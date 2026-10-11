@@ -149,6 +149,24 @@ class TrainingResult:
     evaluations: tuple[EvaluationRecord, ...]
 
 
+@dataclass(frozen=True)
+class SftRunSummary:
+    run_name: str
+    started: str
+    git_revision: str
+    config: SftConfig
+    world_size: int
+    flash_linear_attention: bool
+    train_examples: int
+    train_tokens: int
+    validation_examples: int
+    tokenization_seconds: float
+    result: TrainingResult
+    trained_model_directory: str
+    merged_directory: str
+    merge_seconds: float
+
+
 def distributed_context() -> DistributedContext:
     world_size = int(os.environ.get("WORLD_SIZE", "1"))
     if world_size == 1:
@@ -375,7 +393,7 @@ def evaluate(
         validation_loss=validation_loss,
         validation_examples=min(len(validation), config.validation_examples),
         teacher_forced_exact_match=teacher_forced,
-        generation_exact_match=1 - len(mismatches) / max(1, len(samples)),
+        generation_exact_match=(len(samples) - len(mismatches)) / len(samples) if samples else 0.0,
         generation_examples=len(samples),
         evaluation_seconds=time.perf_counter() - start,
         mismatches=mismatches[:8],

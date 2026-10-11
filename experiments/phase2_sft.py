@@ -9,7 +9,6 @@ import os
 import subprocess
 import time
 import tomllib
-from dataclasses import dataclass
 from pathlib import Path
 
 import transformers
@@ -22,8 +21,8 @@ from lean_search.training.sft import (
     EvaluationRecord,
     FineTuningMethod,
     SftConfig,
+    SftRunSummary,
     StepRecord,
-    TrainingResult,
     distributed_context,
     train,
 )
@@ -33,24 +32,6 @@ REPOSITORY_DIRECTORY = Path(__file__).resolve().parents[1]
 DATA_DIRECTORY = Path(os.environ["LEAN_SEARCH_DATA"]) / "sft"
 RUNS_DIRECTORY = Path(os.environ["LEAN_SEARCH_RUNS"])
 CHECKPOINTS_DIRECTORY = Path(os.environ["LEAN_SEARCH_CHECKPOINTS"])
-
-
-@dataclass(frozen=True)
-class RunSummary:
-    run_name: str
-    started: str
-    git_revision: str
-    config: SftConfig
-    world_size: int
-    flash_linear_attention: bool
-    train_examples: int
-    train_tokens: int
-    validation_examples: int
-    tokenization_seconds: float
-    result: TrainingResult
-    trained_model_directory: str
-    merged_directory: str
-    merge_seconds: float
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -87,7 +68,7 @@ def append_json_line(path: Path, record: object) -> None:
         handle.write(json.dumps(dataclasses.asdict(record), ensure_ascii=False) + "\n")
 
 
-def render_markdown(summary: RunSummary) -> str:
+def render_markdown(summary: SftRunSummary) -> str:
     config = summary.config
     optimization = config.optimization
     result = summary.result
@@ -217,7 +198,7 @@ def main() -> None:
         merge_adapter(config.model, trained_directory, checkpoint_directory / "merged")
         merge_seconds = time.perf_counter() - merge_start
         merged_directory = str(checkpoint_directory / "merged")
-    summary = RunSummary(
+    summary = SftRunSummary(
         run_name=arguments.run_name,
         started=started,
         git_revision=git_revision(),
