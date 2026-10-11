@@ -574,6 +574,7 @@ def write_summary() -> None:
             "n/a" if record.prefix_cache_hit_rate is None else f"{record.prefix_cache_hit_rate:.2f}",
             f"{record.mean_running_requests:.0f}",
             f"{record.mean_kv_cache_usage:.2f}",
+            f"{record.preemptions:.0f}",
             f"{record.peak_gpu_memory_mib:,}",
         ]
         for record in measurements
@@ -592,7 +593,7 @@ def write_summary() -> None:
         for record in server_starts
     ]
     adapter_rows = [
-        [field, *(f"{getattr(record, field):.1f}" for record in adapter_timings)]
+        [field, *(f"{getattr(record, field):.2f}" for record in adapter_timings)]
         for field in AdapterTiming.__dataclass_fields__
         if field != "model"
     ]
@@ -641,6 +642,7 @@ def write_summary() -> None:
                     "Prefix cache hit rate",
                     "Running sequences",
                     "KV cache use",
+                    "Preemptions",
                     "Peak GPU MiB",
                 ],
                 throughput_rows,
