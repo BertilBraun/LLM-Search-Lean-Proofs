@@ -118,12 +118,14 @@ allows.
 
 ## Phases and status
 
-- [ ] **Phase 0** — Environment, REPL wrapper, miniF2F loading and statement check, Lean cost measurements,
+- [x] **Phase 0** — Environment, REPL wrapper, miniF2F loading and statement check, Lean cost measurements,
   automation-only best-first baseline (ladder row 0).
   - [x] Lean v4.9.0-rc1 + Mathlib `d1d1e4b7` + REPL pinned; all 488 statements load; costs measured
     (`results/phase0_environment/`). Lean is cheap: ~3.7 s per process start, ~0.24 GiB private memory,
     ~290 tactic calls/s with 32 processes.
-  - [ ] Search core and automation-only baseline.
+  - [x] Wrapper review: cancellation desync, `admitGoal` closers, axiom spoofing and replay drift fixed.
+  - [x] Search core and automation-only baseline: **79/244 (32.4%) of miniF2F-valid**, all proofs verified,
+    5 minutes for the split (`results/phase0_automation_baseline/`).
 - [ ] **Phase 1** — Model probe (throughput, valid-Lean rate, progress rate; few-shot and after short SFT);
   base-model few-shot search (ladder row 1).
 - [ ] **Phase 2** — Proof-corpus tracing, decontamination, LoRA SFT, policy search on miniF2F-valid (row 2).
