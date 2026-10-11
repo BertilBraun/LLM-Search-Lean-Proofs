@@ -16,7 +16,7 @@ def step_bin(steps: int) -> int:
 class Readout:
     """h = sum_k p_k * steps_k: bins 1..7 count their steps, the 8+ bin and a dead end count these fixed values."""
 
-    eight_or_more_steps: float = 10.0
+    eight_or_more_steps: float = 12.0
     dead_steps: float = 16.0
 
     @property

@@ -57,7 +57,7 @@ def test_value_section_is_parsed() -> None:
     assert (config.priority.kind, config.value.adapter, config.value.readout) == (
         PriorityKind.A_STAR,
         "value-v0",
-        Readout(eight_or_more_steps=10.0, dead_steps=24.0),
+        Readout(eight_or_more_steps=12.0, dead_steps=24.0),
     )
 
 

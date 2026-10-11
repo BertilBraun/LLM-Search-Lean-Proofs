@@ -18,7 +18,7 @@ weight_decay = 0.0
 max_gradient_norm = 1.0
 epochs = 1
 micro_batch_tokens = 32768
-micro_batches_per_step = 2
+micro_batches_per_step = 1
 length_group_examples = 4096
 gradient_checkpointing = true
 seed = 0
@@ -28,11 +28,12 @@ smoothing_sigma = 0.5
 bin_mass_weight = 1.0
 
 [readout]
-eight_or_more_steps = 10.0
+# The mean remaining steps of the 8+ train states of v0 is 12.3; 16 is the search's max_depth.
+eight_or_more_steps = 12.0
 dead_steps = 16.0
 
 [evaluation]
-interval_steps = 100
+interval_steps = 50
 validation_examples = 4000
 micro_batch_tokens = 32768
 served_top_k = 20
