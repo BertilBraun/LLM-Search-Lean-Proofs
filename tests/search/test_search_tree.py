@@ -2,7 +2,7 @@ import pytest
 from search_trees import add_child, new_tree, proof_state
 
 from lean_search.lean import LeanError, LeanTimeout
-from lean_search.search import EdgeOutcome, Failure, FailureKind, NodeStatus, StepSource
+from lean_search.search import EdgeOutcome, Failure, FailureKind, Node, NodeStatus, SearchTree, StepSource
 from lean_search.search.search import ForbiddenSteps
 
 
@@ -30,21 +30,57 @@ def test_proved_states_are_never_deduplicated() -> None:
     assert tree.node_with_goals(()) is None
 
 
-def test_failure_propagates_when_all_children_failed() -> None:
+def add_duplicate_edge(tree: SearchTree, parent: Node, target: Node) -> None:
+    if parent.expansion_index is None:
+        parent.expansion_index = 0
+    tree.add_edge(
+        parent,
+        text="simp",
+        source=StepSource.AUTOMATION,
+        log_probability=None,
+        prompt_tokens=0,
+        generated_tokens=0,
+        outcome=EdgeOutcome.DUPLICATE,
+        target_id=target.node_id,
+        applied_tactics=1,
+        total_tactics=1,
+    )
+
+
+def test_fully_expanded_subtree_without_open_nodes_fails() -> None:
     tree = new_tree("⊢ p")
     child = add_child(tree, tree.root, ("⊢ q",))
-    tree.root.status = NodeStatus.EXPANDED
-    tree.mark_failed(child)
-    assert tree.root.status == NodeStatus.FAILED
+    tree.root.status = child.status = NodeStatus.EXPANDED
+    tree.settle_statuses()
+    assert [node.status for node in tree.nodes] == [NodeStatus.FAILED, NodeStatus.FAILED]
 
 
-def test_failure_does_not_propagate_while_a_sibling_is_open() -> None:
+def test_open_descendant_keeps_its_ancestors_alive() -> None:
     tree = new_tree("⊢ p")
     first = add_child(tree, tree.root, ("⊢ q",))
     add_child(tree, tree.root, ("⊢ r",), step="norm_num")
-    tree.root.status = NodeStatus.EXPANDED
-    tree.mark_failed(first)
-    assert tree.root.status == NodeStatus.EXPANDED
+    tree.root.status = first.status = NodeStatus.EXPANDED
+    tree.settle_statuses()
+    assert [node.status for node in tree.nodes] == [NodeStatus.EXPANDED, NodeStatus.FAILED, NodeStatus.OPEN]
+
+
+def test_duplicate_edge_into_an_open_node_keeps_a_node_alive() -> None:
+    tree = new_tree("⊢ p")
+    first = add_child(tree, tree.root, ("⊢ q",))
+    second = add_child(tree, tree.root, ("⊢ r",), step="norm_num")
+    add_duplicate_edge(tree, first, second)
+    tree.root.status = first.status = NodeStatus.EXPANDED
+    tree.settle_statuses()
+    assert first.status == NodeStatus.EXPANDED
+
+
+def test_duplicate_edge_to_itself_does_not_keep_a_node_alive() -> None:
+    tree = new_tree("⊢ p")
+    child = add_child(tree, tree.root, ("⊢ q",))
+    add_duplicate_edge(tree, child, child)
+    tree.root.status = child.status = NodeStatus.EXPANDED
+    tree.settle_statuses()
+    assert child.status == NodeStatus.FAILED
 
 
 def test_proof_path_is_marked_proved() -> None:

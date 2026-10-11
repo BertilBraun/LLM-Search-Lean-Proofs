@@ -14,6 +14,7 @@ class StepSource(StrEnum):
 
 
 class NodeStatus(StrEnum):
+    # Not fully expanded: on the frontier, at the depth cap, or cut off by a budget mid-expansion.
     OPEN = "open"
     EXPANDED = "expanded"
     PROVED = "proved"
@@ -201,21 +202,28 @@ class SearchTree:
     def next_node_id(self) -> int:
         return len(self.nodes)
 
-    def mark_failed(self, node: Node) -> None:
-        node.status = NodeStatus.FAILED
-        parent = self.parent(node)
-        if (
-            parent is not None
-            and parent.status == NodeStatus.EXPANDED
-            and all(child.status == NodeStatus.FAILED for child in self.children(parent))
-        ):
-            self.mark_failed(parent)
-
     def mark_proof_path(self, proved: Node) -> list[Node]:
         path = self.path(proved)
         for node in path:
             node.status = NodeStatus.PROVED
         return path
+
+    def settle_statuses(self) -> None:
+        """Expanded nodes that reach no open or proved node, via child or duplicate edges, become failed."""
+        predecessors: dict[int, list[int]] = {}
+        for edge in self.edges:
+            if edge.target_id is not None:
+                predecessors.setdefault(edge.target_id, []).append(edge.parent_id)
+        pending = [node.node_id for node in self.nodes if node.status in (NodeStatus.OPEN, NodeStatus.PROVED)]
+        alive = set(pending)
+        while pending:
+            for predecessor in predecessors.get(pending.pop(), ()):
+                if predecessor not in alive:
+                    alive.add(predecessor)
+                    pending.append(predecessor)
+        for node in self.nodes:
+            if node.status == NodeStatus.EXPANDED and node.node_id not in alive:
+                node.status = NodeStatus.FAILED
 
     def _add_node(
         self,

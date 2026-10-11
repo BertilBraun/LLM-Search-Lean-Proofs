@@ -28,14 +28,13 @@ kind = "automation"
 
 [automation]
 # Cheapest first by median latency on the initial states of miniF2F-valid (results/phase0_environment).
+# Dropped after a leave-one-out ablation lost no solve: tauto (covered by rfl, can hang) and positivity (never used).
 tactics = [
     "decide",
     "omega",
-    "positivity",
     "intros",
     "constructor",
     "rfl",
-    "tauto",
     "simp",
     "field_simp",
     "norm_num",

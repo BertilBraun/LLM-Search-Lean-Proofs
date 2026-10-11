@@ -15,7 +15,7 @@ def test_shipped_configs_load(path: Path) -> None:
 
 def test_baseline_config_sweeps_cheapest_tactics_first() -> None:
     config = load_run_config(CONFIG_DIRECTORY / "phase0_automation_baseline.toml")
-    assert config.automation.tactics[:3] == ("decide", "omega", "positivity")
+    assert config.automation.tactics[:2] == ("decide", "omega")
 
 
 def test_missing_sections_take_defaults() -> None:

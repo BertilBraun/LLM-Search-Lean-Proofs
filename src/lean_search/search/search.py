@@ -252,6 +252,7 @@ class _TheoremSearch:
         stop_reason, proved = await self._search()
         if proved is not None:
             tree.mark_proof_path(proved)
+        tree.settle_statuses()
         return CompletedSearch(self._result(stop_reason, proved, tree), tree)
 
     async def _search(self) -> tuple[StopReason, Node | None]:
@@ -284,16 +285,19 @@ class _TheoremSearch:
                 await self._run_batch(expansion, batch)
                 if expansion.proved is not None or expansion.out_of_time:
                     break
-        node.status = NodeStatus.EXPANDED
         node.expansion_wall_seconds = self.wall_seconds() - node.expanded_seconds
         node.expansion_lean_seconds = self.accounting.lean_seconds - lean_seconds_before
-        if expansion.proved is not None or expansion.out_of_time:
+        if expansion.out_of_time:
             return expansion
-        children = self.tree.children(node)
-        if all(child.status == NodeStatus.FAILED for child in children):
-            self.tree.mark_failed(node)
+        node.status = NodeStatus.EXPANDED
+        if expansion.proved is not None:
+            return expansion
         await self._enqueue(
-            [child for child in children if child.status == NodeStatus.OPEN and child.depth < self.config.max_depth]
+            [
+                child
+                for child in self.tree.children(node)
+                if child.status == NodeStatus.OPEN and child.depth < self.config.max_depth
+            ]
         )
         return expansion
 

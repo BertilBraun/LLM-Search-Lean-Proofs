@@ -12,11 +12,9 @@ from lean_search.search.tree import Node, SearchTree, StepSource
 DEFAULT_AUTOMATION_TACTICS = (
     "decide",
     "omega",
-    "positivity",
     "intros",
     "constructor",
     "rfl",
-    "tauto",
     "simp",
     "field_simp",
     "norm_num",
