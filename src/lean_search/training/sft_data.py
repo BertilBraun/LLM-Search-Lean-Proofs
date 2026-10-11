@@ -135,11 +135,19 @@ def sft_example(source: str, proof_identifier: str, step_index: int, goals: Sequ
     return SftExample(source, proof_identifier, step_index, tuple(goals), normalize_tactic_block(step))
 
 
-def read_traced_examples(directory: Path, sources: Collection[str]) -> TracedExamples:
+def shard_step_files(traced_directory: Path) -> list[Path]:
+    return sorted(traced_directory.glob("shards/*/*.steps.jsonl"))
+
+
+def snapshot_step_files(traced_directory: Path) -> list[Path]:
+    return [traced_directory / f"steps_{split}.jsonl" for split in DataSplit]
+
+
+def read_traced_examples(paths: Sequence[Path], sources: Collection[str]) -> TracedExamples:
     train: dict[str, list[SftExample]] = {source: [] for source in sources}
     validation: dict[str, list[SftExample]] = {source: [] for source in sources}
     forbidden: Counter[str] = Counter()
-    for path in sorted(directory.glob("shards/*/*.steps.jsonl")):
+    for path in paths:
         for step in read_traced_steps(path):
             if step.source not in train:
                 continue

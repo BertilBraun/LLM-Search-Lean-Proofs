@@ -28,6 +28,8 @@ from lean_search.training.sft_data import (
     read_traced_examples,
     select_mixture,
     select_validation,
+    shard_step_files,
+    snapshot_step_files,
     source_statistics,
     write_examples,
 )
@@ -52,7 +54,7 @@ class DataSummary:
     built: str
     git_revision: str
     traced_directory: str
-    shard_files: int
+    step_files: tuple[str, ...]
     seconds: float
     config: SftDataConfig
     sources: tuple[SourceStatistics, ...]
@@ -67,6 +69,9 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--name", required=True, help=f"output directory name under {DATA_DIRECTORY / 'sft'}")
     parser.add_argument("--traced-directory", type=Path, default=DATA_DIRECTORY / "traced")
+    parser.add_argument(
+        "--snapshot", action="store_true", help="read the merged steps_{train,validation}.jsonl instead of the shards"
+    )
     return parser.parse_args()
 
 
@@ -140,7 +145,7 @@ def render_markdown(summary: DataSummary) -> str:
     )
     sections = [
         f"# SFT data `{summary.name}`",
-        f"Built {summary.built} from {summary.shard_files} shard files in `{summary.traced_directory}` "
+        f"Built {summary.built} from {len(summary.step_files)} step files in `{summary.traced_directory}` "
         f"(git {summary.git_revision[:10]}, {summary.seconds:.0f} s). Budget {budget} of "
         f"`{config.reference_tokenizer}` tokens (prompt + completion), caps {config.max_prompt_tokens} prompt "
         f"and {config.max_completion_tokens} completion tokens, seed `{config.seed}`. Each example is one traced "
@@ -194,7 +199,8 @@ def main() -> None:
     config = from_json_object(SftDataConfig, tomllib.loads(arguments.config.read_text(encoding="utf-8")))
     weights = {source.name: source.weight for source in config.sources}
     tokenizer = transformers.AutoTokenizer.from_pretrained(config.reference_tokenizer)
-    traced = read_traced_examples(arguments.traced_directory, weights)
+    step_files = (snapshot_step_files if arguments.snapshot else shard_step_files)(arguments.traced_directory)
+    traced = read_traced_examples(step_files, weights)
     print(f"Read traced steps in {time.perf_counter() - start:.0f} s", flush=True)
     pool = deduplicate(traced.train, config.seed)
     tokenize = length_capped_tokenizer(tokenizer, config.max_prompt_tokens, config.max_completion_tokens)
@@ -216,7 +222,7 @@ def main() -> None:
         built=datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds"),
         git_revision=git_revision(),
         traced_directory=str(arguments.traced_directory),
-        shard_files=len(list(arguments.traced_directory.glob("shards/*/*.steps.jsonl"))),
+        step_files=tuple(path.name for path in step_files),
         seconds=time.perf_counter() - start,
         config=config,
         sources=tuple(source_statistics(source, traced, pool, streams[source]) for source in weights),

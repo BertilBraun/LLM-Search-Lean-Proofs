@@ -1,0 +1,32 @@
+# SFT v1, the development policy for rows 2 and 4: Qwen3.5-2B, LoRA, two epochs over the traced snapshot (`v1`).
+# Evaluated as an adapter on the raw base, so no merge.
+model = "Qwen/Qwen3.5-2B"
+data = "v1"
+merge = false
+
+[lora]
+rank = 64
+alpha = 64
+dropout = 0.0
+
+[optimization]
+method = "lora"
+learning_rate = 2e-4
+warmup_fraction = 0.03
+minimum_learning_rate_ratio = 0.1
+weight_decay = 0.0
+max_gradient_norm = 1.0
+epochs = 2
+micro_batch_tokens = 32768
+micro_batches_per_step = 1
+length_group_examples = 4096
+gradient_checkpointing = true
+seed = 0
+
+[evaluation]
+interval_steps = 200
+validation_examples = 2000
+micro_batch_tokens = 16384
+generation_examples = 256
+generation_batch_size = 64
+max_new_tokens = 256

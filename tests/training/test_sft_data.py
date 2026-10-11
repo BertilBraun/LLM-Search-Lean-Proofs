@@ -17,6 +17,8 @@ from lean_search.training.sft_data import (
     select_mixture,
     select_validation,
     sft_example,
+    shard_step_files,
+    snapshot_step_files,
     tokenize_example,
     write_examples,
 )
@@ -200,19 +202,19 @@ def test_forbidden_steps_are_dropped_and_counted(tmp_path: Path) -> None:
     directory = traced_directory(
         tmp_path, [traced_step(DataSplit.TRAIN, "native_decide"), traced_step(DataSplit.TRAIN, "omega", 2)]
     )
-    traced = read_traced_examples(directory, ["first"])
+    traced = read_traced_examples(shard_step_files(directory), ["first"])
     assert ([example.tactic_block for example in traced.train["first"]], traced.forbidden["first"]) == (["omega"], 1)
 
 
 def test_validation_split_steps_are_read_separately(tmp_path: Path) -> None:
     directory = traced_directory(tmp_path, [traced_step(DataSplit.VALIDATION, "omega")])
-    traced = read_traced_examples(directory, ["first"])
+    traced = read_traced_examples(shard_step_files(directory), ["first"])
     assert (len(traced.train["first"]), len(traced.validation["first"])) == (0, 1)
 
 
 def test_unselected_sources_are_ignored(tmp_path: Path) -> None:
     directory = traced_directory(tmp_path, [traced_step(DataSplit.TRAIN, "omega")])
-    assert read_traced_examples(directory, ["second"]).train == {"second": []}
+    assert read_traced_examples(shard_step_files(directory), ["second"]).train == {"second": []}
 
 
 def test_examples_round_trip_through_json_lines(tmp_path: Path) -> None:
@@ -229,3 +231,7 @@ def test_qwen_completion_ends_with_the_end_of_turn_token() -> None:
         pytest.skip("Qwen/Qwen3.5-0.8B is not in the Hugging Face cache")
     tokenized = tokenize_example(tokenizer, example("first", 1))
     assert tokenized.input_ids[-1] == tokenizer.convert_tokens_to_ids("<|im_end|>")
+
+
+def test_the_snapshot_is_the_merged_train_and_validation_files(tmp_path: Path) -> None:
+    assert [path.name for path in snapshot_step_files(tmp_path)] == ["steps_train.jsonl", "steps_validation.jsonl"]
