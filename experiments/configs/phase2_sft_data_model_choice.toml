@@ -1,0 +1,41 @@
+# SFT data for the short model-choice runs: the tracing pilot capped at 7.5M tokens (about 40 minutes of Qwen3.5-2B LoRA).
+# Weights are token shares; a source that runs out passes its share on to the others. Completions are capped at the
+# search's policy max_tokens (256): longer targets could never be sampled whole.
+token_budget = 7_500_000
+max_prompt_tokens = 2048
+max_completion_tokens = 256
+validation_examples = 2000
+reference_tokenizer = "Qwen/Qwen3.5-2B"
+seed = "sft-pilot"
+
+[[sources]]
+name = "goedel_lean_workbook_proofs"
+weight = 1.0
+
+[[sources]]
+name = "stp_lean_workbook"
+weight = 1.0
+
+[[sources]]
+name = "deepseek_prover_v1"
+weight = 1.0
+
+[[sources]]
+name = "lean_workbook"
+weight = 1.0
+
+[[sources]]
+name = "goedel_sft_v2"
+weight = 1.0
+
+[[sources]]
+name = "numinamath_lean_kimina"
+weight = 1.0
+
+[[sources]]
+name = "numinamath_lean_human"
+weight = 1.0
+
+[[sources]]
+name = "leanabell_sft"
+weight = 1.0

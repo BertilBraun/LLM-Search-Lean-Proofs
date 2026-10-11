@@ -1,6 +1,6 @@
 # Short identical LoRA SFT runs that decide the base model: one run per candidate (--model), same data and budget.
 model = "Qwen/Qwen3.5-2B"
-data = "pilot"
+data = "model_choice"
 merge = true
 
 [lora]
