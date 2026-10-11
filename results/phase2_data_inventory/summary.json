@@ -1,0 +1,1288 @@
+{
+  "pipeline": {
+    "proofs_per_statement": 3,
+    "thresholds": {
+      "formal_ngram": 0.35,
+      "shared_conclusion_formal_ngram": 0.25,
+      "minimum_conclusion_tokens": 5,
+      "informal_ngram": 0.2
+    },
+    "reference_problems": {
+      "valid": 244,
+      "test": 244
+    },
+    "proof_sources": [
+      {
+        "name": "goedel_lean_workbook_proofs",
+        "repository": "Goedel-LM/Lean-workbook-proofs",
+        "lean_version_hint": "lean4:v4.9.0-rc1 + Mathlib 2f65ba7f (DeepSeek-Prover-V1.5 environment)",
+        "matches_pinned_environment": true,
+        "raw_items": 29750,
+        "rejections": {},
+        "after_validity_filters": 29750,
+        "exact_duplicates_removed": 1547,
+        "after_deduplication": 28203,
+        "decontamination_removed_proofs": {
+          "informal_ngram": 208,
+          "formal_ngram": 208,
+          "propagated": 36,
+          "shared_conclusion": 3,
+          "exact": 2
+        },
+        "decontamination_removed_statements": {
+          "informal_ngram": 124,
+          "formal_ngram": 157,
+          "propagated": 11,
+          "shared_conclusion": 2,
+          "exact": 2
+        },
+        "after_decontamination": 27746,
+        "statements": 20219,
+        "statements_with_more_proofs_than_cap": 275,
+        "removed_by_statement_cap": 497,
+        "kept_proofs": 27249,
+        "top_level_tactics": {
+          "count": 27249,
+          "mean": 2.97,
+          "percentiles": {
+            "p10": 1.0,
+            "p25": 1.0,
+            "p50": 2.0,
+            "p75": 4.0,
+            "p90": 7.0,
+            "p99": 13.0
+          },
+          "maximum": 102,
+          "histogram": {
+            "1": 10581,
+            "2": 5896,
+            "3": 3388,
+            "4-5": 3581,
+            "6-10": 3144,
+            "11-20": 630,
+            "21-50": 25,
+            "51+": 4
+          }
+        },
+        "proof_characters": {
+          "count": 27249,
+          "mean": 224.8,
+          "percentiles": {
+            "p10": 45.0,
+            "p25": 97.0,
+            "p50": 174.0,
+            "p75": 288.0,
+            "p90": 449.0,
+            "p99": 1019.0
+          },
+          "maximum": 3071,
+          "histogram": {
+            "0-50": 3159,
+            "51-100": 4092,
+            "101-200": 8282,
+            "201-500": 9609,
+            "501-1000": 1816,
+            "1001-2000": 273,
+            "2001-5000": 18,
+            "5001+": 0
+          }
+        }
+      },
+      {
+        "name": "stp_lean_workbook",
+        "repository": "kfdong/STP_Lean_0320 (tag statement)",
+        "lean_version_hint": "lean4:v4.9.0-rc1 + Mathlib 2f65ba7f (DeepSeek-Prover-V1.5 environment)",
+        "matches_pinned_environment": true,
+        "raw_items": 404412,
+        "rejections": {
+          "no_assignment": 1,
+          "no_declaration": 16,
+          "sorry_or_admit": 12,
+          "term_mode": 31
+        },
+        "after_validity_filters": 404352,
+        "exact_duplicates_removed": 6831,
+        "after_deduplication": 397521,
+        "decontamination_removed_proofs": {
+          "exact": 2788,
+          "formal_ngram": 2821,
+          "propagated": 3110,
+          "shared_conclusion": 32,
+          "name": 79
+        },
+        "decontamination_removed_statements": {
+          "exact": 175,
+          "formal_ngram": 170,
+          "propagated": 149,
+          "shared_conclusion": 2,
+          "name": 21
+        },
+        "after_decontamination": 388691,
+        "statements": 23951,
+        "statements_with_more_proofs_than_cap": 23513,
+        "removed_by_statement_cap": 317615,
+        "kept_proofs": 71076,
+        "top_level_tactics": {
+          "count": 71076,
+          "mean": 4.06,
+          "percentiles": {
+            "p10": 1.0,
+            "p25": 2.0,
+            "p50": 3.0,
+            "p75": 6.0,
+            "p90": 9.0,
+            "p99": 14.0
+          },
+          "maximum": 82,
+          "histogram": {
+            "1": 14126,
+            "2": 15135,
+            "3": 11082,
+            "4-5": 12484,
+            "6-10": 15037,
+            "11-20": 3169,
+            "21-50": 39,
+            "51+": 4
+          }
+        },
+        "proof_characters": {
+          "count": 71076,
+          "mean": 291.35,
+          "percentiles": {
+            "p10": 50.0,
+            "p25": 107.0,
+            "p50": 241.0,
+            "p75": 417.0,
+            "p90": 594.0,
+            "p99": 1066.0
+          },
+          "maximum": 2015,
+          "histogram": {
+            "0-50": 7113,
+            "51-100": 9644,
+            "101-200": 13986,
+            "201-500": 28510,
+            "501-1000": 10856,
+            "1001-2000": 966,
+            "2001-5000": 1,
+            "5001+": 0
+          }
+        }
+      },
+      {
+        "name": "stp_conjectures",
+        "repository": "kfdong/STP_Lean_0320 (tag conjecture)",
+        "lean_version_hint": "lean4:v4.9.0-rc1 + Mathlib 2f65ba7f (DeepSeek-Prover-V1.5 environment)",
+        "matches_pinned_environment": true,
+        "raw_items": 2751225,
+        "rejections": {
+          "no_assignment": 75,
+          "sorry_or_admit": 39,
+          "term_mode": 289
+        },
+        "after_validity_filters": 2750822,
+        "exact_duplicates_removed": 4937,
+        "after_deduplication": 2745885,
+        "decontamination_removed_proofs": {
+          "name": 49619,
+          "formal_ngram": 49399,
+          "propagated": 14,
+          "shared_conclusion": 41,
+          "exact": 62
+        },
+        "decontamination_removed_statements": {
+          "name": 12413,
+          "formal_ngram": 12352,
+          "propagated": 1,
+          "shared_conclusion": 11,
+          "exact": 3
+        },
+        "after_decontamination": 2646750,
+        "statements": 673927,
+        "statements_with_more_proofs_than_cap": 345295,
+        "removed_by_statement_cap": 1007194,
+        "kept_proofs": 1639556,
+        "top_level_tactics": {
+          "count": 1639556,
+          "mean": 5.88,
+          "percentiles": {
+            "p10": 2.0,
+            "p25": 3.0,
+            "p50": 5.0,
+            "p75": 8.0,
+            "p90": 10.0,
+            "p99": 19.0
+          },
+          "maximum": 80,
+          "histogram": {
+            "1": 82427,
+            "2": 167683,
+            "3": 215146,
+            "4-5": 427399,
+            "6-10": 590370,
+            "11-20": 143610,
+            "21-50": 12851,
+            "51+": 70
+          }
+        },
+        "proof_characters": {
+          "count": 1639556,
+          "mean": 503.8,
+          "percentiles": {
+            "p10": 154.0,
+            "p25": 275.0,
+            "p50": 458.0,
+            "p75": 679.0,
+            "p90": 915.0,
+            "p99": 1383.0
+          },
+          "maximum": 3683,
+          "histogram": {
+            "0-50": 17630,
+            "51-100": 55048,
+            "101-200": 181466,
+            "201-500": 658865,
+            "501-1000": 613232,
+            "1001-2000": 113283,
+            "2001-5000": 32,
+            "5001+": 0
+          }
+        }
+      },
+      {
+        "name": "goedel_sft_v2",
+        "repository": "Goedel-LM/SFT_dataset_v2",
+        "lean_version_hint": "lean4:v4.9.0-rc1 + Mathlib 2f65ba7f (DeepSeek-Prover-V1.5 environment)",
+        "matches_pinned_environment": true,
+        "raw_items": 1744769,
+        "rejections": {
+          "declares_axiom": 20,
+          "empty_proof": 2,
+          "no_assignment": 712,
+          "no_declaration": 352,
+          "sorry_or_admit": 3600,
+          "term_mode": 24,
+          "too_long": 294,
+          "unbalanced_brackets": 168
+        },
+        "after_validity_filters": 1739597,
+        "exact_duplicates_removed": 380246,
+        "after_deduplication": 1359351,
+        "decontamination_removed_proofs": {
+          "formal_ngram": 8034,
+          "name": 4468,
+          "propagated": 1372,
+          "exact": 13,
+          "shared_conclusion": 44
+        },
+        "decontamination_removed_statements": {
+          "formal_ngram": 5772,
+          "name": 3533,
+          "propagated": 709,
+          "exact": 5,
+          "shared_conclusion": 27
+        },
+        "after_decontamination": 1345420,
+        "statements": 902374,
+        "statements_with_more_proofs_than_cap": 29217,
+        "removed_by_statement_cap": 76424,
+        "kept_proofs": 1268996,
+        "top_level_tactics": {
+          "count": 1268996,
+          "mean": 4.08,
+          "percentiles": {
+            "p10": 2.0,
+            "p25": 2.0,
+            "p50": 3.0,
+            "p75": 5.0,
+            "p90": 7.0,
+            "p99": 14.0
+          },
+          "maximum": 201,
+          "histogram": {
+            "1": 390,
+            "2": 354843,
+            "3": 373535,
+            "4-5": 299846,
+            "6-10": 195572,
+            "11-20": 43623,
+            "21-50": 1172,
+            "51+": 15
+          }
+        },
+        "proof_characters": {
+          "count": 1268996,
+          "mean": 2070.19,
+          "percentiles": {
+            "p10": 522.0,
+            "p25": 927.0,
+            "p50": 1611.0,
+            "p75": 2692.0,
+            "p90": 4152.0,
+            "p99": 8350.0
+          },
+          "maximum": 19989,
+          "histogram": {
+            "0-50": 459,
+            "51-100": 2668,
+            "101-200": 18196,
+            "201-500": 97003,
+            "501-1000": 236374,
+            "1001-2000": 419328,
+            "2001-5000": 419046,
+            "5001+": 75922
+          }
+        }
+      },
+      {
+        "name": "deepseek_prover_v1",
+        "repository": "deepseek-ai/DeepSeek-Prover-V1",
+        "lean_version_hint": "not stated (DeepSeek-Prover-V1, May 2024; same header as DeepSeek-Prover-V1.5)",
+        "matches_pinned_environment": false,
+        "raw_items": 27503,
+        "rejections": {},
+        "after_validity_filters": 27503,
+        "exact_duplicates_removed": 0,
+        "after_deduplication": 27503,
+        "decontamination_removed_proofs": {
+          "formal_ngram": 307,
+          "shared_conclusion": 5,
+          "propagated": 1
+        },
+        "decontamination_removed_statements": {
+          "formal_ngram": 307,
+          "shared_conclusion": 5,
+          "propagated": 1
+        },
+        "after_decontamination": 27190,
+        "statements": 27190,
+        "statements_with_more_proofs_than_cap": 0,
+        "removed_by_statement_cap": 0,
+        "kept_proofs": 27190,
+        "top_level_tactics": {
+          "count": 27190,
+          "mean": 2.31,
+          "percentiles": {
+            "p10": 1.0,
+            "p25": 2.0,
+            "p50": 2.0,
+            "p75": 3.0,
+            "p90": 3.0,
+            "p99": 5.0
+          },
+          "maximum": 27,
+          "histogram": {
+            "1": 4542,
+            "2": 12906,
+            "3": 7625,
+            "4-5": 1917,
+            "6-10": 197,
+            "11-20": 2,
+            "21-50": 1,
+            "51+": 0
+          }
+        },
+        "proof_characters": {
+          "count": 27190,
+          "mean": 45.69,
+          "percentiles": {
+            "p10": 23.0,
+            "p25": 31.0,
+            "p50": 40.0,
+            "p75": 54.0,
+            "p90": 73.0,
+            "p99": 139.0
+          },
+          "maximum": 709,
+          "histogram": {
+            "0-50": 19207,
+            "51-100": 7131,
+            "101-200": 765,
+            "201-500": 81,
+            "501-1000": 6,
+            "1001-2000": 0,
+            "2001-5000": 0,
+            "5001+": 0
+          }
+        }
+      },
+      {
+        "name": "lean_workbook",
+        "repository": "internlm/Lean-Workbook",
+        "lean_version_hint": "lean4:v4.8.0-rc1 + Mathlib v4.8.0-rc1",
+        "matches_pinned_environment": false,
+        "raw_items": 222904,
+        "rejections": {
+          "no_assignment": 559
+        },
+        "after_validity_filters": 222345,
+        "exact_duplicates_removed": 17089,
+        "after_deduplication": 205256,
+        "decontamination_removed_proofs": {
+          "informal_ngram": 1412,
+          "formal_ngram": 1901,
+          "propagated": 421,
+          "shared_conclusion": 4,
+          "exact": 10
+        },
+        "decontamination_removed_statements": {
+          "informal_ngram": 45,
+          "formal_ngram": 89,
+          "propagated": 7,
+          "shared_conclusion": 2,
+          "exact": 1
+        },
+        "after_decontamination": 201508,
+        "statements": 8898,
+        "statements_with_more_proofs_than_cap": 7667,
+        "removed_by_statement_cap": 176377,
+        "kept_proofs": 25131,
+        "top_level_tactics": {
+          "count": 25131,
+          "mean": 2.29,
+          "percentiles": {
+            "p10": 1.0,
+            "p25": 1.0,
+            "p50": 2.0,
+            "p75": 3.0,
+            "p90": 4.0,
+            "p99": 7.0
+          },
+          "maximum": 19,
+          "histogram": {
+            "1": 7412,
+            "2": 9772,
+            "3": 4466,
+            "4-5": 2777,
+            "6-10": 650,
+            "11-20": 54,
+            "21-50": 0,
+            "51+": 0
+          }
+        },
+        "proof_characters": {
+          "count": 25131,
+          "mean": 62.49,
+          "percentiles": {
+            "p10": 25.0,
+            "p25": 36.0,
+            "p50": 55.0,
+            "p75": 79.0,
+            "p90": 105.0,
+            "p99": 195.0
+          },
+          "maximum": 1488,
+          "histogram": {
+            "0-50": 11242,
+            "51-100": 10969,
+            "101-200": 2684,
+            "201-500": 211,
+            "501-1000": 19,
+            "1001-2000": 6,
+            "2001-5000": 0,
+            "5001+": 0
+          }
+        }
+      },
+      {
+        "name": "leanabell_sft",
+        "repository": "stoney0062/Leanabell-Prover-Traindata-SFT",
+        "lean_version_hint": "not stated (DeepSeek-Prover-V1.5 prompt format)",
+        "matches_pinned_environment": false,
+        "raw_items": 218988,
+        "rejections": {
+          "empty_proof": 1,
+          "no_assignment": 10,
+          "term_mode": 6
+        },
+        "after_validity_filters": 218971,
+        "exact_duplicates_removed": 5209,
+        "after_deduplication": 213762,
+        "decontamination_removed_proofs": {
+          "informal_ngram": 1615,
+          "formal_ngram": 1289,
+          "exact": 121,
+          "name": 175,
+          "shared_conclusion": 31,
+          "propagated": 75
+        },
+        "decontamination_removed_statements": {
+          "informal_ngram": 1270,
+          "formal_ngram": 1023,
+          "exact": 111,
+          "name": 163,
+          "shared_conclusion": 25,
+          "propagated": 35
+        },
+        "after_decontamination": 210456,
+        "statements": 179209,
+        "statements_with_more_proofs_than_cap": 2867,
+        "removed_by_statement_cap": 4777,
+        "kept_proofs": 205679,
+        "top_level_tactics": {
+          "count": 205679,
+          "mean": 3.32,
+          "percentiles": {
+            "p10": 1.0,
+            "p25": 2.0,
+            "p50": 2.0,
+            "p75": 4.0,
+            "p90": 7.0,
+            "p99": 14.0
+          },
+          "maximum": 114,
+          "histogram": {
+            "1": 49739,
+            "2": 56071,
+            "3": 35305,
+            "4-5": 35542,
+            "6-10": 23399,
+            "11-20": 4966,
+            "21-50": 560,
+            "51+": 97
+          }
+        },
+        "proof_characters": {
+          "count": 205679,
+          "mean": 170.28,
+          "percentiles": {
+            "p10": 29.0,
+            "p25": 56.0,
+            "p50": 113.0,
+            "p75": 214.0,
+            "p90": 370.0,
+            "p99": 922.0
+          },
+          "maximum": 4477,
+          "histogram": {
+            "0-50": 45184,
+            "51-100": 48152,
+            "101-200": 56011,
+            "201-500": 45511,
+            "501-1000": 9196,
+            "1001-2000": 1502,
+            "2001-5000": 123,
+            "5001+": 0
+          }
+        }
+      },
+      {
+        "name": "numinamath_lean_kimina",
+        "repository": "AI-MO/NuminaMath-LEAN (formal_proof)",
+        "lean_version_hint": "Mathlib v4.15.0 (Lean v4.15.0)",
+        "matches_pinned_environment": false,
+        "raw_items": 31634,
+        "rejections": {
+          "declares_axiom": 1,
+          "no_declaration": 1,
+          "sorry_or_admit": 9,
+          "term_mode": 2
+        },
+        "after_validity_filters": 31621,
+        "exact_duplicates_removed": 58,
+        "after_deduplication": 31563,
+        "decontamination_removed_proofs": {
+          "formal_ngram": 206,
+          "informal_ngram": 305,
+          "shared_conclusion": 9,
+          "exact": 8,
+          "propagated": 17
+        },
+        "decontamination_removed_statements": {
+          "formal_ngram": 173,
+          "informal_ngram": 282,
+          "shared_conclusion": 8,
+          "exact": 7,
+          "propagated": 10
+        },
+        "after_decontamination": 31018,
+        "statements": 29573,
+        "statements_with_more_proofs_than_cap": 71,
+        "removed_by_statement_cap": 199,
+        "kept_proofs": 30819,
+        "top_level_tactics": {
+          "count": 30819,
+          "mean": 5.39,
+          "percentiles": {
+            "p10": 1.0,
+            "p25": 3.0,
+            "p50": 4.0,
+            "p75": 7.0,
+            "p90": 11.0,
+            "p99": 20.0
+          },
+          "maximum": 65,
+          "histogram": {
+            "1": 3286,
+            "2": 1868,
+            "3": 7519,
+            "4-5": 7505,
+            "6-10": 7510,
+            "11-20": 2858,
+            "21-50": 268,
+            "51+": 5
+          }
+        },
+        "proof_characters": {
+          "count": 30819,
+          "mean": 920.06,
+          "percentiles": {
+            "p10": 36.0,
+            "p25": 213.0,
+            "p50": 639.0,
+            "p75": 1331.0,
+            "p90": 2169.0,
+            "p99": 4289.0
+          },
+          "maximum": 12479,
+          "histogram": {
+            "0-50": 3658,
+            "51-100": 1403,
+            "101-200": 2339,
+            "201-500": 5943,
+            "501-1000": 6622,
+            "1001-2000": 7137,
+            "2001-5000": 3564,
+            "5001+": 153
+          }
+        }
+      },
+      {
+        "name": "numinamath_lean_human",
+        "repository": "AI-MO/NuminaMath-LEAN (formal_ground_truth)",
+        "lean_version_hint": "Mathlib v4.15.0 (Lean v4.15.0)",
+        "matches_pinned_environment": false,
+        "raw_items": 9475,
+        "rejections": {
+          "sorry_or_admit": 26,
+          "term_mode": 55,
+          "too_long": 21
+        },
+        "after_validity_filters": 9373,
+        "exact_duplicates_removed": 42,
+        "after_deduplication": 9331,
+        "decontamination_removed_proofs": {
+          "informal_ngram": 137,
+          "formal_ngram": 69,
+          "propagated": 2,
+          "shared_conclusion": 3,
+          "exact": 6
+        },
+        "decontamination_removed_statements": {
+          "informal_ngram": 135,
+          "formal_ngram": 67,
+          "propagated": 2,
+          "shared_conclusion": 3,
+          "exact": 6
+        },
+        "after_decontamination": 9114,
+        "statements": 9060,
+        "statements_with_more_proofs_than_cap": 0,
+        "removed_by_statement_cap": 0,
+        "kept_proofs": 9114,
+        "top_level_tactics": {
+          "count": 9114,
+          "mean": 8.62,
+          "percentiles": {
+            "p10": 1.0,
+            "p25": 3.0,
+            "p50": 5.0,
+            "p75": 11.0,
+            "p90": 19.0,
+            "p99": 44.0
+          },
+          "maximum": 325,
+          "histogram": {
+            "1": 935,
+            "2": 486,
+            "3": 1401,
+            "4-5": 1788,
+            "6-10": 2087,
+            "11-20": 1667,
+            "21-50": 679,
+            "51+": 71
+          }
+        },
+        "proof_characters": {
+          "count": 9114,
+          "mean": 1810.91,
+          "percentiles": {
+            "p10": 39.0,
+            "p25": 266.0,
+            "p50": 1028.0,
+            "p75": 2432.0,
+            "p90": 4564.0,
+            "p99": 10831.0
+          },
+          "maximum": 19837,
+          "histogram": {
+            "0-50": 1044,
+            "51-100": 376,
+            "101-200": 546,
+            "201-500": 1197,
+            "501-1000": 1342,
+            "1001-2000": 1784,
+            "2001-5000": 2047,
+            "5001+": 778
+          }
+        }
+      }
+    ],
+    "merged_proofs": {
+      "sources_in_priority_order": [
+        "goedel_lean_workbook_proofs",
+        "stp_lean_workbook",
+        "stp_conjectures",
+        "goedel_sft_v2",
+        "deepseek_prover_v1",
+        "lean_workbook",
+        "leanabell_sft",
+        "numinamath_lean_kimina",
+        "numinamath_lean_human"
+      ],
+      "statements": 1502558,
+      "proofs": 2943274,
+      "proofs_by_source": {
+        "goedel_lean_workbook_proofs": 27249,
+        "stp_lean_workbook": 47138,
+        "goedel_sft_v2": 999641,
+        "leanabell_sft": 162524,
+        "lean_workbook": 1516,
+        "numinamath_lean_kimina": 30171,
+        "stp_conjectures": 1639086,
+        "numinamath_lean_human": 8762,
+        "deepseek_prover_v1": 27187
+      },
+      "top_level_tactics": {
+        "count": 2943274,
+        "mean": 5.01,
+        "percentiles": {
+          "p10": 2.0,
+          "p25": 3.0,
+          "p50": 4.0,
+          "p75": 6.0,
+          "p90": 9.0,
+          "p99": 17.0
+        },
+        "maximum": 325,
+        "histogram": {
+          "1": 144512,
+          "2": 520317,
+          "3": 584607,
+          "4-5": 722837,
+          "6-10": 772608,
+          "11-20": 182939,
+          "21-50": 15199,
+          "51+": 255
+        }
+      },
+      "proof_characters": {
+        "count": 2943274,
+        "mean": 1007.95,
+        "percentiles": {
+          "p10": 135.0,
+          "p25": 299.0,
+          "p50": 578.0,
+          "p75": 1110.0,
+          "p90": 2420.0,
+          "p99": 6492.0
+        },
+        "maximum": 19989,
+        "histogram": {
+          "0-50": 89588,
+          "51-100": 117999,
+          "101-200": 261891,
+          "201-500": 813229,
+          "501-1000": 835308,
+          "1001-2000": 442747,
+          "2001-5000": 317399,
+          "5001+": 65113
+        }
+      }
+    },
+    "tracing_budget": 300000,
+    "selected_for_tracing": {
+      "sources_in_priority_order": [
+        "goedel_lean_workbook_proofs",
+        "stp_lean_workbook",
+        "stp_conjectures",
+        "goedel_sft_v2",
+        "deepseek_prover_v1",
+        "lean_workbook",
+        "leanabell_sft",
+        "numinamath_lean_kimina",
+        "numinamath_lean_human"
+      ],
+      "statements": 246606,
+      "proofs": 300000,
+      "proofs_by_source": {
+        "goedel_lean_workbook_proofs": 27249,
+        "stp_lean_workbook": 47138,
+        "lean_workbook": 1516,
+        "numinamath_lean_kimina": 30171,
+        "numinamath_lean_human": 8762,
+        "deepseek_prover_v1": 27187,
+        "goedel_sft_v2": 64834,
+        "stp_conjectures": 75579,
+        "leanabell_sft": 17564
+      },
+      "top_level_tactics": {
+        "count": 300000,
+        "mean": 4.47,
+        "percentiles": {
+          "p10": 1.0,
+          "p25": 2.0,
+          "p50": 3.0,
+          "p75": 6.0,
+          "p90": 9.0,
+          "p99": 17.0
+        },
+        "maximum": 325,
+        "histogram": {
+          "1": 35489,
+          "2": 61675,
+          "3": 61822,
+          "4-5": 61817,
+          "6-10": 61464,
+          "11-20": 15979,
+          "21-50": 1660,
+          "51+": 94
+        }
+      },
+      "proof_characters": {
+        "count": 300000,
+        "mean": 777.96,
+        "percentiles": {
+          "p10": 43.0,
+          "p25": 133.0,
+          "p50": 392.0,
+          "p75": 861.0,
+          "p90": 1925.0,
+          "p99": 5950.0
+        },
+        "maximum": 19989,
+        "histogram": {
+          "0-50": 37058,
+          "51-100": 26157,
+          "101-200": 34409,
+          "201-500": 76491,
+          "501-1000": 61900,
+          "1001-2000": 35591,
+          "2001-5000": 23609,
+          "5001+": 4785
+        }
+      }
+    },
+    "statement_sources": [
+      {
+        "name": "lean_workbook",
+        "repository": "internlm/Lean-Workbook",
+        "lean_version_hint": "lean4:v4.8.0-rc1 + Mathlib v4.8.0-rc1",
+        "raw_items": 137131,
+        "rejections": {
+          "no_assignment": 323
+        },
+        "after_validity_filters": 136808,
+        "exact_duplicates_removed": 37810,
+        "after_deduplication": 98998,
+        "decontamination_removed": {
+          "formal_ngram": 376,
+          "propagated": 13,
+          "informal_ngram": 393,
+          "shared_conclusion": 5,
+          "exact": 4
+        },
+        "kept_statements": 98207
+      },
+      {
+        "name": "goedel_pset_v1",
+        "repository": "Goedel-LM/Goedel-Pset-v1",
+        "lean_version_hint": "compiled with `sorry` in the Goedel-Prover environment (lean4:v4.9.0-rc1 + Mathlib 2f65ba7f (DeepSeek-Prover-V1.5 environment))",
+        "raw_items": 1732594,
+        "rejections": {
+          "no_assignment": 70,
+          "no_declaration": 168,
+          "sorry_or_admit": 1219
+        },
+        "after_validity_filters": 1731137,
+        "exact_duplicates_removed": 86630,
+        "after_deduplication": 1644507,
+        "decontamination_removed": {
+          "formal_ngram": 14155,
+          "informal_ngram": 5820,
+          "shared_conclusion": 182,
+          "propagated": 12,
+          "exact": 19
+        },
+        "kept_statements": 1624319
+      },
+      {
+        "name": "numinamath_lean",
+        "repository": "AI-MO/NuminaMath-LEAN",
+        "lean_version_hint": "Mathlib v4.15.0 (Lean v4.15.0)",
+        "raw_items": 104155,
+        "rejections": {
+          "no_assignment": 22,
+          "sorry_or_admit": 1070
+        },
+        "after_validity_filters": 103063,
+        "exact_duplicates_removed": 5070,
+        "after_deduplication": 97993,
+        "decontamination_removed": {
+          "formal_ngram": 340,
+          "informal_ngram": 543,
+          "exact": 12,
+          "shared_conclusion": 13,
+          "propagated": 10
+        },
+        "kept_statements": 97075
+      },
+      {
+        "name": "kimina_prover_promptset",
+        "repository": "AI-MO/Kimina-Prover-Promptset",
+        "lean_version_hint": "Mathlib v4.15.0 (derived from NuminaMath-LEAN)",
+        "raw_items": 24418,
+        "rejections": {
+          "sorry_or_admit": 111
+        },
+        "after_validity_filters": 24307,
+        "exact_duplicates_removed": 16924,
+        "after_deduplication": 7383,
+        "decontamination_removed": {
+          "formal_ngram": 33,
+          "informal_ngram": 25,
+          "propagated": 4,
+          "exact": 1
+        },
+        "kept_statements": 7320
+      }
+    ],
+    "merged_statements": 1822234,
+    "mathlib": {
+      "source": "leandojo_benchmark_4_v10",
+      "tactic_examples": {
+        "random/train": 250814,
+        "random/val": 4260,
+        "random/test": 4506,
+        "novel_premises/train": 246714,
+        "novel_premises/val": 6240,
+        "novel_premises/test": 6626
+      },
+      "tactic_examples_with_premises": {
+        "random/train": 162262,
+        "random/val": 2681,
+        "random/test": 2836,
+        "novel_premises/train": 159234,
+        "novel_premises/val": 4165,
+        "novel_premises/test": 4380
+      },
+      "premises": 180973,
+      "files": 5674
+    }
+  },
+  "inventory": [
+    {
+      "category": "proofs",
+      "repository": "Goedel-LM/Lean-workbook-proofs",
+      "items": "29,750 proofs",
+      "fields": "problem_id, full_proof",
+      "lean_version": "Goedel-Prover environment: Lean v4.9.0-rc1 + Mathlib 2f65ba7f (DeepSeek-Prover-V1.5 fork)",
+      "license": "MIT (LICENSE file)",
+      "full_proofs": "yes (whole files)",
+      "decision": "selected"
+    },
+    {
+      "category": "proofs",
+      "repository": "kfdong/STP_Lean_0320",
+      "items": "3,262,558 rows; 809,535 distinct prompts (conjecture 2,751,225 / statement 404,412 / mathlib 106,921 rows)",
+      "fields": "prompt, target, weight, iteration, tag",
+      "lean_version": "STP setup script: Lean 4.9.0-rc1 + xinhjBrant/mathlib4 (DeepSeek fork)",
+      "license": "MIT",
+      "full_proofs": "yes (statement + tactic block)",
+      "decision": "selected (conjecture and statement tags; mathlib tag is conjecture-generation data)"
+    },
+    {
+      "category": "proofs",
+      "repository": "kfdong/STP_Lean",
+      "items": "1,738,754 rows",
+      "fields": "prompt, target, weight, iteration, tag",
+      "lean_version": "as STP_Lean_0320",
+      "license": "MIT",
+      "full_proofs": "yes",
+      "decision": "skipped (superseded by STP_Lean_0320)"
+    },
+    {
+      "category": "proofs",
+      "repository": "kfdong/STP_Lean_SFT",
+      "items": "235,430 train + 4,096 eval",
+      "fields": "prompt, target",
+      "lean_version": "as STP; eval split is Mathlib file completion",
+      "license": "not stated",
+      "full_proofs": "yes",
+      "decision": "skipped (SFT warm-up mix, overlaps STP and Mathlib)"
+    },
+    {
+      "category": "proofs",
+      "repository": "Goedel-LM/SFT_dataset_v2",
+      "items": "1,745,010 chats",
+      "fields": "messages (proof plan + Lean code, self-correction rounds)",
+      "lean_version": "Goedel-Prover-V2: Lean 4.9 + Mathlib 2f65ba7f",
+      "license": "apache-2.0",
+      "full_proofs": "yes (final lean4 code block of the last assistant turn)",
+      "decision": "selected"
+    },
+    {
+      "category": "proofs",
+      "repository": "Goedel-LM/RL_dataset_V2",
+      "items": "98,632 prompts",
+      "fields": "subset, messages",
+      "lean_version": "as Goedel-Prover-V2",
+      "license": "apache-2.0",
+      "full_proofs": "no (RL prompts)",
+      "decision": "skipped"
+    },
+    {
+      "category": "proofs",
+      "repository": "deepseek-ai/DeepSeek-Prover-V1",
+      "items": "27,503 proofs",
+      "fields": "name, split, formal_statement, goal, header, formal_proof",
+      "lean_version": "not stated",
+      "license": "other (deepseek-license; LICENSE file in the repo is empty)",
+      "full_proofs": "yes",
+      "decision": "selected"
+    },
+    {
+      "category": "proofs + statements",
+      "repository": "internlm/Lean-Workbook",
+      "items": "140,214 statements (57,321 + 82,893 plus); 12,823 with 223,156 proofs; wkbk_1009: 25,214 one-step rows",
+      "fields": "natural_language_statement, answer, tags, formal_statement, split, proof[]",
+      "lean_version": "Lean v4.8.0-rc1 + Mathlib v4.8.0-rc1",
+      "license": "apache-2.0",
+      "full_proofs": "yes (tactic blocks, no header)",
+      "decision": "selected (proofs and statement pool; 6,229 disproved ids dropped)"
+    },
+    {
+      "category": "proofs + statements",
+      "repository": "AI-MO/NuminaMath-LEAN",
+      "items": "104,155 statements; 31,634 Kimina-Prover proofs; 9,475 complete human proofs",
+      "fields": "uuid, problem, formal_statement, formal_ground_truth, ground_truth_type, formal_proof, rl_data, ...",
+      "lean_version": "Mathlib v4.15.0 (version mismatch)",
+      "license": "apache-2.0",
+      "full_proofs": "yes",
+      "decision": "selected (proofs lowest priority; statement pool)"
+    },
+    {
+      "category": "statements",
+      "repository": "AI-MO/Kimina-Prover-Promptset",
+      "items": "24,418 rows (7,228 distinct statements)",
+      "fields": "statement_id, natural_language, formal_statement, source, name",
+      "lean_version": "Mathlib v4.15.0 (derived from NuminaMath-LEAN)",
+      "license": "apache-2.0 (README)",
+      "full_proofs": "no",
+      "decision": "selected (statement pool)"
+    },
+    {
+      "category": "statements",
+      "repository": "Goedel-LM/Goedel-Pset-v1",
+      "items": "1,732,594 statements",
+      "fields": "problem_id, formal_statement, informal_statement",
+      "lean_version": "compiled with sorry in the Goedel-Prover environment (Lean 4.9)",
+      "license": "MIT (LICENSE file)",
+      "full_proofs": "no",
+      "decision": "selected (statement pool)"
+    },
+    {
+      "category": "proofs",
+      "repository": "stoney0062/Leanabell-Prover-Traindata-SFT",
+      "items": "218,988 proofs",
+      "fields": "prompt, output",
+      "lean_version": "not stated (DeepSeek-Prover-V1.5 prompt format)",
+      "license": "apache-2.0",
+      "full_proofs": "yes (with explanatory comments)",
+      "decision": "selected (low priority, provenance unclear)"
+    },
+    {
+      "category": "proofs",
+      "repository": "FrenzyMath/Herald_proofs",
+      "items": "44,553 proofs",
+      "fields": "id, name, formal_theorem, informal_theorem, formal_proof, informal_proof, commented_proof, header",
+      "lean_version": "Lean v4.11.0",
+      "license": "apache-2.0",
+      "full_proofs": "yes",
+      "decision": "skipped (Mathlib-internal theorems with per-file headers and variables)"
+    },
+    {
+      "category": "proofs",
+      "repository": "iiis-lean/NuminaMath-LEAN-Sol",
+      "items": "81,311 rows",
+      "fields": "NuminaMath-LEAN fields + NL solution",
+      "lean_version": "Mathlib v4.15.0",
+      "license": "apache-2.0",
+      "full_proofs": "yes",
+      "decision": "skipped (same proofs as NuminaMath-LEAN)"
+    },
+    {
+      "category": "proofs",
+      "repository": "iiis-lean/lean-math-formal-corpus",
+      "items": "2,877 rows",
+      "fields": "benchmark statements and proofs",
+      "lean_version": "v4.9.0 / v4.15.0 / v4.27.0 configs",
+      "license": "not stated",
+      "full_proofs": "partly",
+      "decision": "excluded (contains miniF2F and other benchmarks)"
+    },
+    {
+      "category": "proofs",
+      "repository": "LukeBailey181/minif2f_proofnet_lean_workbook_deepseek_prover_sols",
+      "items": "small",
+      "fields": "solutions per benchmark split",
+      "lean_version": "not stated",
+      "license": "not stated",
+      "full_proofs": "yes",
+      "decision": "excluded (contains miniF2F solutions)"
+    },
+    {
+      "category": "traced transitions",
+      "repository": "HyperCactus0/LeanTransitionCorpus",
+      "items": "14.8 GB, 51,134 files",
+      "fields": "state before/after, tactic, Syntax/Expr trees, premises, provenance",
+      "lean_version": "Mathlib 29dcec07 (sources: DeepSeek-Prover-V1, Goedel workbook, Numina, Mathlib, OProofs)",
+      "license": "apache-2.0 (packaging)",
+      "full_proofs": "per-step only",
+      "decision": "skipped (traced in a different environment; we trace ourselves)"
+    },
+    {
+      "category": "traced transitions",
+      "repository": "banach1729/goedel-workbook-lean427",
+      "items": "29,750 proofs, 60,341 tactic pairs",
+      "fields": "Lean files + tactic_pairs.jsonl",
+      "lean_version": "Lean v4.27.0",
+      "license": "apache-2.0",
+      "full_proofs": "yes",
+      "decision": "skipped (version mismatch)"
+    },
+    {
+      "category": "mathlib",
+      "repository": "LeanDojo Benchmark 4 v10 (Zenodo 12740403)",
+      "items": "122,517 theorems (random and novel_premises splits 118,517/2,000/2,000), corpus.jsonl premises",
+      "fields": "traced_tactics (state_before, tactic, annotated premises, state_after), corpus premises and imports",
+      "lean_version": "Mathlib 29dcec07 (2024-07-01, lean4:v4.10.0-rc1); closest LeanDojo release to the pin",
+      "license": "CC BY 2.0",
+      "full_proofs": "per-step only",
+      "decision": "selected (zenodo.org is reachable from the node)"
+    },
+    {
+      "category": "mathlib",
+      "repository": "l3lab/ntp-mathlib",
+      "items": "307,049 examples (7.8 GB)",
+      "fields": "state, srcUpToTactic, nextTactic, declUpToTactic, declId, decl, file_tag",
+      "lean_version": "Mathlib cf8e23a6, lean4:v4.4.0",
+      "license": "not stated",
+      "full_proofs": "per-step only",
+      "decision": "skipped (older Mathlib, no premise annotations)"
+    },
+    {
+      "category": "mathlib",
+      "repository": "internlm/Lean-Github",
+      "items": "29k theorems from 100+ repositories",
+      "fields": "lean-github.parquet",
+      "lean_version": "mixed",
+      "license": "apache-2.0",
+      "full_proofs": "per-step",
+      "decision": "skipped (not Mathlib premises)"
+    },
+    {
+      "category": "mathlib",
+      "repository": "ScalableMath/Lean-STaR-base / Lean-STaR-plus",
+      "items": "82 MB / 62 MB JSON",
+      "fields": "state, thought, tactic",
+      "lean_version": "not stated",
+      "license": "not stated (no dataset card)",
+      "full_proofs": "per-step only",
+      "decision": "skipped"
+    },
+    {
+      "category": "mathlib",
+      "repository": "mathlib-initiative/mathlib-tactics",
+      "items": "1M-10M tactic invocations",
+      "fields": "goal states and tactics (lean_scout)",
+      "lean_version": "Mathlib d13f23b7 (2026)",
+      "license": "apache-2.0",
+      "full_proofs": "per-step only",
+      "decision": "skipped (version mismatch)"
+    },
+    {
+      "category": "mathlib",
+      "repository": "FrenzyMath/state_tactic_pairs",
+      "items": "56,407 pairs",
+      "fields": "state, tactic",
+      "lean_version": "not stated (REAL-Prover)",
+      "license": "apache-2.0",
+      "full_proofs": "per-step only",
+      "decision": "skipped (no premises)"
+    }
+  ],
+  "raw_sizes_bytes": {
+    "goedel_lean_workbook_proofs": 16169192,
+    "deepseek_prover_v1": 19596516,
+    "lean_workbook": 99088611,
+    "numinamath_lean": 78434752,
+    "kimina_prover_promptset": 4366281,
+    "minif2f": 320856,
+    "leandojo_benchmark_4_v10": 901969028,
+    "leanabell_sft": 376644851,
+    "goedel_pset_v1": 827651252,
+    "stp_lean_0320": 1741344126,
+    "goedel_sft_v2": 6106221167
+  },
+  "normalized_sizes_bytes": {
+    "decontamination/proofs_goedel_lean_workbook_proofs.jsonl": 118242,
+    "decontamination/proofs_stp_lean_workbook.jsonl": 198594,
+    "decontamination/proofs_stp_conjectures.jsonl": 10003191,
+    "decontamination/proofs_goedel_sft_v2.jsonl": 4006617,
+    "decontamination/proofs_deepseek_prover_v1.jsonl": 115281,
+    "decontamination/proofs_lean_workbook.jsonl": 52532,
+    "decontamination/proofs_leanabell_sft.jsonl": 948685,
+    "decontamination/proofs_numinamath_lean_kimina.jsonl": 186388,
+    "decontamination/proofs_numinamath_lean_human.jsonl": 82680,
+    "decontamination/statements_lean_workbook.jsonl": 309565,
+    "decontamination/statements_goedel_pset_v1.jsonl": 7624041,
+    "decontamination/statements_numinamath_lean.jsonl": 366348,
+    "decontamination/statements_kimina_prover_promptset.jsonl": 25528,
+    "decontamination/near_misses.jsonl": 55053757,
+    "proofs/goedel_lean_workbook_proofs.jsonl": 22228442,
+    "proofs/stp_lean_workbook.jsonl": 63203351,
+    "proofs/stp_conjectures.jsonl": 1872710974,
+    "proofs/goedel_sft_v2.jsonl": 3699695843,
+    "proofs/deepseek_prover_v1.jsonl": 18752477,
+    "proofs/lean_workbook.jsonl": 14445810,
+    "proofs/leanabell_sft.jsonl": 148128166,
+    "proofs/numinamath_lean_kimina.jsonl": 44931917,
+    "proofs/numinamath_lean_human.jsonl": 23973774,
+    "proofs/selected_for_tracing.jsonl": 433735795,
+    "statements/lean_workbook.jsonl": 61445367,
+    "statements/goedel_pset_v1.jsonl": 1428808899,
+    "statements/numinamath_lean.jsonl": 63629652,
+    "statements/kimina_prover_promptset.jsonl": 4262796,
+    "statements/merged.jsonl": 1555181516,
+    "mathlib/tactics_random_train.jsonl": 352113418,
+    "mathlib/tactics_random_val.jsonl": 6085737,
+    "mathlib/tactics_random_test.jsonl": 6722963,
+    "mathlib/tactics_novel_premises_train.jsonl": 345917911,
+    "mathlib/tactics_novel_premises_val.jsonl": 10002766,
+    "mathlib/tactics_novel_premises_test.jsonl": 11072001,
+    "mathlib/premises.jsonl": 69401654,
+    "mathlib/file_imports.jsonl": 1868436
+  },
+  "lean_version_notes": [
+    "Our pin (lean/lean-toolchain) is Lean v4.9.0-rc1 with Mathlib d1d1e4b7 (2024-06-12), the upstream parent of the DeepSeek-Prover-V1.5 Mathlib fork commit 2f65ba7f, which Goedel-Prover (V1 and V2) and STP also pin.",
+    "Goedel workbook proofs, STP_Lean_0320 and Goedel SFT v2 come from provers run in that environment.",
+    "Lean Workbook proofs were found under Lean v4.8.0-rc1, one release older than the pin.",
+    "DeepSeek-Prover-V1 and Leanabell do not state their Lean version.",
+    "NuminaMath-LEAN and the Kimina prompt set target Mathlib v4.15.0, six Lean releases newer than the pin; their replay rate is unknown until they are traced.",
+    "LeanDojo Benchmark 4 v10 traces Mathlib 29dcec07 (2024-07-01, Lean v4.10.0-rc1), 19 days newer than the pinned Mathlib; premises added in that window do not exist in our environment.",
+    "Every proof is replayed in the pinned environment during tracing, so version drift costs coverage, not correctness."
+  ],
+  "minif2f_path": "/workspace/LLM-Search-Lean-Proofs/data/minif2f/minif2f.jsonl",
+  "seconds": 1181
+}
