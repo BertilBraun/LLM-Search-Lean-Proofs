@@ -1,0 +1,63 @@
+# Ablation-ladder row 1: the automation sweep of row 0 plus a few-shot base policy, best-first on the cumulative
+# log-probability. One vLLM server on one RTX 3090; the Lean pool is sized for that one GPU.
+
+[lean]
+pool_size = 24
+concurrency = 24
+
+[search]
+max_expansions = 64
+max_wall_seconds = 600.0
+max_depth = 16
+tactic_timeout_seconds = 10.0
+forbidden_steps = [
+    "exact?",
+    "apply?",
+    "rw?",
+    "simp?",
+    "simp_all?",
+    "dsimp?",
+    "aesop?",
+    "hint",
+    "rw_search",
+    "library_search",
+]
+
+[expander]
+kind = "automation_then_policy"
+
+[automation]
+tactics = [
+    "decide",
+    "omega",
+    "intros",
+    "constructor",
+    "rfl",
+    "simp",
+    "field_simp",
+    "norm_num",
+    "linarith",
+    "ring_nf",
+    "simp_all",
+    "nlinarith",
+    "aesop",
+]
+timeout_seconds = 10.0
+max_wall_clock_timeouts_per_tactic = 1
+
+[priority]
+kind = "cumulative_log_probability"
+length_exponent = 1.0
+# Median log-probability of the probe samples that made progress at temperature 0.8 (results/phase1_probe).
+automation_log_probability = -12.0
+
+[policy]
+model = "search-qwen3.5-2b"
+tokenizer = "Qwen/Qwen3.5-2B"
+server_urls = ["http://127.0.0.1:8100/v1"]
+sample_count = 16
+temperature = 0.8
+top_p = 1.0
+max_tokens = 256
+thinking = false
+few_shot = true
