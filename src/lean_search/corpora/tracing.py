@@ -44,6 +44,7 @@ WHOLE_PROOF_CHECKED = frozenset({TraceStatus.STEP_ERROR, TraceStatus.CLOSED_EARL
 PROBLEMS_KEPT = 3
 PROBLEM_CHARACTERS = 500
 HEADER_FAILURE_PREFIX = "The header does not elaborate"
+NO_IMPORT_MESSAGE = "The header imports nothing."
 _PARSE_ERROR = re.compile(r"<input>:\d+:\d+: ")
 logger = logging.getLogger(__name__)
 
@@ -329,9 +330,17 @@ def _is_header_failure(trace: ProofTrace) -> bool:
     )
 
 
+def imports_nothing(header: str) -> bool:
+    return not any(line.lstrip().startswith("import ") for line in header.splitlines())
+
+
 async def trace_batch(
     pool: LeanReplPool, batch: TracingBatch, preloaded_header: str, limits: TracingLimits
 ) -> list[ProofTrace]:
+    if imports_nothing(batch.header):
+        # Without imports the REPL lacks Lean itself, so the wrapper's base environment cannot be built.
+        failure = LeanError(NO_IMPORT_MESSAGE)
+        return [start_failure_trace(record, failure, 0.0, limits) for record in batch.records]
     traces: list[ProofTrace] = []
     async with pool.acquire() as repl:
         foreign = batch.header != preloaded_header

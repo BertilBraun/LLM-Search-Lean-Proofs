@@ -16,6 +16,7 @@ from lean_search.corpora.tracing import (
     TracingShard,
     assign_split,
     attempt_status,
+    imports_nothing,
     is_parse_error,
     plan_batches,
     plan_shards,
@@ -144,6 +145,19 @@ def test_is_parse_error(failure: LeanError | LeanTimeout | None, expected: bool)
 )
 def test_start_failure_status(failure: LeanError | ReplFailure, status: TraceStatus) -> None:
     assert start_failure_trace(RECORD, failure, 0.5, LIMITS).proof.status is status
+
+
+@pytest.mark.parametrize(
+    ("header", "expected"),
+    [
+        ("", True),
+        ("set_option maxHeartbeats 500000", True),
+        ("import Mathlib", False),
+        ("import Mathlib\nopen Real", False),
+    ],
+)
+def test_imports_nothing(header: str, expected: bool) -> None:
+    assert imports_nothing(header) is expected
 
 
 def test_start_failure_yields_no_training_steps() -> None:
