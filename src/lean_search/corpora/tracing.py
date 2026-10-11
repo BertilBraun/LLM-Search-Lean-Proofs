@@ -40,6 +40,9 @@ EXCLUDED_SOURCES = frozenset({"stp_conjectures"})
 VALIDATION_FRACTION = 0.02
 VERIFICATION_FRACTION = 0.02
 FOREIGN_HEADER_BATCH_SIZE = 32
+WHOLE_PROOF_CHECKED = frozenset({TraceStatus.STEP_ERROR, TraceStatus.CLOSED_EARLY, TraceStatus.GOALS_REMAINING})
+PROBLEMS_KEPT = 3
+PROBLEM_CHARACTERS = 500
 HEADER_FAILURE_PREFIX = "The header does not elaborate"
 _PARSE_ERROR = re.compile(r"<input>:\d+:\d+: ")
 logger = logging.getLogger(__name__)
@@ -174,6 +177,10 @@ def state_before(step: TracedStep) -> ProofState:
     return ProofState(step.header, step.formal_statement, step.previous_steps, step.goals_before, -1, 0, heartbeats)
 
 
+def shortened(problems: Sequence[str]) -> tuple[str, ...]:
+    return tuple(problem[:PROBLEM_CHARACTERS] for problem in problems[:PROBLEMS_KEPT])
+
+
 def _failure_fields(failure: StepFailure | None) -> tuple[str, str]:
     match failure:
         case None:
@@ -213,6 +220,8 @@ def start_failure_trace(
         verified=None,
         plain_verified=None,
         verification_problems=(),
+        whole_proof_verified=None,
+        whole_proof_problems=(),
     )
     return ProofTrace(proof, ())
 
@@ -275,6 +284,10 @@ async def trace_proof(repl: LeanRepl, record: ProofRecord, limits: TracingLimits
     verification: VerificationResult | None = None
     if verify and attempt.status is TraceStatus.COMPLETE:
         verification = await repl.verify_state(attempt.states[-1])
+    whole_proof: VerificationResult | None = None
+    if attempt.status in WHOLE_PROOF_CHECKED:
+        # Separates proofs that do not compile here from proofs that only fail when replayed step by step.
+        whole_proof = await repl.verify_proof(record.formal_statement, record.tactic_proof, record.header)
     split = assign_split(record.formal_statement)
     message, repl_failure_kind = _failure_fields(attempt.failure)
     last_state = attempt.states[-1]
@@ -302,6 +315,8 @@ async def trace_proof(repl: LeanRepl, record: ProofRecord, limits: TracingLimits
         verified=None if verification is None else verification.verified,
         plain_verified=None if verification is None else verification.plain_verified,
         verification_problems=() if verification is None else verification.problems,
+        whole_proof_verified=None if whole_proof is None else whole_proof.verified,
+        whole_proof_problems=() if whole_proof is None else shortened(whole_proof.problems),
     )
     if attempt.status is not TraceStatus.COMPLETE:
         return ProofTrace(proof, ())

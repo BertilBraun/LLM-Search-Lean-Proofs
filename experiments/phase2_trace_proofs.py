@@ -50,6 +50,7 @@ PARTS = ("pilot", "main")
 SEARCH_PROCESS_PATTERN = "run_search.py"
 SEARCH_POLL_SECONDS = 20.0
 COMMAND_TIMEOUT_SECONDS = 120.0
+SEARCH_STEP_SECONDS = 20.0
 FAILURE_REASONS_PER_SOURCE = 8
 DISAGREEMENTS_SHOWN = 20
 REMAINING_STEP_BUCKETS = ((1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6), (7, 7), (8, 15), (16, 31), (32, None))
@@ -138,6 +139,9 @@ class SourceSummary:
     block_fallbacks: int
     block_fallbacks_completed: int
     trailing_steps_after_closure: int
+    failures_checked_as_whole_proofs: int
+    failures_compiling_as_whole_proofs: int
+    complete_proofs_with_slow_steps: int
     training_steps: int
     mean_training_steps_per_complete_proof: float
     lean_seconds: float
@@ -206,6 +210,9 @@ class SourceAccumulator:
     block_fallbacks: int = 0
     block_fallbacks_completed: int = 0
     trailing_steps_after_closure: int = 0
+    failures_checked_as_whole_proofs: int = 0
+    failures_compiling_as_whole_proofs: int = 0
+    complete_proofs_with_slow_steps: int = 0
     training_steps: int = 0
     lean_seconds: float = 0.0
 
@@ -218,6 +225,11 @@ class SourceAccumulator:
         self.trailing_steps_after_closure += (
             proof.status is TraceStatus.COMPLETE and len(proof.applied_steps) > training_steps
         )
+        self.failures_checked_as_whole_proofs += proof.whole_proof_verified is not None
+        self.failures_compiling_as_whole_proofs += proof.whole_proof_verified is True
+        self.complete_proofs_with_slow_steps += proof.status is TraceStatus.COMPLETE and any(
+            seconds > SEARCH_STEP_SECONDS for seconds in proof.step_seconds
+        )
         self.training_steps += training_steps
         self.lean_seconds += proof.elapsed_seconds
 
@@ -228,6 +240,9 @@ class SourceAccumulator:
         self.block_fallbacks += other.block_fallbacks
         self.block_fallbacks_completed += other.block_fallbacks_completed
         self.trailing_steps_after_closure += other.trailing_steps_after_closure
+        self.failures_checked_as_whole_proofs += other.failures_checked_as_whole_proofs
+        self.failures_compiling_as_whole_proofs += other.failures_compiling_as_whole_proofs
+        self.complete_proofs_with_slow_steps += other.complete_proofs_with_slow_steps
         self.training_steps += other.training_steps
         self.lean_seconds += other.lean_seconds
 
@@ -243,6 +258,9 @@ class SourceAccumulator:
             block_fallbacks=self.block_fallbacks,
             block_fallbacks_completed=self.block_fallbacks_completed,
             trailing_steps_after_closure=self.trailing_steps_after_closure,
+            failures_checked_as_whole_proofs=self.failures_checked_as_whole_proofs,
+            failures_compiling_as_whole_proofs=self.failures_compiling_as_whole_proofs,
+            complete_proofs_with_slow_steps=self.complete_proofs_with_slow_steps,
             training_steps=self.training_steps,
             mean_training_steps_per_complete_proof=round(self.training_steps / complete, 2) if complete else 0.0,
             lean_seconds=round(self.lean_seconds, 1),
@@ -256,7 +274,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--sources", help="comma-separated sources (default: all in tracing order)")
     parser.add_argument("--pool-size", type=int, default=16)
     parser.add_argument("--heartbeats", type=int, default=200_000)
-    parser.add_argument("--timeout-seconds", type=float, default=20.0)
+    parser.add_argument("--timeout-seconds", type=float, default=60.0, help="wall-clock backstop per step")
     parser.add_argument("--pilot-size", type=int, default=2000, help="proofs per source in the pilot part")
     parser.add_argument("--shard-size", type=int, default=1000)
     parser.add_argument("--output-directory", type=Path, default=DATA_DIRECTORY / "traced")
@@ -419,6 +437,10 @@ def failure_reason(proof: TracedProof) -> str:
             return "timeout: wall clock"
         case TraceStatus.TIMEOUT:
             return "timeout: heartbeats"
+        case _ if proof.whole_proof_verified:
+            return f"{proof.status}, whole proof compiles: {message_category(proof.failure_message)}"
+        case _ if proof.whole_proof_problems:
+            return f"{proof.status}: {message_category(proof.whole_proof_problems[0])}"
         case TraceStatus.START_FAILURE | TraceStatus.STEP_ERROR:
             return f"{proof.status}: {message_category(proof.failure_message)}"
         case _:
@@ -565,10 +587,22 @@ def render_markdown(summary: TracingSummary, output_directory: Path) -> str:
         f"({summary.proofs_planned:,} proofs planned; `stp_conjectures` excluded). Every step ran with "
         f"{', '.join(f'{value:,}' for value in summary.heartbeats)} heartbeats and a wall-clock backstop. "
         "Only complete proofs (every step succeeds, no goals at the end) yield training steps; steps after the goals "
-        "are closed are dropped.",
+        "are closed are dropped. Proofs failing at a step (step_error, closed_early, goals_remaining) are re-checked "
+        "as whole theorems with `verify_proof`: those that compile fail only in step-by-step replay, the others do "
+        "not compile in the pinned environment (their failure reason is Lean's first error for the whole proof).",
         "## Replay by source",
         markdown_table(
-            ["source", "planned", "attempted", "complete rate", *status_names, "block fallback (completed)", "steps"],
+            [
+                "source",
+                "planned",
+                "attempted",
+                "complete rate",
+                *status_names,
+                "block fallback (completed)",
+                "failures compiling as whole proofs",
+                f"complete with a step > {SEARCH_STEP_SECONDS:.0f} s",
+                "steps",
+            ],
             [
                 [
                     entry.source,
@@ -577,6 +611,8 @@ def render_markdown(summary: TracingSummary, output_directory: Path) -> str:
                     f"{entry.completion_rate:.1%}",
                     *(entry.statuses[name] for name in status_names),
                     f"{entry.block_fallbacks} ({entry.block_fallbacks_completed})",
+                    f"{entry.failures_compiling_as_whole_proofs}/{entry.failures_checked_as_whole_proofs}",
+                    entry.complete_proofs_with_slow_steps,
                     entry.training_steps,
                 ]
                 for entry in by_source

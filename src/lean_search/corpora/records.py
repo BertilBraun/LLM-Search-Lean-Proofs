@@ -136,6 +136,8 @@ class TracedProof:
     verified: bool | None
     plain_verified: bool | None
     verification_problems: tuple[str, ...]
+    whole_proof_verified: bool | None
+    whole_proof_problems: tuple[str, ...]
 
 
 Record = ProofRecord | StatementRecord | TacticExample | PremiseRecord | FileImports | TracedStep | TracedProof
@@ -198,6 +200,6 @@ def read_traced_proofs(path: Path) -> Iterator[TracedProof]:
         fields["split"] = DataSplit(fields["split"])
         fields["status"] = TraceStatus(fields["status"])
         fields["path"] = TracePath(fields["path"])
-        for name in ("applied_steps", "step_seconds", "verification_problems"):
+        for name in ("applied_steps", "step_seconds", "verification_problems", "whole_proof_problems"):
             fields[name] = tuple(fields[name])
         yield TracedProof(**fields)

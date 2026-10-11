@@ -68,6 +68,10 @@ async def test_broken_proof_yields_no_training_steps(repl: LeanRepl) -> None:
     assert (await trace(repl, BROKEN)).steps == ()
 
 
+async def test_broken_proof_does_not_compile_as_a_whole_proof(repl: LeanRepl) -> None:
+    assert (await trace(repl, BROKEN)).proof.whole_proof_verified is False
+
+
 async def test_bullets_are_single_steps(repl: LeanRepl) -> None:
     steps = (await trace(repl, BULLETS)).steps
     assert [step.step for step in steps] == ["constructor", "· exact h₀", "· exact h₁"]
