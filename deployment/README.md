@@ -13,6 +13,8 @@ node's checkout.
 | `setup_remote.sh` | node | Provision a node: clone the repo, then `setup_python.sh` and `setup_lean.sh`. |
 | `environment.sh` | node | Paths, mirrors and `PATH`; sourced by everything else. |
 | `setup_python.sh` | node | Create the virtual environment from `uv.lock`. |
+| `serve_model.sh` | node | Start a detached vLLM server for one model on one GPU (prefix caching, runtime LoRA). |
+| `stop_model.sh` | node | Stop servers started by `serve_model.sh` (by name or `--all`). |
 | `setup_lean.sh` | node | Install elan, the pinned Lean toolchain, Mathlib (from cache) and the REPL. |
 
 ## First-time setup
@@ -47,6 +49,54 @@ REPL facts for this version (handled in `src/lean_search/lean/`): it never flush
 `stdbuf -oL`); tactic-level `set_option maxHeartbeats N in` does not change the heartbeat limit in Lean 4.9, so the
 wrapper defines its own `lean_search_heartbeats N => tactics`; `autoImplicit` is on (Lean's default); proof states
 are never freed, so processes are restarted by memory and proof-state thresholds.
+
+## Python environment and model serving
+
+`setup_python.sh` installs `uv.lock` (Python 3.12, extra `ml`) in about a minute. The lock records the Tsinghua PyPI
+mirror, so `uv sync --locked` downloads from it (~50 MB/s on the node). vLLM 0.31.0 pins torch 2.13.0, whose PyPI
+wheels bundle the CUDA 13.0 runtime; driver 595 supports it and sm_86 is in the arch list, so the system CUDA 12.8
+toolkit is not used. Models are fetched with `hf download <repository>` into `$HF_HOME`; `environment.sh` disables
+Xet, which hf-mirror.com does not proxy (401).
+
+```bash
+deployment/on_node.sh 'deployment/serve_model.sh qwen3.5-2b Qwen/Qwen3.5-2B 0 8000'   # returns once healthy
+deployment/on_node.sh 'deployment/stop_model.sh --all'
+```
+
+| Model | Repository @ revision | Architecture | Context | Chat template thinking default |
+|---|---|---|---|---|
+| Qwen3.5-0.8B | `Qwen/Qwen3.5-0.8B` @ `2fc0636` | hybrid Gated DeltaNet + attention, vision-language | 262,144 | off |
+| Qwen3.5-2B | `Qwen/Qwen3.5-2B` @ `15852e8` | same | 262,144 | off |
+| Qwen3.5-2B-Base | `Qwen/Qwen3.5-2B-Base` @ `b1485b2` | same | 262,144 | off (same template) |
+| Qwen3.5-4B | `Qwen/Qwen3.5-4B` @ `851bf6e` | same | 262,144 | on |
+| Qwen3-1.7B | `Qwen/Qwen3-1.7B` @ `70d244c` | dense attention | 40,960 | on |
+| Qwen2.5-Math-1.5B | `Qwen/Qwen2.5-Math-1.5B` @ `4a83ca6` | dense attention | 4,096 | none (adds a default system prompt) |
+| Qwen2.5-Math-1.5B-Instruct | `Qwen/Qwen2.5-Math-1.5B-Instruct` @ `aafeb0f` | dense attention | 4,096 | none (adds a default system prompt) |
+
+Thinking is switched with the chat-template argument `enable_thinking` (`chat_template_kwargs` in the chat API):
+`False` pre-fills an empty `<think>\n\n</think>\n\n` block, `True` opens `<think>\n`. Qwen3.5-0.8B/2B default to off,
+Qwen3.5-4B and Qwen3-1.7B to on, so always pass it explicitly. Qwen2.5-Math must be served with
+`MAX_MODEL_LEN=4096`.
+
+vLLM facts for these models:
+
+- Qwen3.5 checkpoints are vision-language models (`Qwen3_5ForConditionalGeneration`); `serve_model.sh` adds
+  `--language-model-only` so no memory goes to the vision tower.
+- Prefix caching on Qwen3.5 runs in Mamba cache mode `align` (set automatically): the KV block grows to 544 tokens
+  and the recurrent state is checkpointed once per block, so by default the n samples of a request recompute the
+  prompt tail past the last block boundary. `--prefix-match-unit 16` (set by `serve_model.sh`) fixes that: for n=16
+  the prompt-token cache hit rate rises from 0.72 to 0.90 and throughput by 15–21% on Qwen3.5-2B.
+- LoRA works for Qwen3.5, including the packed Gated DeltaNet projections (`in_proj_qkvz`, `in_proj_ba`); the
+  vision tower is not adapted. Adapters load at runtime (`POST /v1/load_lora_adapter` with `lora_name` and
+  `lora_path`, then request `"model": "<lora_name>"`); `lean_search.policy.adapters` writes adapters targeting
+  exactly the language-model linear layers and merges them.
+- Returned log-probabilities are raw (temperature 1, before top-p) and carry bf16 logit resolution: steps of
+  0.125 nats when logits are around 16–32. vLLM rejects `n > 1` at temperature 0.
+- At n=16 a 3090 is compute-bound (100% utilization at the 350 W cap). The defaults `max_num_seqs=256` and
+  `max_num_batched_tokens=2048` are kept: 512 or 1024 sequences gain at most 3% and cause preemptions with
+  1500-token prompts, because each running Qwen3.5 sequence holds a 544-token-sized recurrent-state page.
+- A start takes 2–4 minutes: torch.compile and Triton autotuning are cached under `~/.cache/vllm` and
+  `~/.triton` (not persistent), and CUDA graphs are captured twice (memory profiling, then serving).
 
 ## Node layout
 
