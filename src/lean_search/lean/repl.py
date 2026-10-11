@@ -153,7 +153,8 @@ def read_memory_usage(process_id: int) -> MemoryUsage:
             key, _, value = line.partition(":")
             if key in ("VmRSS", "RssAnon"):
                 fields[key] = int(value.split()[0]) * 1024
-    return MemoryUsage(resident_bytes=fields["VmRSS"], anonymous_bytes=fields["RssAnon"])
+    # A crashed process that asyncio has not reaped yet is a zombie without memory lines.
+    return MemoryUsage(resident_bytes=fields.get("VmRSS", 0), anonymous_bytes=fields.get("RssAnon", 0))
 
 
 def _messages(response: dict, severity: str) -> list[str]:
