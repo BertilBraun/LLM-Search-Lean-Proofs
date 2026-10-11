@@ -158,7 +158,7 @@ def render_markdown(summary: ValueRunSummary) -> str:
             optional(evaluation.metrics.spearman, ".3f"),
             optional(evaluation.metrics.dead_auc, ".3f"),
             f"{evaluation.bin_mass:.3f}",
-            f"{evaluation.bins_in_top_k:.1%}",
+            f"{evaluation.served_h_error:.4f}",
         ]
         for evaluation in result.evaluations
     ]
@@ -174,10 +174,11 @@ def render_markdown(summary: ValueRunSummary) -> str:
         f"On {final.examples:,} held-out states. Bin accuracy: the most likely of the nine bins is the label's bin. "
         "MAE: expected steps given alive against the label (8+ read out as in the readout). Spearman: h against the "
         "exact remaining steps. Dead AUC: p_dead separating dead from exact labels. Bin mass: full-vocabulary "
-        f"probability of the nine bin tokens; in top-{config.evaluation.served_top_k}: states whose nine bin tokens "
-        "are all among the most likely tokens vLLM returns.",
+        f"probability of the nine bin tokens. Served h error: mean |h read from the "
+        f"top-{config.evaluation.served_top_k} logprobs vLLM returns (bins outside them at the smallest returned "
+        "logprob) − h from all nine bins|.",
         markdown_table(
-            ["Step", "Loss", "Bin accuracy", "MAE", "Spearman", "Dead AUC", "Bin mass", "Bins in top-k"],
+            ["Step", "Loss", "Bin accuracy", "MAE", "Spearman", "Dead AUC", "Bin mass", "Served h error"],
             evaluations,
         ),
         "Final confusion (rows: label bin, columns: most likely bin):",
@@ -225,7 +226,7 @@ def main() -> None:
             f"evaluation step {record.step}: loss {record.value_loss:.4f}, bin accuracy "
             f"{optional(metrics.bin_accuracy, '.3f')}, MAE {optional(metrics.alive_mean_absolute_error, '.3f')}, "
             f"Spearman {optional(metrics.spearman, '.3f')}, dead AUC {optional(metrics.dead_auc, '.3f')}, bin mass "
-            f"{record.bin_mass:.3f}, bins in top-k {record.bins_in_top_k:.3f} ({record.seconds:.0f} s)",
+            f"{record.bin_mass:.3f}, served h error {record.served_h_error:.4f} ({record.seconds:.0f} s)",
             flush=True,
         )
 

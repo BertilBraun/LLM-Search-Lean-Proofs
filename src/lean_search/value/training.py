@@ -17,7 +17,7 @@ from lean_search.training.sft import (
     load_trainable_model,
     trainable_parameters,
 )
-from lean_search.value.bins import Readout
+from lean_search.value.bins import Readout, bin_distribution
 from lean_search.value.labels import ValueExample
 from lean_search.value.loss import LossConfig, bin_mass_losses, label_tensors, value_losses
 from lean_search.value.metrics import ValueMetrics, value_metrics
@@ -91,8 +91,8 @@ class ValueEvaluationRecord:
     value_loss: float
     # Mean full-vocabulary probability of the nine bin tokens together.
     bin_mass: float
-    # Examples whose nine bin tokens are all among the full vocabulary's served_top_k most likely tokens.
-    bins_in_top_k: float
+    # Mean |h read from the served_top_k logprobs vLLM returns - h from all nine bins|.
+    served_h_error: float
     metrics: ValueMetrics
     seconds: float
 
@@ -179,7 +179,8 @@ def evaluate(
     distributions: list[list[float]] = [[] for _ in examples]
     weighted_loss = 0.0
     bin_mass = 0.0
-    bins_in_top_k = 0
+    served_h_error = 0.0
+    token_ids = bin_ids.tolist()
     for micro_batch in micro_batches:
         batch_examples = [examples[index] for index in micro_batch]
         batch = collate_prompts(batch_examples, pad_token_id, device)
@@ -189,10 +190,18 @@ def evaluate(
         labels = label_tensors([example.example for example in batch_examples], device)
         weighted_loss += (labels.weights * value_losses(bin_logits, labels, config.loss.smoothing_sigma)).sum().item()
         bin_mass += torch.exp(-bin_mass_losses(full_logits, bin_ids)).sum().item()
-        top_k = full_logits.topk(config.evaluation.served_top_k, dim=-1).indices
-        bins_in_top_k += int((top_k[:, :, None] == bin_ids[None, None, :]).any(dim=1).all(dim=1).sum().item())
-        for index, probabilities in zip(micro_batch, torch.softmax(bin_logits, dim=-1).tolist(), strict=True):
+        top_k = torch.log_softmax(full_logits, dim=-1).topk(config.evaluation.served_top_k, dim=-1)
+        for index, probabilities, top_ids, top_logprobs in zip(
+            micro_batch,
+            torch.softmax(bin_logits, dim=-1).tolist(),
+            top_k.indices.tolist(),
+            top_k.values.tolist(),
+            strict=True,
+        ):
             distributions[index] = probabilities
+            served = bin_distribution(dict(zip(top_ids, top_logprobs, strict=True)), token_ids)
+            served_steps = config.readout.remaining_steps(served.probabilities)
+            served_h_error += abs(served_steps - config.readout.remaining_steps(probabilities))
     model.train()
     value_examples = [example.example for example in examples]
     return ValueEvaluationRecord(
@@ -200,7 +209,7 @@ def evaluate(
         examples=len(examples),
         value_loss=weighted_loss / sum(example.weight for example in value_examples),
         bin_mass=bin_mass / len(examples),
-        bins_in_top_k=bins_in_top_k / len(examples),
+        served_h_error=served_h_error / len(examples),
         metrics=value_metrics(distributions, value_examples, config.readout),
         seconds=time.perf_counter() - started,
     )

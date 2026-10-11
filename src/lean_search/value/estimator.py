@@ -3,16 +3,15 @@
 import asyncio
 import contextlib
 import itertools
-import math
 import time
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 
 from lean_search.policy.client import NextTokenDistribution, PolicyClient
 from lean_search.policy.expander import load_tokenizer, served_max_model_length
 from lean_search.search.priority import ValueEstimates
 from lean_search.search.tree import Node
-from lean_search.value.bins import BIN_COUNT, DEAD_BIN
+from lean_search.value.bins import BIN_COUNT, DEAD_BIN, BinDistribution, bin_distribution
 from lean_search.value.config import ValueConfig
 from lean_search.value.prompts import ValueTokenizer, bin_token_ids, render_value_prompt
 
@@ -24,12 +23,6 @@ TOO_LONG_DISTRIBUTION = tuple(float(index == DEAD_BIN) for index in range(BIN_CO
 class BinnedValueEstimates(ValueEstimates):
     # Per node, the probabilities of the bins 1..7, 8+, dead.
     distributions: tuple[tuple[float, ...], ...] = ()
-
-
-@dataclass(frozen=True)
-class BinDistribution:
-    probabilities: tuple[float, ...]
-    missing_bin_tokens: int
 
 
 @dataclass(frozen=True)
@@ -54,17 +47,6 @@ class ValueStatistics:
         self.cached_prompt_tokens += distribution.cached_prompt_token_count
         self.missing_bin_tokens += bins.missing_bin_tokens
         self.request_seconds += seconds
-
-
-def bin_distribution(logprob_by_token_id: Mapping[int, float], token_ids: Sequence[int]) -> BinDistribution:
-    """Renormalized over the bin tokens; one outside the top-k gets the smallest returned logprob, its upper bound."""
-    floor = min(logprob_by_token_id.values())
-    logprobs = [logprob_by_token_id.get(token_id, floor) for token_id in token_ids]
-    largest = max(logprobs)
-    weights = [math.exp(logprob - largest) for logprob in logprobs]
-    total = sum(weights)
-    missing = sum(token_id not in logprob_by_token_id for token_id in token_ids)
-    return BinDistribution(tuple(weight / total for weight in weights), missing)
 
 
 class ValueModelEstimator:

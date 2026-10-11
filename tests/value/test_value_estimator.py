@@ -8,12 +8,11 @@ from value_trees import TreeBuilder
 
 from lean_search.search import AStar, PriorityKind
 from lean_search.search.config import parse_run_config
-from lean_search.value.bins import Readout
+from lean_search.value.bins import Readout, bin_distribution
 from lean_search.value.config import ValueConfig
 from lean_search.value.estimator import (
     TOO_LONG_DISTRIBUTION,
     ValueModelEstimator,
-    bin_distribution,
     open_value_estimator,
 )
 

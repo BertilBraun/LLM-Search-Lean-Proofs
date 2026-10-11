@@ -65,8 +65,10 @@ On the nine bin logits `z` at the prompt's last position, `log p = log_softmax(z
 - dead: `−log p_dead`.
 
 Each example's loss is multiplied by its weight; a step averages over its examples' weights. A second term,
-`bin_mass_weight · −log Σ_bins softmax(full logits)`, keeps the bins among the top-20 tokens vLLM returns
-(the nine-way softmax alone leaves the rest of the vocabulary unconstrained). With one-hot targets and weight 1 the two
+`bin_mass_weight · −log Σ_bins softmax(full logits)`, puts the vocabulary's mass on the bins, so the bins that
+matter are among the top-20 tokens vLLM returns (the nine-way softmax alone leaves the rest of the vocabulary
+unconstrained; zero-shot only 68% of the mass is on the bins). A bin outside the top 20, such as `dead` when no dead
+labels were trained, is then negligible. With one-hot targets and weight 1 the two
 terms add up to the ordinary full-vocabulary cross-entropy of the bin token.
 
 ## Training (`training.py`, `experiments/phase3_value.py`)
@@ -76,7 +78,8 @@ checkpointing, length-grouped micro-batches and the cosine schedule of `training
 hidden state is projected onto the vocabulary. Validation: weighted loss, bin accuracy (exact and dead labels), MAE
 of the expected steps given alive (exact labels; `8+` read out as in the readout), Spearman correlation of `h` with
 the exact remaining steps, dead-vs-exact AUC of `p_dead`, mean probability of censored events, the bins' full-vocabulary
-mass and the share of states whose nine bins are all in vLLM's top-k.
+mass and the served h error: the mean change of `h` when it is read from vLLM's top-20 logprobs as the estimator
+does.
 
 ## Serving (`estimator.py`)
 
