@@ -380,10 +380,17 @@ def write_summary(arguments: argparse.Namespace) -> None:
     markdown = [
         "# Phase 0: Lean environment",
         "",
-        f"`{toolchain}`, Mathlib `{revisions['mathlib']}`, REPL `{revisions['REPL']}`. Other workloads share the "
-        f"node; its state when each set of parts started: {load_part('context')}.",
+        f"`{toolchain}`, Mathlib `{revisions['mathlib']}`, REPL `{revisions['REPL']}`. Other workloads shared the "
+        "node; its state when each set of parts started:",
         "",
     ]
+    for parts, context in (load_part("context") or {}).items():
+        markdown.append(
+            f"- {parts}: load average {context['load_average'][0]:.1f}, cgroup memory "
+            f"{context['cgroup_memory_current_gibibytes']:.1f} GiB ({context['cgroup_anonymous_gibibytes']:.1f} GiB "
+            "anonymous)"
+        )
+    markdown.append("")
 
     if (statement_rows := load_part("statements")) is not None:
         checks = [StatementCheck(**row) for row in statement_rows]
@@ -404,7 +411,8 @@ def write_summary(arguments: argparse.Namespace) -> None:
             f"{statements['started']}/{statements['total']} statements yield a proof state "
             f"({statements['started_by_split']}). Initial goal equal to DeepSeek's `goal` field (normalized): "
             f"{statements['goal_matches_dataset']}/{statements['total']}. Statements that only elaborate with "
-            f"`autoImplicit` (the REPL default): {len(statements['needs_auto_implicit'])}. Median start time "
+            f"`autoImplicit` (the REPL default): {len(statements['needs_auto_implicit'])} "
+            f"({', '.join(statements['needs_auto_implicit'])}). Median start time "
             f"{statements['median_start_seconds']:.3f} s.",
             "",
         ]
@@ -438,7 +446,8 @@ def write_summary(arguments: argparse.Namespace) -> None:
             f"One process, {last.tactic_applications} applications of {', '.join(MEMORY_TACTICS)} (50k heartbeats) to "
             f"initial states of miniF2F-valid, {last.proof_states} proof states created: anonymous RSS "
             f"{first.anonymous_mebibytes:.0f} → {last.anonymous_mebibytes:.0f} MiB, "
-            f"**{growth:.1f} MiB per 100 tactic applications**.",
+            f"**{growth:.1f} MiB per 100 tactic applications** "
+            f"({growth * last.tactic_applications / 100 / last.proof_states:.2f} MiB per proof state).",
             "",
         ]
 
@@ -527,13 +536,14 @@ async def main(arguments: argparse.Namespace) -> None:
     valid = [problem for problem in problems if problem.split == Split.VALID]
     if arguments.limit is not None:
         problems, valid = problems[: arguments.limit], valid[: arguments.limit]
-    parts = set(arguments.parts.split(","))
-    context = {
-        "load_average": os.getloadavg(),
-        "cgroup_memory_current_gibibytes": cgroup_memory_current() / GIBIBYTE,
-        "cgroup_anonymous_gibibytes": cgroup_anonymous_memory() / GIBIBYTE,
-    }
-    save_part("context", {**(load_part("context") or {}), ",".join(sorted(parts)): context})
+    parts = set(arguments.parts.split(",")) - {""}
+    if parts:
+        context = {
+            "load_average": os.getloadavg(),
+            "cgroup_memory_current_gibibytes": cgroup_memory_current() / GIBIBYTE,
+            "cgroup_anonymous_gibibytes": cgroup_anonymous_memory() / GIBIBYTE,
+        }
+        save_part("context", {**(load_part("context") or {}), ",".join(sorted(parts)): context})
     if "statements" in parts:
         save_part("statements", [asdict(check) for check in await check_statements(problems, arguments.pool_size)])
     if "process_costs" in parts:
@@ -556,7 +566,11 @@ async def main(arguments: argparse.Namespace) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--parts", default="statements,process_costs,memory_growth,concurrency,sweep")
+    parser.add_argument(
+        "--parts",
+        default="statements,process_costs,memory_growth,concurrency,sweep",
+        help="comma-separated parts to measure; empty only rewrites the summary from saved parts",
+    )
     parser.add_argument("--limit", type=int, default=None, help="only the first N problems (smoke test)")
     parser.add_argument("--pool-size", type=int, default=32)
     parser.add_argument("--memory-applications", type=int, default=2000)
