@@ -8,6 +8,8 @@ from lean_search.lean.repl import (
     MemoryUsage,
     Outcome,
     ProofState,
+    ReplFailure,
+    ReplFailureKind,
     TacticResult,
     VerificationResult,
 )
@@ -24,6 +26,8 @@ __all__ = [
     "MemoryUsage",
     "Outcome",
     "ProofState",
+    "ReplFailure",
+    "ReplFailureKind",
     "TacticResult",
     "VerificationResult",
     "find_forbidden_tokens",

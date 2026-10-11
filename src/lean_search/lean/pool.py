@@ -2,17 +2,29 @@
 
 import asyncio
 import contextlib
+import logging
 from collections.abc import AsyncIterator, Sequence
 
 from lean_search.lean.repl import LeanRepl, LeanReplConfig
 
+logger = logging.getLogger(__name__)
+
 
 class LeanReplPool:
-    """Processes past `restart_fraction` of their limits are restarted on release, so restarts fall between uses."""
+    """Processes past `restart_fraction` of their limits, or whose user raised, are restarted before reuse."""
 
-    def __init__(self, size: int, config: LeanReplConfig | None = None, restart_fraction: float = 0.5) -> None:
+    def __init__(
+        self,
+        size: int,
+        config: LeanReplConfig | None = None,
+        restart_fraction: float = 0.5,
+        restart_attempts: int = 3,
+        restart_backoff_seconds: float = 2.0,
+    ) -> None:
         self.repls = [LeanRepl(config) for _ in range(size)]
         self.restart_fraction = restart_fraction
+        self.restart_attempts = restart_attempts
+        self.restart_backoff_seconds = restart_backoff_seconds
         self._headers: list[str] = []
         self._idle: asyncio.Queue[LeanRepl] = asyncio.Queue()
         self._restarts: set[asyncio.Task[None]] = set()
@@ -35,16 +47,19 @@ class LeanReplPool:
         repl = await self._idle.get()
         try:
             yield repl
-        finally:
-            if repl.exceeds_limits(self.restart_fraction):
-                restart = asyncio.create_task(self._restart(repl))
-                self._restarts.add(restart)
-                restart.add_done_callback(self._restarts.discard)
-            else:
-                self._idle.put_nowait(repl)
+        except BaseException:
+            # The body may have been cancelled mid-request, so never hand this process out unrestarted.
+            self._schedule_restart(repl)
+            raise
+        if repl.needs_restart or repl.exceeds_limits(self.restart_fraction):
+            self._schedule_restart(repl)
+        else:
+            self._idle.put_nowait(repl)
 
     async def close(self) -> None:
-        await asyncio.gather(*self._restarts)
+        for restart in self._restarts:
+            restart.cancel()
+        await asyncio.gather(*self._restarts, return_exceptions=True)
         await asyncio.gather(*(repl.close() for repl in self.repls))
 
     async def _prepare(self, repl: LeanRepl) -> None:
@@ -52,7 +67,22 @@ class LeanReplPool:
         for header in self._headers:
             await repl.load_header(header)
 
+    def _schedule_restart(self, repl: LeanRepl) -> None:
+        restart = asyncio.create_task(self._restart(repl))
+        self._restarts.add(restart)
+        restart.add_done_callback(self._restarts.discard)
+
     async def _restart(self, repl: LeanRepl) -> None:
-        await repl.restart()
-        await self._prepare(repl)
-        self._idle.put_nowait(repl)
+        try:
+            for attempt in range(self.restart_attempts):
+                if attempt:
+                    await asyncio.sleep(self.restart_backoff_seconds * 2 ** (attempt - 1))
+                try:
+                    await repl.restart()
+                    await self._prepare(repl)
+                    return
+                except Exception:
+                    logger.exception("Restarting a pooled Lean REPL failed (attempt %d)", attempt + 1)
+        finally:
+            # Even after failed attempts the slot returns: the REPL retries its start on use and reports ReplFailure.
+            self._idle.put_nowait(repl)
