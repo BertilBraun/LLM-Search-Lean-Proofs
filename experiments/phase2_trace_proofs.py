@@ -51,6 +51,7 @@ SEARCH_PROCESS_PATTERN = "run_search.py"
 SEARCH_POLL_SECONDS = 20.0
 COMMAND_TIMEOUT_SECONDS = 120.0
 SEARCH_STEP_SECONDS = 20.0
+WHOLE_PROOF_INCONCLUSIVE = "Verification exceeded the wall-clock limit."
 FAILURE_REASONS_PER_SOURCE = 8
 DISAGREEMENTS_SHOWN = 20
 REMAINING_STEP_BUCKETS = ((1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6), (7, 7), (8, 15), (16, 31), (32, None))
@@ -438,13 +439,16 @@ def failure_reason(proof: TracedProof) -> str:
         case TraceStatus.TIMEOUT:
             return "timeout: heartbeats"
         case _ if proof.whole_proof_verified:
-            return f"{proof.status}, whole proof compiles: {message_category(proof.failure_message)}"
-        case _ if proof.whole_proof_problems:
-            return f"{proof.status}: {message_category(proof.whole_proof_problems[0])}"
-        case TraceStatus.START_FAILURE | TraceStatus.STEP_ERROR:
-            return f"{proof.status}: {message_category(proof.failure_message)}"
+            return _labelled(f"{proof.status}, whole proof compiles", proof.failure_message)
+        case _ if proof.whole_proof_problems and proof.whole_proof_problems[0] != WHOLE_PROOF_INCONCLUSIVE:
+            return _labelled(str(proof.status), proof.whole_proof_problems[0])
         case _:
-            return str(proof.status)
+            return _labelled(str(proof.status), proof.failure_message)
+
+
+def _labelled(label: str, message: str) -> str:
+    category = message_category(message)
+    return f"{label}: {category}" if category else label
 
 
 def throughput(paths: OutputPaths, shard_keys: set[str]) -> list[InvocationThroughput]:
