@@ -134,6 +134,10 @@ allows.
     checkpoints and training loops swap adapters.
   - [ ] Few-shot probe, short identical SFT per candidate, model choice, row 1.
 - [ ] **Phase 2** — Proof-corpus tracing, decontamination, LoRA SFT, policy search on miniF2F-valid (row 2).
+  - [ ] Proof tracing (`results/phase2_tracing/`): the selection minus `stp_conjectures` is replayed step by step
+    (200k heartbeats, 60 s wall-clock backstop per step; 2% of canonical statements held out). Pilot, 15,516
+    proofs: 83.9% replay completely, from 99.2% (DeepSeek-Prover-V1) to 52.2% (Numina human proofs: Mathlib 4.15
+    names, `native_decide`); 49,807 training steps; 238/238 sampled complete proofs re-verify. Full run in progress.
 - [ ] **Phase 3** — Value v0/v1, A* search, λ/D sweep (row 4).
 - [ ] **Phase 4** — Retriever, applicability annotation, list-length ablation (row 3).
 - [ ] **Phase 5** — Single-step on-policy reasoning (row 5).
