@@ -125,7 +125,7 @@ class Measurement:
     mean_prompt_tokens: float
     prompt_tokens_per_second: float
     computed_prompt_tokens_per_second: float
-    prefix_cache_hit_rate: float
+    prefix_cache_hit_rate: float | None
     preemptions: float
     mean_running_requests: float
     mean_waiting_requests: float
@@ -316,6 +316,7 @@ async def measure_throughput(
     generated_tokens_per_second = (end.generation_tokens - start.generation_tokens) / window
     computed_prompt_tokens = end.computed_prompt_tokens - start.computed_prompt_tokens
     cached_prompt_tokens = end.cached_prompt_tokens - start.cached_prompt_tokens
+    prompt_tokens = computed_prompt_tokens + cached_prompt_tokens
     mean_prompt_tokens = statistics.mean(request.prompt_tokens for request in in_window)
     return Measurement(
         model=model.name,
@@ -335,7 +336,7 @@ async def measure_throughput(
         mean_prompt_tokens=mean_prompt_tokens,
         prompt_tokens_per_second=len(in_window) * mean_prompt_tokens / window,
         computed_prompt_tokens_per_second=computed_prompt_tokens / window,
-        prefix_cache_hit_rate=cached_prompt_tokens / (computed_prompt_tokens + cached_prompt_tokens),
+        prefix_cache_hit_rate=cached_prompt_tokens / prompt_tokens if prompt_tokens else None,
         preemptions=end.preemptions - start.preemptions,
         mean_running_requests=statistics.mean(gauge.running_requests for gauge in gauges),
         mean_waiting_requests=statistics.mean(gauge.waiting_requests for gauge in gauges),
@@ -573,7 +574,7 @@ def write_summary() -> None:
             f"{record.requests_per_second:.2f}",
             f"{record.prompt_tokens_per_second:,.0f}",
             f"{record.computed_prompt_tokens_per_second:,.0f}",
-            f"{record.prefix_cache_hit_rate:.2f}",
+            "n/a" if record.prefix_cache_hit_rate is None else f"{record.prefix_cache_hit_rate:.2f}",
             f"{record.mean_running_requests:.0f}",
             f"{record.mean_kv_cache_usage:.2f}",
             f"{record.peak_gpu_memory_mib:,}",
