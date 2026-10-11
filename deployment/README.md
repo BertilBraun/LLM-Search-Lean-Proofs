@@ -9,6 +9,7 @@ node's checkout.
 | `remote_command.sh` | local | Run one command on a node over SSH (key, port, banner filtering). |
 | `on_node.sh` | local | Run a command inside the node's checkout with `environment.sh` loaded. |
 | `deploy.sh` | local | Push the current branch and fast-forward the node to it. |
+| `fetch_results.sh` | local | Copy `$LEAN_SEARCH_RUNS/<run>/summary/` from the node into `results/<run>/`. |
 | `setup_remote.sh` | node | Provision a node: clone the repo, then `setup_python.sh` and `setup_lean.sh`. |
 | `environment.sh` | node | Paths, mirrors and `PATH`; sourced by everything else. |
 | `setup_python.sh` | node | Create the virtual environment from `uv.lock`. |
