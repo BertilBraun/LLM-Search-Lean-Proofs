@@ -147,11 +147,6 @@ class PolicyClient:
         response = await self._http.post("/unload_lora_adapter", json={"lora_name": name})
         response.raise_for_status()
 
-    async def served_models(self) -> list[str]:
-        response = await self._http.get("/models")
-        response.raise_for_status()
-        return [model["id"] for model in response.json()["data"]]
-
     async def _post(self, path: str, body: dict[str, Any], adapter: str | None) -> dict[str, Any]:
         response = await self._http.post(path, json={"model": adapter or self.model, **body})
         response.raise_for_status()
