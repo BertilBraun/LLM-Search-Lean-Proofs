@@ -101,12 +101,6 @@ class ServerGauges:
 
 
 @dataclass(frozen=True)
-class CompletedRequest:
-    end: float
-    prompt_tokens: int
-
-
-@dataclass(frozen=True)
 class Measurement:
     model: str
     variant: str
@@ -278,22 +272,25 @@ async def measure_throughput(
     adapter: str | None,
 ) -> Measurement:
     prompt_cycle = itertools.cycle(prompts)
-    completed: list[CompletedRequest] = []
+    prompt_token_counts: list[int] = []
     async with PolicyClient(f"http://127.0.0.1:{server.port}/v1", served_name) as client:
 
-        async def worker() -> None:
+        async def worker(seed: int) -> None:
+            randomness = random.Random(seed)
             while True:
+                # Equal lengths would make admitted requests finish together and the batch run in waves.
+                max_tokens = randomness.randint(workload.max_tokens // 2, workload.max_tokens * 3 // 2)
                 generation = await client.generate(
                     next(prompt_cycle),
                     sample_count=SAMPLE_COUNT,
-                    max_tokens=workload.max_tokens,
+                    max_tokens=max_tokens,
                     temperature=1.0,
                     adapter=adapter,
                     ignore_eos=True,
                 )
-                completed.append(CompletedRequest(end=time.monotonic(), prompt_tokens=generation.prompt_token_count))
+                prompt_token_counts.append(generation.prompt_token_count)
 
-        workers = [asyncio.create_task(worker()) for _ in range(load.concurrency)]
+        workers = [asyncio.create_task(worker(seed)) for seed in range(load.concurrency)]
         async with httpx.AsyncClient(timeout=30.0) as http:
             await asyncio.sleep(load.warmup_seconds)
             start = await read_counters(http, server.port)
@@ -312,12 +309,12 @@ async def measure_throughput(
     if failures:
         raise failures[0]
     window = end.timestamp - start.timestamp
-    in_window = [request for request in completed if start.timestamp <= request.end <= end.timestamp]
     generated_tokens_per_second = (end.generation_tokens - start.generation_tokens) / window
     computed_prompt_tokens = end.computed_prompt_tokens - start.computed_prompt_tokens
     cached_prompt_tokens = end.cached_prompt_tokens - start.cached_prompt_tokens
     prompt_tokens = computed_prompt_tokens + cached_prompt_tokens
-    mean_prompt_tokens = statistics.mean(request.prompt_tokens for request in in_window)
+    mean_prompt_tokens = statistics.mean(prompt_token_counts)
+    samples_per_second = generated_tokens_per_second / workload.max_tokens
     return Measurement(
         model=model.name,
         variant=variant,
@@ -331,10 +328,10 @@ async def measure_throughput(
         max_num_batched_tokens=server.max_num_batched_tokens,
         window_seconds=window,
         generated_tokens_per_second=generated_tokens_per_second,
-        samples_per_second=generated_tokens_per_second / workload.max_tokens,
-        requests_per_second=len(in_window) / window,
+        samples_per_second=samples_per_second,
+        requests_per_second=samples_per_second / SAMPLE_COUNT,
         mean_prompt_tokens=mean_prompt_tokens,
-        prompt_tokens_per_second=len(in_window) * mean_prompt_tokens / window,
+        prompt_tokens_per_second=samples_per_second / SAMPLE_COUNT * mean_prompt_tokens,
         computed_prompt_tokens_per_second=computed_prompt_tokens / window,
         prefix_cache_hit_rate=cached_prompt_tokens / prompt_tokens if prompt_tokens else None,
         preemptions=end.preemptions - start.preemptions,
@@ -603,10 +600,15 @@ def write_summary() -> None:
         [
             "# Phase 1: vLLM throughput at the proof-search prompt shape",
             f"One {environment['gpu'].split(',')[0]} per server; vllm {environment['vllm']}, "
-            f"torch {environment['torch']}. Every request asks for n={SAMPLE_COUNT} samples with `ignore_eos`, "
-            "so each sample is exactly `max_tokens` long; prompts are unique synthetic Lean proof states rendered "
-            "with the model's chat template. Generated tokens/s and computed prompt tokens/s come from the "
-            "server's counters over the measurement window; prompt tokens/s counts each request's prompt once.",
+            f"torch {environment['torch']}. Each configuration keeps a fixed number of requests in flight; every "
+            f"request asks for n={SAMPLE_COUNT} samples at temperature 1 with `ignore_eos`, and its `max_tokens` is "
+            "drawn uniformly from [0.5, 1.5] x the workload's output length, so samples average exactly that length "
+            "and requests do not finish in synchronized waves. Prompts are unique synthetic Lean proof states "
+            "rendered with the model's chat template (thinking on or off as named). Generated tokens/s and "
+            "computed (non-cached) prompt tokens/s come from the server's counters over the measurement window; "
+            "samples/s = generated tokens/s / output length, requests/s = samples/s / n, and prompt tokens/s counts "
+            "each request's prompt once. Peak GPU MiB is what the vLLM process reserves "
+            "(`--gpu-memory-utilization 0.90`), not what the model needs.",
             "## Throughput",
             markdown_table(
                 [
@@ -658,7 +660,7 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8100)
     parser.add_argument("--concurrency", type=int, default=64)
     parser.add_argument("--warmup-seconds", type=float, default=30.0)
-    parser.add_argument("--window-seconds", type=float, default=60.0)
+    parser.add_argument("--window-seconds", type=float, default=90.0)
     parser.add_argument("--max-num-seqs", type=int)
     parser.add_argument("--max-num-batched-tokens", type=int)
     parser.add_argument("--server-argument", action="append", default=[], help="extra vllm serve argument")
