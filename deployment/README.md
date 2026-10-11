@@ -22,6 +22,32 @@ echo "HOST:PORT" > deployment/.node_address
 deployment/remote_command.sh "$(cat deployment/.node_address)" 'bash -s' < deployment/setup_remote.sh
 ```
 
+## Lean environment
+
+| Component | Pin |
+|---|---|
+| Lean | `leanprover/lean4:v4.9.0-rc1` (`lean/lean-toolchain`) |
+| Mathlib | `leanprover-community/mathlib4` `d1d1e4b72c6e009edd97cabe1d661b021fe8eeae` (2024-06-12) |
+| REPL | `leanprover-community/repl` tag `v4.9.0-rc1` (`7df77c0a1c9188ab58c76d4138a06ae5e0c32282`) |
+| Other packages | as in Mathlib's manifest; all revisions in `lean/lake-manifest.json` |
+| elan | v4.2.4 |
+
+DeepSeek-Prover-V1.5 (and the Goedel/STP proofs verified in its environment) pins `xinhjBrant/mathlib4@2f65ba7f`,
+which is this Mathlib commit with only `lakefile.lean`/`lake-manifest.json` changed: batteries one commit newer (a
+linter fix), `lean4-cli` bumped, and a REPL fork (`xinhjBrant/repl@3334a97b` = REPL `v4.9.0-rc1` plus AST
+extraction) added. Those files enter Mathlib's cache hashes, so the fork has no prebuilt cache; its upstream parent
+has one (4650 files). The Mathlib sources are identical.
+
+`setup_lean.sh` takes about 4 minutes on a fresh node (3 of them downloading the Mathlib cache from Azure) and under
+a minute when `~/.cache/mathlib` is warm. GitHub release downloads (elan, the toolchain) are throttled to a few KB/s
+on the current node, so they go through `$LEAN_SEARCH_GITHUB_PROXY` (default `https://ghfast.top/`) and are checked
+against pinned SHA-256 sums; `git fetch` from GitHub is fast and used directly.
+
+REPL facts for this version (handled in `src/lean_search/lean/`): it never flushes stdout (run it under
+`stdbuf -oL`); tactic-level `set_option maxHeartbeats N in` does not change the heartbeat limit in Lean 4.9, so the
+wrapper defines its own `lean_search_heartbeats N => tactics`; `autoImplicit` is on (Lean's default); proof states
+are never freed, so processes are restarted by memory and proof-state thresholds.
+
 ## Node layout
 
 | Path | Contents | Persistent |
