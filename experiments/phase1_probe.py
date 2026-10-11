@@ -57,7 +57,7 @@ RUNS_DIRECTORY = Path(os.environ.get("LEAN_SEARCH_RUNS", "/workspace/runs"))
 TRACED_DIRECTORY = DATA_DIRECTORY / "traced"
 DEFAULT_RUN_NAME = "phase1_probe"
 TRACED_STATE_COUNT = 1000
-STATES_PER_PROOF = 3
+STATES_PER_PROOF = 5
 # Keeps the few-shot prompt plus the output inside Qwen2.5-Math's 4096-token context.
 MAX_GOAL_CHARACTERS = 3000
 SAMPLE_COUNT = 8
