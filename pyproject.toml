@@ -4,13 +4,26 @@ version = "0.1.0"
 description = "LLM-guided best-first proof search in Lean 4"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "datasets>=4.7",
+    "httpx>=0.28",
+    "huggingface-hub>=1.31",
+    "numpy>=2",
+    "pyarrow>=21",
+]
 
 [project.optional-dependencies]
-ml = []
+ml = [
+    "accelerate>=1.15",
+    "peft>=0.21",
+    "torch==2.13.0",
+    "transformers>=5.10.4,<5.18",
+    "trl>=1.15",
+    "vllm==0.31.0",
+]
 
 [dependency-groups]
-dev = ["pytest>=8", "ruff>=0.15"]
+dev = ["pytest>=8", "pytest-asyncio>=1", "ruff>=0.15"]
 
 [build-system]
 requires = ["hatchling"]
@@ -22,6 +35,12 @@ packages = ["src/lean_search"]
 [tool.uv]
 environments = ["sys_platform == 'linux'"]
 
+# The node reaches pypi.org slowly; uv.lock records the mirror's URLs, so `uv sync --locked` downloads from it.
+[[tool.uv.index]]
+name = "tsinghua"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true
+
 [tool.ruff]
 line-length = 120
 target-version = "py312"
@@ -31,3 +50,4 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "N"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+asyncio_mode = "auto"
