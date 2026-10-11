@@ -33,9 +33,10 @@ async def test_cumulative_logprob_is_negative(policy_client: PolicyClient) -> No
     assert all(sample.cumulative_logprob < 0 for sample in generation.samples)
 
 
-async def test_greedy_samples_are_identical(policy_client: PolicyClient) -> None:
-    generation = await policy_client.generate(LEAN_PROMPT, sample_count=3, max_tokens=12, temperature=0.0)
-    assert len({sample.text for sample in generation.samples}) == 1
+async def test_greedy_generation_is_deterministic(policy_client: PolicyClient) -> None:
+    first = await policy_client.generate(LEAN_PROMPT, sample_count=1, max_tokens=12, temperature=0.0)
+    second = await policy_client.generate(LEAN_PROMPT, sample_count=1, max_tokens=12, temperature=0.0)
+    assert first.samples[0].text == second.samples[0].text
 
 
 async def test_same_seed_reproduces_samples(policy_client: PolicyClient) -> None:
