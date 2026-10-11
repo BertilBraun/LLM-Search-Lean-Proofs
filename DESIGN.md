@@ -128,6 +128,11 @@ allows.
     5 minutes for the split (`results/phase0_automation_baseline/`).
 - [ ] **Phase 1** — Model probe (throughput, valid-Lean rate, progress rate; few-shot and after short SFT);
   base-model few-shot search (ladder row 1).
+  - [x] Serving and throughput (`results/phase1_throughput/`): Qwen3.5-2B gives ~40–47 short samples/s per 3090
+    (~11–12/s with 512-token thinking), so the GPU, not Lean (~290 tactic calls/s on 32 processes), is the
+    bottleneck. Runtime adapter swaps take 0.26 s; adapters cost 9–24% throughput, so evaluation uses merged
+    checkpoints and training loops swap adapters.
+  - [ ] Few-shot probe, short identical SFT per candidate, model choice, row 1.
 - [ ] **Phase 2** — Proof-corpus tracing, decontamination, LoRA SFT, policy search on miniF2F-valid (row 2).
 - [ ] **Phase 3** — Value v0/v1, A* search, λ/D sweep (row 4).
 - [ ] **Phase 4** — Retriever, applicability annotation, list-length ablation (row 3).
