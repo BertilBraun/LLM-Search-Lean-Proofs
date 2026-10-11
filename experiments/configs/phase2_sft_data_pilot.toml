@@ -1,0 +1,40 @@
+# SFT data for the LoRA vs full fine-tuning A/B and the short model-choice runs, from the tracing pilot.
+# Weights are token shares; a source that runs out passes its share on to the others.
+token_budget = 0
+max_prompt_tokens = 2048
+max_completion_tokens = 512
+validation_examples = 2000
+reference_tokenizer = "Qwen/Qwen3.5-2B"
+seed = "sft-pilot"
+
+[[sources]]
+name = "goedel_lean_workbook_proofs"
+weight = 1.0
+
+[[sources]]
+name = "stp_lean_workbook"
+weight = 1.0
+
+[[sources]]
+name = "deepseek_prover_v1"
+weight = 1.0
+
+[[sources]]
+name = "lean_workbook"
+weight = 1.0
+
+[[sources]]
+name = "goedel_sft_v2"
+weight = 1.0
+
+[[sources]]
+name = "numinamath_lean_kimina"
+weight = 1.0
+
+[[sources]]
+name = "numinamath_lean_human"
+weight = 1.0
+
+[[sources]]
+name = "leanabell_sft"
+weight = 1.0

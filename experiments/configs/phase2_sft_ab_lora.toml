@@ -1,0 +1,31 @@
+# LoRA arm of the LoRA vs full fine-tuning A/B on Qwen3.5-0.8B: identical data, schedule and batches.
+model = "Qwen/Qwen3.5-0.8B"
+data = "pilot"
+merge = false
+
+[lora]
+rank = 64
+alpha = 64
+dropout = 0.0
+
+[optimization]
+method = "lora"
+learning_rate = 2e-4
+warmup_fraction = 0.03
+minimum_learning_rate_ratio = 0.1
+weight_decay = 0.0
+max_gradient_norm = 1.0
+epochs = 1
+micro_batch_tokens = 16384
+micro_batches_per_step = 2
+length_group_examples = 4096
+gradient_checkpointing = true
+seed = 0
+
+[evaluation]
+interval_steps = 50
+validation_examples = 1000
+micro_batch_tokens = 16384
+generation_examples = 128
+generation_batch_size = 64
+max_new_tokens = 256
