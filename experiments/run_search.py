@@ -4,14 +4,17 @@
         --split valid --run-name phase0_automation_baseline [--limit N] [--problems name,...]
 
 Outputs: config.toml and run.json (git revision, metadata), results.jsonl (one SearchResult per theorem),
-trees/<theorem>.json.gz (one TreeRecord per theorem) and summary/{summary.json,summary.md,config.toml}.
+trees/<theorem>.json.gz (one TreeRecord per theorem), policy.json (PolicyStatistics, for policy expanders) and
+summary/{summary.json,summary.md,config.toml,policy.json}.
 """
 
 import argparse
 import asyncio
+import contextlib
 import datetime
 import json
 import os
+import shutil
 import subprocess
 import time
 from dataclasses import asdict, dataclass, replace
@@ -19,8 +22,10 @@ from pathlib import Path
 
 from lean_search.data import Problem, Split, load_minif2f
 from lean_search.lean import LeanReplConfig, LeanReplPool
+from lean_search.policy.expander import PolicyExpander, open_policy_expander
 from lean_search.search import (
     CompletedSearch,
+    Expander,
     RunConfig,
     build_expander,
     build_priority_function,
@@ -59,6 +64,10 @@ class RunPaths:
     @property
     def summary(self) -> Path:
         return self.directory / "summary"
+
+    @property
+    def policy_statistics(self) -> Path:
+        return self.directory / "policy.json"
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -104,11 +113,24 @@ def write_summary(paths: RunPaths, metadata: RunMetadata, config: RunConfig) -> 
     title = f"Proof search: {metadata.run_name}"
     (paths.summary / "summary.md").write_text(render_markdown(summary, title), encoding="utf-8")
     (paths.summary / "config.toml").write_text(paths.config.read_text(encoding="utf-8"), encoding="utf-8")
+    if paths.policy_statistics.exists():
+        shutil.copyfile(paths.policy_statistics, paths.summary / "policy.json")
     print(f"Solved {summary.solved}/{summary.problems} ({summary.solve_rate:.1%}); summary in {paths.summary}")
 
 
 async def run_searches(problems: list[Problem], config: RunConfig, paths: RunPaths) -> None:
-    expander = build_expander(config)
+    async with contextlib.AsyncExitStack() as stack:
+        policy: PolicyExpander | None = None
+        if config.expander.kind.uses_policy:
+            policy = await stack.enter_async_context(open_policy_expander(config.policy, config.search.forbidden_steps))
+        try:
+            await search_with_expander(problems, config, paths, build_expander(config, policy))
+        finally:
+            if policy is not None:
+                paths.policy_statistics.write_text(to_json(policy.statistics), encoding="utf-8")
+
+
+async def search_with_expander(problems: list[Problem], config: RunConfig, paths: RunPaths, expander: Expander) -> None:
     priority_function = build_priority_function(config.priority)
     statements = {problem.name: problem.formal_statement for problem in problems}
     completed_count = 0

@@ -5,7 +5,8 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
-from lean_search.search.expanders import AutomationConfig, AutomationExpander, Expander
+from lean_search.policy.config import PolicyConfig
+from lean_search.search.expanders import AutomationConfig, AutomationExpander, CompositeExpander, Expander
 from lean_search.search.priority import PriorityConfig
 from lean_search.search.records import from_json_object
 from lean_search.search.search import SearchConfig
@@ -13,6 +14,12 @@ from lean_search.search.search import SearchConfig
 
 class ExpanderKind(StrEnum):
     AUTOMATION = "automation"
+    POLICY = "policy"
+    AUTOMATION_THEN_POLICY = "automation_then_policy"
+
+    @property
+    def uses_policy(self) -> bool:
+        return self != ExpanderKind.AUTOMATION
 
 
 @dataclass(frozen=True)
@@ -34,6 +41,7 @@ class RunConfig:
     expander: ExpanderConfig = field(default_factory=ExpanderConfig)
     automation: AutomationConfig = field(default_factory=AutomationConfig)
     priority: PriorityConfig = field(default_factory=PriorityConfig)
+    policy: PolicyConfig = field(default_factory=PolicyConfig)
 
 
 def parse_run_config(text: str) -> RunConfig:
@@ -42,6 +50,10 @@ def parse_run_config(text: str) -> RunConfig:
         raise ValueError("lean.concurrency must be between 1 and lean.pool_size: each search holds one process.")
     if config.search.max_expansions < 1 or config.search.max_depth < 1 or config.search.max_wall_seconds <= 0:
         raise ValueError("search budgets must be positive.")
+    if config.expander.kind.uses_policy and not (config.policy.model and config.policy.tokenizer):
+        raise ValueError("A policy expander needs policy.model and policy.tokenizer.")
+    if config.policy.sample_count < 1 or not config.policy.server_urls:
+        raise ValueError("policy.sample_count must be positive and policy.server_urls not empty.")
     return config
 
 
@@ -49,7 +61,14 @@ def load_run_config(path: Path) -> RunConfig:
     return parse_run_config(path.read_text(encoding="utf-8"))
 
 
-def build_expander(config: RunConfig) -> Expander:
+def build_expander(config: RunConfig, policy: Expander | None = None) -> Expander:
+    """`policy` is the opened policy expander (lean_search.policy.expander) for the kinds that use one."""
     match config.expander.kind:
         case ExpanderKind.AUTOMATION:
             return AutomationExpander(config.automation)
+        case ExpanderKind.POLICY:
+            assert policy is not None
+            return policy
+        case ExpanderKind.AUTOMATION_THEN_POLICY:
+            assert policy is not None
+            return CompositeExpander([AutomationExpander(config.automation), policy])
