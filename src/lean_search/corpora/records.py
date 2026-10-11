@@ -2,6 +2,7 @@ import dataclasses
 import json
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
 from lean_search.corpora.lean_text import split_top_level_tactics
@@ -71,7 +72,73 @@ class FileImports:
     imports: tuple[str, ...]
 
 
-Record = ProofRecord | StatementRecord | TacticExample | PremiseRecord | FileImports
+class DataSplit(StrEnum):
+    TRAIN = "train"
+    VALIDATION = "validation"
+
+
+class TraceStatus(StrEnum):
+    COMPLETE = "complete"
+    STEP_ERROR = "step_error"
+    CLOSED_EARLY = "closed_early"
+    GOALS_REMAINING = "goals_remaining"
+    TIMEOUT = "timeout"
+    START_FAILURE = "start_failure"
+    REPL_FAILURE = "repl_failure"
+
+
+class TracePath(StrEnum):
+    STEPS = "steps"
+    BLOCK = "block"
+
+
+@dataclass(frozen=True)
+class TracedStep:
+    source: str
+    proof_identifier: str
+    statement_identifier: str
+    split: DataSplit
+    header: str
+    formal_statement: str
+    step_index: int
+    total_steps: int
+    remaining_steps: int
+    goals_before: tuple[str, ...]
+    step: str
+    goals_after: tuple[str, ...]
+    previous_steps: tuple[str, ...]
+    heartbeats: int
+    elapsed_seconds: float
+
+
+@dataclass(frozen=True)
+class TracedProof:
+    source: str
+    proof_identifier: str
+    statement_identifier: str
+    split: DataSplit
+    header: str
+    formal_statement: str
+    status: TraceStatus
+    path: TracePath
+    total_steps: int
+    applied_steps: tuple[str, ...]
+    open_goals: int
+    failing_step_index: int | None
+    failing_step: str
+    failure_message: str
+    repl_failure_kind: str
+    heartbeats: int
+    start_seconds: float
+    step_seconds: tuple[float, ...]
+    elapsed_seconds: float
+    verification_seconds: float
+    verified: bool | None
+    plain_verified: bool | None
+    verification_problems: tuple[str, ...]
+
+
+Record = ProofRecord | StatementRecord | TacticExample | PremiseRecord | FileImports | TracedStep | TracedProof
 
 
 def write_jsonl(path: Path, records: Iterable[Record]) -> int:
@@ -116,3 +183,21 @@ def read_file_imports(path: Path) -> Iterator[FileImports]:
     for fields in _read_json_lines(path):
         fields["imports"] = tuple(fields["imports"])
         yield FileImports(**fields)
+
+
+def read_traced_steps(path: Path) -> Iterator[TracedStep]:
+    for fields in _read_json_lines(path):
+        fields["split"] = DataSplit(fields["split"])
+        for name in ("goals_before", "goals_after", "previous_steps"):
+            fields[name] = tuple(fields[name])
+        yield TracedStep(**fields)
+
+
+def read_traced_proofs(path: Path) -> Iterator[TracedProof]:
+    for fields in _read_json_lines(path):
+        fields["split"] = DataSplit(fields["split"])
+        fields["status"] = TraceStatus(fields["status"])
+        fields["path"] = TracePath(fields["path"])
+        for name in ("applied_steps", "step_seconds", "verification_problems"):
+            fields[name] = tuple(fields[name])
+        yield TracedProof(**fields)
