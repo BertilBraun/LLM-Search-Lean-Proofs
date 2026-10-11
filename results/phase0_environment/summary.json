@@ -1,0 +1,535 @@
+{
+ "environment": {
+  "lean_toolchain": "leanprover/lean4:v4.9.0-rc1",
+  "revisions": {
+   "mathlib": "d1d1e4b72c6e009edd97cabe1d661b021fe8eeae",
+   "REPL": "7df77c0a1c9188ab58c76d4138a06ae5e0c32282",
+   "batteries": "f96a34401de084c73c787ecb45b85d4fb47bb981",
+   "Qq": "a7bfa63f5dddbcab2d4e0569c4cac74b2585e2c6",
+   "aesop": "7e3bd939c6badfcb1e607c0fddb509548baafd05",
+   "proofwidgets": "e6b6247c61280c77ade6bbf0bc3c66a44fe2e0c5",
+   "Cli": "a11566029bd9ec4f68a65394e8c3ff1af74c1a29",
+   "importGraph": "7983e959f8f4a79313215720de3ef1eca2d6d474"
+  },
+  "cpu_count": "46",
+  "cgroup_memory_limit_gibibytes": 120.8056640625,
+  "node_state_at_invocation_start": {
+   "concurrency,memory_growth,process_costs,statements,sweep": {
+    "load_average": [
+     23.02587890625,
+     17.5205078125,
+     15.033203125
+    ],
+    "cgroup_memory_current_gibibytes": 66.94985961914062,
+    "cgroup_anonymous_gibibytes": 19.656314849853516
+   },
+   "concurrency,sweep": {
+    "load_average": [
+     39.99365234375,
+     28.23388671875,
+     20.25439453125
+    ],
+    "cgroup_memory_current_gibibytes": 107.23138427734375,
+    "cgroup_anonymous_gibibytes": 63.77101516723633
+   },
+   "sweep": {
+    "load_average": [
+     8.541015625,
+     18.48388671875,
+     20.65478515625
+    ],
+    "cgroup_memory_current_gibibytes": 67.59140396118164,
+    "cgroup_anonymous_gibibytes": 32.862735748291016
+   }
+  }
+ },
+ "settings": {
+  "sweep_heartbeats": 200000,
+  "sweep_timeout_seconds": 60.0,
+  "sweep_tactics": [
+   "rfl",
+   "decide",
+   "norm_num",
+   "simp",
+   "simp_all",
+   "ring_nf",
+   "field_simp",
+   "linarith",
+   "nlinarith",
+   "positivity",
+   "omega",
+   "aesop",
+   "tauto",
+   "intros",
+   "constructor"
+  ],
+  "concurrency_tactics": [
+   "norm_num",
+   "simp",
+   "linarith",
+   "nlinarith",
+   "omega",
+   "aesop"
+  ],
+  "memory_tactics": [
+   "intros",
+   "norm_num",
+   "simp",
+   "ring_nf",
+   "omega",
+   "linarith"
+  ]
+ },
+ "statements": {
+  "total": 488,
+  "started": 488,
+  "started_by_split": {
+   "valid": 244,
+   "test": 244
+  },
+  "goal_matches_dataset": 488,
+  "needs_auto_implicit": [
+   "induction_pord1p1on2powklt5on2",
+   "induction_prod1p1onk3le3m1onn",
+   "amc12a_2021_p9",
+   "mathd_algebra_342",
+   "mathd_algebra_158"
+  ],
+  "median_start_seconds": 0.025106751534622163,
+  "failures": []
+ },
+ "process_costs": {
+  "runs": [
+   {
+    "start_and_import_seconds": 3.6816223689820617,
+    "resident_gibibytes": 3.4986000061035156,
+    "anonymous_gibibytes": 0.24037933349609375
+   },
+   {
+    "start_and_import_seconds": 3.5503690890036523,
+    "resident_gibibytes": 3.499309539794922,
+    "anonymous_gibibytes": 0.24037933349609375
+   },
+   {
+    "start_and_import_seconds": 3.774615788948722,
+    "resident_gibibytes": 3.4987869262695312,
+    "anonymous_gibibytes": 0.240386962890625
+   }
+  ],
+  "median_start_and_import_seconds": 3.6816223689820617
+ },
+ "memory_growth": {
+  "samples": [
+   {
+    "tactic_applications": 0,
+    "proof_states": 0,
+    "anonymous_mebibytes": 246.15625
+   },
+   {
+    "tactic_applications": 100,
+    "proof_states": 70,
+    "anonymous_mebibytes": 262.6484375
+   },
+   {
+    "tactic_applications": 200,
+    "proof_states": 144,
+    "anonymous_mebibytes": 282.33984375
+   },
+   {
+    "tactic_applications": 300,
+    "proof_states": 215,
+    "anonymous_mebibytes": 300.3984375
+   },
+   {
+    "tactic_applications": 400,
+    "proof_states": 289,
+    "anonymous_mebibytes": 317.28125
+   },
+   {
+    "tactic_applications": 500,
+    "proof_states": 365,
+    "anonymous_mebibytes": 336.828125
+   },
+   {
+    "tactic_applications": 600,
+    "proof_states": 434,
+    "anonymous_mebibytes": 352.46875
+   },
+   {
+    "tactic_applications": 700,
+    "proof_states": 505,
+    "anonymous_mebibytes": 367.28515625
+   },
+   {
+    "tactic_applications": 800,
+    "proof_states": 576,
+    "anonymous_mebibytes": 386.46484375
+   },
+   {
+    "tactic_applications": 900,
+    "proof_states": 648,
+    "anonymous_mebibytes": 401.95703125
+   },
+   {
+    "tactic_applications": 1000,
+    "proof_states": 725,
+    "anonymous_mebibytes": 423.44921875
+   },
+   {
+    "tactic_applications": 1100,
+    "proof_states": 796,
+    "anonymous_mebibytes": 442.09765625
+   },
+   {
+    "tactic_applications": 1200,
+    "proof_states": 865,
+    "anonymous_mebibytes": 461.94140625
+   },
+   {
+    "tactic_applications": 1300,
+    "proof_states": 941,
+    "anonymous_mebibytes": 478.11328125
+   },
+   {
+    "tactic_applications": 1400,
+    "proof_states": 1010,
+    "anonymous_mebibytes": 496.03125
+   },
+   {
+    "tactic_applications": 1500,
+    "proof_states": 1082,
+    "anonymous_mebibytes": 514.0625
+   },
+   {
+    "tactic_applications": 1600,
+    "proof_states": 1154,
+    "anonymous_mebibytes": 533.80078125
+   },
+   {
+    "tactic_applications": 1700,
+    "proof_states": 1227,
+    "anonymous_mebibytes": 550.07421875
+   },
+   {
+    "tactic_applications": 1800,
+    "proof_states": 1300,
+    "anonymous_mebibytes": 567.6875
+   },
+   {
+    "tactic_applications": 1900,
+    "proof_states": 1373,
+    "anonymous_mebibytes": 587.6953125
+   },
+   {
+    "tactic_applications": 2000,
+    "proof_states": 1447,
+    "anonymous_mebibytes": 603.125
+   }
+  ],
+  "anonymous_mebibytes_per_100_applications": 17.8484375,
+  "proof_states_created": 1447
+ },
+ "concurrency": [
+  {
+   "processes": 8,
+   "ready_seconds": 4.813089414965361,
+   "applications": 5052,
+   "applications_per_second": 81.69495307643761,
+   "median_latency_seconds": 0.035961167013738304,
+   "p90_latency_seconds": 0.18218798097223043,
+   "wall_clock_timeouts": 0,
+   "load_average_before": 39.99365234375,
+   "baseline_cgroup_gibibytes": 107.23186874389648,
+   "baseline_cgroup_anonymous_gibibytes": 63.77101516723633,
+   "peak_cgroup_gibibytes": 112.70146560668945,
+   "peak_cgroup_anonymous_gibibytes": 69.20158767700195,
+   "peak_pool_anonymous_gibibytes": 2.08270263671875,
+   "max_process_anonymous_gibibytes": 0.3618011474609375,
+   "cgroup_limit_gibibytes": 120.8056640625
+  },
+  {
+   "processes": 16,
+   "ready_seconds": 6.042167488019913,
+   "applications": 9906,
+   "applications_per_second": 154.49587794346834,
+   "median_latency_seconds": 0.03741039097076282,
+   "p90_latency_seconds": 0.18664949899539351,
+   "wall_clock_timeouts": 0,
+   "load_average_before": 22.51953125,
+   "baseline_cgroup_gibibytes": 111.84637451171875,
+   "baseline_cgroup_anonymous_gibibytes": 70.7994155883789,
+   "peak_cgroup_gibibytes": 115.98701858520508,
+   "peak_cgroup_anonymous_gibibytes": 74.96488952636719,
+   "peak_pool_anonymous_gibibytes": 4.017452239990234,
+   "max_process_anonymous_gibibytes": 0.3603706359863281,
+   "cgroup_limit_gibibytes": 120.8056640625
+  },
+  {
+   "processes": 32,
+   "ready_seconds": 7.698468074086122,
+   "applications": 18726,
+   "applications_per_second": 291.20971048318575,
+   "median_latency_seconds": 0.041153236001264304,
+   "p90_latency_seconds": 0.1984215750126168,
+   "wall_clock_timeouts": 0,
+   "load_average_before": 29.380859375,
+   "baseline_cgroup_gibibytes": 112.35655212402344,
+   "baseline_cgroup_anonymous_gibibytes": 71.70886993408203,
+   "peak_cgroup_gibibytes": 120.80502319335938,
+   "peak_cgroup_anonymous_gibibytes": 79.79334259033203,
+   "peak_pool_anonymous_gibibytes": 7.85986328125,
+   "max_process_anonymous_gibibytes": 0.3653144836425781,
+   "cgroup_limit_gibibytes": 120.8056640625
+  },
+  {
+   "processes": 48,
+   "ready_seconds": 10.07437143905554,
+   "applications": 24354,
+   "applications_per_second": 384.03372517521154,
+   "median_latency_seconds": 0.04684705752879381,
+   "p90_latency_seconds": 0.2347838309360668,
+   "wall_clock_timeouts": 0,
+   "load_average_before": 38.8173828125,
+   "baseline_cgroup_gibibytes": 108.59052658081055,
+   "baseline_cgroup_anonymous_gibibytes": 70.29019927978516,
+   "peak_cgroup_gibibytes": 120.80313873291016,
+   "peak_cgroup_anonymous_gibibytes": 83.23538208007812,
+   "peak_pool_anonymous_gibibytes": 12.225208282470703,
+   "max_process_anonymous_gibibytes": 0.35370635986328125,
+   "cgroup_limit_gibibytes": 120.8056640625
+  }
+ ],
+ "sweep": {
+  "problems": 244,
+  "closed_by_any_tactic": 59,
+  "closing_tactics_verified": 259,
+  "closing_tactics_failing_verification": [],
+  "tactics": [
+   {
+    "tactic": "decide",
+    "attempts": 244,
+    "closed": 24,
+    "progress": 0,
+    "unchanged": 0,
+    "errors": 220,
+    "heartbeat_timeouts": 0,
+    "wall_clock_timeouts": 0,
+    "median_seconds": 0.0016558874631300569,
+    "p90_seconds": 0.006352245924063027,
+    "max_seconds": 0.6600152830360457,
+    "closing_rate": 0.09836065573770492,
+    "progress_rate": 0.09836065573770492
+   },
+   {
+    "tactic": "omega",
+    "attempts": 244,
+    "closed": 23,
+    "progress": 0,
+    "unchanged": 0,
+    "errors": 221,
+    "heartbeat_timeouts": 0,
+    "wall_clock_timeouts": 0,
+    "median_seconds": 0.002118989999871701,
+    "p90_seconds": 0.007811117102392018,
+    "max_seconds": 0.145132823032327,
+    "closing_rate": 0.0942622950819672,
+    "progress_rate": 0.0942622950819672
+   },
+   {
+    "tactic": "positivity",
+    "attempts": 244,
+    "closed": 0,
+    "progress": 0,
+    "unchanged": 0,
+    "errors": 244,
+    "heartbeat_timeouts": 0,
+    "wall_clock_timeouts": 0,
+    "median_seconds": 0.002375216979999095,
+    "p90_seconds": 0.0032842830987647176,
+    "max_seconds": 0.01326191599946469,
+    "closing_rate": 0.0,
+    "progress_rate": 0.0
+   },
+   {
+    "tactic": "intros",
+    "attempts": 244,
+    "closed": 0,
+    "progress": 4,
+    "unchanged": 240,
+    "errors": 0,
+    "heartbeat_timeouts": 0,
+    "wall_clock_timeouts": 0,
+    "median_seconds": 0.0032223634188994765,
+    "p90_seconds": 0.005640730960294604,
+    "max_seconds": 0.02191810996737331,
+    "closing_rate": 0.0,
+    "progress_rate": 0.01639344262295082
+   },
+   {
+    "tactic": "constructor",
+    "attempts": 244,
+    "closed": 24,
+    "progress": 39,
+    "unchanged": 0,
+    "errors": 181,
+    "heartbeat_timeouts": 0,
+    "wall_clock_timeouts": 0,
+    "median_seconds": 0.003678880981169641,
+    "p90_seconds": 0.00759606494102627,
+    "max_seconds": 0.6479812699835747,
+    "closing_rate": 0.09836065573770492,
+    "progress_rate": 0.2581967213114754
+   },
+   {
+    "tactic": "rfl",
+    "attempts": 244,
+    "closed": 26,
+    "progress": 0,
+    "unchanged": 0,
+    "errors": 217,
+    "heartbeat_timeouts": 0,
+    "wall_clock_timeouts": 1,
+    "median_seconds": 0.004966656037140638,
+    "p90_seconds": 0.01086568902246654,
+    "max_seconds": 63.81792521290481,
+    "closing_rate": 0.10655737704918032,
+    "progress_rate": 0.10655737704918032
+   },
+   {
+    "tactic": "tauto",
+    "attempts": 244,
+    "closed": 26,
+    "progress": 0,
+    "unchanged": 0,
+    "errors": 217,
+    "heartbeat_timeouts": 0,
+    "wall_clock_timeouts": 1,
+    "median_seconds": 0.017593692522495985,
+    "p90_seconds": 0.04564790998119861,
+    "max_seconds": 63.73571818997152,
+    "closing_rate": 0.10655737704918032,
+    "progress_rate": 0.10655737704918032
+   },
+   {
+    "tactic": "simp",
+    "attempts": 244,
+    "closed": 14,
+    "progress": 32,
+    "unchanged": 0,
+    "errors": 198,
+    "heartbeat_timeouts": 0,
+    "wall_clock_timeouts": 0,
+    "median_seconds": 0.01839063793886453,
+    "p90_seconds": 0.08193800295703113,
+    "max_seconds": 0.6407851030817255,
+    "closing_rate": 0.05737704918032787,
+    "progress_rate": 0.1885245901639344
+   },
+   {
+    "tactic": "field_simp",
+    "attempts": 244,
+    "closed": 6,
+    "progress": 49,
+    "unchanged": 0,
+    "errors": 189,
+    "heartbeat_timeouts": 0,
+    "wall_clock_timeouts": 0,
+    "median_seconds": 0.02168072247877717,
+    "p90_seconds": 0.14241571200545877,
+    "max_seconds": 1.0379153930116445,
+    "closing_rate": 0.02459016393442623,
+    "progress_rate": 0.22540983606557377
+   },
+   {
+    "tactic": "norm_num",
+    "attempts": 244,
+    "closed": 20,
+    "progress": 34,
+    "unchanged": 190,
+    "errors": 0,
+    "heartbeat_timeouts": 0,
+    "wall_clock_timeouts": 0,
+    "median_seconds": 0.028663657954894006,
+    "p90_seconds": 0.11741256900131702,
+    "max_seconds": 0.6720073310425505,
+    "closing_rate": 0.08196721311475409,
+    "progress_rate": 0.22131147540983606
+   },
+   {
+    "tactic": "linarith",
+    "attempts": 244,
+    "closed": 12,
+    "progress": 0,
+    "unchanged": 0,
+    "errors": 232,
+    "heartbeat_timeouts": 0,
+    "wall_clock_timeouts": 0,
+    "median_seconds": 0.05049148545367643,
+    "p90_seconds": 0.11360215302556753,
+    "max_seconds": 0.2901672419393435,
+    "closing_rate": 0.04918032786885246,
+    "progress_rate": 0.04918032786885246
+   },
+   {
+    "tactic": "ring_nf",
+    "attempts": 244,
+    "closed": 25,
+    "progress": 80,
+    "unchanged": 139,
+    "errors": 0,
+    "heartbeat_timeouts": 0,
+    "wall_clock_timeouts": 0,
+    "median_seconds": 0.05174950952641666,
+    "p90_seconds": 0.13732203596737236,
+    "max_seconds": 0.3658116030273959,
+    "closing_rate": 0.10245901639344263,
+    "progress_rate": 0.430327868852459
+   },
+   {
+    "tactic": "simp_all",
+    "attempts": 244,
+    "closed": 16,
+    "progress": 107,
+    "unchanged": 0,
+    "errors": 121,
+    "heartbeat_timeouts": 0,
+    "wall_clock_timeouts": 0,
+    "median_seconds": 0.08967843500431627,
+    "p90_seconds": 0.43564281496219337,
+    "max_seconds": 3.9572427379898727,
+    "closing_rate": 0.06557377049180328,
+    "progress_rate": 0.5040983606557377
+   },
+   {
+    "tactic": "nlinarith",
+    "attempts": 244,
+    "closed": 15,
+    "progress": 0,
+    "unchanged": 0,
+    "errors": 229,
+    "heartbeat_timeouts": 0,
+    "wall_clock_timeouts": 0,
+    "median_seconds": 0.09404269198421389,
+    "p90_seconds": 0.2830332500161603,
+    "max_seconds": 2.036294106976129,
+    "closing_rate": 0.06147540983606557,
+    "progress_rate": 0.06147540983606557
+   },
+   {
+    "tactic": "aesop",
+    "attempts": 244,
+    "closed": 28,
+    "progress": 122,
+    "unchanged": 0,
+    "errors": 94,
+    "heartbeat_timeouts": 0,
+    "wall_clock_timeouts": 0,
+    "median_seconds": 0.13181892450666055,
+    "p90_seconds": 0.6428540269844234,
+    "max_seconds": 3.972168172011152,
+    "closing_rate": 0.11475409836065574,
+    "progress_rate": 0.6147540983606558
+   }
+  ]
+ }
+}
