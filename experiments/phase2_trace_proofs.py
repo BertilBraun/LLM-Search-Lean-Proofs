@@ -95,6 +95,26 @@ class OutputPaths:
     def merged_proofs(self) -> Path:
         return self.directory / "proofs.jsonl"
 
+    @property
+    def merged_snapshot(self) -> Path:
+        return self.directory / "merged_snapshot.json"
+
+    def merged_files(self) -> list[Path]:
+        return [*(self.merged_steps(split) for split in DataSplit), self.merged_proofs]
+
+
+def temporary(path: Path) -> Path:
+    return path.with_name(path.name + ".tmp")
+
+
+@dataclass(frozen=True)
+class MergedSnapshot:
+    created_at: str
+    shards: list[str]
+    proofs: int
+    complete_proofs: dict[str, int]
+    steps: dict[str, int]
+
 
 @dataclass(frozen=True)
 class PlannedShard:
@@ -331,9 +351,8 @@ def append_json_line(path: Path, record: object) -> None:
 
 
 def write_atomically(path: Path, records: Sequence[Record]) -> None:
-    temporary = path.with_name(path.name + ".tmp")
-    write_jsonl(temporary, records)
-    os.replace(temporary, path)
+    write_jsonl(temporary(path), records)
+    os.replace(temporary(path), path)
 
 
 def write_shard(paths: OutputPaths, shard: TracingShard, traces: list[ProofTrace]) -> None:
@@ -500,12 +519,16 @@ def summarize(shards: list[TracingShard], paths: OutputPaths, merge: bool, parts
     heartbeats: set[int] = set()
     sampled = verified = plain_verified = 0
     disagreements: list[VerificationDisagreement] = []
+    # Merged files are written beside the old ones and swapped in only after a complete pass, so the snapshot can be
+    # re-run while tracing continues and while other jobs read the previous snapshot.
     with contextlib.ExitStack() as stack:
         merged_steps = {
-            split: stack.enter_context(paths.merged_steps(split).open("w", encoding="utf-8"))
+            split: stack.enter_context(temporary(paths.merged_steps(split)).open("w", encoding="utf-8"))
             for split in (DataSplit if merge else ())
         }
-        merged_proofs = stack.enter_context(paths.merged_proofs.open("w", encoding="utf-8")) if merge else None
+        merged_proofs = (
+            stack.enter_context(temporary(paths.merged_proofs).open("w", encoding="utf-8")) if merge else None
+        )
         for shard in done:
             training_steps: Counter[str] = Counter()
             for step in read_traced_steps(paths.steps(shard.key)):
@@ -532,6 +555,20 @@ def summarize(shards: list[TracingShard], paths: OutputPaths, merge: bool, parts
                         )
                 if merged_proofs is not None:
                     merged_proofs.write(json.dumps(dataclasses.asdict(proof), ensure_ascii=False) + "\n")
+    if merge:
+        for merged_file in paths.merged_files():
+            os.replace(temporary(merged_file), merged_file)
+        snapshot = MergedSnapshot(
+            created_at=datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds"),
+            shards=[shard.key for shard in done],
+            proofs=sum(sum(accumulator.statuses.values()) for accumulator in accumulators.values()),
+            complete_proofs={str(split): split_proofs[split] for split in DataSplit},
+            steps={str(split): split_steps[split] for split in DataSplit},
+        )
+        temporary(paths.merged_snapshot).write_text(
+            json.dumps(dataclasses.asdict(snapshot), indent=1), encoding="utf-8"
+        )
+        os.replace(temporary(paths.merged_snapshot), paths.merged_snapshot)
     total = SourceAccumulator()
     for accumulator in accumulators.values():
         total.merge(accumulator)
@@ -683,7 +720,8 @@ def render_markdown(summary: TracingSummary, output_directory: Path) -> str:
         ),
         "## Data",
         f"Shards in `{output_directory}/shards/<source>/<part>_<index>.{{steps,proofs}}.jsonl`; merged files "
-        f"`{output_directory}/steps_{{train,validation}}.jsonl` and `proofs.jsonl`. Schemas in "
+        f"`{output_directory}/steps_{{train,validation}}.jsonl` and `proofs.jsonl` (an incremental snapshot of the "
+        "finished shards; `merged_snapshot.json` lists them). Schemas in "
         "`lean_search.corpora.records`: `TracedStep` (one per step of a complete proof; `previous_steps` rebuilds the "
         "state before it, see `tracing.state_before`) and `TracedProof` (one per proof: status, path, failing step, "
         "timing, verification).",
