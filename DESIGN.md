@@ -132,7 +132,11 @@ allows.
     (~11–12/s with 512-token thinking), so the GPU, not Lean (~290 tactic calls/s on 32 processes), is the
     bottleneck. Runtime adapter swaps take 0.26 s; adapters cost 9–24% throughput, so evaluation uses merged
     checkpoints and training loops swap adapters.
-  - [ ] Few-shot probe, short identical SFT per candidate, model choice, row 1.
+  - [x] Few-shot probe (`results/phase1_probe/`): Qwen3.5-2B > Qwen3.5-2B-Base >> Qwen3-1.7B, Qwen2.5-Math;
+    temperature 0.8 beats 1.0.
+  - [x] Row 1, few-shot policy + automation, 16 samples × 64 expansions: **Qwen3.5-2B 115/244 (47.1%),
+    Qwen3.5-2B-Base 117/244 (48.0%)**, no row-0 proof lost (`results/phase1_fewshot_search_*`).
+  - [ ] Short identical SFT per candidate and post-SFT probe → model choice.
 - [ ] **Phase 2** — Proof-corpus tracing, decontamination, LoRA SFT, policy search on miniF2F-valid (row 2).
   - [ ] Proof tracing (`results/phase2_tracing/`): the selection minus `stp_conjectures` is replayed step by step
     (200k heartbeats, 60 s wall-clock backstop per step; 2% of canonical statements held out). Pilot, 15,516
