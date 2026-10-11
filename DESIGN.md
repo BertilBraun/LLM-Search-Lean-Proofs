@@ -146,3 +146,16 @@ allows.
 
 Results of each phase are committed under `results/` as small JSON summaries plus a markdown table; large
 per-theorem logs, datasets and checkpoints stay on the node.
+
+## Known issues (backlog)
+
+- REPL tactic mode has no declaration name, so steps that create auxiliary matchers (`intro ⟨a, b⟩`,
+  `fun ⟨a, b⟩ => …`, `let ⟨…⟩ := h`) fail in step-by-step execution although they compile in whole proofs
+  (~0.8% of traced proofs). Fix in the wrapper after the Phase 1 probe, so probe numbers stay comparable.
+- Loading a second header into a REPL process re-imports Mathlib (~3.9 GiB); import once and elaborate the rest
+  of the header as a command. A header without imports raises instead of returning an error.
+- The wrapper's "goal closed with sorry" error replaces Lean's original message.
+- Lean panics inside tactics (e.g. `Nat.pow exponent is too big`) surface as `ReplFailure(CRASHED)` and are
+  therefore never used as negative labels, although they are deterministic.
+- Statement pools: some Lean Workbook statements lack the colon before the goal; `π` is ambiguous under
+  `open … Nat Real` in the pinned Mathlib.
