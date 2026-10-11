@@ -10,6 +10,8 @@ export LEAN_SEARCH_CHECKPOINTS="${LEAN_SEARCH_CHECKPOINTS:-/workspace/checkpoint
 export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
 export HF_HOME="${HF_HOME:-/workspace/.hf_home}"
 export HF_HUB_ENABLE_HF_TRANSFER="${HF_HUB_ENABLE_HF_TRANSFER:-0}"
+# hf-mirror.com serves plain files, but Xet downloads go to cas-server.xethub.hf.co and fail with 401.
+export HF_HUB_DISABLE_XET="${HF_HUB_DISABLE_XET:-1}"
 
 export PATH="${HOME}/.elan/bin:${LEAN_SEARCH_ROOT}/.venv/bin:${PATH}"
 
