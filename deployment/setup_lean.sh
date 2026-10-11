@@ -84,6 +84,10 @@ for package in json.load(open(sys.argv[1]))["packages"]:
 
 build_project() {
     cd "${lean_directory}"
+    # Re-running `cache get` would rewrite .olean files that running REPLs have memory-mapped.
+    if lake build --no-build Mathlib repl >/dev/null 2>&1; then
+        return
+    fi
     lake exe cache get || echo "Mathlib cache unavailable; building Mathlib from source." >&2
     LEAN_NUM_THREADS="${LEAN_SEARCH_CPU_COUNT}" lake build Mathlib repl
 }
