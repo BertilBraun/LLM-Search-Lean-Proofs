@@ -79,7 +79,7 @@ search. The search runs of row 1 should still be re-checked with the SFT policy 
   about everything the narrowed full trace will hold (~330k steps) plus the pilot's Goedel SFT v2 and Numina steps.
   Build it once the trace is far enough along; a partial snapshot works the same way with a smaller budget.
 - Time: 80M tokens at 7.1k tokens/s on two GPUs is 3.1 h of training, about 3.4 h with evaluations every 200 steps
-  (2,000 validation steps, 256 greedy generations) and the merge; one GPU would take 6.5 h.
-- Training needs `flash-linear-attention` (pure Triton); without it the Gated DeltaNet layers fall back to a PyTorch
-  path that is half as fast (3.6k vs 6.7k tokens/s on Qwen3.5-0.8B in a micro-benchmark). It is installed outside the lock in
-  `/workspace/sft_extra/site` and put on `PYTHONPATH`; it belongs in the `ml` extra.
+  (2,000 validation steps, 256 greedy generations); one GPU would take 6.5 h.
+- Training needs `flash-linear-attention` (pure Triton, now in the `ml` extra); without it the Gated DeltaNet
+  layers fall back to a PyTorch path that is half as fast (3.6k vs 6.7k tokens/s on Qwen3.5-0.8B in a
+  micro-benchmark).
