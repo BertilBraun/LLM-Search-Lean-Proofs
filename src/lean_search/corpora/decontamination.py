@@ -197,7 +197,7 @@ class ContaminationIndex:
         )
         self.name_to_reference = {reference.name: index for index, reference in enumerate(self.references)}
         names_longest_first = sorted(self.name_to_reference, key=len, reverse=True)
-        # Generated variants keep the benchmark name plus a suffix (`_v2`, `sq`); a digit would name another problem.
+        # Names reused with a suffix (`_v2`, `sq`) still count; a following digit names a different problem.
         self.name_prefix = re.compile("(" + "|".join(map(re.escape, names_longest_first)) + ")(?![0-9])")
 
     def _named_reference(self, formal_statement: str) -> int | None:

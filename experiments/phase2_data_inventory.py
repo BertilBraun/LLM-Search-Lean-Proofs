@@ -412,7 +412,9 @@ def render_markdown(summary: PipelineSummary, raw_sizes: dict[str, int], normali
         "1. `exact`: identical token sequence after stripping comments, the declaration keyword and name, and the "
         "`:= by ...` suffix.",
         "2. `name`: the theorem is named after a miniF2F problem, possibly with a non-digit suffix "
-        "(`algebra_..._v2`); generated conjectures keep their seed's name.",
+        "(`amc12a_2021_p12_6`). Most such hits in STP conjectures and Goedel SFT v2 reuse the benchmark name for "
+        "unrelated content (formal similarity below 0.1); they are removed anyway so that no training statement "
+        "carries a miniF2F problem name.",
         f"3. `formal_ngram`: Jaccard similarity of token 5-grams ≥ {thresholds.formal_ngram}, after renaming bound "
         "variables to `v0, v1, ...` in order of appearance and collapsing every hypothesis name (`h...`) to `h`.",
         f"4. `shared_conclusion`: identical anonymized conclusion of at least {thresholds.minimum_conclusion_tokens} "
