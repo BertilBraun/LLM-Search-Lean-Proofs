@@ -1,0 +1,9 @@
+{
+  "gpu": "NVIDIA GeForce RTX 3090, 595.91.07",
+  "vllm": "0.31.0",
+  "torch": "2.13.0",
+  "transformers": "5.17.0",
+  "peft": "0.21.2",
+  "flashinfer-python": "0.7.0.post1",
+  "triton": "3.7.1"
+}

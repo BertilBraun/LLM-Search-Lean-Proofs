@@ -85,18 +85,27 @@ vLLM facts for these models:
 - Prefix caching on Qwen3.5 runs in Mamba cache mode `align` (set automatically): the KV block grows to 544 tokens
   and the recurrent state is checkpointed once per block, so by default the n samples of a request recompute the
   prompt tail past the last block boundary. `--prefix-match-unit 16` (set by `serve_model.sh`) fixes that: for n=16
-  the prompt-token cache hit rate rises from 0.72 to 0.90 and throughput by 15–21% on Qwen3.5-2B.
+  the prompt-token cache hit rate rises from 0.69 to 0.89–0.92 and throughput by 14–22% on Qwen3.5-2B
+  (`results/phase1_throughput/`).
 - LoRA works for Qwen3.5, including the packed Gated DeltaNet projections (`in_proj_qkvz`, `in_proj_ba`); the
   vision tower is not adapted. Adapters load at runtime (`POST /v1/load_lora_adapter` with `lora_name` and
   `lora_path`, then request `"model": "<lora_name>"`); `lean_search.policy.adapters` writes adapters targeting
   exactly the language-model linear layers and merges them.
 - Returned log-probabilities are raw (temperature 1, before top-p) and carry bf16 logit resolution: steps of
   0.125 nats when logits are around 16–32. vLLM rejects `n > 1` at temperature 0.
-- At n=16 a 3090 is compute-bound (100% utilization at the 350 W cap). The defaults `max_num_seqs=256` and
-  `max_num_batched_tokens=2048` are kept: 512 or 1024 sequences gain at most 3% and cause preemptions with
-  1500-token prompts, because each running Qwen3.5 sequence holds a 544-token-sized recurrent-state page.
-- A start takes 2–4 minutes: torch.compile and Triton autotuning are cached under `~/.cache/vllm` and
-  `~/.triton` (not persistent), and CUDA graphs are captured twice (memory profiling, then serving).
+- LoRA cost (rank 64 on all language-model linear layers): requests through an adapter are 9–24% slower than the
+  merged model on Qwen3.5-2B (most for short outputs) and 5–9% on Qwen3-1.7B; merely enabling LoRA costs
+  Qwen3.5-2B up to 10% and Qwen3-1.7B nothing measurable. Loading or swapping an adapter at runtime takes 0.3 s;
+  merging on the CPU takes 25–30 s and restarting the server 1.5–2.5 minutes. Merge for long evaluation runs, swap
+  inside training loops.
+- At n=16 the 3090 runs at 100% utilization at its 350 W cap. The defaults `max_num_seqs=256` and
+  `max_num_batched_tokens=2048` are kept: 512 and 8192 give +15% for short outputs after 600-token prompts but -23%
+  for 512-token outputs after 1500-token prompts, where the KV cache runs out and requests are preempted (each
+  running Qwen3.5 sequence also holds a recurrent-state page as large as a 544-token block). Qwen3.5-4B leaves only
+  9 GiB for the cache and is preempted even at 256 sequences. `MAX_NUM_SEQS` overrides the default.
+- A start takes 1.5–2.5 minutes with warm caches (Qwen3.5-4B cold: 4.6 minutes): torch.compile and Triton
+  autotuning results are cached under `~/.cache/vllm` and `~/.triton` (not persistent), and CUDA graphs are
+  captured twice (memory profiling, then serving).
 
 ## Node layout
 

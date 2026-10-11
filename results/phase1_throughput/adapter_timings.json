@@ -1,0 +1,28 @@
+[
+  {
+    "model": "qwen3.5-2b",
+    "adapter_creation_seconds": 12.188075132085942,
+    "base_request_seconds": 0.08882587996777147,
+    "load_adapter_seconds": 0.2627731410320848,
+    "first_adapter_request_seconds": 0.1306914190063253,
+    "swap_adapter_seconds": 0.2562592920148745,
+    "first_request_after_swap_seconds": 0.12199295603204519,
+    "merge_seconds": 24.35170668992214,
+    "stop_server_seconds": 2.035239432938397,
+    "merged_server_startup_seconds": 154.90288098400924,
+    "first_merged_request_seconds": 0.6811886059585959
+  },
+  {
+    "model": "qwen3-1.7b",
+    "adapter_creation_seconds": 7.989021220942959,
+    "base_request_seconds": 0.05758588796015829,
+    "load_adapter_seconds": 0.2747945379232988,
+    "first_adapter_request_seconds": 0.08810415805783123,
+    "swap_adapter_seconds": 0.2606235620332882,
+    "first_request_after_swap_seconds": 0.09011986595578492,
+    "merge_seconds": 30.028064085985534,
+    "stop_server_seconds": 2.03545748104807,
+    "merged_server_startup_seconds": 86.66514120902866,
+    "first_merged_request_seconds": 0.4311409939546138
+  }
+]

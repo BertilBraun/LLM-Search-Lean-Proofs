@@ -1,0 +1,112 @@
+[
+  {
+    "model": "qwen3.5-2b",
+    "variant": "base",
+    "startup_seconds": 107.10035952599719,
+    "weights_gib": 4.48,
+    "kv_cache_gib": 15.53,
+    "kv_cache_tokens": 929047,
+    "max_num_seqs": null,
+    "max_num_batched_tokens": null
+  },
+  {
+    "model": "qwen3-1.7b",
+    "variant": "base",
+    "startup_seconds": 136.39139792206697,
+    "weights_gib": 3.9,
+    "kv_cache_gib": 15.65,
+    "kv_cache_tokens": 146496,
+    "max_num_seqs": null,
+    "max_num_batched_tokens": null
+  },
+  {
+    "model": "qwen2.5-math-1.5b",
+    "variant": "base",
+    "startup_seconds": 132.04960362799466,
+    "weights_gib": 3.52,
+    "kv_cache_gib": 16.09,
+    "kv_cache_tokens": 602720,
+    "max_num_seqs": null,
+    "max_num_batched_tokens": null
+  },
+  {
+    "model": "qwen3.5-0.8b",
+    "variant": "base",
+    "startup_seconds": 103.63132892700378,
+    "weights_gib": 2.18,
+    "kv_cache_gib": 17.81,
+    "kv_cache_tokens": 1064960,
+    "max_num_seqs": null,
+    "max_num_batched_tokens": null
+  },
+  {
+    "model": "qwen3.5-4b",
+    "variant": "base",
+    "startup_seconds": 277.7816708140308,
+    "weights_gib": 9.39,
+    "kv_cache_gib": 9.24,
+    "kv_cache_tokens": 213364,
+    "max_num_seqs": null,
+    "max_num_batched_tokens": null
+  },
+  {
+    "model": "qwen3.5-2b",
+    "variant": "LoRA server",
+    "startup_seconds": 105.7998715529684,
+    "weights_gib": 4.48,
+    "kv_cache_gib": 15.53,
+    "kv_cache_tokens": 929047,
+    "max_num_seqs": null,
+    "max_num_batched_tokens": null
+  },
+  {
+    "model": "qwen3.5-2b",
+    "variant": "merged, LoRA disabled",
+    "startup_seconds": 154.90288098400924,
+    "weights_gib": 3.63,
+    "kv_cache_gib": 15.89,
+    "kv_cache_tokens": 950272,
+    "max_num_seqs": null,
+    "max_num_batched_tokens": null
+  },
+  {
+    "model": "qwen3-1.7b",
+    "variant": "LoRA server",
+    "startup_seconds": 97.37802129099146,
+    "weights_gib": 3.9,
+    "kv_cache_gib": 16.22,
+    "kv_cache_tokens": 151808,
+    "max_num_seqs": null,
+    "max_num_batched_tokens": null
+  },
+  {
+    "model": "qwen3-1.7b",
+    "variant": "merged, LoRA disabled",
+    "startup_seconds": 86.66514120902866,
+    "weights_gib": 3.22,
+    "kv_cache_gib": 16.74,
+    "kv_cache_tokens": 156752,
+    "max_num_seqs": null,
+    "max_num_batched_tokens": null
+  },
+  {
+    "model": "qwen3.5-2b",
+    "variant": "prefix match unit 544 (vLLM default)",
+    "startup_seconds": 103.10511383495759,
+    "weights_gib": 4.48,
+    "kv_cache_gib": 15.53,
+    "kv_cache_tokens": 929047,
+    "max_num_seqs": null,
+    "max_num_batched_tokens": null
+  },
+  {
+    "model": "qwen3.5-2b",
+    "variant": "max_num_seqs 512, max_num_batched_tokens 8192",
+    "startup_seconds": 105.79293887701351,
+    "weights_gib": 4.48,
+    "kv_cache_gib": 14.95,
+    "kv_cache_tokens": 894045,
+    "max_num_seqs": 512,
+    "max_num_batched_tokens": 8192
+  }
+]
