@@ -1,0 +1,359 @@
+{
+ "name": "v1",
+ "built": "2026-10-11T22:36:14+00:00",
+ "git_revision": "04572060be13852b554f37dfeff72446454e70e8",
+ "traced_directory": "/workspace/data/traced",
+ "step_files": [
+  "steps_train.jsonl",
+  "steps_validation.jsonl"
+ ],
+ "seconds": 64.7919024610892,
+ "config": {
+  "sources": [
+   {
+    "name": "goedel_lean_workbook_proofs",
+    "weight": 1.0
+   },
+   {
+    "name": "stp_lean_workbook",
+    "weight": 1.0
+   },
+   {
+    "name": "deepseek_prover_v1",
+    "weight": 1.0
+   },
+   {
+    "name": "lean_workbook",
+    "weight": 1.0
+   },
+   {
+    "name": "goedel_sft_v2",
+    "weight": 1.0
+   },
+   {
+    "name": "numinamath_lean_kimina",
+    "weight": 1.0
+   },
+   {
+    "name": "numinamath_lean_human",
+    "weight": 1.0
+   },
+   {
+    "name": "leanabell_sft",
+    "weight": 1.0
+   }
+  ],
+  "token_budget": 0,
+  "max_prompt_tokens": 2048,
+  "max_completion_tokens": 256,
+  "validation_examples": 2000,
+  "reference_tokenizer": "Qwen/Qwen3.5-2B",
+  "seed": "sft-v1"
+ },
+ "sources": [
+  {
+   "source": "goedel_lean_workbook_proofs",
+   "traced_steps": 45949,
+   "forbidden_steps": 0,
+   "duplicates": 1778,
+   "examined": 44171,
+   "over_length": 341,
+   "selected": 43830,
+   "prompt_tokens": {
+    "count": 43830,
+    "total": 7799706,
+    "mean": 177.9535934291581,
+    "p50": 156,
+    "p90": 254,
+    "p99": 551,
+    "maximum": 2043
+   },
+   "completion_tokens": {
+    "count": 43830,
+    "total": 1421467,
+    "mean": 32.431371206935886,
+    "p50": 18,
+    "p90": 83,
+    "p99": 177,
+    "maximum": 255
+   },
+   "total_tokens": 9221173
+  },
+  {
+   "source": "stp_lean_workbook",
+   "traced_steps": 8217,
+   "forbidden_steps": 0,
+   "duplicates": 175,
+   "examined": 8042,
+   "over_length": 49,
+   "selected": 7993,
+   "prompt_tokens": {
+    "count": 7993,
+    "total": 1567219,
+    "mean": 196.0739396972351,
+    "p50": 181,
+    "p90": 284,
+    "p99": 453,
+    "maximum": 1414
+   },
+   "completion_tokens": {
+    "count": 7993,
+    "total": 257736,
+    "mean": 32.2452145627424,
+    "p50": 18,
+    "p90": 82,
+    "p99": 190,
+    "maximum": 256
+   },
+   "total_tokens": 1824955
+  },
+  {
+   "source": "deepseek_prover_v1",
+   "traced_steps": 4555,
+   "forbidden_steps": 0,
+   "duplicates": 3,
+   "examined": 4552,
+   "over_length": 1,
+   "selected": 4551,
+   "prompt_tokens": {
+    "count": 4551,
+    "total": 758660,
+    "mean": 166.7018237749945,
+    "p50": 150,
+    "p90": 234,
+    "p99": 431,
+    "maximum": 1509
+   },
+   "completion_tokens": {
+    "count": 4551,
+    "total": 51681,
+    "mean": 11.35596572181938,
+    "p50": 9,
+    "p90": 21,
+    "p99": 45,
+    "maximum": 139
+   },
+   "total_tokens": 810341
+  },
+  {
+   "source": "lean_workbook",
+   "traced_steps": 2264,
+   "forbidden_steps": 0,
+   "duplicates": 136,
+   "examined": 2128,
+   "over_length": 1,
+   "selected": 2127,
+   "prompt_tokens": {
+    "count": 2127,
+    "total": 327963,
+    "mean": 154.1904090267983,
+    "p50": 140,
+    "p90": 210,
+    "p99": 410,
+    "maximum": 870
+   },
+   "completion_tokens": {
+    "count": 2127,
+    "total": 29963,
+    "mean": 14.086976962858486,
+    "p50": 12,
+    "p90": 28,
+    "p99": 43,
+    "maximum": 176
+   },
+   "total_tokens": 357926
+  },
+  {
+   "source": "goedel_sft_v2",
+   "traced_steps": 6449,
+   "forbidden_steps": 0,
+   "duplicates": 0,
+   "examined": 6449,
+   "over_length": 1722,
+   "selected": 4727,
+   "prompt_tokens": {
+    "count": 4727,
+    "total": 1065194,
+    "mean": 225.34250052887666,
+    "p50": 191,
+    "p90": 365,
+    "p99": 700,
+    "maximum": 1261
+   },
+   "completion_tokens": {
+    "count": 4727,
+    "total": 284208,
+    "mean": 60.12439179183414,
+    "p50": 19,
+    "p90": 181,
+    "p99": 247,
+    "maximum": 256
+   },
+   "total_tokens": 1349402
+  },
+  {
+   "source": "numinamath_lean_kimina",
+   "traced_steps": 8384,
+   "forbidden_steps": 0,
+   "duplicates": 5,
+   "examined": 8379,
+   "over_length": 569,
+   "selected": 7810,
+   "prompt_tokens": {
+    "count": 7810,
+    "total": 1652245,
+    "mean": 211.5550576184379,
+    "p50": 183,
+    "p90": 334,
+    "p99": 602,
+    "maximum": 1592
+   },
+   "completion_tokens": {
+    "count": 7810,
+    "total": 344629,
+    "mean": 44.12663252240717,
+    "p50": 25,
+    "p90": 119,
+    "p99": 234,
+    "maximum": 256
+   },
+   "total_tokens": 1996874
+  },
+  {
+   "source": "numinamath_lean_human",
+   "traced_steps": 0,
+   "forbidden_steps": 0,
+   "duplicates": 0,
+   "examined": 0,
+   "over_length": 0,
+   "selected": 0,
+   "prompt_tokens": {
+    "count": 0,
+    "total": 0,
+    "mean": 0.0,
+    "p50": 0,
+    "p90": 0,
+    "p99": 0,
+    "maximum": 0
+   },
+   "completion_tokens": {
+    "count": 0,
+    "total": 0,
+    "mean": 0.0,
+    "p50": 0,
+    "p90": 0,
+    "p99": 0,
+    "maximum": 0
+   },
+   "total_tokens": 0
+  },
+  {
+   "source": "leanabell_sft",
+   "traced_steps": 6209,
+   "forbidden_steps": 0,
+   "duplicates": 8,
+   "examined": 6201,
+   "over_length": 30,
+   "selected": 6171,
+   "prompt_tokens": {
+    "count": 6171,
+    "total": 1069491,
+    "mean": 173.30918813806514,
+    "p50": 142,
+    "p90": 242,
+    "p99": 829,
+    "maximum": 2035
+   },
+   "completion_tokens": {
+    "count": 6171,
+    "total": 126222,
+    "mean": 20.45405930967428,
+    "p50": 12,
+    "p90": 44,
+    "p99": 144,
+    "maximum": 250
+   },
+   "total_tokens": 1195713
+  }
+ ],
+ "train": {
+  "examples": 77209,
+  "prompt_tokens": {
+   "count": 77209,
+   "total": 14240478,
+   "mean": 184.44064811097152,
+   "p50": 160,
+   "p90": 272,
+   "p99": 567,
+   "maximum": 2043
+  },
+  "completion_tokens": {
+   "count": 77209,
+   "total": 2515906,
+   "mean": 32.58565711251279,
+   "p50": 17,
+   "p90": 85,
+   "p99": 204,
+   "maximum": 256
+  },
+  "total_tokens": {
+   "count": 77209,
+   "total": 16756384,
+   "mean": 217.02630522348431,
+   "p50": 191,
+   "p90": 328,
+   "p99": 630,
+   "maximum": 2057
+  },
+  "examples_by_source": {
+   "goedel_lean_workbook_proofs": 43830,
+   "leanabell_sft": 6171,
+   "numinamath_lean_kimina": 7810,
+   "stp_lean_workbook": 7993,
+   "lean_workbook": 2127,
+   "deepseek_prover_v1": 4551,
+   "goedel_sft_v2": 4727
+  }
+ },
+ "validation_traced_steps": 1656,
+ "validation_duplicates": 54,
+ "validation": {
+  "examples": 1509,
+  "prompt_tokens": {
+   "count": 1509,
+   "total": 280758,
+   "mean": 186.05566600397614,
+   "p50": 161,
+   "p90": 281,
+   "p99": 536,
+   "maximum": 1953
+  },
+  "completion_tokens": {
+   "count": 1509,
+   "total": 49945,
+   "mean": 33.098078197481776,
+   "p50": 17,
+   "p90": 93,
+   "p99": 206,
+   "maximum": 255
+  },
+  "total_tokens": {
+   "count": 1509,
+   "total": 330703,
+   "mean": 219.15374420145793,
+   "p50": 192,
+   "p90": 336,
+   "p99": 590,
+   "maximum": 1969
+  },
+  "examples_by_source": {
+   "goedel_lean_workbook_proofs": 928,
+   "numinamath_lean_kimina": 106,
+   "stp_lean_workbook": 109,
+   "goedel_sft_v2": 133,
+   "deepseek_prover_v1": 110,
+   "leanabell_sft": 90,
+   "lean_workbook": 33
+  }
+ }
+}

@@ -13,8 +13,11 @@ Qwen3.5 tokens (prompt + completion).
 | `partial4` | full-FT/LoRA learning-rate check | all | 512 | 20,208 | 4,145,054 | 539,172 | 372 |
 | `pilot` | LoRA vs full fine-tuning A/B | all | 256 | 45,864 | 10,864,923 | 1,510,468 | 858 |
 | `model_choice` | model-choice runs | 7.5M | 256 | 33,107 | 7,500,857 | 1,030,501 | 858 |
+| `v1` | SFT v1 (development policy) | all | 256 | 77,209 | 16,756,384 | 2,515,906 | 1,509 |
 
-`partial4` was built while the pilot was still running and holds only the first four sources. Details per source
+`partial4` was built while the pilot was still running and holds only the first four sources. `v1` is built from
+the merged tracing snapshot of 2026-10-11 20:39 UTC (`--snapshot`: 82,027 train steps, pilot plus the first main
+shards; 55% Goedel workbook, no Numina human proofs). Details per source
 (steps, duplicates, length drops, token shares, length quantiles) in `<name>.md`, machine-readable in `<name>.json`.
 
 Findings:
