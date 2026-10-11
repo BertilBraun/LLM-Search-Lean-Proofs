@@ -543,7 +543,12 @@ async def execute_all(
                     # A second header re-imports Mathlib onto the heap, so a process holds one header at a time.
                     await repl.restart()
                 for state in batch.states:
-                    outcomes.append(await execute_state(repl, state, blocks_by_state[state.identifier]))
+                    try:
+                        outcome = await execute_state(repl, state, blocks_by_state[state.identifier])
+                    except Exception as error:
+                        # The wrapper asserts on environments it cannot build (some headers): not the model's fault.
+                        outcome = StateOutcome(state.identifier, repr(error)[:FAILURE_MESSAGE_CHARACTERS], ())
+                    outcomes.append(outcome)
                 if foreign:
                     await repl.restart()
                     await repl.load_header(preloaded_header)
