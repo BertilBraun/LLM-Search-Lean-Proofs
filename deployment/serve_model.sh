@@ -6,7 +6,8 @@
 #
 # The model is served under <name>. Prefix caching and LoRA are on; adapters are loaded at runtime through
 # POST /v1/load_lora_adapter and then requested by their adapter name. Sampling defaults are vLLM's, not the
-# model's generation_config.json, so every request states its own parameters.
+# model's generation_config.json, so every request states its own parameters. Later arguments override earlier
+# ones, e.g. --no-enable-lora for a merged model.
 # Log: $LEAN_SEARCH_RUNS/servers/<name>.log, process group id: <name>.pid. Stop with stop_model.sh <name>.
 # Overrides: MAX_MODEL_LEN (8192), GPU_MEMORY_UTILIZATION (0.90), MAX_NUM_SEQS (vLLM default), MAX_LORA_RANK (64),
 # MAX_LORAS (4), SERVER_START_TIMEOUT seconds (900).
@@ -41,6 +42,8 @@ arguments=(
     --max-model-len "${MAX_MODEL_LEN:-8192}"
     --gpu-memory-utilization "${GPU_MEMORY_UTILIZATION:-0.90}"
     --enable-prefix-caching
+    # Hybrid models checkpoint recurrent state per 544-token block; a finer unit lets n samples share the prompt tail.
+    --prefix-match-unit 16
     --enable-lora
     --max-lora-rank "${MAX_LORA_RANK:-64}"
     --max-loras "${MAX_LORAS:-4}"
@@ -58,7 +61,8 @@ if [[ "${has_vision_tower}" == True ]]; then
     arguments+=(--language-model-only)
 fi
 
-CUDA_VISIBLE_DEVICES="${gpu}" VLLM_ALLOW_RUNTIME_LORA_UPDATING=True \
+# Persisting Triton autotuning results removes about a minute of warmup from later starts.
+CUDA_VISIBLE_DEVICES="${gpu}" VLLM_ALLOW_RUNTIME_LORA_UPDATING=True TRITON_CACHE_AUTOTUNING=1 \
     setsid nohup vllm "${arguments[@]}" "$@" > "${log_file}" 2>&1 < /dev/null &
 echo $! > "${pid_file}"
 echo "Starting ${name} (${model}) on GPU ${gpu}, port ${port}, pid $(cat "${pid_file}"), log ${log_file}"
