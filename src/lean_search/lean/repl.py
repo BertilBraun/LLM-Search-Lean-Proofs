@@ -43,10 +43,10 @@ _lake_environments: dict[Path, dict[str, str]] = {}
 class LeanReplConfig:
     project_directory: Path = PROJECT_DIRECTORY
     tactic_heartbeats: int = 200_000
-    tactic_timeout_seconds: float = 60.0
-    command_timeout_seconds: float = 600.0
-    max_anonymous_memory_bytes: int = 16 << 30
-    max_proof_states: int = 50_000
+    tactic_timeout_seconds: float = 20.0
+    command_timeout_seconds: float = 300.0
+    max_anonymous_memory_bytes: int = 2 << 30
+    max_proof_states: int = 8_000
 
 
 @dataclass(frozen=True)
@@ -208,6 +208,14 @@ class LeanRepl:
         assert self._process is not None and self._is_running()
         return read_memory_usage(self._process.pid)
 
+    def exceeds_limits(self, fraction: float = 1.0) -> bool:
+        if not self._is_running():
+            return False
+        return (
+            self.proof_state_count >= fraction * self.config.max_proof_states
+            or self.memory_usage().anonymous_bytes >= fraction * self.config.max_anonymous_memory_bytes
+        )
+
     async def start(self) -> None:
         async with self._lock:
             if not self._is_running():
@@ -232,6 +240,7 @@ class LeanRepl:
             started = time.monotonic()
             await self._ensure_healthy()
             outcome = await self._start_proof(statement, header)
+            await self._recover_if_dead()
             return TacticResult(outcome, time.monotonic() - started)
 
     async def apply_tactic(
@@ -241,6 +250,7 @@ class LeanRepl:
             started = time.monotonic()
             await self._ensure_healthy()
             outcome = await self._apply_tactic(state, tactic, self._limits(heartbeats, timeout_seconds))
+            await self._recover_if_dead()
             return TacticResult(outcome, time.monotonic() - started)
 
     async def apply_block(
@@ -263,6 +273,7 @@ class LeanRepl:
                     break
                 current = outcome
                 applied.append(tactic)
+            await self._recover_if_dead()
             return BlockResult(current, tuple(applied), len(tactics), failure, time.monotonic() - started)
 
     async def verify_proof(self, statement: str, proof: str, header: str) -> VerificationResult:
@@ -270,6 +281,7 @@ class LeanRepl:
             started = time.monotonic()
             await self._ensure_healthy()
             problems, axioms = await self._verify_proof(statement, proof, header)
+            await self._recover_if_dead()
             return VerificationResult(not problems, tuple(problems), axioms, time.monotonic() - started)
 
     async def _verify_proof(self, statement: str, proof: str, header: str) -> tuple[list[str], tuple[str, ...]]:
@@ -402,12 +414,17 @@ class LeanRepl:
     async def _ensure_healthy(self) -> None:
         if not self._is_running():
             await self._start_process()
-        elif (
-            self.proof_state_count >= self.config.max_proof_states
-            or self.memory_usage().anonymous_bytes >= self.config.max_anonymous_memory_bytes
-        ):
+        elif self.exceeds_limits():
             await self._stop_process()
             await self._start_process()
+
+    async def _recover_if_dead(self) -> None:
+        if self._is_running():
+            return
+        headers = list(self._tactic_environments)
+        await self._start_process()
+        for header in headers:
+            await self._tactic_environment(header)
 
     def _is_running(self) -> bool:
         return self._process is not None and self._process.returncode is None

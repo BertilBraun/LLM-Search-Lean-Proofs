@@ -160,3 +160,19 @@ async def test_pool_serves_concurrent_proofs() -> None:
     async with LeanReplPool(2) as pool:
         proved = await asyncio.gather(*(prove(pool) for _ in range(4)))
     assert all(proved)
+
+
+async def test_wall_clock_timeout_restarts_the_process_before_returning(
+    repl: LeanRepl, initial_state: ProofState
+) -> None:
+    await repl.apply_tactic(initial_state, SLOW_TACTIC, heartbeats=0, timeout_seconds=2.0)
+    assert repl.process_id is not None
+
+
+async def test_pool_restarts_a_process_past_its_limits_on_release() -> None:
+    async with LeanReplPool(1, LeanReplConfig(max_proof_states=2), restart_fraction=0.5) as pool:
+        async with pool.acquire() as repl:
+            await repl.start_proof(STATEMENT, HEADER)
+        async with pool.acquire() as repl:
+            restart_count = repl.restart_count
+    assert restart_count == 1

@@ -8,9 +8,14 @@ from lean_search.lean.repl import LeanRepl, LeanReplConfig
 
 
 class LeanReplPool:
-    def __init__(self, size: int, config: LeanReplConfig | None = None) -> None:
+    """Processes past `restart_fraction` of their limits are restarted on release, so restarts fall between uses."""
+
+    def __init__(self, size: int, config: LeanReplConfig | None = None, restart_fraction: float = 0.5) -> None:
         self.repls = [LeanRepl(config) for _ in range(size)]
+        self.restart_fraction = restart_fraction
+        self._headers: list[str] = []
         self._idle: asyncio.Queue[LeanRepl] = asyncio.Queue()
+        self._restarts: set[asyncio.Task[None]] = set()
         for repl in self.repls:
             self._idle.put_nowait(repl)
 
@@ -22,7 +27,8 @@ class LeanReplPool:
         await self.close()
 
     async def start(self, headers: Sequence[str] = ()) -> None:
-        await asyncio.gather(*(self._prepare(repl, headers) for repl in self.repls))
+        self._headers = list(dict.fromkeys([*self._headers, *headers]))
+        await asyncio.gather(*(self._prepare(repl) for repl in self.repls))
 
     @contextlib.asynccontextmanager
     async def acquire(self) -> AsyncIterator[LeanRepl]:
@@ -30,13 +36,23 @@ class LeanReplPool:
         try:
             yield repl
         finally:
-            self._idle.put_nowait(repl)
+            if repl.exceeds_limits(self.restart_fraction):
+                restart = asyncio.create_task(self._restart(repl))
+                self._restarts.add(restart)
+                restart.add_done_callback(self._restarts.discard)
+            else:
+                self._idle.put_nowait(repl)
 
     async def close(self) -> None:
+        await asyncio.gather(*self._restarts)
         await asyncio.gather(*(repl.close() for repl in self.repls))
 
-    @staticmethod
-    async def _prepare(repl: LeanRepl, headers: Sequence[str]) -> None:
+    async def _prepare(self, repl: LeanRepl) -> None:
         await repl.start()
-        for header in headers:
+        for header in self._headers:
             await repl.load_header(header)
+
+    async def _restart(self, repl: LeanRepl) -> None:
+        await repl.restart()
+        await self._prepare(repl)
+        self._idle.put_nowait(repl)

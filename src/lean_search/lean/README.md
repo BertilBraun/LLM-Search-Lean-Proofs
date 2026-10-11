@@ -43,6 +43,11 @@ Semantics:
   before Lean sees the tactic.
 - `ProofState`s are immutable and carry their tactic path. After a restart (memory or proof-state threshold,
   wall-clock kill, crash) or on another process of the pool, a state is transparently rebuilt by replaying its path.
+- `elapsed_seconds` is wall-clock time inside the process lock, including any restart: a wall-clock kill restarts
+  the process and re-imports its headers (about 3.5 s) before the call returns; a threshold restart (default 2 GiB
+  private memory or 8000 proof states) and replays are charged to the call that triggers them. The pool restarts
+  processes past half their limits when they are released, so with one search per `acquire` restarts mostly fall
+  between searches.
 - `split_tactics` splits a block into top-level tactics by indentation relative to its first line; deeper lines,
   and lines starting with `<;>`, `|` or `else`, continue the previous tactic; a `·` bullet takes its indented body.
 - `verify_proof` re-elaborates `statement + proof` from scratch in the header environment followed by
