@@ -1,0 +1,466 @@
+{
+ "run_name": "phase2_sft_choice_qwen3-1.7b",
+ "started": "2026-10-11T19:28:26+00:00",
+ "git_revision": "1cf565fa71443d71113ceffca62bef43de5a17ee",
+ "config": {
+  "model": "Qwen/Qwen3-1.7B",
+  "data": "model_choice",
+  "lora": {
+   "rank": 64,
+   "alpha": 64,
+   "dropout": 0.0
+  },
+  "optimization": {
+   "method": "lora",
+   "learning_rate": 0.0002,
+   "warmup_fraction": 0.03,
+   "minimum_learning_rate_ratio": 0.1,
+   "weight_decay": 0.0,
+   "max_gradient_norm": 1.0,
+   "epochs": 1,
+   "max_steps": 0,
+   "micro_batch_tokens": 32768,
+   "micro_batches_per_step": 1,
+   "length_group_examples": 4096,
+   "gradient_checkpointing": true,
+   "seed": 0
+  },
+  "evaluation": {
+   "interval_steps": 50,
+   "validation_examples": 1000,
+   "micro_batch_tokens": 16384,
+   "generation_examples": 128,
+   "generation_batch_size": 64,
+   "max_new_tokens": 256
+  },
+  "merge": true
+ },
+ "world_size": 1,
+ "flash_linear_attention": true,
+ "train_examples": 33107,
+ "train_tokens": 7335011,
+ "validation_examples": 858,
+ "tokenization_seconds": 17.70546322502196,
+ "result": {
+  "steps": 243,
+  "examples": 33107,
+  "tokens": 7335011,
+  "padded_tokens": 7711327,
+  "completion_tokens": 1009240,
+  "training_seconds": 1985.998310267576,
+  "tokens_per_second": 3693.3621554852907,
+  "peak_memory_gib": 13.052793025970459,
+  "trainable_parameters": 69730304,
+  "evaluations": [
+   {
+    "step": 0,
+    "validation_loss": 2.3278462043350587,
+    "validation_examples": 858,
+    "teacher_forced_exact_match": 0.006993006993006993,
+    "generation_exact_match": 0.0234375,
+    "generation_examples": 128,
+    "evaluation_seconds": 61.27324948797468,
+    "mismatches": [
+     {
+      "goals": [
+       "park_group soccer_group : Finset ℕ\nj : ℕ\nh₁ : park_group ⊆ {3, 5, 7, 9, 11, 13, 15}\nh₂ : soccer_group ⊆ {3, 5, 7, 9, 11, 13, 15}\nh₃ : park_group.card = 3\nh₄ : soccer_group.card = 2\nh₅ : ∑ x ∈ park_group, x = 26\nh₆ : ∀ x ∈ soccer_group, x < 12\nh₇ : 3 ∉ park_group\nh₈ : 3 ∉ soccer_group\nh₉ : park_group ∩ soccer_group = ∅\nh₁₀ : j ∈ {3, 5, 7, 9, 11, 13, 15}\nh₁₁ : j ∉ park_group\nh₁₂ : j ∉ soccer_group\nh₁₃ : j ≠ 3\nh₁₄ : False\nh₁₅ : j = 13\n⊢ j = 13"
+      ],
+      "target": "exact h₁₅",
+      "generated": "rw [h₁₅, h₁₀]"
+     },
+     {
+      "goals": [
+       "x : ℝ\n⊢ let original := fun x => 3 * x ^ 2 - 6 * x + 5;\n  let rotated := fun x => -3 * x ^ 2 + 6 * x - 1;\n  let line := fun x => -x - 2;\n  let final := fun x => -3 * x ^ 2 + 6 * x - 4;\n  final 2 = line 2 ∧ ∃ a, ∀ (x : ℝ), final x = rotated x + a"
+      ],
+      "target": "intro original rotated line final",
+      "generated": "rw [final, line, rotated, original]"
+     },
+     {
+      "goals": [
+       "a b : ℝ\nha : 0 ≤ a\nhb : 0 ≤ b\n⊢ a + b ≥ √((a ^ 2 + b ^ 2) / 2) ∧ √((a ^ 2 + b ^ 2) / 2) ≥ √(a * b)"
+      ],
+      "target": "constructor",
+      "generated": "rw [add_le_add, add_le_add, add_le_add, add_le_add]"
+     },
+     {
+      "goals": [
+       "x y : ℝ\nhx : 0 < x\nhy : 0 < y\nhxy : x > y\nz t : ℝ\nhz : z = (x + y) / 2\nht : t = √(x * y)\nh : x - y = 3 * ((x + y) / 2 - √(x * y))\neq1 : 2 * (x - y) = 3 * (x + y - 2 * √(x * y))\neq2 : x + 5 * y = 6 * √(x * y)\nh3 : 0 ≤ x * y\n⊢ x / y = 25"
+      ],
+      "target": "have eq3 : (x + 5 * y) ^ 2 = 36 * (x * y) := by\n  calc\n    (x + 5 * y) ^ 2 = (6 * Real.sqrt (x * y)) ^ 2 := by\n      rw [show 6 * Real.sqrt (x * y) = x + 5 * y by linarith [eq2]]\n    _ = 36 * (Real.sqrt (x * y) ^ 2) := by\n      ring_nf\n    _ = 36 * (x * y) := by\n      rw [Real.sq_sqrt (show (0 : ℝ) ≤ x * y by nlinarith)]",
+      "generated": "rw [h, eq1, eq2]"
+     },
+     {
+      "goals": [
+       "x y z : ℝ\nh₁ : x + y + z = 3\nh₂ : x ^ 2 + y ^ 2 + z ^ 2 = 5\nh₃ : x ^ 3 + y ^ 3 + z ^ 3 = 7\nh₄ : x = 3 - y - z\n⊢ x ^ 4 + y ^ 4 + z ^ 4 = 9"
+      ],
+      "target": "simp_all only [rpow_two, mul_neg, mul_one, sub_eq_add_neg]",
+      "generated": "rw [h₄, h₁] at h₂\nrw [h₄, h₁] at h₃\nrw [h₄, h₁] at h₂\nrw [h₄, h₁] at h₃"
+     },
+     {
+      "goals": [
+       "R : ℝ → ℝ → ℝ\nx : ℝ\nhx : 0 ≤ x\nhx' : x < 100\nhR : ∀ (x y : ℝ), R x y = 901 * x ^ 2 - 9450 * x + 10000\n⊢ x = 100 → R x 0 = 90100"
+      ],
+      "target": "intro h",
+      "generated": "rw [hR, hx, hx'] at hR"
+     },
+     {
+      "goals": [
+       "x y z : ℝ\nthis : 0 ≤ (x * y * (x - y) + y * z * (y - z) + z * x * (z - x)) ^ 2\n⊢ 2 * (x ^ 2 + y ^ 2) * (y ^ 2 + z ^ 2) * (z ^ 2 + x ^ 2) ≥\n    (x * y * (x + y) + y * z * (y + z) + z * x * (z + x) - 2 * x * y * z) ^ 2"
+      ],
+      "target": "linarith",
+      "generated": "rw [pow_pow, pow_eq_zero_iff, pow_eq_zero_iff]"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\nh₀ : 0 < a ^ 2\n⊢ 4 / (a ^ 2 + b * c) ≤ 1 / a ^ 2 + 1 / (b * c)"
+      ],
+      "target": "have h₁ : 0 < b * c := by nlinarith",
+      "generated": "rw [div_eq_zero_iff, div_eq_zero_iff] at *"
+     }
+    ]
+   },
+   {
+    "step": 50,
+    "validation_loss": 0.6219422131988426,
+    "validation_examples": 858,
+    "teacher_forced_exact_match": 0.07342657342657342,
+    "generation_exact_match": 0.1015625,
+    "generation_examples": 128,
+    "evaluation_seconds": 61.07406082004309,
+    "mismatches": [
+     {
+      "goals": [
+       "x : ℝ\n⊢ let original := fun x => 3 * x ^ 2 - 6 * x + 5;\n  let rotated := fun x => -3 * x ^ 2 + 6 * x - 1;\n  let line := fun x => -x - 2;\n  let final := fun x => -3 * x ^ 2 + 6 * x - 4;\n  final 2 = line 2 ∧ ∃ a, ∀ (x : ℝ), final x = rotated x + a"
+      ],
+      "target": "intro original rotated line final",
+      "generated": "have final_2 := final 2"
+     },
+     {
+      "goals": [
+       "a b : ℝ\nha : 0 ≤ a\nhb : 0 ≤ b\n⊢ a + b ≥ √((a ^ 2 + b ^ 2) / 2) ∧ √((a ^ 2 + b ^ 2) / 2) ≥ √(a * b)"
+      ],
+      "target": "constructor",
+      "generated": "have h₁ : a + b ≥ Real.sqrt ((a^2 + b^2)/2) := by\n  have h₁₁ : 0 ≤ a * b := mul_nonneg ha hb\n  have h₁₂ : 0 ≤ a^2 + b^2 := by nlinarith\n  have h₁₃ : 0 ≤ (a^2 + b^2)/2 := by nlinarith\n  have h₁₄ : Real.sqrt ((a^2 + b^2)/2) ≥ Real.sqrt (a * b) := by\n    nlinarith\n  exact Real.sqrt_le_sqrt h₁₄"
+     },
+     {
+      "goals": [
+       "x y : ℝ\nhx : 0 < x\nhy : 0 < y\nhxy : x > y\nz t : ℝ\nhz : z = (x + y) / 2\nht : t = √(x * y)\nh : x - y = 3 * ((x + y) / 2 - √(x * y))\neq1 : 2 * (x - y) = 3 * (x + y - 2 * √(x * y))\neq2 : x + 5 * y = 6 * √(x * y)\nh3 : 0 ≤ x * y\n⊢ x / y = 25"
+      ],
+      "target": "have eq3 : (x + 5 * y) ^ 2 = 36 * (x * y) := by\n  calc\n    (x + 5 * y) ^ 2 = (6 * Real.sqrt (x * y)) ^ 2 := by\n      rw [show 6 * Real.sqrt (x * y) = x + 5 * y by linarith [eq2]]\n    _ = 36 * (Real.sqrt (x * y) ^ 2) := by\n      ring_nf\n    _ = 36 * (x * y) := by\n      rw [Real.sq_sqrt (show (0 : ℝ) ≤ x * y by nlinarith)]",
+      "generated": "have h4 : 0 ≤ x * y := by nlinarith"
+     },
+     {
+      "goals": [
+       "x y z : ℝ\nh₁ : x + y + z = 3\nh₂ : x ^ 2 + y ^ 2 + z ^ 2 = 5\nh₃ : x ^ 3 + y ^ 3 + z ^ 3 = 7\nh₄ : x = 3 - y - z\n⊢ x ^ 4 + y ^ 4 + z ^ 4 = 9"
+      ],
+      "target": "simp_all only [rpow_two, mul_neg, mul_one, sub_eq_add_neg]",
+      "generated": "have h₅ : y = 3 - x - z := by\n  have h₅₁ : y = 3 - x - z := by\n    rw [h₄]\n  exact h₅₁"
+     },
+     {
+      "goals": [
+       "R : ℝ → ℝ → ℝ\nx : ℝ\nhx : 0 ≤ x\nhx' : x < 100\nhR : ∀ (x y : ℝ), R x y = 901 * x ^ 2 - 9450 * x + 10000\n⊢ x = 100 → R x 0 = 90100"
+      ],
+      "target": "intro h",
+      "generated": "have hR0 : R x 0 = 901 * x ^ 2 - 9450 * x + 10000 := by\n  rw [hR]\n  <;> simp_all"
+     },
+     {
+      "goals": [
+       "x y z : ℝ\nthis : 0 ≤ (x * y * (x - y) + y * z * (y - z) + z * x * (z - x)) ^ 2\n⊢ 2 * (x ^ 2 + y ^ 2) * (y ^ 2 + z ^ 2) * (z ^ 2 + x ^ 2) ≥\n    (x * y * (x + y) + y * z * (y + z) + z * x * (z + x) - 2 * x * y * z) ^ 2"
+      ],
+      "target": "linarith",
+      "generated": "nlinarith [sq_nonneg (x * y * (x - y) + y * z * (y - z) + z * x * (z - x)),\n  sq_nonneg (x * y * (x + y) + y * z * (y + z) + z * x * (z + x) - 2 * x * y * z)]"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\nh₀ : 0 < a ^ 2\n⊢ 4 / (a ^ 2 + b * c) ≤ 1 / a ^ 2 + 1 / (b * c)"
+      ],
+      "target": "have h₁ : 0 < b * c := by nlinarith",
+      "generated": "nlinarith [sq_nonneg (a - b), sq_nonneg (b - c), sq_nonneg (c - a),\n  mul_self_nonneg (a - b), mul_self_nonneg (b - c), mul_self_nonneg (c - a),\n  mul_self_nonneg (a + b), mul_self_nonneg (b + c), mul_self_nonneg (c + a),\n  mul_self_nonneg (a * b), mul_self_nonneg (b * c), mul_self_nonneg (c * a),\n  mul_self_nonneg (a * c), mul_self_nonneg (b * a), mul_self_nonneg (c * b),\n  mul_self_nonneg (a * b * c), mul_self_nonneg (a * b * c), mul_self_nonneg (a * b * c),\n  mul_self_nonneg (a * b * c), mul_self_nonneg (a * b * c), mul_self_nonneg (a * b * c),\n  mul_self_nonneg (a * b * c), mul_self_nonneg (a * b * c), mul_self_nonneg (a * b * c),\n  mul_self_nonneg (a * b * c), mul_self"
+     },
+     {
+      "goals": [
+       "h :\n  ∀ (c f : ℝ) (n : ℕ),\n    Irrational c →\n      c ∈ Set.Ioo 1 2 →\n        f ∈ Set.Ico 0 1 →\n          f < 2 - c →\n            0 < n →\n              let A := c * ↑n;\n              let B := ↑n * (2 - 1 / c) - f / c;\n              B ≤ A ∧ A < B + 1\nh₁ : Irrational √2\nh₂ : 1 < √2 ∧ √2 < 2\n⊢ False"
+      ],
+      "target": "have h₃ : (1 / 1000 : ℝ) ∈ Set.Ico 0 1 := by\n  constructor\n  ·\n    norm_num\n  ·\n    norm_num",
+      "generated": "have h₃ : Real.sqrt 2 ∈ Set.Ioo 1 2 := by\n  have h₄ : Real.sqrt 2 ∈ Set.Ioo 1 2 := by\n    have h₅ : Real.sqrt 2 ∈ Set.Ioo 1 2 := by\n      have h₆ : Real.sqrt 2 ∈ Set.Ioo 1 2 := by\n        have h₇ : Real.sqrt 2 ∈ Set.Ioo 1 2 := by\n          have h₈ : Real.sqrt 2 ∈ Set.Ioo 1 2 := by\n            have h₉ : Real.sqrt 2 ∈ Set.Ioo 1 2 := by\n              have h₁₀ : Real.sqrt 2 ∈ Set.Ioo 1 2 := by\n                have h₁₁ : Real.sqrt 2 ∈ Set.Ioo 1 2 := by\n                  have h₁₂ : Real.sqrt 2 ∈ Set.Ioo 1 2 := by\n                    have h₁₃ : Real.sqrt 2 ∈ Set.Ioo 1 2 := by\n                      have h₁₄ : Real.sqrt 2 ∈ Set.Ioo 1 2 := by\n                        have h"
+     }
+    ]
+   },
+   {
+    "step": 100,
+    "validation_loss": 0.5694964195786621,
+    "validation_examples": 858,
+    "teacher_forced_exact_match": 0.1258741258741259,
+    "generation_exact_match": 0.1015625,
+    "generation_examples": 128,
+    "evaluation_seconds": 60.98068008199334,
+    "mismatches": [
+     {
+      "goals": [
+       "x y : ℝ\nhx : 0 < x\nhy : 0 < y\nhxy : x > y\nz t : ℝ\nhz : z = (x + y) / 2\nht : t = √(x * y)\nh : x - y = 3 * ((x + y) / 2 - √(x * y))\neq1 : 2 * (x - y) = 3 * (x + y - 2 * √(x * y))\neq2 : x + 5 * y = 6 * √(x * y)\nh3 : 0 ≤ x * y\n⊢ x / y = 25"
+      ],
+      "target": "have eq3 : (x + 5 * y) ^ 2 = 36 * (x * y) := by\n  calc\n    (x + 5 * y) ^ 2 = (6 * Real.sqrt (x * y)) ^ 2 := by\n      rw [show 6 * Real.sqrt (x * y) = x + 5 * y by linarith [eq2]]\n    _ = 36 * (Real.sqrt (x * y) ^ 2) := by\n      ring_nf\n    _ = 36 * (x * y) := by\n      rw [Real.sq_sqrt (show (0 : ℝ) ≤ x * y by nlinarith)]",
+      "generated": "have h4 : 0 ≤ x * y := by positivity"
+     },
+     {
+      "goals": [
+       "x y z : ℝ\nh₁ : x + y + z = 3\nh₂ : x ^ 2 + y ^ 2 + z ^ 2 = 5\nh₃ : x ^ 3 + y ^ 3 + z ^ 3 = 7\nh₄ : x = 3 - y - z\n⊢ x ^ 4 + y ^ 4 + z ^ 4 = 9"
+      ],
+      "target": "simp_all only [rpow_two, mul_neg, mul_one, sub_eq_add_neg]",
+      "generated": "have h₅ : y = 3 - x - z := by\n  linarith"
+     },
+     {
+      "goals": [
+       "x y z : ℝ\nthis : 0 ≤ (x * y * (x - y) + y * z * (y - z) + z * x * (z - x)) ^ 2\n⊢ 2 * (x ^ 2 + y ^ 2) * (y ^ 2 + z ^ 2) * (z ^ 2 + x ^ 2) ≥\n    (x * y * (x + y) + y * z * (y + z) + z * x * (z + x) - 2 * x * y * z) ^ 2"
+      ],
+      "target": "linarith",
+      "generated": "have h₁ : 0 ≤ (x * y * (x - y) + y * z * (y - z) + z * x * (z - x)) ^ 2 := by\n  positivity"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\nh₀ : 0 < a ^ 2\n⊢ 4 / (a ^ 2 + b * c) ≤ 1 / a ^ 2 + 1 / (b * c)"
+      ],
+      "target": "have h₁ : 0 < b * c := by nlinarith",
+      "generated": "rw [div_le_div_iff (by positivity) (by positivity)]"
+     },
+     {
+      "goals": [
+       "h :\n  ∀ (c f : ℝ) (n : ℕ),\n    Irrational c →\n      c ∈ Set.Ioo 1 2 →\n        f ∈ Set.Ico 0 1 →\n          f < 2 - c →\n            0 < n →\n              let A := c * ↑n;\n              let B := ↑n * (2 - 1 / c) - f / c;\n              B ≤ A ∧ A < B + 1\nh₁ : Irrational √2\nh₂ : 1 < √2 ∧ √2 < 2\n⊢ False"
+      ],
+      "target": "have h₃ : (1 / 1000 : ℝ) ∈ Set.Ico 0 1 := by\n  constructor\n  ·\n    norm_num\n  ·\n    norm_num",
+      "generated": "have h₃ : √2 ∈ Set.Ioo 1 2 := by\n  have h₄ : Real.sqrt 2 ∈ Set.Ioo 1 2 := by\n    have h₅ : Real.sqrt 2 ∈ Set.Ioo 1 2 := by\n      have h₆ : 1 < Real.sqrt 2 := h₂.1\n      have h₇ : Real.sqrt 2 < 2 := h₂.2\n      have h₈ : Real.sqrt 2 ∈ Set.Ioo 1 2 := by\n        have h₉ : 1 < Real.sqrt 2 := h₆\n        have h₁₀ : Real.sqrt 2 < 2 := h₇\n        have h₁₁ : Real.sqrt 2 ∈ Set.Ioo 1 2 := by\n          have h₁₂ : 1 < Real.sqrt 2 := h₉\n          have h₁₃ : Real.sqrt 2 < 2 := h₁₀\n          have h₁₄ : Real.sqrt 2 ∈ Set.Ioo 1 2 := by\n            have h₁₅ : 1 < Real.sqrt 2 := h₁₂"
+     },
+     {
+      "goals": [
+       "case right.left\n⊢ Nat.Prime 7",
+       "case right.right\n⊢ Nat.Prime 11 ∧ Nat.Prime 13 ∧ 7 ≠ 11 ∧ 7 ≠ 13 ∧ 11 ≠ 13"
+      ],
+      "target": "·\n  norm_num",
+      "generated": "·\n  norm_num\n  <;> norm_num\n  <;> norm_num\n  <;> norm_num\n  <;> norm_num\n  <;> norm_num\n  <;> norm_num\n  <;> norm_num\n  <;> norm_num\n  <;> norm_num\n  <;> norm_num\n  <;> norm_num\n  <;> norm_num\n  <;> norm_num\n  <;> norm_num\n  <;> norm_num\n  <;> norm_num\n  <;> norm_num\n  <;> norm_num\n  <;> norm_num\n  <;> norm_num\n  <;> norm_num\n  <;> norm_num\n  <;> norm_num\n  <;> norm_num\n  <;> norm_num\n  <;> norm_num\n  <;> norm_num\n  <;> norm_num\n  <;> norm_num\n  <;> norm_num\n  <;> norm_num\n  <;> norm_num\n  <;> norm_num\n  <;> norm_num\n  <;> norm_num\n  <;> norm"
+     },
+     {
+      "goals": [
+       "a b c d : ℝ\nh₀ : a ≠ 0 ∨ b ≠ 0\nh₁ : a ≠ 0 ∨ d ≠ 0\nh₂ : ∀ (n : ℕ), ¬n = 0 → (a * ↑n + b) / (c * ↑n + d) = (a + b / ↑n) / (c + d / ↑n)\nh₃ : (a * ↑2 + b) / (c * ↑2 + d) = (a + b / ↑2) / (c + d / ↑2)\n⊢ (a * 2 + b) / (c * 2 + d) = (a + b / 2) / (c + d / 2)"
+      ],
+      "target": "simpa [h₀, h₁] using h₃",
+      "generated": "have h₄ := h₂ 3"
+     },
+     {
+      "goals": [
+       "⊢ ∑ k ∈ Finset.Icc 1 3, 1 / (k + 1) = 5 / 6"
+      ],
+      "target": "decide\n<;> aesop\n<;> norm_num",
+      "generated": "simp [Finset.sum_Icc_succ, Finset.sum_Icc_succ_succ, Finset.sum_Icc_succ_succ_succ]"
+     }
+    ]
+   },
+   {
+    "step": 150,
+    "validation_loss": 0.5255234551434496,
+    "validation_examples": 858,
+    "teacher_forced_exact_match": 0.15034965034965034,
+    "generation_exact_match": 0.1328125,
+    "generation_examples": 128,
+    "evaluation_seconds": 60.72448183293454,
+    "mismatches": [
+     {
+      "goals": [
+       "a b : ℝ\nha : 0 ≤ a\nhb : 0 ≤ b\n⊢ a + b ≥ √((a ^ 2 + b ^ 2) / 2) ∧ √((a ^ 2 + b ^ 2) / 2) ≥ √(a * b)"
+      ],
+      "target": "constructor",
+      "generated": "have h₁ : a + b ≥ Real.sqrt ((a^2 + b^2) / 2) := by\n  have h₂ : 0 ≤ a * b := by positivity\n  have h₃ : 0 ≤ (a - b) ^ 2 := by positivity\n  have h₄ : 0 ≤ (a + b) ^ 2 := by positivity\n  have h₅ : 0 ≤ (a - b) ^ 2 + (a + b) ^ 2 := by positivity\n  have h₆ : 0 ≤ (a - b) ^ 2 + (a + b) ^ 2 := by positivity\n  have h₇ : 0 ≤ (a - b) ^ 2 + (a + b) ^ 2 := by positivity\n  have h₈ : 0 ≤ (a - b) ^ 2 + (a + b) ^ 2 := by positivity\n  have h₉ : 0 ≤ (a - b) ^ 2 + (a + b) ^ 2 := by positivity\n  have h₁₀ : 0 ≤ (a - b) ^ 2 + (a + b)"
+     },
+     {
+      "goals": [
+       "x y : ℝ\nhx : 0 < x\nhy : 0 < y\nhxy : x > y\nz t : ℝ\nhz : z = (x + y) / 2\nht : t = √(x * y)\nh : x - y = 3 * ((x + y) / 2 - √(x * y))\neq1 : 2 * (x - y) = 3 * (x + y - 2 * √(x * y))\neq2 : x + 5 * y = 6 * √(x * y)\nh3 : 0 ≤ x * y\n⊢ x / y = 25"
+      ],
+      "target": "have eq3 : (x + 5 * y) ^ 2 = 36 * (x * y) := by\n  calc\n    (x + 5 * y) ^ 2 = (6 * Real.sqrt (x * y)) ^ 2 := by\n      rw [show 6 * Real.sqrt (x * y) = x + 5 * y by linarith [eq2]]\n    _ = 36 * (Real.sqrt (x * y) ^ 2) := by\n      ring_nf\n    _ = 36 * (x * y) := by\n      rw [Real.sq_sqrt (show (0 : ℝ) ≤ x * y by nlinarith)]",
+      "generated": "have h4 : 0 ≤ (x - y) ^ 2 := sq_nonneg (x - y)"
+     },
+     {
+      "goals": [
+       "x y z : ℝ\nh₁ : x + y + z = 3\nh₂ : x ^ 2 + y ^ 2 + z ^ 2 = 5\nh₃ : x ^ 3 + y ^ 3 + z ^ 3 = 7\nh₄ : x = 3 - y - z\n⊢ x ^ 4 + y ^ 4 + z ^ 4 = 9"
+      ],
+      "target": "simp_all only [rpow_two, mul_neg, mul_one, sub_eq_add_neg]",
+      "generated": "have h₅ : y^2 + z^2 = 1 := by\n  nlinarith [sq_nonneg (x + y + z), sq_nonneg (x - y), sq_nonneg (x - z), sq_nonneg (y - z)]"
+     },
+     {
+      "goals": [
+       "x y z : ℝ\nthis : 0 ≤ (x * y * (x - y) + y * z * (y - z) + z * x * (z - x)) ^ 2\n⊢ 2 * (x ^ 2 + y ^ 2) * (y ^ 2 + z ^ 2) * (z ^ 2 + x ^ 2) ≥\n    (x * y * (x + y) + y * z * (y + z) + z * x * (z + x) - 2 * x * y * z) ^ 2"
+      ],
+      "target": "linarith",
+      "generated": "nlinarith [sq_nonneg (x * y * (x - y) + y * z * (y - z) + z * x * (z - x)),\n  sq_nonneg (x * y * (x + y) + y * z * (y + z) + z * x * (z + x) - 2 * x * y * z)]"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\nh₀ : 0 < a ^ 2\n⊢ 4 / (a ^ 2 + b * c) ≤ 1 / a ^ 2 + 1 / (b * c)"
+      ],
+      "target": "have h₁ : 0 < b * c := by nlinarith",
+      "generated": "have h₁ : 0 < b * c := by positivity"
+     },
+     {
+      "goals": [
+       "h :\n  ∀ (c f : ℝ) (n : ℕ),\n    Irrational c →\n      c ∈ Set.Ioo 1 2 →\n        f ∈ Set.Ico 0 1 →\n          f < 2 - c →\n            0 < n →\n              let A := c * ↑n;\n              let B := ↑n * (2 - 1 / c) - f / c;\n              B ≤ A ∧ A < B + 1\nh₁ : Irrational √2\nh₂ : 1 < √2 ∧ √2 < 2\n⊢ False"
+      ],
+      "target": "have h₃ : (1 / 1000 : ℝ) ∈ Set.Ico 0 1 := by\n  constructor\n  ·\n    norm_num\n  ·\n    norm_num",
+      "generated": "have h₃ : ∃ (n : ℕ), n < 2 := by\n  use 1\n  constructor\n  ·\n    norm_num\n  ·\n    norm_num"
+     },
+     {
+      "goals": [
+       "case right.left\n⊢ Nat.Prime 7",
+       "case right.right\n⊢ Nat.Prime 11 ∧ Nat.Prime 13 ∧ 7 ≠ 11 ∧ 7 ≠ 13 ∧ 11 ≠ 13"
+      ],
+      "target": "·\n  norm_num",
+      "generated": "norm_num"
+     },
+     {
+      "goals": [
+       "a b c d : ℝ\nh₀ : a ≠ 0 ∨ b ≠ 0\nh₁ : a ≠ 0 ∨ d ≠ 0\nh₂ : ∀ (n : ℕ), ¬n = 0 → (a * ↑n + b) / (c * ↑n + d) = (a + b / ↑n) / (c + d / ↑n)\nh₃ : (a * ↑2 + b) / (c * ↑2 + d) = (a + b / ↑2) / (c + d / ↑2)\n⊢ (a * 2 + b) / (c * 2 + d) = (a + b / 2) / (c + d / 2)"
+      ],
+      "target": "simpa [h₀, h₁] using h₃",
+      "generated": "have h₄ := h₂ 3"
+     }
+    ]
+   },
+   {
+    "step": 200,
+    "validation_loss": 0.500682227557273,
+    "validation_examples": 858,
+    "teacher_forced_exact_match": 0.16433566433566432,
+    "generation_exact_match": 0.1640625,
+    "generation_examples": 128,
+    "evaluation_seconds": 60.8555968250148,
+    "mismatches": [
+     {
+      "goals": [
+       "x y : ℝ\nhx : 0 < x\nhy : 0 < y\nhxy : x > y\nz t : ℝ\nhz : z = (x + y) / 2\nht : t = √(x * y)\nh : x - y = 3 * ((x + y) / 2 - √(x * y))\neq1 : 2 * (x - y) = 3 * (x + y - 2 * √(x * y))\neq2 : x + 5 * y = 6 * √(x * y)\nh3 : 0 ≤ x * y\n⊢ x / y = 25"
+      ],
+      "target": "have eq3 : (x + 5 * y) ^ 2 = 36 * (x * y) := by\n  calc\n    (x + 5 * y) ^ 2 = (6 * Real.sqrt (x * y)) ^ 2 := by\n      rw [show 6 * Real.sqrt (x * y) = x + 5 * y by linarith [eq2]]\n    _ = 36 * (Real.sqrt (x * y) ^ 2) := by\n      ring_nf\n    _ = 36 * (x * y) := by\n      rw [Real.sq_sqrt (show (0 : ℝ) ≤ x * y by nlinarith)]",
+      "generated": "have h4 : 0 ≤ Real.sqrt (x * y) := Real.sqrt_nonneg (x * y)"
+     },
+     {
+      "goals": [
+       "x y z : ℝ\nh₁ : x + y + z = 3\nh₂ : x ^ 2 + y ^ 2 + z ^ 2 = 5\nh₃ : x ^ 3 + y ^ 3 + z ^ 3 = 7\nh₄ : x = 3 - y - z\n⊢ x ^ 4 + y ^ 4 + z ^ 4 = 9"
+      ],
+      "target": "simp_all only [rpow_two, mul_neg, mul_one, sub_eq_add_neg]",
+      "generated": "rw [h₄] at h₁ h₂ h₃"
+     },
+     {
+      "goals": [
+       "x y z : ℝ\nthis : 0 ≤ (x * y * (x - y) + y * z * (y - z) + z * x * (z - x)) ^ 2\n⊢ 2 * (x ^ 2 + y ^ 2) * (y ^ 2 + z ^ 2) * (z ^ 2 + x ^ 2) ≥\n    (x * y * (x + y) + y * z * (y + z) + z * x * (z + x) - 2 * x * y * z) ^ 2"
+      ],
+      "target": "linarith",
+      "generated": "nlinarith [sq_nonneg (x * y * (x - y) + y * z * (y - z) + z * x * (z - x)),\n  sq_nonneg (x * y * (x + y) + y * z * (y + z) + z * x * (z + x) - 2 * x * y * z)]"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\nh₀ : 0 < a ^ 2\n⊢ 4 / (a ^ 2 + b * c) ≤ 1 / a ^ 2 + 1 / (b * c)"
+      ],
+      "target": "have h₁ : 0 < b * c := by nlinarith",
+      "generated": "have h₁ : 0 < b * c := by positivity"
+     },
+     {
+      "goals": [
+       "h :\n  ∀ (c f : ℝ) (n : ℕ),\n    Irrational c →\n      c ∈ Set.Ioo 1 2 →\n        f ∈ Set.Ico 0 1 →\n          f < 2 - c →\n            0 < n →\n              let A := c * ↑n;\n              let B := ↑n * (2 - 1 / c) - f / c;\n              B ≤ A ∧ A < B + 1\nh₁ : Irrational √2\nh₂ : 1 < √2 ∧ √2 < 2\n⊢ False"
+      ],
+      "target": "have h₃ : (1 / 1000 : ℝ) ∈ Set.Ico 0 1 := by\n  constructor\n  ·\n    norm_num\n  ·\n    norm_num",
+      "generated": "have h₃ := h 1 (fun x => x) 1 (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num) (by norm_num)"
+     },
+     {
+      "goals": [
+       "case right.left\n⊢ Nat.Prime 7",
+       "case right.right\n⊢ Nat.Prime 11 ∧ Nat.Prime 13 ∧ 7 ≠ 11 ∧ 7 ≠ 13 ∧ 11 ≠ 13"
+      ],
+      "target": "·\n  norm_num",
+      "generated": "· norm_num"
+     },
+     {
+      "goals": [
+       "a b c d : ℝ\nh₀ : a ≠ 0 ∨ b ≠ 0\nh₁ : a ≠ 0 ∨ d ≠ 0\nh₂ : ∀ (n : ℕ), ¬n = 0 → (a * ↑n + b) / (c * ↑n + d) = (a + b / ↑n) / (c + d / ↑n)\nh₃ : (a * ↑2 + b) / (c * ↑2 + d) = (a + b / ↑2) / (c + d / ↑2)\n⊢ (a * 2 + b) / (c * 2 + d) = (a + b / 2) / (c + d / 2)"
+      ],
+      "target": "simpa [h₀, h₁] using h₃",
+      "generated": "have h₄ := h₂ 3"
+     },
+     {
+      "goals": [
+       "⊢ ∑ k ∈ Finset.Icc 1 3, 1 / (k + 1) = 5 / 6"
+      ],
+      "target": "decide\n<;> aesop\n<;> norm_num",
+      "generated": "simp [Finset.sum_Icc_succ, Finset.sum_Icc_zero]"
+     }
+    ]
+   },
+   {
+    "step": 243,
+    "validation_loss": 0.49245499308324936,
+    "validation_examples": 858,
+    "teacher_forced_exact_match": 0.16433566433566432,
+    "generation_exact_match": 0.15625,
+    "generation_examples": 128,
+    "evaluation_seconds": 60.99850848491769,
+    "mismatches": [
+     {
+      "goals": [
+       "x y : ℝ\nhx : 0 < x\nhy : 0 < y\nhxy : x > y\nz t : ℝ\nhz : z = (x + y) / 2\nht : t = √(x * y)\nh : x - y = 3 * ((x + y) / 2 - √(x * y))\neq1 : 2 * (x - y) = 3 * (x + y - 2 * √(x * y))\neq2 : x + 5 * y = 6 * √(x * y)\nh3 : 0 ≤ x * y\n⊢ x / y = 25"
+      ],
+      "target": "have eq3 : (x + 5 * y) ^ 2 = 36 * (x * y) := by\n  calc\n    (x + 5 * y) ^ 2 = (6 * Real.sqrt (x * y)) ^ 2 := by\n      rw [show 6 * Real.sqrt (x * y) = x + 5 * y by linarith [eq2]]\n    _ = 36 * (Real.sqrt (x * y) ^ 2) := by\n      ring_nf\n    _ = 36 * (x * y) := by\n      rw [Real.sq_sqrt (show (0 : ℝ) ≤ x * y by nlinarith)]",
+      "generated": "have h4 : 0 ≤ Real.sqrt (x * y) := Real.sqrt_nonneg (x * y)"
+     },
+     {
+      "goals": [
+       "x y z : ℝ\nh₁ : x + y + z = 3\nh₂ : x ^ 2 + y ^ 2 + z ^ 2 = 5\nh₃ : x ^ 3 + y ^ 3 + z ^ 3 = 7\nh₄ : x = 3 - y - z\n⊢ x ^ 4 + y ^ 4 + z ^ 4 = 9"
+      ],
+      "target": "simp_all only [rpow_two, mul_neg, mul_one, sub_eq_add_neg]",
+      "generated": "have h₅ : y = 3 - x - z := by\n  linarith"
+     },
+     {
+      "goals": [
+       "x y z : ℝ\nthis : 0 ≤ (x * y * (x - y) + y * z * (y - z) + z * x * (z - x)) ^ 2\n⊢ 2 * (x ^ 2 + y ^ 2) * (y ^ 2 + z ^ 2) * (z ^ 2 + x ^ 2) ≥\n    (x * y * (x + y) + y * z * (y + z) + z * x * (z + x) - 2 * x * y * z) ^ 2"
+      ],
+      "target": "linarith",
+      "generated": "nlinarith [sq_nonneg (x * y * (x - y) + y * z * (y - z) + z * x * (z - x)),\n  sq_nonneg (x * y * (x + y) + y * z * (y + z) + z * x * (z + x) - 2 * x * y * z)]"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\nh₀ : 0 < a ^ 2\n⊢ 4 / (a ^ 2 + b * c) ≤ 1 / a ^ 2 + 1 / (b * c)"
+      ],
+      "target": "have h₁ : 0 < b * c := by nlinarith",
+      "generated": "have h₁ : 0 < b * c := by positivity"
+     },
+     {
+      "goals": [
+       "h :\n  ∀ (c f : ℝ) (n : ℕ),\n    Irrational c →\n      c ∈ Set.Ioo 1 2 →\n        f ∈ Set.Ico 0 1 →\n          f < 2 - c →\n            0 < n →\n              let A := c * ↑n;\n              let B := ↑n * (2 - 1 / c) - f / c;\n              B ≤ A ∧ A < B + 1\nh₁ : Irrational √2\nh₂ : 1 < √2 ∧ √2 < 2\n⊢ False"
+      ],
+      "target": "have h₃ : (1 / 1000 : ℝ) ∈ Set.Ico 0 1 := by\n  constructor\n  ·\n    norm_num\n  ·\n    norm_num",
+      "generated": "have h₃ := h 1 (fun n => 0) (fun n => 0) (fun n => 0) (fun n => 0) (fun n => 0) (fun n => 0) (fun n => 0) (fun n => 0) (fun n => 0) (fun n => 0) (fun n => 0) (fun n => 0) (fun n => 0) (fun n => 0) (fun n => 0) (fun n => 0) (fun n => 0) (fun n => 0) (fun n => 0) (fun n => 0) (fun n => 0) (fun n => 0) (fun n => 0) (fun n => 0) (fun n => 0) (fun n => 0) (fun n => 0) (fun n => 0) (fun n => 0) (fun n => 0) (fun n => 0) (fun n => 0) (fun n => 0) (fun n => 0) (fun n => 0) (fun n"
+     },
+     {
+      "goals": [
+       "case right.left\n⊢ Nat.Prime 7",
+       "case right.right\n⊢ Nat.Prime 11 ∧ Nat.Prime 13 ∧ 7 ≠ 11 ∧ 7 ≠ 13 ∧ 11 ≠ 13"
+      ],
+      "target": "·\n  norm_num",
+      "generated": "· norm_num"
+     },
+     {
+      "goals": [
+       "a b c d : ℝ\nh₀ : a ≠ 0 ∨ b ≠ 0\nh₁ : a ≠ 0 ∨ d ≠ 0\nh₂ : ∀ (n : ℕ), ¬n = 0 → (a * ↑n + b) / (c * ↑n + d) = (a + b / ↑n) / (c + d / ↑n)\nh₃ : (a * ↑2 + b) / (c * ↑2 + d) = (a + b / ↑2) / (c + d / ↑2)\n⊢ (a * 2 + b) / (c * 2 + d) = (a + b / 2) / (c + d / 2)"
+      ],
+      "target": "simpa [h₀, h₁] using h₃",
+      "generated": "have h₄ := h₂ 1 (by norm_num)"
+     },
+     {
+      "goals": [
+       "⊢ ∑ k ∈ Finset.Icc 1 3, 1 / (k + 1) = 5 / 6"
+      ],
+      "target": "decide\n<;> aesop\n<;> norm_num",
+      "generated": "simp [Finset.sum_Icc_succ, Finset.sum_Icc_succ, Finset.sum_Icc_succ]"
+     }
+    ]
+   }
+  ]
+ },
+ "trained_model_directory": "/workspace/checkpoints/phase2_sft_choice_qwen3-1.7b/adapter",
+ "merged_directory": "/workspace/checkpoints/phase2_sft_choice_qwen3-1.7b/merged",
+ "merge_seconds": 33.04863296204712
+}

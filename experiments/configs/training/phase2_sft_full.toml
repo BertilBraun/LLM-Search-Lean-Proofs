@@ -1,0 +1,34 @@
+# Proposed full policy SFT (not run yet): Qwen3.5-2B, LoRA, one epoch over the 80M-token `full` data
+# (phase2_sft_data_full.toml). Planned on both GPUs with torchrun (32k tokens per GPU, 64k per step):
+#   torchrun --nproc-per-node 2 experiments/phase2_sft.py --config experiments/configs/training/phase2_sft_full.toml \
+#       --run-name phase2_sft_full
+model = "Qwen/Qwen3.5-2B"
+data = "full"
+merge = true
+
+[lora]
+rank = 64
+alpha = 64
+dropout = 0.0
+
+[optimization]
+method = "lora"
+learning_rate = 2e-4
+warmup_fraction = 0.03
+minimum_learning_rate_ratio = 0.1
+weight_decay = 0.0
+max_gradient_norm = 1.0
+epochs = 1
+micro_batch_tokens = 32768
+micro_batches_per_step = 1
+length_group_examples = 4096
+gradient_checkpointing = true
+seed = 0
+
+[evaluation]
+interval_steps = 200
+validation_examples = 2000
+micro_batch_tokens = 16384
+generation_examples = 256
+generation_batch_size = 64
+max_new_tokens = 256

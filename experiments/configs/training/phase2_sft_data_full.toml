@@ -1,6 +1,7 @@
-# Proposed SFT data for the full policy SFT (not run yet): all traced sources, 80M tokens, one epoch.
-# Equal token shares: small sources are used whole and their unused shares go to the large ones.
-# Completions are capped at the search's policy max_tokens (256).
+# Proposed SFT data for the full policy SFT (not run yet): 80M tokens, about everything the narrowed full trace
+# (Goedel workbook, STP workbook, DeepSeek-Prover-V1, Lean Workbook, Leanabell, plus the pilot's Goedel SFT v2 and
+# Numina steps) will hold. Equal token shares: small sources are used whole and their unused shares go to the large
+# ones. Completions are capped at the search's policy max_tokens (256).
 token_budget = 80_000_000
 max_prompt_tokens = 2048
 max_completion_tokens = 256
