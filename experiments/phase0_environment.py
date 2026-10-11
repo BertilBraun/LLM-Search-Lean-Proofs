@@ -77,11 +77,16 @@ class ConcurrencyResult:
     applications: int
     applications_per_second: float
     median_latency_seconds: float
+    p90_latency_seconds: float
+    wall_clock_timeouts: int
+    load_average_before: float
     baseline_cgroup_gibibytes: float
+    baseline_cgroup_anonymous_gibibytes: float
     peak_cgroup_gibibytes: float
     peak_cgroup_anonymous_gibibytes: float
-    cgroup_limit_gibibytes: float
+    peak_pool_anonymous_gibibytes: float
     max_process_anonymous_gibibytes: float
+    cgroup_limit_gibibytes: float
 
 
 @dataclass(frozen=True)
@@ -110,13 +115,15 @@ class TacticStatistics:
     progress_rate: float
 
 
-class CgroupSampler:
-    def __init__(self) -> None:
+class MemorySampler:
+    def __init__(self, repls: Sequence[LeanRepl]) -> None:
+        self.repls = repls
         self.peak_current = 0
         self.peak_anonymous = 0
+        self.peak_pool_anonymous = 0
         self._task: asyncio.Task[None] | None = None
 
-    async def __aenter__(self) -> "CgroupSampler":
+    async def __aenter__(self) -> "MemorySampler":
         self._task = asyncio.create_task(self._run())
         return self
 
@@ -128,6 +135,8 @@ class CgroupSampler:
         while True:
             self.peak_current = max(self.peak_current, cgroup_memory_current())
             self.peak_anonymous = max(self.peak_anonymous, cgroup_anonymous_memory())
+            pool_anonymous = sum(repl.memory_usage().anonymous_bytes for repl in self.repls if repl.process_id)
+            self.peak_pool_anonymous = max(self.peak_pool_anonymous, pool_anonymous)
             await asyncio.sleep(0.25)
 
 
@@ -234,10 +243,14 @@ async def measure_memory_growth(problems: Sequence[Problem], applications: int) 
 
 async def measure_concurrency(problems: Sequence[Problem], processes: int, seconds: float) -> ConcurrencyResult:
     baseline = cgroup_memory_current()
+    baseline_anonymous = cgroup_anonymous_memory()
+    load_average = os.getloadavg()[0]
     latencies: list[float] = []
+    wall_clock_timeouts = 0
     problem_iterator = itertools.cycle(problems)
 
     async def work(repl: LeanRepl, deadline: float) -> None:
+        nonlocal wall_clock_timeouts
         while time.monotonic() < deadline:
             problem = next(problem_iterator)
             start = await repl.start_proof(problem.formal_statement, problem.header)
@@ -246,28 +259,35 @@ async def measure_concurrency(problems: Sequence[Problem], processes: int, secon
             for tactic in CONCURRENCY_TACTICS:
                 result = await repl.apply_tactic(start.outcome, tactic)
                 latencies.append(result.elapsed_seconds)
+                if isinstance(result.outcome, LeanTimeout) and result.outcome.wall_clock:
+                    wall_clock_timeouts += 1
 
-    async with CgroupSampler() as sampler:
-        pool = LeanReplPool(processes, NO_RESTARTS)
-        started = time.monotonic()
+    pool = LeanReplPool(processes, NO_RESTARTS)
+    started = time.monotonic()
+    async with pool, MemorySampler(pool.repls) as sampler:
         await pool.start([problems[0].header])
         ready_seconds = time.monotonic() - started
         work_started = time.monotonic()
         await asyncio.gather(*(work(repl, work_started + seconds) for repl in pool.repls))
         elapsed = time.monotonic() - work_started
-        max_process_anonymous = max(repl.memory_usage().anonymous_bytes for repl in pool.repls)
-        await pool.close()
+        running = [repl for repl in pool.repls if repl.process_id is not None]
+        max_process_anonymous = max(repl.memory_usage().anonymous_bytes for repl in running)
     return ConcurrencyResult(
         processes=processes,
         ready_seconds=ready_seconds,
         applications=len(latencies),
         applications_per_second=len(latencies) / elapsed,
         median_latency_seconds=statistics.median(latencies),
+        p90_latency_seconds=percentile(latencies, 0.9),
+        wall_clock_timeouts=wall_clock_timeouts,
+        load_average_before=load_average,
         baseline_cgroup_gibibytes=baseline / GIBIBYTE,
+        baseline_cgroup_anonymous_gibibytes=baseline_anonymous / GIBIBYTE,
         peak_cgroup_gibibytes=sampler.peak_current / GIBIBYTE,
         peak_cgroup_anonymous_gibibytes=sampler.peak_anonymous / GIBIBYTE,
-        cgroup_limit_gibibytes=cgroup_memory_limit() / GIBIBYTE,
+        peak_pool_anonymous_gibibytes=sampler.peak_pool_anonymous / GIBIBYTE,
         max_process_anonymous_gibibytes=max_process_anonymous / GIBIBYTE,
+        cgroup_limit_gibibytes=cgroup_memory_limit() / GIBIBYTE,
     )
 
 
@@ -347,7 +367,7 @@ def write_summary(arguments: argparse.Namespace) -> None:
             "revisions": revisions,
             "cpu_count": os.environ.get("LEAN_SEARCH_CPU_COUNT"),
             "cgroup_memory_limit_gibibytes": cgroup_memory_limit() / GIBIBYTE,
-            "at_run_start": load_part("context"),
+            "node_state_at_invocation_start": load_part("context"),
         },
         "settings": {
             "sweep_heartbeats": arguments.sweep_heartbeats,
@@ -360,8 +380,8 @@ def write_summary(arguments: argparse.Namespace) -> None:
     markdown = [
         "# Phase 0: Lean environment",
         "",
-        f"`{toolchain}`, Mathlib `{revisions['mathlib']}`, REPL `{revisions['REPL']}`. Node state at the start "
-        f"(other workloads share the node): {load_part('context')}.",
+        f"`{toolchain}`, Mathlib `{revisions['mathlib']}`, REPL `{revisions['REPL']}`. Other workloads share the "
+        f"node; its state when each set of parts started: {load_part('context')}.",
         "",
     ]
 
@@ -429,21 +449,26 @@ def write_summary(arguments: argparse.Namespace) -> None:
             "## Concurrency",
             "",
             f"Each process repeatedly starts a miniF2F-valid problem and applies {', '.join(CONCURRENCY_TACTICS)} "
-            f"(default limits) for {arguments.concurrency_seconds:.0f} s. Memory from the cgroup (`memory.current`, "
-            "`memory.stat` anon), sampled every 0.25 s.",
+            f"(default limits) for {arguments.concurrency_seconds:.0f} s, sampled every 0.25 s. Pool anonymous = sum "
+            "of the REPL processes' private memory; the Mathlib .olean files are shared file mappings (about 3.3 GiB "
+            "once per node). Cgroup figures include other workloads on the node (baseline before the pool starts), "
+            f"limit {cgroup_memory_limit() / GIBIBYTE:.1f} GiB.",
             "",
             markdown_table(
                 results,
                 [
                     "processes",
+                    "load_average_before",
                     "ready_seconds",
                     "applications_per_second",
                     "median_latency_seconds",
-                    "baseline_cgroup_gibibytes",
-                    "peak_cgroup_gibibytes",
-                    "peak_cgroup_anonymous_gibibytes",
+                    "p90_latency_seconds",
+                    "wall_clock_timeouts",
+                    "peak_pool_anonymous_gibibytes",
                     "max_process_anonymous_gibibytes",
-                    "cgroup_limit_gibibytes",
+                    "baseline_cgroup_anonymous_gibibytes",
+                    "peak_cgroup_anonymous_gibibytes",
+                    "peak_cgroup_gibibytes",
                 ],
             ),
             "",
@@ -503,14 +528,12 @@ async def main(arguments: argparse.Namespace) -> None:
     if arguments.limit is not None:
         problems, valid = problems[: arguments.limit], valid[: arguments.limit]
     parts = set(arguments.parts.split(","))
-    save_part(
-        "context",
-        {
-            "load_average": os.getloadavg(),
-            "cgroup_memory_current_gibibytes": cgroup_memory_current() / GIBIBYTE,
-            "cgroup_anonymous_gibibytes": cgroup_anonymous_memory() / GIBIBYTE,
-        },
-    )
+    context = {
+        "load_average": os.getloadavg(),
+        "cgroup_memory_current_gibibytes": cgroup_memory_current() / GIBIBYTE,
+        "cgroup_anonymous_gibibytes": cgroup_anonymous_memory() / GIBIBYTE,
+    }
+    save_part("context", {**(load_part("context") or {}), ",".join(sorted(parts)): context})
     if "statements" in parts:
         save_part("statements", [asdict(check) for check in await check_statements(problems, arguments.pool_size)])
     if "process_costs" in parts:
