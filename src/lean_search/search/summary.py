@@ -30,6 +30,7 @@ class CostMetric(StrEnum):
     DUPLICATES = "duplicates"
     ERRORS = "errors"
     TIMEOUTS = "timeouts"
+    REPL_FAILURES = "repl_failures"
     VERIFICATION_SECONDS = "verification_seconds"
     GENERATED_TOKENS = "generated_tokens"
 
@@ -51,6 +52,8 @@ class CostMetric(StrEnum):
                 return accounting.errors
             case CostMetric.TIMEOUTS:
                 return accounting.timeouts
+            case CostMetric.REPL_FAILURES:
+                return accounting.repl_failures
             case CostMetric.VERIFICATION_SECONDS:
                 return accounting.verification_seconds
             case CostMetric.GENERATED_TOKENS:
@@ -66,6 +69,7 @@ COST_METRICS = (
     CostMetric.DUPLICATES,
     CostMetric.ERRORS,
     CostMetric.TIMEOUTS,
+    CostMetric.REPL_FAILURES,
     CostMetric.VERIFICATION_SECONDS,
 )
 
@@ -127,6 +131,7 @@ class StepCost:
     errors: int
     heartbeat_timeouts: int
     wall_clock_timeouts: int
+    repl_failures: int
     rejected: int
     closing: int
     on_proof_paths: int
@@ -172,6 +177,7 @@ class RunSummary:
     solved_at_depth_two_or_more: int
     multi_step_proofs: tuple[SolvedProof, ...]
     verification_failures: int
+    plain_verified: int
     start_failures: int
 
 
@@ -232,6 +238,7 @@ def step_costs(results: Sequence[SearchResult]) -> tuple[StepCost, ...]:
             total.errors += step.errors
             total.heartbeat_timeouts += step.heartbeat_timeouts
             total.wall_clock_timeouts += step.wall_clock_timeouts
+            total.repl_failures += step.repl_failures
             total.rejected += step.rejected
             total.repeated += step.repeated
             total.proofs += step.proofs
@@ -250,6 +257,7 @@ def step_costs(results: Sequence[SearchResult]) -> tuple[StepCost, ...]:
             errors=total.errors,
             heartbeat_timeouts=total.heartbeat_timeouts,
             wall_clock_timeouts=total.wall_clock_timeouts,
+            repl_failures=total.repl_failures,
             rejected=total.rejected,
             closing=total.proofs,
             on_proof_paths=on_proof_paths[total.step],
@@ -305,6 +313,7 @@ def summarize(results: Sequence[SearchResult], metadata: RunMetadata, search_con
         solved_at_depth_two_or_more=len(multi_step),
         multi_step_proofs=multi_step,
         verification_failures=sum(result.verification_failures for result in results),
+        plain_verified=sum(result.plain_verified is True for result in results),
         start_failures=sum(result.stop_reason == StopReason.START_FAILED for result in results),
     )
 
@@ -334,6 +343,7 @@ def render_markdown(summary: RunSummary, title: str) -> str:
         f"**Solved {summary.solved}/{summary.problems} ({summary.solve_rate:.1%}).** "
         f"Solved only with proofs of 2 or more steps: {summary.solved_at_depth_two_or_more}. "
         f"Verification failures (bugs): {summary.verification_failures}. "
+        f"Proofs that also verify without the per-step heartbeat wrappers: {summary.plain_verified}/{summary.solved}. "
         f"Statements that failed to start: {summary.start_failures}.",
         "## By category",
         markdown_table(
@@ -377,7 +387,8 @@ def render_markdown(summary: RunSummary, title: str) -> str:
     sections.append("## Compute by step")
     sections.append(
         "Lean seconds per step text over all searches (policy steps pooled). Failures = no tactic applied; "
-        "closing = the step produced a proof that verified or not; on proof paths = steps of found proofs."
+        "closing = the step produced a proof that verified or not; on proof paths = steps of found proofs; "
+        "REPL failures (crash, failed replay) are infrastructure, not the step's fault."
     )
     sections.append(
         markdown_table(
@@ -393,6 +404,7 @@ def render_markdown(summary: RunSummary, title: str) -> str:
                 "errors",
                 "heartbeat timeouts",
                 "wall-clock timeouts",
+                "REPL failures",
                 "closing",
                 "on proof paths",
             ],
@@ -409,6 +421,7 @@ def render_markdown(summary: RunSummary, title: str) -> str:
                     cost.errors,
                     cost.heartbeat_timeouts,
                     cost.wall_clock_timeouts,
+                    cost.repl_failures,
                     cost.closing,
                     cost.on_proof_paths,
                 )

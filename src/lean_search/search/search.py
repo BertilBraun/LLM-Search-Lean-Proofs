@@ -12,7 +12,7 @@ from enum import StrEnum
 from typing import NamedTuple
 
 from lean_search.data import Problem
-from lean_search.lean import LeanError, LeanRepl, LeanReplPool, LeanTimeout, ProofState
+from lean_search.lean import LeanError, LeanRepl, LeanReplPool, LeanTimeout, ProofState, ReplFailure
 from lean_search.lean.text import join_tactics
 from lean_search.search.expanders import Candidate, Expander, SearchContext
 from lean_search.search.frontier import Frontier
@@ -77,6 +77,7 @@ class Accounting:
     duplicates: int = 0
     errors: int = 0
     timeouts: int = 0
+    repl_failures: int = 0
     rejected: int = 0
     verification_seconds: float = 0.0
 
@@ -91,6 +92,7 @@ class StepStatistics:
     errors: int = 0
     heartbeat_timeouts: int = 0
     wall_clock_timeouts: int = 0
+    repl_failures: int = 0
     rejected: int = 0
     repeated: int = 0
     proofs: int = 0
@@ -108,6 +110,7 @@ class SearchResult:
     solved_at: Accounting | None
     verification_failures: int
     max_depth_reached: int
+    plain_verified: bool | None = None
     step_statistics: tuple[StepStatistics, ...] = ()
     start_failure: str | None = None
 
@@ -187,6 +190,8 @@ def step_statistics(tree: SearchTree) -> tuple[StepStatistics, ...]:
                 statistics.heartbeat_timeouts += 1
             case FailureKind.WALL_CLOCK_TIMEOUT:
                 statistics.wall_clock_timeouts += 1
+            case FailureKind.REPL_FAILURE:
+                statistics.repl_failures += 1
             case FailureKind.FORBIDDEN | None:
                 pass
     return tuple(by_step.values())
@@ -226,6 +231,7 @@ class _TheoremSearch:
         self.accounting = Accounting()
         self.solved_at: Accounting | None = None
         self.verification_failures = 0
+        self.plain_verified: bool | None = None
         self.started = time.monotonic()
 
     def wall_seconds(self) -> float:
@@ -240,7 +246,7 @@ class _TheoremSearch:
         start = await self.repl.start_proof(self.problem.formal_statement, self.problem.header)
         self.accounting.lean_seconds += start.elapsed_seconds
         match start.outcome:
-            case LeanError() | LeanTimeout() as failure:
+            case LeanError() | LeanTimeout() | ReplFailure() as failure:
                 result = self._result(StopReason.START_FAILED, None, None)
                 return CompletedSearch(dataclasses.replace(result, start_failure=failure.message), None)
             case ProofState() as root_state:
@@ -340,10 +346,15 @@ class _TheoremSearch:
         result = await self.repl.apply_block(node.state, candidate.text, heartbeats, timeout_seconds)
         self.accounting.lean_seconds += result.elapsed_seconds
         failure = None if result.failure is None else Failure.from_lean(result.failure)
-        if failure is not None and failure.is_timeout:
-            self.accounting.timeouts += 1
-        elif failure is not None:
-            self.accounting.errors += 1
+        match None if failure is None else failure.kind:
+            case FailureKind.HEARTBEAT_TIMEOUT | FailureKind.WALL_CLOCK_TIMEOUT:
+                self.accounting.timeouts += 1
+            case FailureKind.REPL_FAILURE:
+                self.accounting.repl_failures += 1
+            case FailureKind.ERROR:
+                self.accounting.errors += 1
+            case FailureKind.FORBIDDEN | None:
+                pass
         applied_tactics = len(result.applied_tactics)
         execution = _Execution(applied_tactics, result.total_tactics, failure, result.elapsed_seconds)
         if not applied_tactics:
@@ -396,12 +407,11 @@ class _TheoremSearch:
         )
 
     async def _verify(self, node: Node) -> bool:
-        verification = await self.repl.verify_proof(
-            self.problem.formal_statement, node.state.proof, self.problem.header
-        )
+        verification = await self.repl.verify_state(node.state)
         self.accounting.verification_seconds += verification.elapsed_seconds
         if verification.verified:
             self.solved_at = self.snapshot()
+            self.plain_verified = verification.plain_verified
             return True
         self.verification_failures += 1
         node.verification_problems = verification.problems
@@ -434,5 +444,6 @@ class _TheoremSearch:
             solved_at=self.solved_at,
             verification_failures=self.verification_failures,
             max_depth_reached=0 if tree is None else max(node.depth for node in tree.nodes),
+            plain_verified=self.plain_verified,
             step_statistics=() if tree is None else step_statistics(tree),
         )

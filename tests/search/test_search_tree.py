@@ -1,7 +1,7 @@
 import pytest
 from search_trees import add_child, new_tree, proof_state
 
-from lean_search.lean import LeanError, LeanTimeout
+from lean_search.lean import LeanError, LeanTimeout, ReplFailure, ReplFailureKind
 from lean_search.search import EdgeOutcome, Failure, FailureKind, Node, NodeStatus, SearchTree, StepSource
 from lean_search.search.search import ForbiddenSteps
 
@@ -127,10 +127,26 @@ def test_wall_clock_timeouts_are_counted_by_step_text() -> None:
         (LeanError("unknown identifier"), FailureKind.ERROR),
         (LeanTimeout("heartbeats", wall_clock=False), FailureKind.HEARTBEAT_TIMEOUT),
         (LeanTimeout("killed", wall_clock=True), FailureKind.WALL_CLOCK_TIMEOUT),
+        (ReplFailure(ReplFailureKind.CRASHED, "died"), FailureKind.REPL_FAILURE),
+        (ReplFailure(ReplFailureKind.REPLAY_MISMATCH, "goals differ"), FailureKind.REPL_FAILURE),
     ],
 )
-def test_lean_failures_map_to_failure_kinds(outcome: LeanError | LeanTimeout, kind: FailureKind) -> None:
+def test_lean_failures_map_to_failure_kinds(outcome: LeanError | LeanTimeout | ReplFailure, kind: FailureKind) -> None:
     assert Failure.from_lean(outcome).kind == kind
+
+
+@pytest.mark.parametrize(
+    ("kind", "expected"),
+    [
+        (FailureKind.ERROR, True),
+        (FailureKind.HEARTBEAT_TIMEOUT, True),
+        (FailureKind.WALL_CLOCK_TIMEOUT, True),
+        (FailureKind.FORBIDDEN, True),
+        (FailureKind.REPL_FAILURE, False),
+    ],
+)
+def test_only_the_candidates_own_failures_are_negative_labels(kind: FailureKind, expected: bool) -> None:
+    assert Failure(kind, "").is_negative_label == expected
 
 
 @pytest.mark.parametrize(

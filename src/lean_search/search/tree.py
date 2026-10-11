@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 from enum import StrEnum
 
-from lean_search.lean import LeanError, LeanTimeout, ProofState
+from lean_search.lean import LeanError, LeanTimeout, ProofState, ReplFailure
 
 MAX_FAILURE_MESSAGE_CHARACTERS = 1000
 
@@ -34,6 +34,8 @@ class FailureKind(StrEnum):
     HEARTBEAT_TIMEOUT = "heartbeat_timeout"
     WALL_CLOCK_TIMEOUT = "wall_clock_timeout"
     FORBIDDEN = "forbidden"
+    # Crash, failed or mismatched replay, failed restart: infrastructure, never the candidate's fault.
+    REPL_FAILURE = "repl_failure"
 
 
 @dataclass(frozen=True)
@@ -42,7 +44,7 @@ class Failure:
     message: str
 
     @staticmethod
-    def from_lean(outcome: LeanError | LeanTimeout) -> "Failure":
+    def from_lean(outcome: LeanError | LeanTimeout | ReplFailure) -> "Failure":
         message = outcome.message[:MAX_FAILURE_MESSAGE_CHARACTERS]
         match outcome:
             case LeanTimeout(wall_clock=True):
@@ -51,10 +53,12 @@ class Failure:
                 return Failure(FailureKind.HEARTBEAT_TIMEOUT, message)
             case LeanError():
                 return Failure(FailureKind.ERROR, message)
+            case ReplFailure(kind=repl_failure_kind):
+                return Failure(FailureKind.REPL_FAILURE, f"{repl_failure_kind}: {message}")
 
     @property
-    def is_timeout(self) -> bool:
-        return self.kind in (FailureKind.HEARTBEAT_TIMEOUT, FailureKind.WALL_CLOCK_TIMEOUT)
+    def is_negative_label(self) -> bool:
+        return self.kind != FailureKind.REPL_FAILURE
 
 
 @dataclass(slots=True)

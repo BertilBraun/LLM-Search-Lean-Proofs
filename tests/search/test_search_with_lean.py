@@ -6,7 +6,7 @@ import pytest
 import pytest_asyncio
 
 from lean_search.data import Problem, Split
-from lean_search.lean import LeanRepl, LeanReplConfig, LeanReplPool
+from lean_search.lean import FORBIDDEN_TOKENS, LeanRepl, LeanReplConfig, LeanReplPool
 from lean_search.lean.repl import PROJECT_DIRECTORY, REPL_BINARY
 from lean_search.search import (
     AutomationConfig,
@@ -36,6 +36,7 @@ FALSE = "theorem false_statement : (1 : ℕ) = 2 := by\n"
 ARITHMETIC = "theorem squares (a b : ℕ) (h : a = b) : a * a = b * b := by\n"
 # Every application adds another hypothesis, so the search never runs out of new states.
 ALWAYS_PROGRESSES = "have : (1 : ℕ) = 1 := rfl"
+SLEEP = "sleep 60000"
 
 lean_is_installed = (PROJECT_DIRECTORY / REPL_BINARY).exists() and shutil.which("lake") is not None
 pytestmark = [
@@ -205,12 +206,18 @@ async def test_composite_runs_the_second_expander_after_automation(repl: LeanRep
     assert [edge.source for edge in completed.tree.edges] == [StepSource.AUTOMATION, StepSource.POLICY]
 
 
-async def test_wall_clock_timeout_disables_the_tactic_for_the_rest_of_the_search(repl: LeanRepl) -> None:
-    # exact? builds its lemma index on first use, which takes far longer than the timeout.
-    config = AutomationConfig(tactics=("exact?", ALWAYS_PROGRESSES), heartbeats=0, timeout_seconds=2.0)
-    completed = await search(repl, ARITHMETIC, AutomationExpander(config), max_expansions=2, forbidden_steps=())
+async def test_wall_clock_timeout_disables_the_tactic_for_the_rest_of_the_search() -> None:
+    sleep_allowed = LeanReplConfig(forbidden_tokens=FORBIDDEN_TOKENS - {"sleep"})
+    config = AutomationConfig(tactics=(SLEEP, ALWAYS_PROGRESSES), timeout_seconds=2.0)
+    async with LeanRepl(sleep_allowed) as sleep_repl:
+        completed = await search(sleep_repl, ARITHMETIC, AutomationExpander(config), max_expansions=2)
     assert completed.tree is not None
-    assert [edge.text for edge in completed.tree.edges] == ["exact?", ALWAYS_PROGRESSES, ALWAYS_PROGRESSES]
+    assert [edge.text for edge in completed.tree.edges] == [SLEEP, ALWAYS_PROGRESSES, ALWAYS_PROGRESSES]
+
+
+async def test_found_proof_also_verifies_without_heartbeat_wrappers(repl: LeanRepl) -> None:
+    completed = await search(repl, NEEDS_INTRO, automation("rfl", "intros"))
+    assert completed.result.plain_verified is True
 
 
 async def test_concurrent_searches_share_a_pool() -> None:
