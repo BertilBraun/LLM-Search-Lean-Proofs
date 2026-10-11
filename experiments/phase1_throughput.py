@@ -592,9 +592,24 @@ def write_summary() -> None:
         for record in server_starts
     ]
     adapter_rows = [
-        [key, f"{value:.2f}" if isinstance(value, float) else str(value)]
-        for record in adapter_timings
-        for key, value in asdict(record).items()
+        [field, *(f"{getattr(record, field):.1f}" for record in adapter_timings)]
+        for field in AdapterTiming.__dataclass_fields__
+        if field != "model"
+    ]
+    base_by_model_and_workload = {
+        (record.model, record.workload): record for record in measurements if record.variant == "base"
+    }
+    overview_rows = [
+        [
+            model,
+            *(
+                f"{record.generated_tokens_per_second:,.0f} ({record.samples_per_second:.0f})"
+                if (record := base_by_model_and_workload.get((model, workload))) is not None
+                else "-"
+                for workload in WORKLOADS
+            ),
+        ]
+        for model in dict.fromkeys(model for model, _ in base_by_model_and_workload)
     ]
     readme = "\n\n".join(
         [
@@ -609,7 +624,9 @@ def write_summary() -> None:
             "samples/s = generated tokens/s / output length, requests/s = samples/s / n, and prompt tokens/s counts "
             "each request's prompt once. Peak GPU MiB is what the vLLM process reserves "
             "(`--gpu-memory-utilization 0.90`), not what the model needs.",
-            "## Throughput",
+            "## Overview: generated tokens/s (samples/s), base model on a LoRA-enabled server",
+            markdown_table(["Model", *WORKLOADS], overview_rows),
+            "## All measurements",
             markdown_table(
                 [
                     "Model",
@@ -622,7 +639,7 @@ def write_summary() -> None:
                     "Prompt tokens/s",
                     "Computed prompt tokens/s",
                     "Prefix cache hit rate",
-                    "Running requests",
+                    "Running sequences",
                     "KV cache use",
                     "Peak GPU MiB",
                 ],
@@ -643,7 +660,7 @@ def write_summary() -> None:
                 server_rows,
             ),
             "## Adapter load, swap and merge timings (seconds)",
-            markdown_table(["Quantity", "Value"], adapter_rows),
+            markdown_table(["Quantity", *(record.model for record in adapter_timings)], adapter_rows),
         ]
     )
     (summary_directory / "README.md").write_text(readme + "\n")
