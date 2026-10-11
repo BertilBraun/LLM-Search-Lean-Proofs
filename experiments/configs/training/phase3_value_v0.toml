@@ -1,0 +1,38 @@
+# Value v0: a LoRA adapter on the policy's base model, trained on the remaining steps of traced train-split proofs
+# (no dead labels yet). The model is a placeholder until the post-SFT probe picks the base model.
+model = "Qwen/Qwen3.5-2B"
+data = "v0"
+max_prompt_tokens = 2048
+
+[lora]
+rank = 64
+alpha = 64
+dropout = 0.0
+
+[optimization]
+method = "lora"
+learning_rate = 2e-4
+warmup_fraction = 0.03
+minimum_learning_rate_ratio = 0.1
+weight_decay = 0.0
+max_gradient_norm = 1.0
+epochs = 1
+micro_batch_tokens = 32768
+micro_batches_per_step = 2
+length_group_examples = 4096
+gradient_checkpointing = true
+seed = 0
+
+[loss]
+smoothing_sigma = 0.5
+bin_mass_weight = 1.0
+
+[readout]
+eight_or_more_steps = 10.0
+dead_steps = 16.0
+
+[evaluation]
+interval_steps = 100
+validation_examples = 4000
+micro_batch_tokens = 32768
+served_top_k = 20

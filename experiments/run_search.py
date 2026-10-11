@@ -4,8 +4,9 @@
         --split valid --run-name phase0_automation_baseline [--limit N] [--problems name,...]
 
 Outputs: config.toml and run.json (git revision, metadata), results.jsonl (one SearchResult per theorem),
-trees/<theorem>.json.gz (one TreeRecord per theorem), policy.json (PolicyStatistics, for policy expanders) and
-summary/{summary.json,summary.md,config.toml,policy.json}.
+trees/<theorem>.json.gz (one TreeRecord per theorem), policy.json (PolicyStatistics, for policy expanders),
+value.json (ValueStatistics, with a value model) and
+summary/{summary.json,summary.md,config.toml,policy.json,value.json}.
 """
 
 import argparse
@@ -27,6 +28,7 @@ from lean_search.search import (
     CompletedSearch,
     Expander,
     RunConfig,
+    ValueEstimator,
     build_expander,
     build_priority_function,
     load_run_config,
@@ -37,6 +39,7 @@ from lean_search.search import (
 )
 from lean_search.search.records import from_json_object, to_json
 from lean_search.search.summary import RunMetadata, render_markdown, summarize
+from lean_search.value.estimator import ValueModelEstimator, open_value_estimator
 
 REPOSITORY_DIRECTORY = Path(__file__).resolve().parents[1]
 
@@ -68,6 +71,10 @@ class RunPaths:
     @property
     def policy_statistics(self) -> Path:
         return self.directory / "policy.json"
+
+    @property
+    def value_statistics(self) -> Path:
+        return self.directory / "value.json"
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -115,6 +122,8 @@ def write_summary(paths: RunPaths, metadata: RunMetadata, config: RunConfig) -> 
     (paths.summary / "config.toml").write_text(paths.config.read_text(encoding="utf-8"), encoding="utf-8")
     if paths.policy_statistics.exists():
         shutil.copyfile(paths.policy_statistics, paths.summary / "policy.json")
+    if paths.value_statistics.exists():
+        shutil.copyfile(paths.value_statistics, paths.summary / "value.json")
     print(f"Solved {summary.solved}/{summary.problems} ({summary.solve_rate:.1%}); summary in {paths.summary}")
 
 
@@ -123,15 +132,26 @@ async def run_searches(problems: list[Problem], config: RunConfig, paths: RunPat
         policy: PolicyExpander | None = None
         if config.expander.kind.uses_policy:
             policy = await stack.enter_async_context(open_policy_expander(config.policy, config.search.forbidden_steps))
+        value_estimator: ValueModelEstimator | None = None
+        if config.value.model:
+            value_estimator = await stack.enter_async_context(open_value_estimator(config.value))
         try:
-            await search_with_expander(problems, config, paths, build_expander(config, policy))
+            await search_with_expander(problems, config, paths, build_expander(config, policy), value_estimator)
         finally:
             if policy is not None:
                 paths.policy_statistics.write_text(to_json(policy.statistics), encoding="utf-8")
+            if value_estimator is not None:
+                paths.value_statistics.write_text(to_json(value_estimator.statistics), encoding="utf-8")
 
 
-async def search_with_expander(problems: list[Problem], config: RunConfig, paths: RunPaths, expander: Expander) -> None:
-    priority_function = build_priority_function(config.priority)
+async def search_with_expander(
+    problems: list[Problem],
+    config: RunConfig,
+    paths: RunPaths,
+    expander: Expander,
+    value_estimator: ValueEstimator | None,
+) -> None:
+    priority_function = build_priority_function(config.priority, value_estimator)
     statements = {problem.name: problem.formal_statement for problem in problems}
     completed_count = 0
     solved_count = 0

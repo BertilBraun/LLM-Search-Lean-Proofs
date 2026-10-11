@@ -7,9 +7,10 @@ from pathlib import Path
 
 from lean_search.policy.config import PolicyConfig
 from lean_search.search.expanders import AutomationConfig, AutomationExpander, CompositeExpander, Expander
-from lean_search.search.priority import PriorityConfig
+from lean_search.search.priority import PriorityConfig, PriorityKind
 from lean_search.search.records import from_json_object
 from lean_search.search.search import SearchConfig
+from lean_search.value.config import ValueConfig
 
 
 class ExpanderKind(StrEnum):
@@ -42,6 +43,7 @@ class RunConfig:
     automation: AutomationConfig = field(default_factory=AutomationConfig)
     priority: PriorityConfig = field(default_factory=PriorityConfig)
     policy: PolicyConfig = field(default_factory=PolicyConfig)
+    value: ValueConfig = field(default_factory=ValueConfig)
 
 
 def parse_run_config(text: str) -> RunConfig:
@@ -54,6 +56,10 @@ def parse_run_config(text: str) -> RunConfig:
         raise ValueError("A policy expander needs policy.model and policy.tokenizer.")
     if config.policy.sample_count < 1 or not config.policy.server_urls:
         raise ValueError("policy.sample_count must be positive and policy.server_urls not empty.")
+    if config.value.model and not (config.priority.kind == PriorityKind.A_STAR and config.value.tokenizer):
+        raise ValueError('A value model needs priority.kind = "a_star" and value.tokenizer.')
+    if not config.value.server_urls or config.value.top_k < 1:
+        raise ValueError("value.server_urls must not be empty and value.top_k must be positive.")
     return config
 
 
