@@ -30,8 +30,7 @@ from lean_search.search.summary import (
     markdown_table,
     seconds_budgets,
 )
-from lean_search.value.bins import STEP_BIN_COUNT
-from lean_search.value.labels import LabelKind, TreeLabelConfig, tree_examples
+from lean_search.value.labels import LABEL_GROUPS, LabelKind, TreeLabelConfig, label_group, tree_examples
 from lean_search.value.metrics import roc_auc, spearman_correlation
 
 RUNS_DIRECTORY = Path(os.environ["LEAN_SEARCH_RUNS"])
@@ -182,16 +181,6 @@ def changes(run: str, reference: str, results: Sequence[SearchResult], baseline:
     )
 
 
-def label_name(kind: LabelKind, steps: int) -> str:
-    match kind:
-        case LabelKind.EXACT:
-            return f"exact {steps}" if steps < STEP_BIN_COUNT else f"exact {STEP_BIN_COUNT}+"
-        case LabelKind.AT_LEAST:
-            return "at least 1 (open)" if steps == 1 else "at least 2+"
-        case LabelKind.DEAD:
-            return "dead"
-
-
 def tree_estimates(run: str, problems: Sequence[str]) -> TreeEstimates:
     estimates = TreeEstimates([], [], [])
     for problem in problems:
@@ -203,8 +192,9 @@ def tree_estimates(run: str, problems: Sequence[str]) -> TreeEstimates:
         examples = tree_examples(record, run, TreeLabelConfig())
         for node, example in zip(labelled_nodes, examples, strict=True):
             if node.value_estimate is not None:
-                label = label_name(example.kind, example.steps)
-                estimates.nodes.append(LabelledEstimate(label, example.kind, example.steps, node.value_estimate))
+                estimates.nodes.append(
+                    LabelledEstimate(label_group(example), example.kind, example.steps, node.value_estimate)
+                )
         root_h = record.nodes[0].value_estimate
         if root_h is not None:
             (estimates.solved_roots if record.result.proved else estimates.unsolved_roots).append(root_h)
@@ -218,10 +208,8 @@ def quantile(ordered: Sequence[float], fraction: float) -> float:
 def calibration(run: str, problems: Sequence[str]) -> Calibration:
     trees = tree_estimates(run, problems)
     estimates = trees.nodes
-    labels = [label_name(LabelKind.EXACT, steps) for steps in range(1, STEP_BIN_COUNT + 1)]
-    labels += ["dead", "at least 2+", "at least 1 (open)"]
     by_label = []
-    for label in labels:
+    for label in LABEL_GROUPS:
         values = sorted(estimate.h for estimate in estimates if estimate.label == label)
         if values:
             by_label.append(

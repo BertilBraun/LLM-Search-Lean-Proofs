@@ -124,6 +124,29 @@ def tree_examples(record: TreeRecord, source: str, config: TreeLabelConfig) -> l
     return examples
 
 
+def label_group(example: ValueExample) -> str:
+    match example.kind:
+        case LabelKind.EXACT if example.steps >= STEP_BIN_COUNT:
+            return f"exact {STEP_BIN_COUNT}+"
+        case LabelKind.EXACT:
+            return f"exact {example.steps}"
+        case LabelKind.AT_LEAST if example.steps == 1:
+            return "at least 1 (open)"
+        case LabelKind.AT_LEAST:
+            return "at least 2+"
+        case LabelKind.DEAD:
+            return "dead"
+
+
+LABEL_GROUPS = (
+    *(f"exact {steps}" for steps in range(1, STEP_BIN_COUNT)),
+    f"exact {STEP_BIN_COUNT}+",
+    "dead",
+    "at least 2+",
+    "at least 1 (open)",
+)
+
+
 def merge_rank(example: ValueExample) -> tuple[int, int]:
     match example.kind:
         case LabelKind.EXACT:
