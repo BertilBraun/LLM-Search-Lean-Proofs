@@ -1,0 +1,41 @@
+# Proposed SFT data for the full policy SFT (not run yet): all traced sources, 80M tokens, one epoch.
+# Equal token shares: small sources are used whole and their unused shares go to the large ones.
+# Completions are capped at the search's policy max_tokens (256).
+token_budget = 80_000_000
+max_prompt_tokens = 2048
+max_completion_tokens = 256
+validation_examples = 2000
+reference_tokenizer = "Qwen/Qwen3.5-2B"
+seed = "sft-full"
+
+[[sources]]
+name = "goedel_lean_workbook_proofs"
+weight = 1.0
+
+[[sources]]
+name = "stp_lean_workbook"
+weight = 1.0
+
+[[sources]]
+name = "deepseek_prover_v1"
+weight = 1.0
+
+[[sources]]
+name = "lean_workbook"
+weight = 1.0
+
+[[sources]]
+name = "goedel_sft_v2"
+weight = 1.0
+
+[[sources]]
+name = "numinamath_lean_kimina"
+weight = 1.0
+
+[[sources]]
+name = "numinamath_lean_human"
+weight = 1.0
+
+[[sources]]
+name = "leanabell_sft"
+weight = 1.0
