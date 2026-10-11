@@ -1,0 +1,51 @@
+# Ablation-ladder row 0: best-first search over the automation sweep only, no model.
+# A generous budget, so that solve-rate-vs-budget curves can be read off one run.
+
+[lean]
+pool_size = 32
+concurrency = 32
+
+[search]
+max_expansions = 256
+max_wall_seconds = 300.0
+max_depth = 16
+tactic_timeout_seconds = 10.0
+forbidden_steps = [
+    "exact?",
+    "apply?",
+    "rw?",
+    "simp?",
+    "simp_all?",
+    "dsimp?",
+    "aesop?",
+    "hint",
+    "rw_search",
+    "library_search",
+]
+
+[expander]
+kind = "automation"
+
+[automation]
+# Cheapest first by median latency on the initial states of miniF2F-valid (results/phase0_environment).
+# Dropped after a leave-one-out ablation lost no solve: tauto (covered by rfl, can hang) and positivity (never used).
+tactics = [
+    "decide",
+    "omega",
+    "intros",
+    "constructor",
+    "rfl",
+    "simp",
+    "field_simp",
+    "norm_num",
+    "linarith",
+    "ring_nf",
+    "simp_all",
+    "nlinarith",
+    "aesop",
+]
+timeout_seconds = 10.0
+max_wall_clock_timeouts_per_tactic = 1
+
+[priority]
+kind = "depth_plus_goals"
