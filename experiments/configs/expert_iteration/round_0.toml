@@ -1,7 +1,8 @@
-# Expert-iteration round 0 (experiments/phase6_orchestrate.py prints the steps): search 4,000 prepared pool statements
-# with the SFT v2 policy and value v0 (A*, λ = 0.5), build SFT, DPO and value-v1 data from the trees, train the next
-# policy (SFT from the SFT v2 adapter, then DPO) and value v1, and evaluate both on miniF2F-valid with row 4's
-# settings. 4,000 statements is an estimated 5-6 h of search on both GPUs (row 4: ~3.7 policy requests/s).
+# Expert-iteration round 0 (experiments/phase6_orchestrate.py prints the steps): search prepared pool statements with
+# the SFT v2 policy and value v0 (A*, λ = 0.5), build SFT, DPO and value-v1 data from the trees, train the next policy
+# (SFT from the SFT v2 adapter, then DPO) and value v1, and evaluate them alone and together on miniF2F-valid with
+# row 4's settings. The slices below are the 500-statement measurement; the full round (~3,000 statements, 4-5 h)
+# grows them by source yield and resumes the same run.
 index = 0
 pool = "expert_iteration/pool_v1"
 pool_config = "experiments/configs/expert_iteration/pool_v1.toml"
@@ -10,31 +11,30 @@ search_config = "experiments/configs/expert_iteration/round_0_search.toml"
 policy_sft_config = "experiments/configs/expert_iteration/round_0_policy_sft.toml"
 policy_dpo_config = "experiments/configs/expert_iteration/round_0_policy_dpo.toml"
 value_config = "experiments/configs/expert_iteration/round_0_value.toml"
-evaluation_config = "experiments/configs/expert_iteration/round_0_evaluation.toml"
 
 # Statements whose proofs were traced for SFT are left out of the pool, so automation solved none of the first 550
 # Lean Workbook and NuminaMath candidates. Of the first 12,000 candidates, a proof in the untraced Goedel-Prover SFT
-# set exists for 18% of Lean Workbook, 8.5% of Goedel-Pset and 0.1% of NuminaMath ones, so NuminaMath gets the
-# smallest share. Later rounds continue each source at offset = the counts used so far.
+# set exists for 18% of Lean Workbook, 8.5% of Goedel-Pset and 0.1% of NuminaMath ones. The measurement samples every
+# source enough to compare solve rates. Later rounds continue each source at offset = the counts used so far.
 [[statements]]
 source = "goedel_pset_v1"
 offset = 0
-count = 1600
+count = 150
 
 [[statements]]
 source = "lean_workbook"
 offset = 0
-count = 1200
+count = 150
 
 [[statements]]
 source = "numinamath_lean"
 offset = 0
-count = 800
+count = 100
 
 [[statements]]
 source = "kimina_prover_promptset"
 offset = 0
-count = 400
+count = 100
 
 [policy]
 name = "policy-v2"
@@ -51,6 +51,25 @@ path = "/workspace/checkpoints/phase6_round_0_policy_dpo/adapter"
 [next_value]
 name = "value-v1"
 path = "/workspace/checkpoints/phase6_round_0_value/adapter"
+
+# Alone and together: (new policy, v0) and (SFT v2, v1) attribute the gain of (new policy, v1); rows 2 and 4 with
+# SFT v2 come from the value runs.
+[[evaluations]]
+name = "policy_ei1_value_v0"
+config = "experiments/configs/expert_iteration/round_0_evaluation_policy_ei1_value_v0.toml"
+
+[[evaluations]]
+name = "policy_v2_value_v1"
+config = "experiments/configs/expert_iteration/round_0_evaluation_policy_v2_value_v1.toml"
+
+[[evaluations]]
+name = "policy_ei1_value_v1"
+config = "experiments/configs/expert_iteration/round_0_evaluation_policy_ei1_value_v1.toml"
+
+# The deferred tracing job needs the CPU the search needs: stopped right before the search, restarted after it.
+[tracing]
+process_pattern = "^python experiments/phase2_trace_proofs.py"
+restart_command = "setsid nohup python experiments/phase2_trace_proofs.py --parts pilot,main --sources goedel_sft_v2,numinamath_lean_kimina,numinamath_lean_human --pool-size 36 >> $LEAN_SEARCH_RUNS/phase2_tracing/log_deferred_36.txt 2>&1 < /dev/null &"
 
 [data]
 # Later rounds list every round's trees: proofs keep the shortest per statement, tree labels accumulate.

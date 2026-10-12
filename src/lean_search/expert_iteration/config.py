@@ -1,6 +1,7 @@
 """Configuration of the statement pool and of one expert-iteration round, loaded from TOML."""
 
 import tomllib
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -82,6 +83,22 @@ class RoundDataConfig:
 
 
 @dataclass(frozen=True)
+class RoundEvaluation:
+    # The run is phase6_round_<index>_evaluation_<name>.
+    name: str
+    config: str
+
+
+@dataclass(frozen=True)
+class TracingJob:
+    """A CPU job stopped while the round searches and restarted after the search."""
+
+    # A pgrep -f pattern anchored at the job's own command, so it never matches a shell or ssh command naming it.
+    process_pattern: str
+    restart_command: str
+
+
+@dataclass(frozen=True)
 class RoundConfig:
     index: int
     # A prepared pool under $LEAN_SEARCH_DATA (phase6_pool.py), its config, and the slice of each source to search.
@@ -98,10 +115,11 @@ class RoundConfig:
     policy_sft_config: str
     value_config: str
     policy_dpo_config: str
-    # The adapters this round trains, and the miniF2F-valid run config that evaluates them together.
+    # The adapters this round trains, and the miniF2F-valid run configs that evaluate them alone and together.
     next_policy: AdapterReference
     next_value: AdapterReference
-    evaluation_config: str
+    evaluations: tuple[RoundEvaluation, ...]
+    tracing: TracingJob | None = None
 
     @property
     def statement_count(self) -> int:
@@ -130,6 +148,13 @@ def load_round_config(path: Path) -> RoundConfig:
     if not 0 <= config.data.policy.replay_fraction < 1 or not 0 <= config.data.value.replay_fraction < 1:
         raise ValueError("Replay fractions must lie in [0, 1).")
     return config
+
+
+def unserved_adapters(run_config: RunConfig, served: Sequence[AdapterReference]) -> list[str]:
+    """The adapters a run config requests that are not among those served."""
+    names = {adapter.name for adapter in served}
+    requested = (("policy", run_config.policy.adapter), ("value", run_config.value.adapter))
+    return [f"{role} adapter {name!r} is not served" for role, name in requested if name not in names]
 
 
 def adapter_mismatches(run_config: RunConfig, policy: AdapterReference, value: AdapterReference) -> list[str]:

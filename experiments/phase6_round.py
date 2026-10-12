@@ -5,12 +5,12 @@
 
 Takes the round's slice of each source's prepared statements in $LEAN_SEARCH_DATA/<pool>/prepared.jsonl
 (experiments/phase6_pool.py), interleaved in proportion, and searches them with the round's run config, whose policy
-and value adapters must be served. Writes the standard run
-layout to $LEAN_SEARCH_RUNS/phase6_round_<index>/: config.toml, round.toml, results.jsonl, trees/<problem>.json.gz
-for every statement, statistics/{policy,value}_<invocation>.json, invocations.jsonl. Re-running resumes: finished
-statements are skipped, so the run can be stopped (kill) and restarted at any time; --limit searches only the first N
-statements of the slice. The summary (solve rates by source, costs, throughput) goes to
-summary/{summary.json,README.md}.
+and value adapters must be served. Writes the standard run layout to $LEAN_SEARCH_RUNS/phase6_round_<index>/:
+config.toml, round.toml (and round_<invocation>.toml), results.jsonl, trees/<problem>.json.gz for every statement,
+statistics/{policy,value}_<invocation>.json, invocations.jsonl. Re-running resumes: finished statements are skipped,
+so the run can be stopped (kill) and restarted at any time, also with larger slices (a first measurement, then the
+full round); --limit searches only the first N statements. The summary (solve rates by source, costs, throughput)
+goes to summary/{summary.json,README.md}.
 """
 
 import argparse
@@ -103,13 +103,16 @@ def round_statements(config: RoundConfig) -> list[StatementRecord]:
     return sliced_statements(list(prepared), config.statements)
 
 
-def write_run_files(paths: PoolRunPaths, config_path: Path, search_config_path: Path) -> None:
+def write_run_files(paths: PoolRunPaths, config_path: Path, search_config_path: Path, invocation: int) -> None:
+    """The search config must stay; the statement slices may grow between invocations, each one's is kept."""
     paths.directory.mkdir(parents=True, exist_ok=True)
-    for source, destination in ((search_config_path, paths.config), (config_path, paths.directory / "round.toml")):
-        text = source.read_text(encoding="utf-8")
-        if destination.exists() and destination.read_text(encoding="utf-8") != text:
-            raise ValueError(f"{destination} differs from {source}: a resumed round must keep its configuration.")
-        destination.write_text(text, encoding="utf-8")
+    search_text = search_config_path.read_text(encoding="utf-8")
+    if paths.config.exists() and paths.config.read_text(encoding="utf-8") != search_text:
+        raise ValueError(f"{paths.config} differs from {search_config_path}: a resumed round keeps its search config.")
+    paths.config.write_text(search_text, encoding="utf-8")
+    round_text = config_path.read_text(encoding="utf-8")
+    (paths.directory / f"round_{invocation:03d}.toml").write_text(round_text, encoding="utf-8")
+    (paths.directory / "round.toml").write_text(round_text, encoding="utf-8")
 
 
 def search_round(config: RoundConfig, search_config: RunConfig, paths: PoolRunPaths, limit: int | None) -> None:
@@ -237,7 +240,7 @@ def main() -> None:
         raise ValueError(f"{config.search_config} does not request the round's adapters: {'; '.join(mismatches)}")
     paths = PoolRunPaths(RUNS_DIRECTORY / config.run_name)
     if not arguments.summarize_only:
-        write_run_files(paths, arguments.config, search_config_path)
+        write_run_files(paths, arguments.config, search_config_path, len(read_invocations(paths.invocations)))
         search_round(config, search_config, paths, arguments.limit)
     summarize_round(config, arguments.config, search_config, paths)
 

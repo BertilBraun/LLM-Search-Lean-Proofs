@@ -1,5 +1,5 @@
-# Expert-iteration round 0 evaluation on miniF2F-valid (experiments/run_search.py): row 4's settings exactly
-# (experiments/configs/phase3_astar_v0.toml) with the round's new policy (SFT on its proofs, then DPO) and value v1.
+# Expert-iteration round 0 attribution on miniF2F-valid (experiments/run_search.py), row 4's settings exactly
+# (experiments/configs/phase3_astar_v0.toml): the round's new policy (SFT on its proofs, then DPO) with value v1.
 # Value v1 has dead labels, so p_dead now moves h; D stays 16 until a sweep says otherwise.
 
 [lean]

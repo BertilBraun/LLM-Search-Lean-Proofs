@@ -1,13 +1,14 @@
 """The steps of one expert-iteration round, each a separate command: print them, or run one on the node.
 
     python experiments/phase6_orchestrate.py --config experiments/configs/expert_iteration/round_0.toml
-    python experiments/phase6_orchestrate.py --config ... --run search
+    deployment/on_node.sh 'python experiments/phase6_orchestrate.py --config ... --run search'
 
-Printed commands run inside the node's checkout (deployment/on_node.sh '<command>'); `fetch` runs locally. Long steps
-start detached and log to $LEAN_SEARCH_RUNS/<run>/log.txt. Every step can be repeated: the search resumes where it
-stopped, the data build is deterministic, and training restarts from its initial adapter. Order: finalize_pool ->
-serve_search -> search -> stop_servers -> data -> policy_sft and value (one GPU each, in parallel) -> policy_dpo ->
-serve_evaluation -> evaluate -> stop_servers -> fetch.
+Run steps with --run on the node (the printed commands are for reading; some quote their own patterns); `fetch` runs
+locally. Long steps start detached and log to $LEAN_SEARCH_RUNS/<run>/log.txt. Every step can be repeated: the
+search resumes where it stopped (also after the round's slices grew), the data build is deterministic, training
+restarts from its initial adapter, and finished evaluations are skipped. Order: finalize_pool -> serve_search ->
+pause_tracing -> search -> stop_servers -> resume_tracing -> data -> policy_sft and value (one GPU each, in parallel)
+-> policy_dpo -> serve_evaluation -> evaluate -> stop_servers -> fetch.
 """
 
 import argparse
@@ -23,20 +24,27 @@ from urllib.parse import urlparse
 from lean_search.expert_iteration.config import (
     AdapterReference,
     RoundConfig,
+    TracingJob,
     adapter_mismatches,
     load_round_config,
+    unserved_adapters,
 )
 from lean_search.search import RunConfig, load_run_config
 
 REPOSITORY_DIRECTORY = Path(__file__).resolve().parents[1]
 SERVER_NAME_PREFIX = "search-gpu"
+# Anchored, so the pattern matches the pre-filter itself and never a shell or ssh command that names it.
+PREFILTER_PATTERN = "^python experiments/phase6_pool.py"
+TIMESTAMP = "$(date -u +%FT%TZ)"
 
 
 class Step(StrEnum):
     FINALIZE_POOL = "finalize_pool"
     SERVE_SEARCH = "serve_search"
+    PAUSE_TRACING = "pause_tracing"
     SEARCH = "search"
     STOP_SERVERS = "stop_servers"
+    RESUME_TRACING = "resume_tracing"
     DATA = "data"
     POLICY_SFT = "policy_sft"
     VALUE = "value"
@@ -80,31 +88,72 @@ def stop_command(run_config: RunConfig) -> str:
     return f"deployment/stop_model.sh {names}"
 
 
-def round_commands(config: RoundConfig, config_path: Path) -> list[Command]:
-    search_config = load_run_config(REPOSITORY_DIRECTORY / config.search_config)
-    evaluation_config = load_run_config(REPOSITORY_DIRECTORY / config.evaluation_config)
-    problems = adapter_mismatches(search_config, config.policy, config.value) + adapter_mismatches(
-        evaluation_config, config.next_policy, config.next_value
+def pause_tracing_command(job: TracingJob, log: str) -> str:
+    """SIGTERM to the job's own process only (its REPLs die with it), waiting until it is gone; logged."""
+    pattern = shlex.quote(job.process_pattern)
+    return (
+        f'mkdir -p "$(dirname {log})"; pids=$(pgrep -f {pattern}); '
+        f'if [ -z "$pids" ]; then echo "{TIMESTAMP} no tracing process matches {job.process_pattern}" >> {log}; '
+        "else for pid in $pids; do "
+        f'echo "{TIMESTAMP} SIGTERM to tracing pid $pid: $(tr "\\0" " " < /proc/$pid/cmdline)" >> {log}; '
+        "kill -TERM $pid; done; for pid in $pids; do while kill -0 $pid 2>/dev/null; do sleep 2; done; "
+        f'echo "{TIMESTAMP} tracing pid $pid exited" >> {log}; done; fi; tail -n 4 {log}'
     )
+
+
+def resume_tracing_command(job: TracingJob, log: str) -> str:
+    pattern = shlex.quote(job.process_pattern)
+    command = job.restart_command.strip().removesuffix("&").rstrip()
+    return (
+        f'mkdir -p "$(dirname {log})"; if [ -n "$(pgrep -f {pattern})" ]; then '
+        f'echo "{TIMESTAMP} tracing is already running, not restarted" >> {log}; '
+        f'else {command} & echo "{TIMESTAMP} tracing restarted as pid $!" >> {log}; fi; tail -n 2 {log}'
+    )
+
+
+def evaluation_command(config: RoundConfig) -> str:
+    """The evaluations one after another (each holds both GPUs' servers and 40 REPLs), finished ones skipped."""
+    steps = []
+    for evaluation in config.evaluations:
+        run = config.stage_run_name(f"evaluation_{evaluation.name}")
+        steps.append(
+            f'[ -f "$LEAN_SEARCH_RUNS/{run}/summary/summary.json" ] || python experiments/run_search.py '
+            f"--config {evaluation.config} --split valid --run-name {run}"
+        )
+    return detached(config.stage_run_name("evaluation"), f"bash -c {shlex.quote('; '.join(steps))}")
+
+
+def configuration_problems(config: RoundConfig) -> list[str]:
+    search_config = load_run_config(REPOSITORY_DIRECTORY / config.search_config)
+    problems = adapter_mismatches(search_config, config.policy, config.value)
+    served = (config.policy, config.value, config.next_policy, config.next_value)
+    for evaluation in config.evaluations:
+        evaluation_config = load_run_config(REPOSITORY_DIRECTORY / evaluation.config)
+        problems += [f"{evaluation.name}: {problem}" for problem in unserved_adapters(evaluation_config, served)]
     last_policy_stage = "policy_dpo" if config.policy_dpo_config else "policy_sft"
     if not config.next_policy.path.endswith(f"{config.stage_run_name(last_policy_stage)}/adapter"):
         problems.append(f"next_policy.path should be the {last_policy_stage} adapter: {config.next_policy.path}")
     if not config.next_value.path.endswith(f"{config.stage_run_name('value')}/adapter"):
         problems.append(f"next_value.path should be the value run's adapter: {config.next_value.path}")
-    if problems:
+    return problems
+
+
+def round_commands(config: RoundConfig, config_path: Path) -> list[Command]:
+    if problems := configuration_problems(config):
         raise ValueError("Inconsistent round configuration: " + "; ".join(problems))
+    search_config = load_run_config(REPOSITORY_DIRECTORY / config.search_config)
+    first_evaluation = load_run_config(REPOSITORY_DIRECTORY / config.evaluations[0].config)
     round_config = shlex.quote(config_path.as_posix())
     sft_run = config.stage_run_name("policy_sft")
     dpo_run = config.stage_run_name("policy_dpo")
     value_run = config.stage_run_name("value")
-    evaluation_run = config.stage_run_name("evaluation")
-    pool_name = Path(config.pool).name
+    tracing_log = f"$LEAN_SEARCH_RUNS/{config.run_name}/tracing.log"
+    evaluation_runs = [config.stage_run_name(f"evaluation_{evaluation.name}") for evaluation in config.evaluations]
     commands = [
         Command(
             Step.FINALIZE_POOL,
-            # Anchored, so the pattern matches the pre-filter itself and never a shell or ssh command that names it.
-            "pkill -TERM -f '^python experiments/phase6_pool.py'; sleep 30; python experiments/phase6_pool.py "
-            f"--config {config.pool_config} --name {pool_name} --step finalize",
+            f"pkill -TERM -f {shlex.quote(PREFILTER_PATTERN)}; sleep 30; python experiments/phase6_pool.py "
+            f"--config {config.pool_config} --name {Path(config.pool).name} --step finalize",
             "stops the CPU pre-filter (it resumes later with --step prefilter) and writes prepared.jsonl from the "
             "statements done so far; the round fails early if a source has too few",
         ),
@@ -112,13 +161,33 @@ def round_commands(config: RoundConfig, config_path: Path) -> list[Command]:
             Command(Step.SERVE_SEARCH, command, f"GPU server with {config.policy.name} and {config.value.name}")
             for command in serve_commands(config, search_config, (config.policy, config.value))
         ),
+    ]
+    if config.tracing is not None:
+        commands.append(
+            Command(
+                Step.PAUSE_TRACING,
+                pause_tracing_command(config.tracing, tracing_log),
+                "stops the deferred tracing job right before the search (it resumes by shard), logged",
+            )
+        )
+    commands += [
         Command(
             Step.SEARCH,
             detached(config.run_name, f"python experiments/phase6_round.py --config {round_config}"),
-            f"{config.statement_count:,} statements; resumable. The tracing job pauses only for run_search.py, "
-            "so pause it (or accept slower Lean) while this runs.",
+            f"{config.statement_count:,} statements; resumable, also after the slices grow (measurement first, "
+            "then the full round)",
         ),
         Command(Step.STOP_SERVERS, stop_command(search_config), "frees both GPUs for training"),
+    ]
+    if config.tracing is not None:
+        commands.append(
+            Command(
+                Step.RESUME_TRACING,
+                resume_tracing_command(config.tracing, tracing_log),
+                "restarts the tracing job after the search phase unless it runs already, logged",
+            )
+        )
+    commands += [
         Command(
             Step.DATA,
             detached(config.stage_run_name("data"), f"python experiments/phase6_data.py --config {round_config}"),
@@ -155,23 +224,17 @@ def round_commands(config: RoundConfig, config_path: Path) -> list[Command]:
                 "GPU 0, after policy_sft: DPO with the SFT adapter as the frozen reference",
             )
         )
+    adapters = (config.policy, config.value, config.next_policy, config.next_value)
     commands += [
         *(
-            Command(
-                Step.SERVE_EVALUATION,
-                command,
-                f"GPU server with {config.next_policy.name} and {config.next_value.name}",
-            )
-            for command in serve_commands(config, evaluation_config, (config.next_policy, config.next_value))
+            Command(Step.SERVE_EVALUATION, command, "GPU server with the old and the new policy and value adapters")
+            for command in serve_commands(config, first_evaluation, adapters)
         ),
         Command(
             Step.EVALUATE,
-            detached(
-                evaluation_run,
-                f"python experiments/run_search.py --config {config.evaluation_config} --split valid "
-                f"--run-name {evaluation_run}",
-            ),
-            "miniF2F-valid with row 4's settings; afterwards stop_servers again",
+            evaluation_command(config),
+            f"miniF2F-valid at row 4's budget, one after another: {', '.join(evaluation_runs)}; a run that broke off "
+            "must be removed before a rerun; afterwards stop_servers again",
         ),
         Command(
             Step.FETCH,
@@ -183,7 +246,7 @@ def round_commands(config: RoundConfig, config_path: Path) -> list[Command]:
                     sft_run,
                     *([dpo_run] if config.policy_dpo_config else []),
                     value_run,
-                    evaluation_run,
+                    *evaluation_runs,
                 )
             ),
             "locally: copies every summary to results/",
@@ -201,8 +264,7 @@ def main() -> None:
         for command in commands:
             print(f"\n# {command.step}: {command.note}\n{command.text}")
         return
-    selected = [command for command in commands if command.step == arguments.run]
-    for command in selected:
+    for command in (command for command in commands if command.step == arguments.run):
         print(command.text, flush=True)
         completed = subprocess.run(["bash", "-c", command.text], cwd=REPOSITORY_DIRECTORY, check=False)
         if completed.returncode:

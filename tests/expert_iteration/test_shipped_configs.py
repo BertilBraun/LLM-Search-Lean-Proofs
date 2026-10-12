@@ -8,6 +8,7 @@ from lean_search.expert_iteration.config import (
     adapter_mismatches,
     load_pool_config,
     load_round_config,
+    unserved_adapters,
 )
 from lean_search.search import load_run_config
 from lean_search.search.records import from_json_object
@@ -34,10 +35,22 @@ def test_the_round_search_requests_the_served_adapters(path: Path) -> None:
 
 
 @pytest.mark.parametrize("path", ROUND_CONFIGS, ids=lambda path: path.stem)
-def test_the_round_evaluation_requests_the_trained_adapters(path: Path) -> None:
+def test_the_round_evaluations_request_only_served_adapters(path: Path) -> None:
     config = load_round_config(path)
-    evaluation = load_run_config(REPOSITORY_DIRECTORY / config.evaluation_config)
-    assert adapter_mismatches(evaluation, config.next_policy, config.next_value) == []
+    served = (config.policy, config.value, config.next_policy, config.next_value)
+    problems = [
+        problem
+        for evaluation in config.evaluations
+        for problem in unserved_adapters(load_run_config(REPOSITORY_DIRECTORY / evaluation.config), served)
+    ]
+    assert problems == []
+
+
+@pytest.mark.parametrize("path", ROUND_CONFIGS, ids=lambda path: path.stem)
+def test_the_round_evaluations_cover_distinct_adapter_pairs(path: Path) -> None:
+    config = load_round_config(path)
+    pairs = [load_run_config(REPOSITORY_DIRECTORY / evaluation.config) for evaluation in config.evaluations]
+    assert len({(run.policy.adapter, run.value.adapter) for run in pairs}) == len(pairs)
 
 
 @pytest.mark.parametrize("path", ROUND_CONFIGS, ids=lambda path: path.stem)
