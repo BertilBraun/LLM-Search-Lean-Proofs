@@ -48,7 +48,8 @@ max_wall_clock_timeouts_per_tactic = 1
 
 [priority]
 kind = "a_star"
-value_weight = 1.0
+# Best anytime curves of the sweep over 0.5, 1, 2, 4 on 83 row-0-unsolved problems (results/phase3_astar_v0/).
+value_weight = 0.5
 
 [policy]
 model = "search-qwen3.5-2b"
@@ -71,4 +72,5 @@ adapter = "value-v0"
 
 [value.readout]
 eight_or_more_steps = 12.0
+# v0 has no dead labels: p_dead is ~1e-7, so D does not change h.
 dead_steps = 16.0
