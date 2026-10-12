@@ -17,6 +17,8 @@ class PolicyConfig:
     top_p: float = 1.0
     max_tokens: int = 256
     thinking: bool = False
+    # Appended to the system prompt in thinking mode only, e.g. prompts.BRIEF_THINKING_INSTRUCTION; empty adds nothing.
+    thinking_instruction: str = ""
     few_shot: bool = True
     request_timeout_seconds: float = 900.0
     retrieval: RetrievalConfig = field(default_factory=RetrievalConfig)

@@ -34,6 +34,9 @@ class NodeRecord:
     expansion_wall_seconds: float | None
     expansion_lean_seconds: float | None
     verification_problems: tuple[str, ...]
+    # Absent from records written before generation cost was charged per batch.
+    expansion_prompt_tokens: int | None = None
+    expansion_generated_tokens: int | None = None
 
 
 @dataclass(frozen=True)
@@ -67,6 +70,8 @@ def tree_record(tree: SearchTree, statement: str, result: SearchResult) -> TreeR
             expansion_wall_seconds=node.expansion_wall_seconds,
             expansion_lean_seconds=node.expansion_lean_seconds,
             verification_problems=node.verification_problems,
+            expansion_prompt_tokens=node.expansion_prompt_tokens,
+            expansion_generated_tokens=node.expansion_generated_tokens,
         )
         for node in tree.nodes
     )

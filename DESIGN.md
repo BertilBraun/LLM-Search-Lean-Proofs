@@ -167,9 +167,9 @@ Results of each phase are committed under `results/` as small JSON summaries plu
 per-theorem logs, datasets and checkpoints stay on the node.
 
 ## Known issues (backlog)
-- Search token accounting is per executed candidate: requests whose samples all fail to parse, and candidates
-  left unexecuted after a proof is found, are not charged. Must become batch-level before any equal-token
-  comparison (thinking vs non-thinking, final ladder).
+- Resolved: search generation cost is charged per batch (`CandidateBatch`), when the expander yields it. Runs before
+  the fix did not charge requests whose samples all failed to parse (in `PolicyStatistics.unattributed_generated_tokens`
+  instead) nor candidates left unexecuted after a proof, so their token totals are low, most for thinking mode.
 
 - Statement pools: some Lean Workbook statements lack the colon before the goal; `π` is ambiguous under
   `open … Nat Real` in the pinned Mathlib.

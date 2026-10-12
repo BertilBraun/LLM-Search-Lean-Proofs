@@ -31,11 +31,20 @@ class Candidate:
     text: str
     source: StepSource
     log_probability: float | None = None
-    # Token counts are summed over candidates, so a prompt shared by n samples is counted on one candidate only.
+    # Logged on the edge, never charged: the prompt the candidate was sampled from and the samples that produced it.
     prompt_tokens: int = 0
     generated_tokens: int = 0
     heartbeats: int | None = None
     timeout_seconds: float | None = None
+
+
+@dataclass(frozen=True)
+class CandidateBatch:
+    """The candidates of one request and the tokens it cost, charged on arrival whether or not the candidates run."""
+
+    candidates: tuple[Candidate, ...]
+    prompt_tokens: int = 0
+    generated_tokens: int = 0
 
 
 @dataclass(frozen=True)
@@ -45,11 +54,11 @@ class SearchContext:
     repl: LeanRepl
 
 
-type CandidateBatches = AsyncGenerator[Sequence[Candidate], None]
+type CandidateBatches = AsyncGenerator[CandidateBatch, None]
 
 
 class Expander(Protocol):
-    """Yields batches of candidates; the search runs each batch before asking for the next and stops at a proof."""
+    """Yields batches; the search charges each, runs its candidates before asking for the next and stops at a proof."""
 
     def expand(self, node: Node, context: SearchContext) -> CandidateBatches: ...
 
@@ -69,16 +78,18 @@ class AutomationExpander:
         self.config = config
 
     async def expand(self, node: Node, context: SearchContext) -> CandidateBatches:
-        yield [
-            Candidate(
-                tactic,
-                StepSource.AUTOMATION,
-                heartbeats=self.config.heartbeats,
-                timeout_seconds=self.config.timeout_seconds,
+        yield CandidateBatch(
+            tuple(
+                Candidate(
+                    tactic,
+                    StepSource.AUTOMATION,
+                    heartbeats=self.config.heartbeats,
+                    timeout_seconds=self.config.timeout_seconds,
+                )
+                for tactic in self.config.tactics
+                if not self._disabled(tactic, context.tree)
             )
-            for tactic in self.config.tactics
-            if not self._disabled(tactic, context.tree)
-        ]
+        )
 
     def _disabled(self, tactic: str, tree: SearchTree) -> bool:
         limit = self.config.max_wall_clock_timeouts_per_tactic

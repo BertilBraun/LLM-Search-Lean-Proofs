@@ -56,6 +56,8 @@ def parse_run_config(text: str) -> RunConfig:
         raise ValueError("A policy expander needs policy.model and policy.tokenizer.")
     if config.policy.sample_count < 1 or not config.policy.server_urls:
         raise ValueError("policy.sample_count must be positive and policy.server_urls not empty.")
+    if config.policy.thinking_instruction and not config.policy.thinking:
+        raise ValueError("policy.thinking_instruction is only used with policy.thinking = true.")
     if config.value.model and not (config.priority.kind == PriorityKind.A_STAR and config.value.tokenizer):
         raise ValueError('A value model needs priority.kind = "a_star" and value.tokenizer.')
     if not config.value.server_urls or config.value.top_k < 1:

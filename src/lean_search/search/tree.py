@@ -81,6 +81,9 @@ class Node:
     expanded_seconds: float | None = None
     expansion_wall_seconds: float | None = None
     expansion_lean_seconds: float | None = None
+    # What the expansion's batches cost, including requests without candidates and candidates never run.
+    expansion_prompt_tokens: int | None = None
+    expansion_generated_tokens: int | None = None
     verification_problems: tuple[str, ...] = ()
 
     @property
@@ -100,6 +103,7 @@ class Edge:
     text: str
     source: StepSource
     log_probability: float | None
+    # The prompt this step was sampled from and the samples that produced it; not summable into a cost, see Node.
     prompt_tokens: int
     generated_tokens: int
     outcome: EdgeOutcome

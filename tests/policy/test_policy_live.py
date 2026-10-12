@@ -9,7 +9,7 @@ from lean_search.lean import LeanRepl, ProofState
 from lean_search.policy.config import PolicyConfig
 from lean_search.policy.expander import PolicyExpander, PolicyTokenizer, load_tokenizer, open_policy_expander
 from lean_search.policy.prompts import assistant_message, prompt_messages, render_completion, render_prompt
-from lean_search.search import Candidate, SearchContext, SearchTree, StepSource
+from lean_search.search import Candidate, CandidateBatch, SearchContext, SearchTree, StepSource
 
 POLICY_URL = os.environ.get("LEAN_SEARCH_POLICY_URL", "http://127.0.0.1:8000/v1")
 CANDIDATE_MODELS = (
@@ -60,22 +60,26 @@ async def policy_expander(served_model: ServedModel) -> AsyncIterator[PolicyExpa
         yield expander
 
 
-async def expand_root(expander: PolicyExpander) -> list[Candidate]:
+async def expand_root(expander: PolicyExpander) -> list[CandidateBatch]:
     state = ProofState("", "theorem probe (a b : ℝ) : a = 2 := by", (), GOALS, 0, 0)
     tree = SearchTree("probe", state, 0.0)
     problem = Problem("probe", Split.VALID, "", state.statement, "", GOALS[0])
     context = SearchContext(problem, tree, LeanRepl())
-    return [candidate async for batch in expander.expand(tree.root, context) for candidate in batch]
+    return [batch async for batch in expander.expand(tree.root, context)]
+
+
+async def root_candidates(expander: PolicyExpander) -> list[Candidate]:
+    return [candidate for batch in await expand_root(expander) for candidate in batch.candidates]
 
 
 async def test_expansion_yields_distinct_policy_candidates(policy_expander: PolicyExpander) -> None:
-    candidates = await expand_root(policy_expander)
+    candidates = await root_candidates(policy_expander)
     texts = [candidate.text for candidate in candidates]
     assert len(set(texts)) == len(texts) and all(candidate.source == StepSource.POLICY for candidate in candidates)
 
 
 async def test_prefilled_generation_stops_before_the_closing_fence(policy_expander: PolicyExpander) -> None:
-    candidates = await expand_root(policy_expander)
+    candidates = await root_candidates(policy_expander)
     assert not any("```" in candidate.text for candidate in candidates)
 
 
@@ -84,6 +88,7 @@ async def test_statistics_count_every_sample(policy_expander: PolicyExpander) ->
     assert (policy_expander.statistics.requests, policy_expander.statistics.samples) == (1, SAMPLE_COUNT)
 
 
-async def test_search_accounting_sees_the_prompt_once(policy_expander: PolicyExpander) -> None:
-    candidates = await expand_root(policy_expander)
-    assert [candidate.prompt_tokens > 0 for candidate in candidates] == [True] + [False] * (len(candidates) - 1)
+async def test_the_batch_charges_what_the_statistics_count(policy_expander: PolicyExpander) -> None:
+    (batch,) = await expand_root(policy_expander)
+    statistics = policy_expander.statistics
+    assert (batch.prompt_tokens, batch.generated_tokens) == (statistics.prompt_tokens, statistics.generated_tokens)

@@ -12,6 +12,7 @@ from lean_search.search import (
     AutomationConfig,
     AutomationExpander,
     Candidate,
+    CandidateBatch,
     CandidateBatches,
     CompletedSearch,
     CompositeExpander,
@@ -46,17 +47,18 @@ pytestmark = [
 
 
 class FixedPolicy:
-    def __init__(self, steps: Sequence[str], generated_tokens: int = 10) -> None:
+    """One request per expansion that proposes `steps` (none: all its samples failed) at the given cost."""
+
+    def __init__(self, steps: Sequence[str], generated_tokens: int = 10, prompt_tokens: int = 0) -> None:
         self.steps = tuple(steps)
         self.generated_tokens = generated_tokens
+        self.prompt_tokens = prompt_tokens
         self.calls = 0
 
     async def expand(self, node: Node, context: SearchContext) -> CandidateBatches:
         self.calls += 1
-        yield [
-            Candidate(step, StepSource.POLICY, log_probability=-0.5, generated_tokens=self.generated_tokens)
-            for step in self.steps
-        ]
+        candidates = tuple(Candidate(step, StepSource.POLICY, log_probability=-0.5) for step in self.steps)
+        yield CandidateBatch(candidates, self.prompt_tokens, self.generated_tokens)
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="module")
@@ -187,6 +189,41 @@ async def test_wall_clock_budget_stops_within_one_step(repl: LeanRepl) -> None:
 async def test_generated_token_budget_is_respected(repl: LeanRepl) -> None:
     policy = FixedPolicy([ALWAYS_PROGRESSES], generated_tokens=10)
     completed = await search(repl, ARITHMETIC, policy, max_expansions=100, max_generated_tokens=25)
+    assert (completed.result.accounting.generated_tokens, completed.result.stop_reason) == (
+        30,
+        StopReason.TOKEN_BUDGET,
+    )
+
+
+async def test_request_whose_samples_all_failed_is_charged(repl: LeanRepl) -> None:
+    policy = FixedPolicy([], generated_tokens=40, prompt_tokens=100)
+    completed = await search(repl, ARITHMETIC, policy, max_expansions=1)
+    accounting = completed.result.accounting
+    assert (accounting.prompt_tokens, accounting.generated_tokens) == (100, 40)
+
+
+async def test_candidates_left_unexecuted_by_a_proof_are_charged(repl: LeanRepl) -> None:
+    completed = await search(repl, TRIVIAL, FixedPolicy(["norm_num", "simp", "decide"], generated_tokens=30))
+    assert completed.result.solved_at is not None and completed.result.solved_at.generated_tokens == 30
+
+
+async def test_composite_charges_each_expander(repl: LeanRepl) -> None:
+    first = FixedPolicy(["intros"], generated_tokens=10, prompt_tokens=5)
+    second = FixedPolicy(["skip"], generated_tokens=20, prompt_tokens=7)
+    completed = await search(repl, NEEDS_INTRO, CompositeExpander([first, second]), max_expansions=1)
+    accounting = completed.result.accounting
+    assert (accounting.prompt_tokens, accounting.generated_tokens) == (12, 30)
+
+
+async def test_expansion_records_what_its_batches_cost(repl: LeanRepl) -> None:
+    expander = CompositeExpander([FixedPolicy(["intros"], generated_tokens=10), FixedPolicy([], generated_tokens=20)])
+    completed = await search(repl, NEEDS_INTRO, expander, max_expansions=1)
+    assert completed.tree is not None and completed.tree.root.expansion_generated_tokens == 30
+
+
+async def test_token_budget_counts_requests_without_candidates(repl: LeanRepl) -> None:
+    expander = CompositeExpander([FixedPolicy([ALWAYS_PROGRESSES], generated_tokens=0), FixedPolicy([])])
+    completed = await search(repl, ARITHMETIC, expander, max_expansions=100, max_generated_tokens=25)
     assert (completed.result.accounting.generated_tokens, completed.result.stop_reason) == (
         30,
         StopReason.TOKEN_BUDGET,

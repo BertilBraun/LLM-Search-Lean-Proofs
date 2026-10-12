@@ -285,14 +285,18 @@ class _TheoremSearch:
         node.expansion_index = self.accounting.expansions
         node.expanded_seconds = self.wall_seconds()
         self.accounting.expansions += 1
-        lean_seconds_before = self.accounting.lean_seconds
+        before = copy.copy(self.accounting)
         async with contextlib.aclosing(self.expander.expand(node, self.context)) as batches:
             async for batch in batches:
-                await self._run_batch(expansion, batch)
+                self.accounting.prompt_tokens += batch.prompt_tokens
+                self.accounting.generated_tokens += batch.generated_tokens
+                await self._run_batch(expansion, batch.candidates)
                 if expansion.proved is not None or expansion.out_of_time:
                     break
         node.expansion_wall_seconds = self.wall_seconds() - node.expanded_seconds
-        node.expansion_lean_seconds = self.accounting.lean_seconds - lean_seconds_before
+        node.expansion_lean_seconds = self.accounting.lean_seconds - before.lean_seconds
+        node.expansion_prompt_tokens = self.accounting.prompt_tokens - before.prompt_tokens
+        node.expansion_generated_tokens = self.accounting.generated_tokens - before.generated_tokens
         if expansion.out_of_time:
             return expansion
         node.status = NodeStatus.EXPANDED
@@ -319,8 +323,6 @@ class _TheoremSearch:
 
     async def _execute(self, expansion: _Expansion, candidate: Candidate) -> Node | None:
         node = expansion.node
-        self.accounting.prompt_tokens += candidate.prompt_tokens
-        self.accounting.generated_tokens += candidate.generated_tokens
         self.accounting.edges += 1
         normalized_text = candidate.text.strip()
         earlier_edge_id = expansion.edge_id_by_text.get(normalized_text)

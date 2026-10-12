@@ -17,6 +17,7 @@ from lean_search.lean import LeanRepl, LeanReplConfig
 from lean_search.lean.repl import PROJECT_DIRECTORY, REPL_BINARY
 from lean_search.search import (
     Candidate,
+    CandidateBatch,
     CandidateBatches,
     DepthPlusGoals,
     Node,
@@ -61,11 +62,13 @@ class FixedPolicy:
     """Proposes the same blocks at every node: one makes progress, one is an error, one closes the goal."""
 
     async def expand(self, node: Node, context: SearchContext) -> CandidateBatches:
-        yield [
-            Candidate("intro n", StepSource.POLICY, log_probability=-0.5),
-            Candidate(UNKNOWN_LEMMA, StepSource.POLICY, log_probability=-1.0),
-            Candidate("simp", StepSource.POLICY, log_probability=-2.0),
-        ]
+        yield CandidateBatch(
+            (
+                Candidate("intro n", StepSource.POLICY, log_probability=-0.5),
+                Candidate(UNKNOWN_LEMMA, StepSource.POLICY, log_probability=-1.0),
+                Candidate("simp", StepSource.POLICY, log_probability=-2.0),
+            )
+        )
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="module")

@@ -23,7 +23,7 @@ from lean_search.policy.prompts import (
 )
 from lean_search.retrieval.provider import LemmaProvider, load_lemma_provider
 from lean_search.retrieval.statistics import LemmaStatistics
-from lean_search.search.expanders import Candidate, CandidateBatches, SearchContext
+from lean_search.search.expanders import Candidate, CandidateBatch, CandidateBatches, SearchContext
 from lean_search.search.tree import Node, StepSource
 
 MINIMUM_GENERATED_TOKENS = 32
@@ -48,7 +48,7 @@ class PolicyStatistics:
     prompt_tokens: int = 0
     cached_prompt_tokens: int = 0
     generated_tokens: int = 0
-    # Tokens of requests whose samples all failed to parse: no candidate carries them into the search's accounting.
+    # Tokens of requests whose samples all failed to parse; the search charges them like every other request's.
     unattributed_generated_tokens: int = 0
     request_seconds: float = 0.0
     # From the first request's start to the latest response, for samples per second under the search's load.
@@ -79,18 +79,19 @@ class PolicyStatistics:
         self.request_seconds += seconds
 
 
-def search_candidates(parsed: ParsedSamples, prompt_tokens: int) -> list[Candidate]:
-    # The search sums tokens over candidates, so the first one also carries the prompt and the failed samples.
-    return [
+def candidate_batch(parsed: ParsedSamples, generation: Generation) -> CandidateBatch:
+    """The whole request's cost, failed samples included; each candidate logs the prompt and its own samples."""
+    candidates = tuple(
         Candidate(
             candidate.tactic_block,
             StepSource.POLICY,
             log_probability=candidate.log_probability,
-            prompt_tokens=prompt_tokens if index == 0 else 0,
-            generated_tokens=candidate.generated_tokens + (parsed.failed_generated_tokens if index == 0 else 0),
+            prompt_tokens=generation.prompt_token_count,
+            generated_tokens=candidate.generated_tokens,
         )
-        for index, candidate in enumerate(parsed.candidates)
-    ]
+        for candidate in parsed.candidates
+    )
+    return CandidateBatch(candidates, generation.prompt_token_count, generation.completion_token_count)
 
 
 class PolicyExpander:
@@ -115,7 +116,12 @@ class PolicyExpander:
     async def expand(self, node: Node, context: SearchContext) -> CandidateBatches:
         lemmas = await self.lemma_provider.lemma_lines(node.state, context.repl) if self.lemma_provider else ()
         prompt = render_prompt(
-            self.tokenizer, node.goals, lemmas, few_shot=self.config.few_shot, thinking=self.config.thinking
+            self.tokenizer,
+            node.goals,
+            lemmas,
+            few_shot=self.config.few_shot,
+            thinking=self.config.thinking,
+            thinking_instruction=self.config.thinking_instruction,
         )
         prompt_tokens = len(self.tokenizer.encode(prompt, add_special_tokens=False))
         max_tokens = min(self.config.max_tokens, self.max_model_length - prompt_tokens)
@@ -127,9 +133,7 @@ class PolicyExpander:
             generation.samples, thinking=self.config.thinking, forbidden_tokens=self.forbidden_tokens
         )
         self.statistics.record(generation, parsed, seconds)
-        candidates = search_candidates(parsed, generation.prompt_token_count)
-        if candidates:
-            yield candidates
+        yield candidate_batch(parsed, generation)
 
     async def _generate(self, prompt: str, max_tokens: int) -> tuple[Generation, float]:
         started = time.monotonic()

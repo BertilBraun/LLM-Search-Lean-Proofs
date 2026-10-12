@@ -44,17 +44,21 @@ as `  -- apply: leaves 2 goals`. With `lemma_count = 0` (the default) nothing is
 Thinking (`thinking=True`) renders the same messages with `enable_thinking=True` and no prefill: the model thinks,
 closes `</think>` and writes the fenced block, which `parse_sample` reads from the first fence after `</think>`.
 Generation then has no stop string (fences appear inside thoughts) and costs about ten times the tokens.
+`policy.thinking_instruction` (default empty) is appended to the system prompt in thinking mode only, e.g.
+`BRIEF_THINKING_INSTRUCTION` ("Think briefly (a few sentences) about which tactic to use; do not restate the goal.");
+`phase1_probe.py sample --thinking --thinking-instruction brief` does the same for the probe.
 
 ## API
 
 | Call | Purpose |
 |---|---|
-| `render_prompt(tokenizer, goals, lemmas=(), *, few_shot=False, thinking=False) -> str` | the exact prompt text, ending with the prefill |
+| `render_prompt(tokenizer, goals, lemmas=(), *, few_shot=False, thinking=False, thinking_instruction="") -> str` | the exact prompt text, ending with the prefill |
 | `render_completion(tactic_block) -> str` | SFT target after the prompt: block, closing fence, `<|im_end|>` |
 | `prompt_messages(goals, lemmas=(), *, few_shot=False) -> list[ChatMessage]`, `assistant_message(block)` | the same as chat messages, for chat-format SFT data |
 | `parse_sample(sample, *, thinking, forbidden_tokens) -> str \| ParseFailure` | one sample's normalized block (dedented, trailing spaces and a leading bare `by` line removed), or `TRUNCATED`, `NO_BLOCK`, `EMPTY`, `FORBIDDEN` |
 | `parse_samples(samples, *, thinking, forbidden_tokens) -> ParsedSamples` | distinct blocks, most likely first; duplicates merge, keep the best log-probability and sum their tokens |
-| `PolicyExpander.expand(node, context)` | one request with n samples per expansion; yields the distinct candidates as one batch |
+| `PolicyExpander.expand(node, context)` | one request with n samples per expansion; yields one `CandidateBatch` of the distinct candidates and the request's cost, also when no sample parsed |
+| `candidate_batch(parsed, generation) -> CandidateBatch` | that batch: prompt and completion tokens of the whole request |
 | `open_policy_expander(config, forbidden_steps)` | async context manager: loads the chat template, reads `max_model_len` from the server, opens one client per server URL, loads the retriever when `policy.retrieval.lemma_count > 0` |
 
 `render_prompt(...) + render_completion(block) + "\n"` equals the tokenizer's chat template applied to the full
@@ -64,7 +68,11 @@ the format the search samples.
 ## Expander accounting
 
 Requests go round-robin over `policy.server_urls`. A prompt that leaves fewer than 32 tokens of context is skipped
-(`prompts_too_long`). The first candidate of a request carries the prompt tokens and the tokens of failed samples, so
-the search's per-theorem token accounting stays exact as long as one candidate survives; requests whose samples all
-fail are counted in `PolicyStatistics.unattributed_generated_tokens`. `run_search.py` writes the statistics to
-`policy.json`.
+(`prompts_too_long`) and costs nothing. Every request yields one `CandidateBatch` carrying its prompt tokens and all its
+generated tokens (the server's `completion_tokens`, failed samples included); the search charges the batch when it
+arrives, so requests whose samples all fail (`requests_without_candidates`, their tokens also in
+`PolicyStatistics.unattributed_generated_tokens`) and candidates a proof leaves unexecuted are paid for too. A
+theorem's `prompt_tokens` and `generated_tokens` therefore sum to the statistics' totals. On its edge each candidate
+logs the request's prompt tokens and the tokens of the samples that produced it (duplicates merged); these are not a
+cost, the node's `expansion_prompt_tokens` and `expansion_generated_tokens` are. `run_search.py` writes the statistics
+to `policy.json`.

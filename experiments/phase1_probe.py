@@ -46,7 +46,14 @@ from lean_search.lean import (
 )
 from lean_search.policy import PolicyClient, Sample
 from lean_search.policy.expander import PolicyTokenizer, load_tokenizer, served_max_model_length
-from lean_search.policy.prompts import ParseFailure, parse_sample, parse_samples, render_prompt, stop_sequences
+from lean_search.policy.prompts import (
+    BRIEF_THINKING_INSTRUCTION,
+    ParseFailure,
+    parse_sample,
+    parse_samples,
+    render_prompt,
+    stop_sequences,
+)
 from lean_search.search.records import from_json_object, to_json
 from lean_search.search.search import DEFAULT_FORBIDDEN_STEPS
 from lean_search.search.summary import category, markdown_table
@@ -74,6 +81,19 @@ PARSE_FAILURES = (ParseFailure.TRUNCATED, ParseFailure.NO_BLOCK, ParseFailure.EM
 class StateKind(StrEnum):
     TRACED = "traced"
     MINIF2F = "minif2f"
+
+
+class ThinkingInstruction(StrEnum):
+    NONE = "none"
+    BRIEF = "brief"
+
+    @property
+    def text(self) -> str:
+        match self:
+            case ThinkingInstruction.NONE:
+                return ""
+            case ThinkingInstruction.BRIEF:
+                return BRIEF_THINKING_INSTRUCTION
 
 
 class StateGroup(StrEnum):
@@ -128,6 +148,8 @@ class SamplingRun:
     generated_tokens_per_second: float
     started_at: str
     git_revision: str
+    # The system prompt addition in thinking mode; absent from runs sampled before it existed.
+    thinking_instruction: str = ""
 
 
 class ExecutionStatus(StrEnum):
@@ -375,7 +397,11 @@ async def sample_states(
 
         async def sample_state(state: ProbeState) -> StateSamples:
             prompt = render_prompt(
-                tokenizer, state.goals, few_shot=not arguments.zero_shot, thinking=arguments.thinking
+                tokenizer,
+                state.goals,
+                few_shot=not arguments.zero_shot,
+                thinking=arguments.thinking,
+                thinking_instruction=arguments.thinking_instruction.text,
             )
             prompt_tokens = len(tokenizer.encode(prompt, add_special_tokens=False))
             max_tokens = min(arguments.max_tokens, max_model_length - prompt_tokens)
@@ -408,6 +434,8 @@ async def sample_states(
 
 
 def command_sample(arguments: argparse.Namespace, paths: RunPaths) -> None:
+    if arguments.thinking_instruction != ThinkingInstruction.NONE and not arguments.thinking:
+        raise ValueError("--thinking-instruction only changes the prompt with --thinking.")
     states = read_records(arguments.states or paths.states, ProbeState)
     if arguments.limit is not None:
         states = states[: arguments.limit]
@@ -442,6 +470,7 @@ def command_sample(arguments: argparse.Namespace, paths: RunPaths) -> None:
         generated_tokens_per_second=generated_tokens / sampled.wall_seconds,
         started_at=started_at,
         git_revision=git_revision(),
+        thinking_instruction=arguments.thinking_instruction.text,
     )
     paths.sampling(arguments.label).write_text(to_json(run), encoding="utf-8")
     print(
@@ -803,7 +832,9 @@ def render_summary(metrics: Sequence[ModelMetrics], states: Sequence[ProbeState]
         f"{traced} traced validation-split states (at most {STATES_PER_PROOF} per proof, goals of at most "
         f"{MAX_GOAL_CHARACTERS} characters, never trained on) and {len(states) - traced} miniF2F-valid initial "
         f"states. Per state k={sampling.sample_count} samples at temperature {sampling.temperature} in the search's "
-        f"prompt format (few-shot: {sampling.few_shot}, thinking: {sampling.thinking}, at most {sampling.max_tokens} "
+        f"prompt format (few-shot: {sampling.few_shot}, thinking: {sampling.thinking}"
+        + (f" with “{sampling.thinking_instruction}” in the system prompt" if sampling.thinking_instruction else "")
+        + f", at most {sampling.max_tokens} "
         f"tokens, stop at the closing fence), all requests queued at once ({REQUESTS_IN_FLIGHT} in flight) on one "
         f"RTX 3090 with one model at a time. Every distinct parsed block ran on its state with `apply_block` "
         f"(default heartbeats, {TACTIC_TIMEOUT_SECONDS:.0f} s wall clock).",
@@ -868,6 +899,13 @@ def parse_arguments() -> argparse.Namespace:
     sample.add_argument("--max-tokens", type=int, default=MAX_TOKENS)
     sample.add_argument("--zero-shot", action="store_true")
     sample.add_argument("--thinking", action="store_true")
+    sample.add_argument(
+        "--thinking-instruction",
+        type=ThinkingInstruction,
+        choices=list(ThinkingInstruction),
+        default=ThinkingInstruction.NONE,
+        help="system prompt addition in thinking mode (brief: policy.prompts.BRIEF_THINKING_INSTRUCTION)",
+    )
     sample.add_argument("--limit", type=int, help="only the first N states (smoke tests)")
 
     execute = commands.add_parser("execute", help="run the sampled blocks in Lean and compute the metrics")
