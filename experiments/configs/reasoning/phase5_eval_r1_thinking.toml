@@ -1,7 +1,7 @@
 # Phase 5 evaluation after round 1, thinking: the round-1 reasoning adapter on the pilot's held-out states
-# (`states --states-from phase5_pilot_sft_v2_thinking`), at the training cap. Compare with the pilot arm (a) at
-# cap 512 (results/phase5_pilot/README.md); statistics split SFT-seen and unseen states. Both servers serve the
-# base with the adapters policy-v2 and reasoning-r1 (/workspace/checkpoints/phase5_sft_r1/adapter).
+# (`states --states-from phase5_pilot_sft_v2_thinking`), at the training cap (2048); the statistics simulate the
+# smaller caps. Compare with the pilot arm (a) (results/phase5_pilot/README.md); SFT-seen and unseen states apart.
+# Both servers serve the base with the adapters policy-v2 and reasoning-r1 (/workspace/checkpoints/phase5_sft_r1/adapter).
 
 [states]
 count = 512
@@ -22,7 +22,7 @@ sample_count = 8
 temperature = 0.8
 top_p = 1.0
 # Reasoning and block together; truncated samples are failures, so the cap is the reasoning length the search pays.
-max_tokens = 512
+max_tokens = 2048
 thinking = true
 few_shot = false
 request_timeout_seconds = 1800.0

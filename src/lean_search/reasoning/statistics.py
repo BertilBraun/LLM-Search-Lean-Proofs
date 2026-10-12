@@ -11,7 +11,9 @@ from lean_search.reasoning.records import ScoredSample, StateRecord, scored_samp
 from lean_search.reasoning.reward import RewardConfig, StepOutcome
 
 # Lower bucket edges in reasoning tokens; truncated samples get their own row.
-REASONING_LENGTH_EDGES = (0, 1, 32, 64, 128, 192, 256, 384, 512, 768, 1024)
+REASONING_LENGTH_EDGES = (0, 1, 32, 64, 128, 192, 256, 384, 512, 768, 1024, 1536)
+# Generation caps simulated by cutting the run's samples, up to the run's own cap.
+SIMULATED_CAPS = (256, 512, 1024, 2048)
 TRUNCATED_BUCKET = "truncated"
 
 
@@ -37,6 +39,18 @@ class OutcomeCount:
 
 
 @dataclass(frozen=True)
+class CapSimulation:
+    cap: int
+    success_rate: float
+    any_success_rate: float
+    tokens_per_sample: float
+    tokens_per_success: float
+    # Samples that finished but needed more tokens than the cap, so that cap truncates them, and their success rate.
+    finished_beyond_cap: int
+    finished_beyond_cap_success_rate: float
+
+
+@dataclass(frozen=True)
 class SelectionYield:
     states_with_examples: int
     examples: int
@@ -59,6 +73,7 @@ class RunStatistics:
     by_sft_exposure: tuple[SampleGroup, ...]
     # Samples whose block was written without the opening fence, which only the reasoning pipeline parses.
     recovered_format: SampleGroup
+    caps: tuple[CapSimulation, ...]
     selection: SelectionYield
 
 
@@ -114,6 +129,31 @@ def sample_group(label: str, states: Sequence[ScoredState], include: Callable[[S
     )
 
 
+def cap_simulation(states: Sequence[ScoredState], cap: int) -> CapSimulation:
+    """The run as if every sample had been cut at `cap` generated tokens."""
+    samples = [sample for state in states for sample in state.samples]
+    successes = sum(sample.success and sample.sample.generated_tokens <= cap for sample in samples)
+    tokens = sum(min(sample.sample.generated_tokens, cap) for sample in samples)
+    beyond = [
+        sample for sample in samples if sample.outcome != StepOutcome.TRUNCATED and sample.sample.generated_tokens > cap
+    ]
+    return CapSimulation(
+        cap=cap,
+        success_rate=rate(successes, len(samples)),
+        any_success_rate=rate(
+            sum(
+                any(sample.success and sample.sample.generated_tokens <= cap for sample in state.samples)
+                for state in states
+            ),
+            len(states),
+        ),
+        tokens_per_sample=rate(tokens, len(samples)),
+        tokens_per_success=rate(tokens, successes),
+        finished_beyond_cap=len(beyond),
+        finished_beyond_cap_success_rate=rate(sum(sample.success for sample in beyond), len(beyond)),
+    )
+
+
 def run_statistics(records: Sequence[StateRecord], reward: RewardConfig, selection: SelectionConfig) -> RunStatistics:
     usable = [ScoredState(record, tuple(scored_samples(record, reward))) for record in records if record.usable]
     samples = [sample for state in usable for sample in state.samples]
@@ -163,6 +203,11 @@ def run_statistics(records: Sequence[StateRecord], reward: RewardConfig, selecti
             ).samples
         ),
         recovered_format=sample_group("recovered format", usable, lambda sample: sample.sample.recovered_format),
+        caps=tuple(
+            cap_simulation(usable, cap)
+            for cap in SIMULATED_CAPS
+            if cap <= max((state.record.sampled.max_tokens for state in usable), default=0)
+        ),
         selection=SelectionYield(
             states_with_examples=sum(bool(state_selection) for state_selection in selected_by_state),
             examples=len(selected),

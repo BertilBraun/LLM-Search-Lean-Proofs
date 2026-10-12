@@ -349,6 +349,32 @@ def render_run_summary(summary: RunSummary) -> str:
         "non-thinking answer format). The search's parser rejects them; this pipeline executes them and renders "
         "their training targets with the opening fence.",
         markdown_table(GROUP_HEADERS, group_rows([statistics.recovered_format])),
+        "## Simulated generation caps",
+        "The same samples cut at a smaller cap: a sample counts as a success only if it finished within the cap, "
+        "and costs at most the cap. Finished beyond the cap: samples that completed but needed more tokens.",
+        markdown_table(
+            [
+                "cap",
+                "success",
+                "any success / state",
+                "tokens / sample",
+                "tokens / success",
+                "finished beyond cap",
+                "their success",
+            ],
+            [
+                [
+                    entry.cap,
+                    percent(entry.success_rate),
+                    percent(entry.any_success_rate),
+                    f"{entry.tokens_per_sample:.0f}",
+                    f"{entry.tokens_per_success:,.0f}",
+                    entry.finished_beyond_cap,
+                    percent(entry.finished_beyond_cap_success_rate),
+                ]
+                for entry in statistics.caps
+            ],
+        ),
         "## Rejection selection",
         f"At most {selection.max_per_state} successes per state with at least {selection.min_reasoning_tokens} "
         f"reasoning tokens, shortest reasoning first, distinct blocks before repeated ones: "

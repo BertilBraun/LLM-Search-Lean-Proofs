@@ -2,9 +2,9 @@ import pytest
 from reasoning_records import execution, sample_record, state_record
 
 from lean_search.reasoning.dataset import SelectionConfig
-from lean_search.reasoning.records import ScoredSample
+from lean_search.reasoning.records import ScoredSample, scored_samples
 from lean_search.reasoning.reward import RewardConfig, StepOutcome
-from lean_search.reasoning.statistics import BUCKET_LABELS, length_bucket, run_statistics
+from lean_search.reasoning.statistics import BUCKET_LABELS, ScoredState, cap_simulation, length_bucket, run_statistics
 
 EXECUTIONS = [execution("omega", StepOutcome.CLOSED), execution("simp", StepOutcome.ERROR)]
 
@@ -15,7 +15,7 @@ def scored(reasoning_tokens: int, outcome: StepOutcome = StepOutcome.CLOSED) -> 
 
 @pytest.mark.parametrize(
     ("reasoning_tokens", "label"),
-    [(0, "0"), (1, "1–31"), (31, "1–31"), (32, "32–63"), (511, "384–511"), (1024, "1024+"), (5000, "1024+")],
+    [(0, "0"), (1, "1–31"), (31, "1–31"), (32, "32–63"), (511, "384–511"), (1024, "1024–1535"), (5000, "1536+")],
 )
 def test_length_buckets(reasoning_tokens: int, label: str) -> None:
     assert length_bucket(scored(reasoning_tokens)) == label
@@ -63,3 +63,28 @@ def test_recovered_samples_are_reported_separately() -> None:
     )
     recovered = run_statistics([record], RewardConfig(), SelectionConfig()).recovered_format
     assert (recovered.samples, recovered.success_rate) == (1, 1.0)
+
+
+def long_and_short_successes() -> list[ScoredState]:
+    record = state_record(
+        [sample_record(0, "omega", 588), sample_record(1, "omega", 100), sample_record(2, "simp", 100)], EXECUTIONS
+    )
+    return [ScoredState(record, tuple(scored_samples(record, RewardConfig())))]
+
+
+def test_a_success_longer_than_the_cap_does_not_count_under_it() -> None:
+    assert cap_simulation(long_and_short_successes(), 512).success_rate == pytest.approx(1 / 3)
+
+
+def test_samples_cost_at_most_the_cap() -> None:
+    assert cap_simulation(long_and_short_successes(), 512).tokens_per_sample == pytest.approx((512 + 112 + 112) / 3)
+
+
+def test_samples_finishing_beyond_the_cap_are_counted_with_their_success() -> None:
+    simulation = cap_simulation(long_and_short_successes(), 512)
+    assert (simulation.finished_beyond_cap, simulation.finished_beyond_cap_success_rate) == (1, 1.0)
+
+
+def test_caps_above_the_runs_own_cap_are_not_simulated() -> None:
+    record = state_record([sample_record(0, "omega", 40)], EXECUTIONS)
+    assert [entry.cap for entry in run_statistics([record], RewardConfig(), SelectionConfig()).caps] == [256, 512]
