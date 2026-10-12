@@ -41,11 +41,13 @@ from lean_search.expert_iteration.pool import (
     SourceSelection,
     canonical_header,
     completed_prefix,
+    first_per_name,
     interleave,
     load_failure_category,
     pool_problem,
     prefilter_outcome,
     problem_name,
+    problem_source,
     select_by_source,
 )
 from lean_search.expert_iteration.pool_search import (
@@ -92,6 +94,8 @@ class SelectionSummary:
     config: PoolConfig
     excluded_statement_keys: int
     headers_rewritten: int
+    # Statements of one source with the same identifier (26 in NuminaMath-LEAN); the first in candidate order stays.
+    duplicate_names_dropped: int
     candidates: int
     sources: tuple[SourceSelectionStatistics, ...]
     seconds: float
@@ -203,10 +207,9 @@ def select(config: PoolConfig, output_directory: Path) -> None:
         config.seed,
         lambda statement: statement_key(statement.formal_statement) in excluded,
     )
-    ordered = interleave([selection.ordered() for selection in selections])
+    ordered, duplicate_names = first_per_name(interleave([selection.ordered() for selection in selections]))
+    headers_rewritten = sum(canonical_header(statement.header) != statement.header for statement in ordered)
     candidates = [dataclasses.replace(statement, header=canonical_header(statement.header)) for statement in ordered]
-    names = [problem_name(statement) for statement in candidates]
-    assert len(set(names)) == len(names), "pool problem names must be unique"
     write_jsonl(output_directory / "candidates.jsonl", candidates)
     revision, _ = git_state()
     summary = SelectionSummary(
@@ -215,9 +218,8 @@ def select(config: PoolConfig, output_directory: Path) -> None:
         git_revision=revision,
         config=config,
         excluded_statement_keys=len(excluded),
-        headers_rewritten=sum(
-            original.header != candidate.header for original, candidate in zip(ordered, candidates, strict=True)
-        ),
+        headers_rewritten=headers_rewritten,
+        duplicate_names_dropped=duplicate_names,
         candidates=len(candidates),
         sources=tuple(selection_statistics(selection) for selection in selections),
         seconds=time.perf_counter() - started,
@@ -228,7 +230,10 @@ def select(config: PoolConfig, output_directory: Path) -> None:
             f"{source.source}: {source.selected:,} of {source.available:,} selected "
             f"({source.excluded:,} of {source.checked:,} checked were excluded)"
         )
-    log(f"{len(candidates):,} candidates, {summary.headers_rewritten:,} headers rewritten, {summary.seconds:.0f} s")
+    log(
+        f"{len(candidates):,} candidates, {headers_rewritten:,} headers rewritten, {duplicate_names} duplicate names "
+        f"dropped, {summary.seconds:.0f} s"
+    )
 
 
 def selection_statistics(selection: SourceSelection) -> SourceSelectionStatistics:
@@ -350,7 +355,7 @@ def source_statistics(
     counts = Counter(
         outcome
         for result, outcome in zip(processed_results, outcomes, strict=True)
-        if result.problem_name.split(".", 1)[0] == source
+        if problem_source(result.problem_name) == source
     )
     processed = sum(counts.values())
     loaded = processed - counts[PrefilterOutcome.LOAD_FAILED]

@@ -12,6 +12,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from lean_search.data import Problem
+from lean_search.expert_iteration.pool import problem_source
 from lean_search.lean import LeanReplConfig, LeanReplPool
 from lean_search.policy.expander import PolicyExpander, PolicyStatistics, open_policy_expander
 from lean_search.search import (
@@ -107,10 +108,6 @@ class ModelThroughput:
     # From each invocation's first policy request to its last response, summed.
     policy_window_seconds: float
     samples_per_second: float
-
-
-def problem_source(problem_name: str) -> str:
-    return problem_name.split(".", 1)[0]
 
 
 def read_completed_results(path: Path) -> list[SearchResult]:

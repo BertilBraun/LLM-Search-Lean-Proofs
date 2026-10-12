@@ -7,6 +7,7 @@ from lean_search.expert_iteration.pool import (
     SourceQuota,
     canonical_header,
     completed_prefix,
+    first_per_name,
     interleave,
     load_failure_category,
     ordering_key,
@@ -106,3 +107,9 @@ def test_load_failure_category_hides_names() -> None:
 
 def test_problem_names_carry_the_source() -> None:
     assert problem_name(StatementRecord("numina", "a/b", "", "", "", "")) == "numina.a_b"
+
+
+def test_only_the_first_statement_of_a_name_is_kept() -> None:
+    first = statement("a", 1)
+    second = StatementRecord("a", first.identifier, "", "theorem other : True := by", "", "")
+    assert first_per_name([first, second, statement("a", 2)]) == ([first, statement("a", 2)], 1)

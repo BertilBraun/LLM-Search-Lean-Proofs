@@ -67,6 +67,10 @@ def problem_name(statement: StatementRecord) -> str:
     return f"{statement.source}.{statement.identifier}".replace("/", "_")
 
 
+def problem_source(problem_name: str) -> str:
+    return problem_name.split(".", 1)[0]
+
+
 def pool_problem(statement: StatementRecord) -> Problem:
     # The search reads only the name, header and statement; the split field is miniF2F's and does not apply.
     return Problem(problem_name(statement), Split.VALID, statement.header, statement.formal_statement, "", "")
@@ -115,6 +119,21 @@ def interleave[T](lists: Sequence[Sequence[T]]) -> list[T]:
         for index in range(len(items))
     ]
     return [lists[list_index][index] for _, list_index, index in sorted(positioned)]
+
+
+def first_per_name(statements: Iterable[StatementRecord]) -> tuple[list[StatementRecord], int]:
+    """The first statement of each problem name, and how many later ones were dropped."""
+    seen: set[str] = set()
+    kept = []
+    dropped = 0
+    for statement in statements:
+        name = problem_name(statement)
+        if name in seen:
+            dropped += 1
+            continue
+        seen.add(name)
+        kept.append(statement)
+    return kept, dropped
 
 
 def prefilter_outcome(result: SearchResult) -> PrefilterOutcome:
