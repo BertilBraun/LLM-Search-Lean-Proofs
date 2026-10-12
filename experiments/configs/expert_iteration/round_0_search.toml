@@ -1,15 +1,17 @@
 # Expert-iteration round 0 pool search (experiments/phase6_round.py): row 4's A* (λ = 0.5) and sampling with the
 # SFT v2 policy adapter and value v0, at a pool budget of 24 expansions (row 4: 64) and 300 s per statement. Both
-# vLLM servers serve both adapters; requests go round-robin. 40 searches as in rows 2 and 4.
+# vLLM servers serve both adapters; requests go round-robin. 120 searches (results/gpu_utilization/).
 
 [lean]
-pool_size = 40
-concurrency = 40
+# Lean is the bottleneck: run under deployment/background.sh with BACKGROUND_CPUS=40 (deployment/README.md).
+pool_size = 120
+concurrency = 120
 
 [search]
 max_expansions = 24
 max_wall_seconds = 300.0
 max_depth = 16
+score_children_early = true
 tactic_timeout_seconds = 10.0
 forbidden_steps = [
     "exact?",
@@ -26,6 +28,7 @@ forbidden_steps = [
 
 [expander]
 kind = "automation_then_policy"
+overlap = true
 
 [automation]
 tactics = [

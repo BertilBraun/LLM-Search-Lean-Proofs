@@ -4,13 +4,15 @@
 # (experiments/configs/phase2_sft_v1_search.toml).
 
 [lean]
-pool_size = 40
-concurrency = 40
+# Lean is the bottleneck: run under deployment/background.sh with BACKGROUND_CPUS=40 (deployment/README.md).
+pool_size = 120
+concurrency = 120
 
 [search]
 max_expansions = 64
 max_wall_seconds = 600.0
 max_depth = 16
+score_children_early = true
 tactic_timeout_seconds = 10.0
 forbidden_steps = [
     "exact?",
@@ -27,6 +29,7 @@ forbidden_steps = [
 
 [expander]
 kind = "automation_then_policy"
+overlap = true
 
 [automation]
 tactics = [
