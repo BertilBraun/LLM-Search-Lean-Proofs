@@ -71,15 +71,15 @@ search. The search runs of row 1 should still be re-checked with the SFT policy 
 - Training throughput at this sequence shape (237 tokens per example): Qwen3.5-2B 3.5k tokens/s on one 3090,
   7.1k tokens/s on both GPUs with DDP (2.0× scaling, `experiments/phase2_sft.py` under `torchrun`).
 
-## Proposed full SFT (not run; waiting for confirmation)
+## Full SFT
+
+Proposed here and run as SFT v2 (`results/phase2_sft_v2/`) with a 60M-token budget instead of 80M:
 
 - Model Qwen3.5-2B, LoRA rank 64 on all language-model linear layers, learning rate 2e-4, cosine, one epoch,
-  32k tokens per GPU per step on both GPUs (64k per step): `experiments/configs/training/phase2_sft_full.toml`.
-- Data `full`: 80M tokens with equal source shares (`experiments/configs/training/phase2_sft_data_full.toml`),
-  about everything the narrowed full trace will hold (~330k steps) plus the pilot's Goedel SFT v2 and Numina steps.
-  Build it once the trace is far enough along; a partial snapshot works the same way with a smaller budget.
-- Time: 80M tokens at 7.1k tokens/s on two GPUs is 3.1 h of training, about 3.4 h with evaluations every 200 steps
-  (2,000 validation steps, 256 greedy generations); one GPU would take 6.5 h.
+  32k tokens per GPU per step on both GPUs (64k per step): `experiments/configs/training/phase2_sft_v2.toml`.
+- Data `v2`: equal source shares (`experiments/configs/training/phase2_sft_data_v2.toml`) over the merged snapshot
+  after the narrowed full trace.
+- Time: at 7.1k tokens/s on two GPUs, 60M tokens take 2.3 h of training plus evaluations; 80M would take 3.1 h.
 - Training needs `flash-linear-attention` (pure Triton, now in the `ml` extra); without it the Gated DeltaNet
   layers fall back to a PyTorch path that is half as fast (3.6k vs 6.7k tokens/s on Qwen3.5-0.8B in a
   micro-benchmark).

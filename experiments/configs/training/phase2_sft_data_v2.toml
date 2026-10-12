@@ -1,13 +1,12 @@
-# Proposed SFT data for the full policy SFT (not run yet): 80M tokens, about everything the narrowed full trace
-# (Goedel workbook, STP workbook, DeepSeek-Prover-V1, Lean Workbook, Leanabell, plus the pilot's Goedel SFT v2 and
-# Numina steps) will hold. Equal token shares: small sources are used whole and their unused shares go to the large
-# ones. Completions are capped at the search's policy max_tokens (256).
-token_budget = 80_000_000
+# SFT v2 data: the merged tracing snapshot after the narrowed full run (phase2_sft_data.py --snapshot), 60M tokens
+# with equal token shares: small sources are used whole and their unused shares go to the large ones (STP and
+# Goedel workbook). Completions are capped at the search's policy max_tokens (256).
+token_budget = 60_000_000
 max_prompt_tokens = 2048
 max_completion_tokens = 256
 validation_examples = 2000
 reference_tokenizer = "Qwen/Qwen3.5-2B"
-seed = "sft-full"
+seed = "sft-v2"
 
 [[sources]]
 name = "goedel_lean_workbook_proofs"
