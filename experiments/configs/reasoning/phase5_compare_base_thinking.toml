@@ -1,0 +1,49 @@
+# Arm (e): the raw base model thinking, cap 4096.
+# Does SFT destroy reasoning? Arms (e)–(h) on the pilot's 512 states (`states --states-from
+# phase5_pilot_sft_v2_thinking`), k=8, temperature 0.8, with the pilot's success metric; arm (d), SFT v2 without
+# thinking, is the pilot's. Two servers (GPU 0 port 8100, GPU 1 port 8101) serve the base as search-qwen3.5-2b with
+# the adapter policy-v2.
+
+[states]
+count = 512
+states_per_proof = 2
+max_goal_characters = 3000
+seed = "reasoning"
+# Marks states whose goals are SFT v2 prompts (statistics by SFT exposure); they are not avoided.
+seen_sft_data = ["v2"]
+excluded_runs = []
+
+[policy]
+model = "search-qwen3.5-2b"
+tokenizer = "Qwen/Qwen3.5-2B"
+server_urls = ["http://127.0.0.1:8100/v1", "http://127.0.0.1:8101/v1"]
+sample_count = 8
+# The search's sampling temperature, so the reasoning is learned on the distribution the search draws from.
+temperature = 0.8
+top_p = 1.0
+# Reasoning and block together; truncated samples are failures, so the cap is the reasoning length the search pays.
+# Long enough that truncation does not decide the comparison.
+max_tokens = 4096
+thinking = true
+few_shot = false
+request_timeout_seconds = 1800.0
+
+[execution]
+pool_size = 16
+tactic_timeout_seconds = 10.0
+foreign_header_batch_size = 16
+
+[pipeline]
+# One chunk: 4096-token stragglers idle the GPUs at the end of every chunk.
+chunk_states = 512
+requests_in_flight = 128
+
+[reward]
+accept_later_reference_states = true
+value_progress = false
+value_progress_margin = 1.0
+
+[selection]
+max_per_state = 2
+min_reasoning_tokens = 16
+max_reasoning_tokens = 0

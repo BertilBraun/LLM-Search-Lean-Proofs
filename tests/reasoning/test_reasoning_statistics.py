@@ -15,7 +15,16 @@ def scored(reasoning_tokens: int, outcome: StepOutcome = StepOutcome.CLOSED) -> 
 
 @pytest.mark.parametrize(
     ("reasoning_tokens", "label"),
-    [(0, "0"), (1, "1–31"), (31, "1–31"), (32, "32–63"), (511, "384–511"), (1024, "1024–1535"), (5000, "1536+")],
+    [
+        (0, "0"),
+        (1, "1–31"),
+        (31, "1–31"),
+        (32, "32–63"),
+        (511, "384–511"),
+        (1024, "1024–1535"),
+        (2500, "2048–3071"),
+        (5000, "3072+"),
+    ],
 )
 def test_length_buckets(reasoning_tokens: int, label: str) -> None:
     assert length_bucket(scored(reasoning_tokens)) == label

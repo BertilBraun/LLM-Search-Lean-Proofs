@@ -1,7 +1,8 @@
 # Phase 5 evaluation after round 1, thinking: the round-1 reasoning adapter on the pilot's held-out states
 # (`states --states-from phase5_pilot_sft_v2_thinking`), at the training cap (2048); the statistics simulate the
 # smaller caps. Compare with the pilot arm (a) (results/phase5_pilot/README.md); SFT-seen and unseen states apart.
-# Both servers serve the base with the adapters policy-v2 and reasoning-r1 (/workspace/checkpoints/phase5_sft_r1/adapter).
+# Both servers serve the base with the adapters policy-v2 and reasoning-r1
+# (/workspace/checkpoints/phase5_sft_r1/adapter).
 
 [states]
 count = 512

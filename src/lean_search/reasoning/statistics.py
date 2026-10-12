@@ -11,9 +11,9 @@ from lean_search.reasoning.records import ScoredSample, StateRecord, scored_samp
 from lean_search.reasoning.reward import RewardConfig, StepOutcome
 
 # Lower bucket edges in reasoning tokens; truncated samples get their own row.
-REASONING_LENGTH_EDGES = (0, 1, 32, 64, 128, 192, 256, 384, 512, 768, 1024, 1536)
+REASONING_LENGTH_EDGES = (0, 1, 32, 64, 128, 192, 256, 384, 512, 768, 1024, 1536, 2048, 3072)
 # Generation caps simulated by cutting the run's samples, up to the run's own cap.
-SIMULATED_CAPS = (256, 512, 1024, 2048)
+SIMULATED_CAPS = (256, 512, 1024, 2048, 4096)
 TRUNCATED_BUCKET = "truncated"
 
 
