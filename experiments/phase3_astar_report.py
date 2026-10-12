@@ -267,6 +267,7 @@ def build_report(runs: Sequence[str], references: Sequence[str]) -> SearchReport
     categories = tuple(name for name in (*CATEGORIES, "other") if any(category(p) == name for p in problems))
     max_expansions = max(result.accounting.expansions for results in ordered.values() for result in results)
     max_seconds = max(result.accounting.wall_seconds for results in ordered.values() for result in results)
+    max_lean_seconds = max(result.accounting.lean_seconds for results in ordered.values() for result in results)
     max_tokens = max(result.accounting.generated_tokens for results in ordered.values() for result in results)
     token_budgets = (*(budget for budget in TOKEN_BUDGETS if budget < max_tokens), float(max_tokens))
     runs_in_order = [ordered[run] for run in runs]
@@ -280,6 +281,7 @@ def build_report(runs: Sequence[str], references: Sequence[str]) -> SearchReport
             generations_curve(GENERATION_BUDGETS, runs_in_order, [settings[run] for run in runs]),
             curve(CostMetric.GENERATED_TOKENS, token_budgets, runs_in_order),
             curve(CostMetric.WALL_SECONDS, seconds_budgets(max_seconds), runs_in_order),
+            curve(CostMetric.LEAN_SECONDS, seconds_budgets(max_lean_seconds), runs_in_order),
         ),
         changes=tuple(
             changes(run, reference, ordered[run], ordered[reference])
