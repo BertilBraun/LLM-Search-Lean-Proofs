@@ -1,0 +1,67 @@
+# Ablation-ladder row 2 with SFT v2: the automation sweep plus the SFT policy (LoRA adapter policy-v2 on
+# Qwen3.5-2B), best-first on the cumulative log-probability, the row-1 budget. Two vLLM servers (one per RTX 3090)
+# serve the base model with the policy and value adapters; requests go round-robin. Same protocol as the v1 pair
+# (experiments/configs/phase2_sft_v1_search.toml).
+
+[lean]
+pool_size = 40
+concurrency = 40
+
+[search]
+max_expansions = 64
+max_wall_seconds = 600.0
+max_depth = 16
+tactic_timeout_seconds = 10.0
+forbidden_steps = [
+    "exact?",
+    "apply?",
+    "rw?",
+    "simp?",
+    "simp_all?",
+    "dsimp?",
+    "aesop?",
+    "hint",
+    "rw_search",
+    "library_search",
+]
+
+[expander]
+kind = "automation_then_policy"
+
+[automation]
+tactics = [
+    "decide",
+    "omega",
+    "intros",
+    "constructor",
+    "rfl",
+    "simp",
+    "field_simp",
+    "norm_num",
+    "linarith",
+    "ring_nf",
+    "simp_all",
+    "nlinarith",
+    "aesop",
+]
+timeout_seconds = 10.0
+max_wall_clock_timeouts_per_tactic = 1
+
+[priority]
+kind = "cumulative_log_probability"
+length_exponent = 1.0
+# Median log-probability of the SFT v2 probe samples that made progress (-2.79; the v1 pair used -2.4 by the same rule).
+automation_log_probability = -2.8
+
+[policy]
+model = "search-qwen3.5-2b"
+tokenizer = "Qwen/Qwen3.5-2B"
+server_urls = ["http://127.0.0.1:8100/v1", "http://127.0.0.1:8101/v1"]
+adapter = "policy-v2"
+sample_count = 16
+temperature = 0.8
+top_p = 1.0
+# SFT completions were capped at 256 tokens; SFT samples average ~26 tokens, so the cap rarely binds.
+max_tokens = 256
+thinking = false
+few_shot = false
