@@ -49,6 +49,8 @@ class LatencySummary:
     goal_bytes_mean: float
     goal_bytes_p90: int
     rows: tuple[LatencyRow, ...]
+    # Peak memory torch allocated on the GPU, encoder and index included (0 on the CPU); the CUDA context comes on top.
+    peak_gpu_memory_gib: float
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -108,7 +110,9 @@ def render_markdown(summary: LatencySummary) -> str:
     return (
         f"# Retrieval latency on {summary.device}\n\n"
         f"miniF2F-valid root goals (mean {summary.goal_bytes_mean:.0f} bytes, p90 {summary.goal_bytes_p90}), "
-        f"{index} ({summary.index_premises:,} premises, top {CANDIDATES}). Medians over batches.\n\n"
+        f"{index} ({summary.index_premises:,} premises, top {CANDIDATES}). Encoder in the search's precision "
+        f"(bfloat16 on a GPU, float32 on the CPU). Medians over batches. Peak GPU memory allocated by torch: "
+        f"{summary.peak_gpu_memory_gib:.2f} GiB.\n\n"
         + markdown_table(["Threads", "Goals per batch", "Encode ms", "Search ms", "ms per goal"], rows)
         + "\n"
     )
@@ -122,7 +126,9 @@ def main() -> None:
         if arguments.random_index
         else load_premise_index(DATA_DIRECTORY, DEFAULT_RETRIEVER, arguments.device)
     )
-    encoder = TextEncoder(DEFAULT_RETRIEVER, arguments.device)
+    encoder = TextEncoder(
+        DEFAULT_RETRIEVER, arguments.device, torch.float32 if arguments.device == "cpu" else torch.bfloat16
+    )
     encoder.encode(goals[:8])
     rows = []
     for threads in arguments.threads if arguments.device == "cpu" else [0]:
@@ -142,6 +148,7 @@ def main() -> None:
         goal_bytes_mean=statistics.fmean(lengths),
         goal_bytes_p90=lengths[int(0.9 * len(lengths))],
         rows=tuple(rows),
+        peak_gpu_memory_gib=0.0 if arguments.device == "cpu" else torch.cuda.max_memory_allocated() / 2**30,
     )
     directory = RUN_DIRECTORY / "summary"
     directory.mkdir(parents=True, exist_ok=True)
