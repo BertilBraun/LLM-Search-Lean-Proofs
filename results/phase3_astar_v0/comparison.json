@@ -1,0 +1,1162 @@
+{
+ "run": "phase3_astar_v0",
+ "baseline": "phase0_automation_baseline",
+ "problems": 244,
+ "baseline_solved": 79,
+ "solved": 155,
+ "solved_with_policy_steps": 90,
+ "categories": [
+  {
+   "category": "mathd_algebra",
+   "problems": 70,
+   "baseline_solved": 28,
+   "solved": 58,
+   "newly_solved": 30,
+   "lost": 0
+  },
+  {
+   "category": "mathd_numbertheory",
+   "problems": 60,
+   "baseline_solved": 38,
+   "solved": 49,
+   "newly_solved": 11,
+   "lost": 0
+  },
+  {
+   "category": "amc12",
+   "problems": 45,
+   "baseline_solved": 8,
+   "solved": 19,
+   "newly_solved": 11,
+   "lost": 0
+  },
+  {
+   "category": "aime",
+   "problems": 15,
+   "baseline_solved": 0,
+   "solved": 2,
+   "newly_solved": 2,
+   "lost": 0
+  },
+  {
+   "category": "imo",
+   "problems": 20,
+   "baseline_solved": 0,
+   "solved": 2,
+   "newly_solved": 2,
+   "lost": 0
+  },
+  {
+   "category": "algebra",
+   "problems": 18,
+   "baseline_solved": 5,
+   "solved": 15,
+   "newly_solved": 10,
+   "lost": 0
+  },
+  {
+   "category": "numbertheory",
+   "problems": 8,
+   "baseline_solved": 0,
+   "solved": 4,
+   "newly_solved": 4,
+   "lost": 0
+  },
+  {
+   "category": "induction",
+   "problems": 8,
+   "baseline_solved": 0,
+   "solved": 6,
+   "newly_solved": 6,
+   "lost": 0
+  }
+ ],
+ "newly_solved": [
+  {
+   "problem_name": "aime_1984_p15",
+   "proof_steps": [
+    "ring_nf at *",
+    "linarith"
+   ],
+   "proof_sources": [
+    "policy",
+    "automation"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "aime_1991_p1",
+   "proof_steps": [
+    "have h3 : x ≤ 71 := by\n  nlinarith",
+    "interval_cases x <;> try {\n  omega\n}",
+    "all_goals nlinarith"
+   ],
+   "proof_sources": [
+    "policy",
+    "policy",
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "algebra_2varlineareq_xpeeq7_2xpeeq3_eeq11_xeqn4",
+   "proof_steps": [
+    "refine' ⟨_, _⟩",
+    "ring_nf at h₀ h₁ ⊢",
+    "all_goals\n  apply Eq.symm\n  apply Eq.symm\n  ring_nf at h₀ h₁ ⊢\n  simp_all [Complex.ext_iff]\n  constructor <;> nlinarith"
+   ],
+   "proof_sources": [
+    "policy",
+    "policy",
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "algebra_amgm_faxinrrp2msqrt2geq2mxm1div2x",
+   "proof_steps": [
+    "aesop",
+    "norm_num",
+    "have h₁ : (2 : ℝ) ≤ 2 - Real.sqrt 2 + x⁻¹ * (1 / 2) + x := by\n  have h₂ : 0 < Real.sqrt 2 := by norm_num\n  have h₃ : 0 < x := by linarith\n  have h₄ : 0 < x ^ 2 := by positivity\n  have h₅ : 0 < x ^ 3 := by positivity\n  have h₆ : 0 < x ^ 4 := by positivity\n  field_simp\n  rw [le_div_iff (by positivity)]\n  nlinarith [Real.sq_sqrt (show 0 ≤ 2 by norm_num), sq_nonneg (x - 1),\n    sq_nonneg (x - Real.sqrt 2 / 2), sq_nonneg (x - 1 + Real.sqrt 2 / 2)]",
+    "linarith"
+   ],
+   "proof_sources": [
+    "automation",
+    "automation",
+    "policy",
+    "automation"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "algebra_apb4leq8ta4pb4",
+   "proof_steps": [
+    "nlinarith [sq_nonneg (a - b), sq_nonneg (a + b), sq_nonneg (a ^ 2 - b ^ 2), sq_nonneg (a ^ 2 + b ^ 2),\n  sq_nonneg (a ^ 2 - 2 * a * b + b ^ 2), sq_nonneg (a ^ 2 + 2 * a * b + b ^ 2)]"
+   ],
+   "proof_sources": [
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "algebra_binomnegdiscrineq_10alt28asqp1",
+   "proof_steps": [
+    "nlinarith [sq_nonneg (a - 1/5)]"
+   ],
+   "proof_sources": [
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "algebra_manipexpr_apbeq2cceqiacpbceqm2",
+   "proof_steps": [
+    "simp_all",
+    "simp_all [Complex.ext_iff, Complex.I_mul_I]",
+    "linarith"
+   ],
+   "proof_sources": [
+    "automation",
+    "policy",
+    "automation"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "algebra_sqineq_2at2pclta2c2p41pc",
+   "proof_steps": [
+    "nlinarith [sq_nonneg (a - c - 2)]"
+   ],
+   "proof_sources": [
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "algebra_sqineq_2unitcircatblt1",
+   "proof_steps": [
+    "nlinarith [sq_nonneg (a - b), sq_nonneg (a + b)]"
+   ],
+   "proof_sources": [
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "algebra_sqineq_36azm9asqle36zsq",
+   "proof_steps": [
+    "nlinarith [sq_nonneg (a - 2 * z)]"
+   ],
+   "proof_sources": [
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "algebra_sqineq_4bap1lt4bsqpap1sq",
+   "proof_steps": [
+    "ring_nf",
+    "nlinarith [sq_nonneg (b - (a + 1) / 2)]"
+   ],
+   "proof_sources": [
+    "automation",
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "algebra_xmysqpymzsqpzmxsqeqxyz_xpypzp6dvdx3y3z3",
+   "proof_steps": [
+    "rw [dvd_iff_exists_eq_mul_left]",
+    "use x^2 + y^2 + z^2 - x * y - y * z - z * x",
+    "linarith"
+   ],
+   "proof_sources": [
+    "policy",
+    "policy",
+    "automation"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "amc12_2000_p11",
+   "proof_steps": [
+    "have h₂ : a / b + b / a - a * b = 2 := by\n  have h₃ : a / b + b / a - a * b = 2 := by\n    have h₄ : a ≠ 0 := h₀.1\n    have h₅ : b ≠ 0 := h₀.2\n    field_simp [h₄, h₅]\n    nlinarith [h₁, mul_self_nonneg (a - b)]\n  exact h₃",
+    "linarith"
+   ],
+   "proof_sources": [
+    "policy",
+    "automation"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "amc12_2000_p5",
+   "proof_steps": [
+    "cases' le_total 0 (x - 2) with h h <;>\nsimp_all only [abs_of_nonneg, abs_of_nonpos, sub_nonneg, sub_nonpos] <;>\nlinarith"
+   ],
+   "proof_sources": [
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "amc12a_2009_p5",
+   "proof_steps": [
+    "nlinarith [sq_nonneg (x + 1), sq_nonneg (x - 1)]"
+   ],
+   "proof_sources": [
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "amc12a_2009_p9",
+   "proof_steps": [
+    "simp_all",
+    "have h₂ := h₀ (-3)",
+    "have h₃ := h₀ 0",
+    "simp_all",
+    "linarith [h₀ 0, h₀ 1, h₀ 2]"
+   ],
+   "proof_sources": [
+    "automation",
+    "policy",
+    "policy",
+    "automation",
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "amc12a_2011_p18",
+   "proof_steps": [
+    "cases' le_total 0 (x + y) with h₁ h₁ <;>\ncases' le_total 0 (x - y) with h₂ h₂ <;>\nsimp_all only [abs_of_nonneg, abs_of_nonpos, sub_nonneg, sub_nonpos] <;>\nnlinarith [sq_nonneg (x - 3), sq_nonneg (y - 3), sq_nonneg (x + 3), sq_nonneg (y + 3)]"
+   ],
+   "proof_sources": [
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "amc12a_2013_p8",
+   "proof_steps": [
+    "have h₄ : x * y = 2 := by\n  field_simp [h₀, h₁, h₂, sub_eq_zero, add_eq_zero_iff_eq_neg] at h₃\n  have h₅ : x * y - 2 = 0 := by\n    apply mul_left_cancel₀ (sub_ne_zero.mpr h₂)\n    nlinarith\n  linarith",
+    "linarith"
+   ],
+   "proof_sources": [
+    "policy",
+    "automation"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "amc12a_2015_p10",
+   "proof_steps": [
+    "have h₃ : x ≤ 80 := by\n  nlinarith",
+    "have h₄ : y ≤ 80 := by nlinarith",
+    "interval_cases y <;> try {\n  omega\n} <;> try {\n  interval_cases x <;> omega\n}"
+   ],
+   "proof_sources": [
+    "policy",
+    "policy",
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "amc12b_2002_p6",
+   "proof_steps": [
+    "constructor",
+    "·\n  have h₂ := h₁ 0\n  have h₃ := h₁ 1\n  simp at h₂ h₃\n  nlinarith [sq_pos_of_ne_zero h₀.1, sq_pos_of_ne_zero h₀.2, sq_pos_of_ne_zero (sub_ne_zero_of_ne h₀.1), sq_pos_of_ne_zero (sub_ne_zero_of_ne h₀.2)]",
+    "·\n  have h₂ := h₁ 0\n  have h₃ := h₁ 1\n  have h₄ := h₁ (-1)\n  have h₅ := h₁ 2\n  have h₆ := h₁ (-2)\n  have h₇ := h₁ (a / 2)\n  have h₈ := h₁ (-a / 2)\n  field_simp [h₀.1, h₀.2] at h₂ h₃ h₄ h₅ h₆ h₇ h₈\n  linarith [h₂, h₃, h₄, h₅, h₆, h₇, h₈]"
+   ],
+   "proof_sources": [
+    "automation",
+    "policy",
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "amc12b_2003_p17",
+   "proof_steps": [
+    "field_simp",
+    "simp [Real.log_mul, h₀.1.ne', h₀.2.ne', Real.log_pow, h₀.1.ne', h₀.2.ne'] at h₁ h₂ ⊢",
+    "linarith"
+   ],
+   "proof_sources": [
+    "automation",
+    "policy",
+    "automation"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "amc12b_2004_p3",
+   "proof_steps": [
+    "have h1 : 2 ^ x * 3 ^ y = 1296 := h₀",
+    "have h2 : x ≤ 10 := by\n  by_contra h\n  push_neg at h\n  have h3 : x ≥ 11 := by omega\n  have h4 : 2 ^ x ≥ 2 ^ 11 := by\n    apply Nat.pow_le_pow_of_le_right (show 0 < 2 by norm_num)\n    <;> omega\n  have h5 : 3 ^ y ≥ 1 := by\n    apply Nat.one_le_pow\n    norm_num\n  have h6 : 2 ^ x * 3 ^ y ≥ 2 ^ 11 * 1 := by\n    nlinarith\n  have h7 : 2 ^ 11 * 1 = 2048 := by norm_num\n  have h8 : 2 ^ x * 3 ^ y ≥ 2048 := by nlinarith\n  have h9 : 2 ^ x * 3 ^ y = 1296 := h1\n  linarith",
+    "have h3 : y ≤ 15 := by\n  by_contra h\n  have h4 : y ≥ 16 := by omega\n  have h5 : 3 ^ y ≥ 3 ^ 16 := by exact pow_le_pow_right (by norm_num) h4\n  have h6 : 2 ^ x * 3 ^ y ≥ 2 ^ 0 * 3 ^ 16 := by\n    have h7 : 2 ^ x ≥ 2 ^ 0 := by\n      apply pow_le_pow_right\n      norm_num\n      all_goals omega\n    nlinarith\n  norm_num at h1\n  all_goals nlinarith",
+    "interval_cases x <;> interval_cases y <;> simp_all"
+   ],
+   "proof_sources": [
+    "policy",
+    "policy",
+    "policy",
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "amc12b_2020_p5",
+   "proof_steps": [
+    "field_simp at h₀ h₁",
+    "ring_nf at h₀ h₁",
+    "norm_cast at h₀ h₁",
+    "omega"
+   ],
+   "proof_sources": [
+    "policy",
+    "policy",
+    "policy",
+    "automation"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "imo_1961_p1",
+   "proof_steps": [
+    "ring_nf",
+    "have h₇ : a^2 < 3 * b^2 := by\n  nlinarith [sq_pos_of_ne_zero (sub_ne_zero_of_ne h₁), sq_pos_of_ne_zero (sub_ne_zero_of_ne h₂), sq_pos_of_ne_zero (sub_ne_zero_of_ne h₃),\n    Real.sqrt_nonneg (x * y - z ^ 2)]",
+    "refine' ⟨_, _, _⟩\n<;> nlinarith [sq_nonneg (x - y), sq_nonneg (y - z), sq_nonneg (z - x)]\n<;> nlinarith [sq_nonneg (x - y), sq_nonneg (y - z), sq_nonneg (z - x)]\n<;> nlinarith [sq_nonneg (x - y), sq_nonneg (y - z), sq_nonneg (z - x)]"
+   ],
+   "proof_sources": [
+    "automation",
+    "policy",
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "imo_1974_p5",
+   "proof_steps": [
+    "aesop",
+    "case left =>\n  apply lt_of_sub_pos\n  field_simp\n  ring_nf\n  nlinarith [mul_pos left left_1, mul_pos left left_2, mul_pos right left_1, mul_pos right left_2]",
+    "·\n  have h₀ : 0 < a + b + d := by linarith\n  have h₁ : 0 < a + b + c := by linarith\n  have h₂ : 0 < b + c + d := by linarith\n  have h₃ : 0 < a + c + d := by linarith\n  have h₄ : 0 < a * b := by positivity\n  have h₅ : 0 < a * c := by positivity\n  have h₆ : 0 < a * d := by positivity\n  have h₇ : 0 < b * c := by positivity\n  have h₈ : 0 < b * d := by positivity\n  have h₉ : 0 < c * d := by positivity\n  field_simp\n  rw [← sub_pos]\n  field_simp\n  ring_nf\n  nlinarith"
+   ],
+   "proof_sources": [
+    "automation",
+    "policy",
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "induction_divisibility_3div2tooddnp1",
+   "proof_steps": [
+    "induction n with\n| zero =>\n  norm_num\n| succ n ih =>\n  simp only [Nat.mul_succ, Nat.add_succ, pow_succ, pow_add, pow_one, Nat.mul_zero, Nat.add_zero] at ih ⊢\n  omega"
+   ],
+   "proof_sources": [
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "induction_divisibility_3divnto3m2n",
+   "proof_steps": [
+    "have h : n % 3 = 0 ∨ n % 3 = 1 ∨ n % 3 = 2 := by omega",
+    "rcases h with (h | h | h) <;>\nsimp [h, Nat.dvd_iff_mod_eq_zero, Nat.pow_succ, Nat.mul_mod, Nat.add_mod, Nat.mod_eq_of_lt]"
+   ],
+   "proof_sources": [
+    "policy",
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "induction_divisibility_9div10tonm1",
+   "proof_steps": [
+    "induction n with\n| zero => contradiction\n| succ n ih =>\n  cases n with\n  | zero => norm_num\n  | succ n =>\n    simp [Nat.pow_succ, Nat.mul_sub_left_distrib] at ih ⊢\n    omega"
+   ],
+   "proof_sources": [
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "induction_ineq_nsqlefactn",
+   "proof_steps": [
+    "induction' h₀ with n hn",
+    "decide",
+    "{ simp_all [Nat.factorial_succ, Nat.succ_mul, Nat.mul_succ]\n  nlinarith }"
+   ],
+   "proof_sources": [
+    "policy",
+    "automation",
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "induction_sum2kp1npqsqm1",
+   "proof_steps": [
+    "induction n with\n| zero =>\n  simp\n| succ n hn =>\n  simp_all [Finset.sum_range_succ, Nat.succ_eq_add_one]\n  ring_nf\n  omega"
+   ],
+   "proof_sources": [
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "induction_sum_1oktkp1",
+   "proof_steps": [
+    "induction n with\n| zero =>\n  simp\n| succ n ih =>\n  simp_all [Finset.sum_range_succ, mul_add, mul_comm, mul_left_comm, mul_assoc]\n  field_simp\n  ring"
+   ],
+   "proof_sources": [
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "mathd_algebra_11",
+   "proof_steps": [
+    "have h₄ : a - 2 * b ≠ 0 := by\n  intro h₅\n  apply h₁\n  linarith",
+    "have h₅ : a - b ≠ 0 := by\n  intro h\n  apply h₀\n  linarith",
+    "have h₆ : (a + 11 * b) / (a - b) = 2 := by\n  field_simp [h₄, h₅] at h₂ ⊢\n  nlinarith",
+    "linarith"
+   ],
+   "proof_sources": [
+    "policy",
+    "policy",
+    "policy",
+    "automation"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "mathd_algebra_116",
+   "proof_steps": [
+    "simp_all only [sq, mul_one, mul_add, mul_sub, mul_comm, mul_left_comm, mul_right_comm]",
+    "nlinarith [Real.sq_sqrt (show 0 ≤ 131 by norm_num)]"
+   ],
+   "proof_sources": [
+    "policy",
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "mathd_algebra_13",
+   "proof_steps": [
+    "aesop",
+    "·\n  have h₁ := h₀ 4 (by norm_num) (by norm_num)\n  have h₂ := h₀ 6 (by norm_num) (by norm_num)\n  norm_num at h₁ h₂\n  linarith",
+    "{\n  have h₁ := h₀ 4\n  have h₂ := h₀ 0\n  have h₃ := h₀ 3\n  have h₄ := h₀ 5\n  norm_num at h₁ h₂ h₃ h₄\n  all_goals linarith\n}"
+   ],
+   "proof_sources": [
+    "automation",
+    "policy",
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "mathd_algebra_131",
+   "proof_steps": [
+    "simp_all",
+    "have h₄ : a - 1 ≠ 0 := by\n  by_contra h\n  have eq1 : a = 1 := by linarith\n  rw [eq1] at h₁\n  nlinarith",
+    "have h₅ : b - 1 ≠ 0 := by\n  by_contra h\n  have h₆ : b = 1 := by linarith\n  rw [h₆] at h₂\n  nlinarith",
+    "field_simp",
+    "nlinarith [sq_pos_of_ne_zero (sub_ne_zero.mpr h₃), sq_pos_of_ne_zero (sub_ne_zero.mpr h₄), sq_pos_of_ne_zero (sub_ne_zero.mpr h₅)]"
+   ],
+   "proof_sources": [
+    "automation",
+    "policy",
+    "policy",
+    "automation",
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "mathd_algebra_140",
+   "proof_steps": [
+    "have h2 := h₁ 1",
+    "aesop",
+    "nlinarith [h₁ 0, h₁ 1, h₁ 2, h₁ 3, h₁ 4, h₁ 5, h₁ 6, h₁ 7, h₁ 8, h₁ 9]"
+   ],
+   "proof_sources": [
+    "policy",
+    "automation",
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "mathd_algebra_151",
+   "proof_steps": [
+    "have h1 : 27 < 1001 := by norm_num",
+    "have h2 : √27 > 5 := by\n  have h2 : (5 : ℝ) < √27 := by\n    apply Real.lt_sqrt_of_sq_lt\n    norm_num\n  linarith",
+    "have h3 : Real.sqrt 26 < 6 := by\n  nlinarith [Real.sqrt_nonneg 26, Real.sq_sqrt (show (0 : ℝ) ≤ 26 by norm_num)]",
+    "have h4 : ⌈(Real.sqrt 27 : ℝ)⌉ = 6 := by\n  rw [Int.ceil_eq_iff]\n  constructor <;> norm_num <;>\n  nlinarith [Real.sqrt_nonneg 27, Real.sq_sqrt (show 0 ≤ 27 by norm_num)]",
+    "have h5 : ⌊Real.sqrt 26⌋ = 5 := by\n  rw [Int.floor_eq_iff]\n  constructor <;> norm_num <;>\n  nlinarith [Real.sqrt_nonneg 26, Real.sq_sqrt (show 0 ≤ (26 : ℝ) by norm_num)]",
+    "omega"
+   ],
+   "proof_sources": [
+    "policy",
+    "policy",
+    "policy",
+    "policy",
+    "policy",
+    "automation"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "mathd_algebra_181",
+   "proof_steps": [
+    "have h₂ : n - 3 ≠ 0 := by\n  intro h\n  apply h₀\n  linarith",
+    "have h₃ : n = 11 := by\n  field_simp [h₂] at h₁\n  linarith",
+    "linarith"
+   ],
+   "proof_sources": [
+    "policy",
+    "policy",
+    "automation"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "mathd_algebra_192",
+   "proof_steps": [
+    "simp_all",
+    "norm_num [Complex.ext_iff, pow_two]"
+   ],
+   "proof_sources": [
+    "automation",
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "mathd_algebra_206",
+   "proof_steps": [
+    "rw [h₀] at h₂ h₃",
+    "apply mul_left_cancel₀ (sub_ne_zero_of_ne h₁)",
+    "nlinarith"
+   ],
+   "proof_sources": [
+    "policy",
+    "policy",
+    "automation"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "mathd_algebra_22",
+   "proof_steps": [
+    "simp [Real.logb, show (5: ℝ) ≠ 0 by norm_num, show (4 : ℝ) ≠ 0 by norm_num]\n<;> ring\n<;> norm_num\n<;> linarith"
+   ],
+   "proof_sources": [
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "mathd_algebra_234",
+   "proof_steps": [
+    "field_simp at h₀ ⊢",
+    "nlinarith [h₀, sq_nonneg (3 * d), sq_nonneg (5 * d), sq_nonneg (3 * d - 5 * d)]"
+   ],
+   "proof_sources": [
+    "policy",
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "mathd_algebra_251",
+   "proof_steps": [
+    "have h₂ : x = 2 := by\n  have h₃ : x ≠ 0 := h₀\n  have h₄ : 3 + 1 / x = 7 / x := h₁\n  have h₅ : x = 2 := by\n    field_simp at h₄ ⊢\n    nlinarith\n  exact h₅",
+    "linarith"
+   ],
+   "proof_sources": [
+    "policy",
+    "automation"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "mathd_algebra_267",
+   "proof_steps": [
+    "apply Eq.symm",
+    "field_simp [h₀, h₁, sub_eq_zero, add_eq_zero_iff_eq_neg] at h₂",
+    "linarith"
+   ],
+   "proof_sources": [
+    "policy",
+    "policy",
+    "automation"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "mathd_algebra_28",
+   "proof_steps": [
+    "aesop",
+    "nlinarith [sq_nonneg (w + 5 / 4)]"
+   ],
+   "proof_sources": [
+    "automation",
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "mathd_algebra_323",
+   "proof_steps": [
+    "simp",
+    "have h₁ := h 3",
+    "norm_num at h₁",
+    "have h₂ : (σ.symm 19) = (3 : ℝ) := by\n  rw [show 19 = σ 3 by linarith [h₁]]\n  simp [← h]\n  <;> norm_num\n  <;>\n  (try\n    {\n      norm_num\n    })\n  <;>\n  (try\n    {\n      aesop\n    })",
+    "linarith"
+   ],
+   "proof_sources": [
+    "automation",
+    "policy",
+    "policy",
+    "policy",
+    "automation"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "mathd_algebra_327",
+   "proof_steps": [
+    "constructor <;>\ncases' le_total 0 (9 + 2 * a) with h h <;>\nsimp_all only [abs_of_nonneg, abs_of_nonpos, le_of_lt] <;>\nlinarith"
+   ],
+   "proof_sources": [
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "mathd_algebra_393",
+   "proof_steps": [
+    "simp_all",
+    "have h1 : σ 2 = 33 := by\n  rw [h₀]\n  norm_num",
+    "simp_all",
+    "have h2 : σ 2 = 33 := by\n  rw [h₀]\n  norm_num",
+    "rw [show 33 = σ 2 by linarith [h2]]",
+    "simp"
+   ],
+   "proof_sources": [
+    "automation",
+    "policy",
+    "automation",
+    "policy",
+    "policy",
+    "automation"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "mathd_algebra_405",
+   "proof_steps": [
+    "have h₁ : S = Finset.filter (fun x => 0 < x ∧ x^2 + 4*x + 4 < 20) (Finset.range 21) := by\n  ext x\n  simp [h₀, Finset.mem_filter]\n  <;> omega",
+    "aesop"
+   ],
+   "proof_sources": [
+    "policy",
+    "automation"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "mathd_algebra_410",
+   "proof_steps": [
+    "aesop",
+    "nlinarith [sq_nonneg (x - 3)]"
+   ],
+   "proof_sources": [
+    "automation",
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "mathd_algebra_421",
+   "proof_steps": [
+    "nlinarith [sq_nonneg (a - c), sq_nonneg (a + c + 2)]"
+   ],
+   "proof_sources": [
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "mathd_algebra_433",
+   "proof_steps": [
+    "have h₁ : f 8 = 1 := by\n  rw [h₀]\n  have h₂ : sqrt (2 * (8 : ℝ) - 7) = 3 := by\n    rw [Real.sqrt_eq_iff_sq_eq] <;> norm_num\n  rw [h₂]\n  norm_num",
+    "linarith"
+   ],
+   "proof_sources": [
+    "policy",
+    "automation"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "mathd_algebra_437",
+   "proof_steps": [
+    "have h₄ : n = -4 := by\n  have h₅ : (x : ℝ) < (n : ℝ) := by exact_mod_cast h₂\n  have h₆ : (n : ℝ) < (y : ℝ) := by exact_mod_cast h₃\n  have h₇ : (x : ℝ) ^ 3 = -45 := by norm_num [h₀]\n  have h₈ : (y : ℝ) ^ 3 = -101 := by norm_num [h₁]\n  have h₉ : (n : ℝ) = -4 := by\n    nlinarith [pow_two_nonneg ((x - 3) * (x + 3)), pow_two_nonneg (y - 4), pow_two_nonneg (y + 4),\n      pow_two_nonneg ((x + 4 : ℝ) * (x - 4 : ℝ)), pow_two_nonneg (y - 5 : ℝ), pow_two_nonneg (y + 5 : ℝ)]\n  exact_mod_cast h₉",
+    "omega"
+   ],
+   "proof_sources": [
+    "policy",
+    "automation"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "mathd_algebra_480",
+   "proof_steps": [
+    "have h_pi_pos : (0 : ℝ) ≤ Real.pi ∧ Real.pi < 4 := by\n  have h_pos : 0 < Real.pi := Real.pi_pos\n  have h_bound : Real.pi < 4 := by\n    have := Real.pi_gt_31415\n    have := Real.pi_lt_31416\n    norm_num at *\n    <;> linarith\n  constructor\n  · linarith\n  · linarith",
+    "simp_all"
+   ],
+   "proof_sources": [
+    "policy",
+    "automation"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "mathd_algebra_493",
+   "proof_steps": [
+    "have h₁ : f 4 = 9 := by\n  rw [h₀ 4]\n  have h₁ : Real.sqrt 4 = 2 := by\n    rw [Real.sqrt_eq_iff_sq_eq] <;> norm_num\n  rw [h₁]\n  norm_num",
+    "have h₂ : f (f 4) = 70 := by\n  rw [h₁]\n  have h₃ : f 9 = 9 ^ 2 - 4 * Real.sqrt 9 + 1 := by\n    apply h₀\n  rw [h₃]\n  have h₄ : Real.sqrt 9 = 3 := by\n    norm_num [Real.sqrt_eq_iff_sq_eq]\n  rw [h₄]\n  norm_num",
+    "linarith"
+   ],
+   "proof_sources": [
+    "policy",
+    "policy",
+    "automation"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "mathd_algebra_510",
+   "proof_steps": [
+    "rw [Real.sqrt_eq_iff_sq_eq] <;> nlinarith [sq_nonneg (x - y)]"
+   ],
+   "proof_sources": [
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "mathd_algebra_536",
+   "proof_steps": [
+    "have h_main : (Nat.factorial 3 : ℝ) * ((2 : ℝ) ^ 3 + Real.sqrt (9 : ℝ)) / 2 = 33 := by\n  have h₁ : (Nat.factorial 3 : ℝ) = (6 : ℝ) := by\n    norm_num [Nat.factorial]\n    <;>\n    simp_all [Nat.factorial]\n    <;>\n    norm_num\n    <;>\n    linarith\n  have h₂ : (Real.sqrt (9 : ℝ) : ℝ) = (3 : ℝ) := by\n    rw [Real.sqrt_eq_iff_sq_eq] <;> norm_num\n  rw [h₁, h₂]\n  <;> ring_nf\n  <;> norm_num\n  <;>\n  linarith",
+    "linarith"
+   ],
+   "proof_sources": [
+    "policy",
+    "automation"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "mathd_algebra_547",
+   "proof_steps": [
+    "subst h₀; subst h₁; norm_num",
+    "rw [Real.sqrt_eq_iff_mul_self_eq] <;> norm_num"
+   ],
+   "proof_sources": [
+    "policy",
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "mathd_algebra_73",
+   "proof_steps": [
+    "apply mul_left_cancel₀ (sub_ne_zero.mpr h₁)",
+    "ring_nf",
+    "linear_combination h₀"
+   ],
+   "proof_sources": [
+    "policy",
+    "automation",
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "mathd_algebra_77",
+   "proof_steps": [
+    "simp_all",
+    "constructor",
+    "all_goals\n  apply mul_left_cancel₀ (sub_ne_zero.mpr h₁)\n  nlinarith"
+   ],
+   "proof_sources": [
+    "automation",
+    "automation",
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "mathd_algebra_89",
+   "proof_steps": [
+    "simp",
+    "have h₁ : b ^ 2 ≠ 0 := by\n  intro h\n  apply h₀\n  nlinarith",
+    "field_simp [h₀, h₁, pow_ne_zero, pow_two, mul_ne_zero]",
+    "ring_nf",
+    "have h₂ : b^6 * 3136 = (b^2 * 4)^3 * 49 := by\n  ring_nf\n  <;> nlinarith\n  <;> ring_nf\n  <;> nlinarith",
+    "aesop"
+   ],
+   "proof_sources": [
+    "automation",
+    "policy",
+    "policy",
+    "automation",
+    "policy",
+    "automation"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "mathd_numbertheory_22",
+   "proof_steps": [
+    "have h₂ : b ≤ 9 := by linarith",
+    "interval_cases b <;> norm_num at h₁ <;> omega"
+   ],
+   "proof_sources": [
+    "policy",
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "mathd_numbertheory_257",
+   "proof_steps": [
+    "rcases h₀ with ⟨h₀_left, h₀_right⟩",
+    "interval_cases x <;> norm_num [Finset.sum_range_succ] at h₁\n<;> omega"
+   ],
+   "proof_sources": [
+    "policy",
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "mathd_numbertheory_32",
+   "proof_steps": [
+    "have h₁ : S = Finset.filter (fun n ↦ n ∣ 36) (Finset.range 37) := by\n  ext n\n  simp [h₀]",
+    "aesop"
+   ],
+   "proof_sources": [
+    "policy",
+    "automation"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "mathd_numbertheory_326",
+   "proof_steps": [
+    "ring_nf at h₀",
+    "have h : n^3 + (-n) = 720 := by linarith",
+    "have h₁ : n + 1 = 10 := by\n  nlinarith [sq_nonneg (n - 10), sq_nonneg (n + 1), sq_nonneg (n ^ 2 - 100), sq_nonneg (n ^ 2 + 100)]",
+    "omega"
+   ],
+   "proof_sources": [
+    "policy",
+    "policy",
+    "policy",
+    "automation"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "mathd_numbertheory_35",
+   "proof_steps": [
+    "have h₁ : (∑ k in S, k) = 24 := by\n  have h₂ := h₀ 196\n  have h₃ := h₀ 21\n  have h₄ := h₀ 14\n  have h₅ := h₀ 7\n  have h₆ := h₀ 3\n  have h₇ := h₀ 2\n  have h₈ := h₀ 1\n  norm_num at *\n  <;>\n  (try omega) <;>\n  (try\n    {\n      simp_all [Finset.sum_eq_multiset_sum]\n      <;> norm_num\n      <;> omega\n    }) <;>\n  (try\n    {\n      norm_num at *\n      <;> omega\n    })\n  <;>\n  (try\n    {\n      omega\n    })\n  <;>\n  (try\n    {\n      aesop\n    })",
+    "omega"
+   ],
+   "proof_sources": [
+    "policy",
+    "automation"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "mathd_numbertheory_412",
+   "proof_steps": [
+    "simp [h₀, h₁, pow_two, pow_three, Int.mul_emod, Int.add_emod, Int.sub_emod]"
+   ],
+   "proof_sources": [
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "mathd_numbertheory_629",
+   "proof_steps": [
+    "constructor",
+    "decide",
+    "·\n  intro t ht\n  rcases ht with ⟨ht_pos, ht_lcm⟩\n  by_contra h\n  push_neg at h\n  interval_cases t <;> norm_num [Nat.lcm] at ht_lcm <;> omega"
+   ],
+   "proof_sources": [
+    "automation",
+    "automation",
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "mathd_numbertheory_64",
+   "proof_steps": [
+    "constructor",
+    "decide",
+    "·\n  intro x hx\n  simp [Nat.ModEq] at hx\n  omega"
+   ],
+   "proof_sources": [
+    "automation",
+    "automation",
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "mathd_numbertheory_690",
+   "proof_steps": [
+    "constructor",
+    "decide",
+    "·\n  intro a\n  rintro ⟨ha_pos, ha_mod2, ha_mod5, ha_mod7, ha_mod9⟩\n  by_contra h\n  push_neg at h\n  interval_cases a <;> norm_num [Nat.ModEq] at ha_mod2 ha_mod5 ha_mod7 ha_mod9 <;> omega"
+   ],
+   "proof_sources": [
+    "automation",
+    "automation",
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "mathd_numbertheory_780",
+   "proof_steps": [
+    "rcases h₁ with ⟨h₁, h₄⟩",
+    "interval_cases m <;> omega"
+   ],
+   "proof_sources": [
+    "policy",
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "mathd_numbertheory_84",
+   "proof_steps": [
+    "norm_num [Int.floor_eq_iff]"
+   ],
+   "proof_sources": [
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "numbertheory_2dvd4expn",
+   "proof_steps": [
+    "induction n with\n| zero => contradiction\n| succ n ih =>\n  simp_all [Nat.pow_succ, Nat.mul_succ]\n  omega"
+   ],
+   "proof_sources": [
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "numbertheory_nckeqnm1ckpnm1ckm1",
+   "proof_steps": [
+    "cases n <;> cases k <;> simp_all [choose, Nat.succ_mul, Nat.mul_succ]\n<;> omega"
+   ],
+   "proof_sources": [
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "numbertheory_sqmod3in01d",
+   "proof_steps": [
+    "have : a % 3 = 0 ∨ a % 3 = 1 ∨ a % 3 = 2 := by omega",
+    "rcases this with (h | h | h) <;>\nsimp [h, pow_two, Int.mul_emod, Int.add_emod]"
+   ],
+   "proof_sources": [
+    "policy",
+    "policy"
+   ],
+   "stop_reason": "proved"
+  },
+  {
+   "problem_name": "numbertheory_sqmod4in01d",
+   "proof_steps": [
+    "have : a % 4 = 0 ∨ a % 4 = 1 ∨ a % 4 = 2 ∨ a % 4 = 3 := by omega",
+    "rcases this with (h | h | h | h) <;>\nsimp [h, pow_two, Int.mul_emod, Int.add_emod]"
+   ],
+   "proof_sources": [
+    "policy",
+    "policy"
+   ],
+   "stop_reason": "proved"
+  }
+ ],
+ "lost": [],
+ "curves": [
+  {
+   "metric": "expansions",
+   "budgets": [
+    1.0,
+    2.0,
+    4.0,
+    8.0,
+    16.0,
+    32.0,
+    64.0
+   ],
+   "baseline_solved": [
+    59,
+    72,
+    77,
+    79,
+    79,
+    79,
+    79
+   ],
+   "solved": [
+    84,
+    119,
+    131,
+    139,
+    146,
+    152,
+    155
+   ]
+  },
+  {
+   "metric": "wall_seconds",
+   "budgets": [
+    1.0,
+    2.0,
+    5.0,
+    10.0,
+    20.0,
+    30.0,
+    60.0,
+    120.0,
+    180.0,
+    300.0,
+    600.0,
+    613.1605072609382
+   ],
+   "baseline_solved": [
+    41,
+    57,
+    77,
+    79,
+    79,
+    79,
+    79,
+    79,
+    79,
+    79,
+    79,
+    79
+   ],
+   "solved": [
+    33,
+    55,
+    80,
+    105,
+    123,
+    127,
+    139,
+    147,
+    148,
+    151,
+    155,
+    155
+   ]
+  }
+ ],
+ "costs": {
+  "mean_generated_tokens": 12207.573770491803,
+  "median_generated_tokens": 977.0,
+  "total_generated_tokens": 2978648,
+  "mean_prompt_tokens": 4157.315573770492,
+  "total_prompt_tokens": 1014385,
+  "mean_wall_seconds": 174.9953308810583,
+  "median_wall_seconds": 17.759953070548363,
+  "mean_lean_seconds": 114.77166899303394,
+  "total_lean_seconds": 28004.287234300282,
+  "mean_expansions": 22.139344262295083,
+  "generated_tokens_per_solve": 19217.08387096774
+ },
+ "throughput": {
+  "run_wall_seconds": 1454.6600124719553,
+  "policy_window_seconds": 1422.658583186916,
+  "requests": 5299,
+  "samples": 84784,
+  "samples_per_second": 59.59546513969237,
+  "generated_tokens_per_second": 2117.292958126584,
+  "mean_request_seconds": 2.456922714087207,
+  "total_request_seconds": 13019.233461948112,
+  "total_lean_seconds": 28004.287234300282,
+  "candidates_per_request": 10.58954519720702,
+  "duplicate_sample_fraction": 0.30452679750896394,
+  "failed_sample_fraction": 0.033626627665597285,
+  "prompt_cache_hit_rate": 0.8668881401723095,
+  "requests_without_candidates": 0,
+  "unattributed_generated_tokens": 0,
+  "prompts_too_long": 0,
+  "gpu": null
+ }
+}

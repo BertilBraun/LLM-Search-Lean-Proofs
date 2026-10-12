@@ -1,0 +1,771 @@
+{
+ "problems": 83,
+ "categories": [
+  "mathd_algebra",
+  "mathd_numbertheory",
+  "amc12",
+  "aime",
+  "imo",
+  "algebra",
+  "numbertheory",
+  "induction"
+ ],
+ "category_sizes": [
+  21,
+  11,
+  19,
+  8,
+  10,
+  6,
+  4,
+  4
+ ],
+ "runs": [
+  {
+   "settings": {
+    "run": "phase2_sft_v1_search",
+    "priority": "cumulative_log_probability",
+    "value_weight": null,
+    "dead_steps": null
+   },
+   "solved": 37,
+   "solve_rate": 0.4457831325301205,
+   "mean_expansions": 33.75903614457831,
+   "mean_generated_tokens": 19103.060240963856,
+   "mean_value_prompt_tokens": 0.0,
+   "mean_wall_seconds": 260.2795089649679,
+   "mean_lean_seconds": 193.78347062420085,
+   "generated_tokens_per_solve": 42852.81081081081,
+   "solved_by_category": [
+    13,
+    7,
+    4,
+    2,
+    1,
+    6,
+    1,
+    3
+   ]
+  },
+  {
+   "settings": {
+    "run": "phase3_astar_v0_sweep_l0.5",
+    "priority": "a_star",
+    "value_weight": 0.5,
+    "dead_steps": 16.0
+   },
+   "solved": 40,
+   "solve_rate": 0.4819277108433735,
+   "mean_expansions": 31.518072289156628,
+   "mean_generated_tokens": 18994.975903614457,
+   "mean_value_prompt_tokens": 27139.939759036144,
+   "mean_wall_seconds": 254.3917048242678,
+   "mean_lean_seconds": 161.85273365759016,
+   "generated_tokens_per_solve": 39414.575,
+   "solved_by_category": [
+    16,
+    7,
+    5,
+    2,
+    1,
+    5,
+    1,
+    3
+   ]
+  },
+  {
+   "settings": {
+    "run": "phase3_astar_v0_sweep_l1",
+    "priority": "a_star",
+    "value_weight": 1.0,
+    "dead_steps": 16.0
+   },
+   "solved": 39,
+   "solve_rate": 0.46987951807228917,
+   "mean_expansions": 30.819277108433734,
+   "mean_generated_tokens": 18539.13253012048,
+   "mean_value_prompt_tokens": 26226.590361445782,
+   "mean_wall_seconds": 250.57467079760244,
+   "mean_lean_seconds": 161.48033540361948,
+   "generated_tokens_per_solve": 39455.07692307692,
+   "solved_by_category": [
+    13,
+    7,
+    5,
+    2,
+    3,
+    5,
+    1,
+    3
+   ]
+  },
+  {
+   "settings": {
+    "run": "phase3_astar_v0_sweep_l2",
+    "priority": "a_star",
+    "value_weight": 2.0,
+    "dead_steps": 16.0
+   },
+   "solved": 41,
+   "solve_rate": 0.4939759036144578,
+   "mean_expansions": 30.759036144578314,
+   "mean_generated_tokens": 18604.12048192771,
+   "mean_value_prompt_tokens": 26152.22891566265,
+   "mean_wall_seconds": 269.1329320828425,
+   "mean_lean_seconds": 182.22870131569678,
+   "generated_tokens_per_solve": 37662.0,
+   "solved_by_category": [
+    16,
+    7,
+    5,
+    2,
+    1,
+    6,
+    1,
+    3
+   ]
+  },
+  {
+   "settings": {
+    "run": "phase3_astar_v0_sweep_l4",
+    "priority": "a_star",
+    "value_weight": 4.0,
+    "dead_steps": 16.0
+   },
+   "solved": 40,
+   "solve_rate": 0.4819277108433735,
+   "mean_expansions": 30.180722891566266,
+   "mean_generated_tokens": 17816.4578313253,
+   "mean_value_prompt_tokens": 26394.493975903613,
+   "mean_wall_seconds": 258.8503238210042,
+   "mean_lean_seconds": 171.74397223851088,
+   "generated_tokens_per_solve": 36969.15,
+   "solved_by_category": [
+    14,
+    7,
+    6,
+    2,
+    2,
+    5,
+    1,
+    3
+   ]
+  }
+ ],
+ "curves": [
+  {
+   "metric": "expansions",
+   "budgets": [
+    1.0,
+    2.0,
+    4.0,
+    8.0,
+    16.0,
+    32.0,
+    64.0
+   ],
+   "solved": [
+    [
+     11,
+     18,
+     27,
+     29,
+     33,
+     35,
+     37
+    ],
+    [
+     12,
+     24,
+     32,
+     36,
+     37,
+     38,
+     40
+    ],
+    [
+     12,
+     25,
+     31,
+     33,
+     37,
+     38,
+     39
+    ],
+    [
+     10,
+     22,
+     27,
+     32,
+     34,
+     38,
+     41
+    ],
+    [
+     12,
+     21,
+     30,
+     34,
+     36,
+     38,
+     40
+    ]
+   ]
+  },
+  {
+   "metric": "generated_tokens",
+   "budgets": [
+    500.0,
+    1000.0,
+    2000.0,
+    5000.0,
+    10000.0,
+    20000.0,
+    50000.0,
+    100000.0,
+    100748.0
+   ],
+   "solved": [
+    [
+     18,
+     24,
+     29,
+     32,
+     35,
+     36,
+     37,
+     37,
+     37
+    ],
+    [
+     17,
+     30,
+     33,
+     35,
+     37,
+     39,
+     40,
+     40,
+     40
+    ],
+    [
+     19,
+     27,
+     33,
+     35,
+     36,
+     38,
+     39,
+     39,
+     39
+    ],
+    [
+     18,
+     26,
+     31,
+     32,
+     36,
+     40,
+     41,
+     41,
+     41
+    ],
+    [
+     18,
+     28,
+     30,
+     34,
+     36,
+     36,
+     40,
+     40,
+     40
+    ]
+   ]
+  },
+  {
+   "metric": "wall_seconds",
+   "budgets": [
+    1.0,
+    2.0,
+    5.0,
+    10.0,
+    20.0,
+    30.0,
+    60.0,
+    120.0,
+    180.0,
+    300.0,
+    600.0,
+    614.9287628619932
+   ],
+   "solved": [
+    [
+     0,
+     1,
+     9,
+     20,
+     24,
+     28,
+     32,
+     35,
+     35,
+     36,
+     37,
+     37
+    ],
+    [
+     0,
+     0,
+     7,
+     18,
+     29,
+     30,
+     33,
+     37,
+     37,
+     38,
+     40,
+     40
+    ],
+    [
+     0,
+     1,
+     9,
+     18,
+     26,
+     31,
+     34,
+     35,
+     36,
+     39,
+     39,
+     39
+    ],
+    [
+     0,
+     0,
+     5,
+     17,
+     25,
+     27,
+     32,
+     35,
+     36,
+     38,
+     41,
+     41
+    ],
+    [
+     0,
+     1,
+     7,
+     18,
+     26,
+     29,
+     32,
+     35,
+     35,
+     36,
+     40,
+     40
+    ]
+   ]
+  }
+ ],
+ "changes": [
+  {
+   "run": "phase3_astar_v0_sweep_l0.5",
+   "reference": "phase2_sft_v1_search",
+   "newly_solved": [
+    "amc12b_2003_p17",
+    "imo_1974_p5",
+    "mathd_algebra_131",
+    "mathd_algebra_405",
+    "mathd_algebra_89"
+   ],
+   "lost": [
+    "algebra_amgm_sqrtxymulxmyeqxpy_xpygeq4",
+    "imo_1984_p2"
+   ]
+  },
+  {
+   "run": "phase3_astar_v0_sweep_l1",
+   "reference": "phase2_sft_v1_search",
+   "newly_solved": [
+    "amc12b_2004_p3",
+    "imo_1964_p1_2",
+    "imo_1974_p5",
+    "mathd_algebra_405"
+   ],
+   "lost": [
+    "algebra_amgm_sqrtxymulxmyeqxpy_xpygeq4",
+    "mathd_algebra_451"
+   ]
+  },
+  {
+   "run": "phase3_astar_v0_sweep_l2",
+   "reference": "phase2_sft_v1_search",
+   "newly_solved": [
+    "amc12b_2003_p17",
+    "mathd_algebra_405",
+    "mathd_algebra_59",
+    "mathd_algebra_89"
+   ],
+   "lost": []
+  },
+  {
+   "run": "phase3_astar_v0_sweep_l4",
+   "reference": "phase2_sft_v1_search",
+   "newly_solved": [
+    "amc12b_2003_p17",
+    "amc12b_2004_p3",
+    "imo_1974_p5",
+    "mathd_algebra_131",
+    "mathd_algebra_89"
+   ],
+   "lost": [
+    "algebra_amgm_sqrtxymulxmyeqxpy_xpygeq4",
+    "mathd_algebra_451"
+   ]
+  }
+ ],
+ "calibrations": [
+  {
+   "run": "phase3_astar_v0_sweep_l0.5",
+   "nodes_with_estimates": 10305,
+   "by_label": [
+    {
+     "label": "exact 1",
+     "nodes": 40,
+     "mean_h": 1.8103120682334595,
+     "p10_h": 1.1965831928544248,
+     "median_h": 1.6896502430724443,
+     "p90_h": 2.7674008843370808
+    },
+    {
+     "label": "exact 2",
+     "nodes": 30,
+     "mean_h": 2.9564808609654514,
+     "p10_h": 1.7931320654612557,
+     "median_h": 2.638688990272747,
+     "p90_h": 4.696329570197166
+    },
+    {
+     "label": "exact 3",
+     "nodes": 16,
+     "mean_h": 3.26688568619232,
+     "p10_h": 1.883853162990629,
+     "median_h": 2.722998919094739,
+     "p90_h": 5.042992228577533
+    },
+    {
+     "label": "exact 4",
+     "nodes": 14,
+     "mean_h": 3.4208194076592764,
+     "p10_h": 2.3080264008177793,
+     "median_h": 3.31958677334514,
+     "p90_h": 4.732001940344402
+    },
+    {
+     "label": "exact 5",
+     "nodes": 12,
+     "mean_h": 4.681328599403456,
+     "p10_h": 2.2568158115770167,
+     "median_h": 4.755797676681897,
+     "p90_h": 6.906048842633691
+    },
+    {
+     "label": "exact 6",
+     "nodes": 1,
+     "mean_h": 2.099555086640173,
+     "p10_h": 2.099555086640173,
+     "median_h": 2.099555086640173,
+     "p90_h": 2.099555086640173
+    },
+    {
+     "label": "dead",
+     "nodes": 86,
+     "mean_h": 2.7258489821247758,
+     "p10_h": 1.5692159183965175,
+     "median_h": 2.843937548549272,
+     "p90_h": 3.9752991043391765
+    },
+    {
+     "label": "at least 2+",
+     "nodes": 2407,
+     "mean_h": 3.018573296445167,
+     "p10_h": 1.765154704389511,
+     "median_h": 2.7290020131896218,
+     "p90_h": 4.73171759041472
+    },
+    {
+     "label": "at least 1 (open)",
+     "nodes": 7699,
+     "mean_h": 3.293631188245864,
+     "p10_h": 1.8064206760206605,
+     "median_h": 2.9343796729077134,
+     "p90_h": 5.260318526039311
+    }
+   ],
+   "spearman_exact": 0.6348845165729208,
+   "dead_auc": 0.5164642930644165,
+   "mean_root_h_solved": 3.0733540752353226,
+   "mean_root_h_unsolved": 4.310620530437482
+  },
+  {
+   "run": "phase3_astar_v0_sweep_l1",
+   "nodes_with_estimates": 9799,
+   "by_label": [
+    {
+     "label": "exact 1",
+     "nodes": 39,
+     "mean_h": 1.8021271684027624,
+     "p10_h": 1.198307591262406,
+     "median_h": 1.6657217498533134,
+     "p90_h": 2.483249332177765
+    },
+    {
+     "label": "exact 2",
+     "nodes": 27,
+     "mean_h": 2.7601924701872833,
+     "p10_h": 1.8234276099924955,
+     "median_h": 2.722998890694345,
+     "p90_h": 3.6786986263706862
+    },
+    {
+     "label": "exact 3",
+     "nodes": 13,
+     "mean_h": 3.6315353915745243,
+     "p10_h": 1.7319853164542294,
+     "median_h": 3.1927664396887177,
+     "p90_h": 5.713079162935425
+    },
+    {
+     "label": "exact 4",
+     "nodes": 6,
+     "mean_h": 3.632230837571416,
+     "p10_h": 1.9097208466030111,
+     "median_h": 3.7870916251617146,
+     "p90_h": 5.149074730779575
+    },
+    {
+     "label": "dead",
+     "nodes": 124,
+     "mean_h": 2.1298863261718646,
+     "p10_h": 1.384096459439511,
+     "median_h": 1.8587897373923774,
+     "p90_h": 3.5087107339340675
+    },
+    {
+     "label": "at least 2+",
+     "nodes": 2338,
+     "mean_h": 2.588093121401228,
+     "p10_h": 1.6398233617902132,
+     "median_h": 2.352273216890307,
+     "p90_h": 3.7332456111674595
+    },
+    {
+     "label": "at least 1 (open)",
+     "nodes": 7252,
+     "mean_h": 3.056848764122199,
+     "p10_h": 1.7616054154542875,
+     "median_h": 2.7198859844114747,
+     "p90_h": 4.744548955840895
+    }
+   ],
+   "spearman_exact": 0.6371571045056347,
+   "dead_auc": 0.4104364326375712,
+   "mean_root_h_solved": 3.029488310997826,
+   "mean_root_h_unsolved": 4.303949087880039
+  },
+  {
+   "run": "phase3_astar_v0_sweep_l2",
+   "nodes_with_estimates": 9367,
+   "by_label": [
+    {
+     "label": "exact 1",
+     "nodes": 41,
+     "mean_h": 1.5864630322136477,
+     "p10_h": 1.1640114138046438,
+     "median_h": 1.4571855003253082,
+     "p90_h": 2.4146966609924787
+    },
+    {
+     "label": "exact 2",
+     "nodes": 31,
+     "mean_h": 2.3886270232296183,
+     "p10_h": 1.631906671757471,
+     "median_h": 2.2592403526996128,
+     "p90_h": 3.342699239841923
+    },
+    {
+     "label": "exact 3",
+     "nodes": 26,
+     "mean_h": 2.5640671458252204,
+     "p10_h": 1.8729927442108314,
+     "median_h": 2.3740493851637194,
+     "p90_h": 3.178188450300819
+    },
+    {
+     "label": "exact 4",
+     "nodes": 19,
+     "mean_h": 2.786510935613665,
+     "p10_h": 1.7032554317137725,
+     "median_h": 2.5965886549712747,
+     "p90_h": 4.526081288745281
+    },
+    {
+     "label": "exact 5",
+     "nodes": 11,
+     "mean_h": 2.5978639592292314,
+     "p10_h": 2.0001552230894637,
+     "median_h": 2.1576383858674433,
+     "p90_h": 3.0013532109253744
+    },
+    {
+     "label": "exact 6",
+     "nodes": 3,
+     "mean_h": 2.7994536262115877,
+     "p10_h": 2.608551838621886,
+     "median_h": 2.610005730923472,
+     "p90_h": 3.1798033090894053
+    },
+    {
+     "label": "exact 7",
+     "nodes": 1,
+     "mean_h": 3.737065963626609,
+     "p10_h": 3.737065963626609,
+     "median_h": 3.737065963626609,
+     "p90_h": 3.737065963626609
+    },
+    {
+     "label": "dead",
+     "nodes": 145,
+     "mean_h": 2.0507679896036928,
+     "p10_h": 1.318464102736258,
+     "median_h": 1.7684015599458243,
+     "p90_h": 3.11819076016273
+    },
+    {
+     "label": "at least 2+",
+     "nodes": 2260,
+     "mean_h": 2.2325900963943512,
+     "p10_h": 1.4997756200951942,
+     "median_h": 2.0868782482815806,
+     "p90_h": 3.0650358731732514
+    },
+    {
+     "label": "at least 1 (open)",
+     "nodes": 6830,
+     "mean_h": 2.743556498141252,
+     "p10_h": 1.6625075554677224,
+     "median_h": 2.4332505386230983,
+     "p90_h": 4.175176586530352
+    }
+   ],
+   "spearman_exact": 0.5936253033243557,
+   "dead_auc": 0.4179728317659352,
+   "mean_root_h_solved": 2.868648915027274,
+   "mean_root_h_unsolved": 4.534135685952309
+  },
+  {
+   "run": "phase3_astar_v0_sweep_l4",
+   "nodes_with_estimates": 8327,
+   "by_label": [
+    {
+     "label": "exact 1",
+     "nodes": 40,
+     "mean_h": 1.6431369621682979,
+     "p10_h": 1.195411533637485,
+     "median_h": 1.4341004083820286,
+     "p90_h": 2.529565002823292
+    },
+    {
+     "label": "exact 2",
+     "nodes": 28,
+     "mean_h": 2.475861401528863,
+     "p10_h": 1.4479704875651862,
+     "median_h": 2.491050768049336,
+     "p90_h": 3.644613698414505
+    },
+    {
+     "label": "exact 3",
+     "nodes": 19,
+     "mean_h": 2.574156589468405,
+     "p10_h": 1.3344666229183855,
+     "median_h": 2.20986199343458,
+     "p90_h": 4.7164464702299576
+    },
+    {
+     "label": "exact 4",
+     "nodes": 11,
+     "mean_h": 2.8222261701549147,
+     "p10_h": 1.8864596367937854,
+     "median_h": 2.288087582902463,
+     "p90_h": 4.568659434656936
+    },
+    {
+     "label": "exact 5",
+     "nodes": 9,
+     "mean_h": 2.980046084388489,
+     "p10_h": 1.6681077011797283,
+     "median_h": 2.1593668109279323,
+     "p90_h": 6.804098546934404
+    },
+    {
+     "label": "exact 6",
+     "nodes": 9,
+     "mean_h": 2.9579060599445604,
+     "p10_h": 1.4623204240822163,
+     "median_h": 1.8646326378719535,
+     "p90_h": 7.760941814873437
+    },
+    {
+     "label": "exact 7",
+     "nodes": 4,
+     "mean_h": 2.7889717499795736,
+     "p10_h": 1.887600771079705,
+     "median_h": 2.3507128026327524,
+     "p90_h": 5.000011544123036
+    },
+    {
+     "label": "exact 8+",
+     "nodes": 3,
+     "mean_h": 3.139921793217431,
+     "p10_h": 2.4734425073058324,
+     "median_h": 3.193308897110066,
+     "p90_h": 3.7530139752363953
+    },
+    {
+     "label": "dead",
+     "nodes": 157,
+     "mean_h": 1.9992303291275608,
+     "p10_h": 1.3277672991026361,
+     "median_h": 1.9172216424771034,
+     "p90_h": 2.891108597634855
+    },
+    {
+     "label": "at least 2+",
+     "nodes": 2215,
+     "mean_h": 2.033728231838882,
+     "p10_h": 1.4725749906458274,
+     "median_h": 1.8846932695239116,
+     "p90_h": 2.7045805201298947
+    },
+    {
+     "label": "at least 1 (open)",
+     "nodes": 5832,
+     "mean_h": 2.5424004399496467,
+     "p10_h": 1.6261085829199085,
+     "median_h": 2.1760391312215783,
+     "p90_h": 3.8754691745132552
+    }
+   ],
+   "spearman_exact": 0.4587411063900773,
+   "dead_auc": 0.4303246854124592,
+   "mean_root_h_solved": 3.1578629629028105,
+   "mean_root_h_unsolved": 4.223917182219786
+  }
+ ]
+}

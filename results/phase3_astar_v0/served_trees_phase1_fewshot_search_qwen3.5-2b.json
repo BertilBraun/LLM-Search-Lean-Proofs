@@ -1,0 +1,207 @@
+{
+ "source": "trees_phase1_fewshot_search_qwen3.5-2b",
+ "adapter": "value-v0",
+ "server_urls": [
+  "http://127.0.0.1:8101/v1"
+ ],
+ "examples": 13661,
+ "seconds": 335.9772236610297,
+ "metrics": {
+  "examples": 13661,
+  "bin_accuracy": 0.08036984352773827,
+  "alive_mean_absolute_error": 2.49303774277263,
+  "spearman": 0.393755338312162,
+  "dead_auc": 0.686802532647408,
+  "at_least_probability": 0.8368403652023706,
+  "confusion": [
+   [
+    88,
+    17,
+    9,
+    0,
+    0,
+    0,
+    0,
+    1,
+    0
+   ],
+   [
+    15,
+    13,
+    9,
+    1,
+    2,
+    0,
+    0,
+    2,
+    0
+   ],
+   [
+    8,
+    7,
+    10,
+    0,
+    0,
+    0,
+    0,
+    2,
+    0
+   ],
+   [
+    7,
+    5,
+    1,
+    1,
+    0,
+    0,
+    0,
+    1,
+    0
+   ],
+   [
+    5,
+    2,
+    4,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ],
+   [
+    6,
+    1,
+    2,
+    0,
+    1,
+    0,
+    0,
+    0,
+    0
+   ],
+   [
+    4,
+    2,
+    0,
+    0,
+    0,
+    1,
+    0,
+    0,
+    0
+   ],
+   [
+    21,
+    13,
+    4,
+    0,
+    0,
+    0,
+    0,
+    1,
+    0
+   ],
+   [
+    489,
+    313,
+    195,
+    94,
+    15,
+    2,
+    0,
+    32,
+    0
+   ]
+  ]
+ },
+ "mean_h": 2.617882366708177,
+ "mean_dead_probability": 1.3722095898615995e-07,
+ "groups": [
+  {
+   "label": "exact 1",
+   "states": 115,
+   "mean_h": 1.8428771452252635,
+   "median_h": 1.609459099116282,
+   "mean_dead_probability": 6.226215217468378e-08
+  },
+  {
+   "label": "exact 2",
+   "states": 42,
+   "mean_h": 2.9916290799663208,
+   "median_h": 2.6609869340040877,
+   "mean_dead_probability": 1.0320363163060842e-07
+  },
+  {
+   "label": "exact 3",
+   "states": 27,
+   "mean_h": 3.074318418429397,
+   "median_h": 2.7186186761575732,
+   "mean_dead_probability": 1.0512101881093576e-07
+  },
+  {
+   "label": "exact 4",
+   "states": 15,
+   "mean_h": 2.935360852252116,
+   "median_h": 2.405797006475909,
+   "mean_dead_probability": 1.1270114954290766e-07
+  },
+  {
+   "label": "exact 5",
+   "states": 11,
+   "mean_h": 2.5456007831045127,
+   "median_h": 2.156403519811502,
+   "mean_dead_probability": 1.0224306182194675e-07
+  },
+  {
+   "label": "exact 6",
+   "states": 10,
+   "mean_h": 2.5023299297741666,
+   "median_h": 2.0929540539023987,
+   "mean_dead_probability": 1.0729244696002551e-07
+  },
+  {
+   "label": "exact 7",
+   "states": 7,
+   "mean_h": 2.6652217133907015,
+   "median_h": 1.9291679797925512,
+   "mean_dead_probability": 1.4145240952628107e-07
+  },
+  {
+   "label": "exact 8+",
+   "states": 39,
+   "mean_h": 2.430197309304368,
+   "median_h": 2.145515139075517,
+   "mean_dead_probability": 1.0414208598434385e-07
+  },
+  {
+   "label": "dead",
+   "states": 1140,
+   "mean_h": 2.8129366357474574,
+   "median_h": 2.4550843910740907,
+   "mean_dead_probability": 1.2737780599833712e-07
+  },
+  {
+   "label": "at least 2+",
+   "states": 4761,
+   "mean_h": 2.668771100632057,
+   "median_h": 2.4253289718544773,
+   "mean_dead_probability": 1.3997718605315833e-07
+  },
+  {
+   "label": "at least 1 (open)",
+   "states": 7494,
+   "mean_h": 2.5645914836708985,
+   "median_h": 2.338156705332708,
+   "mean_dead_probability": 1.3873240564763969e-07
+  }
+ ],
+ "statistics": {
+  "requests": 13661,
+  "prompt_tokens": 5125121,
+  "cached_prompt_tokens": 28880,
+  "prompts_too_long": 0,
+  "missing_bin_tokens": 13661,
+  "request_seconds": 42622.88024746743
+ }
+}
