@@ -1,0 +1,29 @@
+{
+ "name": "adapters_c40",
+ "settings": [],
+ "processes": 1,
+ "concurrency_per_process": 40,
+ "orchestrator_cpu_cores": [
+  0.3070769230769231
+ ],
+ "window_seconds": 269.2135923100868,
+ "gpu_utilization": [
+  77.66666666666667,
+  80.34814814814816
+ ],
+ "gpu_power_watts": [
+  317.2534777777778,
+  317.42952222222226
+ ],
+ "cpu_cores_used": 29.891830523664872,
+ "throttled_fraction": 0.0018573551263001485,
+ "load_average": 38.55722222222222,
+ "peak_anonymous_memory_gib": 28.85601043701172,
+ "generated_tokens_per_second": 2178.7124304051113,
+ "prompt_tokens_per_second": 21139.538130916168,
+ "policy_samples_per_second": 88.97024772958528,
+ "requests_per_second": 27.569187485344937,
+ "running_sequences": 50.44074074074074,
+ "waiting_sequences": 7.203703703703703,
+ "finished_searches_per_hour": 735.4754947585958
+}

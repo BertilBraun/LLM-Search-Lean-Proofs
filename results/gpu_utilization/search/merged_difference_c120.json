@@ -1,0 +1,30 @@
+{
+ "name": "merged_difference_c120",
+ "settings": [],
+ "processes": 1,
+ "concurrency_per_process": 120,
+ "background_cpus": 40,
+ "orchestrator_cpu_cores": [
+  0.30346153846153845
+ ],
+ "window_seconds": 269.24009885592386,
+ "gpu_utilization": [
+  78.88148148148149,
+  80.02962962962962
+ ],
+ "gpu_power_watts": [
+  326.57024814814815,
+  321.32776666666666
+ ],
+ "cpu_cores_used": 43.637266473026706,
+ "throttled_fraction": 0.001114413075780089,
+ "load_average": 82.59377777777777,
+ "peak_anonymous_memory_gib": 51.108516693115234,
+ "generated_tokens_per_second": 3141.400569952252,
+ "prompt_tokens_per_second": 32910.88897104318,
+ "policy_samples_per_second": 144.6441305195025,
+ "requests_per_second": 42.9245125414413,
+ "running_sequences": 140.0185185185185,
+ "waiting_sequences": 19.307407407407407,
+ "finished_searches_per_hour": 467.98378300783975
+}

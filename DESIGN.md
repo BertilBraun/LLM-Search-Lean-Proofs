@@ -33,6 +33,11 @@ Nothing derived from miniF2F-test is ever used for training or for generating re
 - **Hardware**: one Vast.ai node (see `deployment/README.md`): 2× RTX 3090 24 GB, 46 effective CPU cores,
   ~120 GB RAM cgroup limit, 300 GB non-persistent disk. During search both GPUs serve; during expert iteration
   one GPU serves while the other trains.
+- **Throughput** (`results/gpu_utilization/`): training is GPU-bound (98–100%) with packed sequences and compiled
+  element-wise layers (10.9k tokens/s on both GPUs, 1.5× the padded setup). Search at row-4 settings is bound by
+  Lean CPU (~4.3 core-seconds per expansion with the 7-tactic sweep): 120 searches pinned to 40 CPUs reach
+  ~150 samples/s, ~85% of what both GPUs serve (merged policy and value instances); CPU-heavy jobs run pinned
+  (`deployment/background.sh`), because `nice` cannot prevent the cgroup quota from throttling GPU feeders.
 
 ## Search
 

@@ -1,0 +1,33 @@
+{
+ "name": "adapters_c120_pinned40",
+ "settings": [
+  "lean.pool_size=120",
+  "lean.concurrency=120"
+ ],
+ "processes": 1,
+ "concurrency_per_process": 120,
+ "background_cpus": 40,
+ "orchestrator_cpu_cores": [
+  0.2847435897435897
+ ],
+ "window_seconds": 269.2252496080473,
+ "gpu_utilization": [
+  75.58148148148148,
+  79.88888888888889
+ ],
+ "gpu_power_watts": [
+  323.1768703703704,
+  322.6301666666667
+ ],
+ "cpu_cores_used": 42.601278690233755,
+ "throttled_fraction": 0.0,
+ "load_average": 72.32562962962963,
+ "peak_anonymous_memory_gib": 50.57180404663086,
+ "generated_tokens_per_second": 3092.859979560813,
+ "prompt_tokens_per_second": 32078.603372355657,
+ "policy_samples_per_second": 138.23369113476937,
+ "requests_per_second": 41.615710325503976,
+ "running_sequences": 131.55185185185186,
+ "waiting_sequences": 19.755555555555556,
+ "finished_searches_per_hour": 361.0359731916268
+}

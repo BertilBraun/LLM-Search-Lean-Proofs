@@ -1,0 +1,16 @@
+{
+ "run_name": "ddp_padded_idle",
+ "world_size": 2,
+ "packing": false,
+ "micro_batch_tokens": 32768,
+ "micro_batches_per_step": 1,
+ "gradient_checkpointing": true,
+ "compile_layers": false,
+ "measured_steps": 9,
+ "tokens": 560123,
+ "padded_tokens": 586152,
+ "seconds": 76.39849063695874,
+ "tokens_per_second": 7331.59772307116,
+ "padding_overhead": 0.04647015030627211,
+ "peak_memory_gib": 14.806156635284424
+}

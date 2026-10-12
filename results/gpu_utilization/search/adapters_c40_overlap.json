@@ -1,0 +1,33 @@
+{
+ "name": "adapters_c40_overlap",
+ "settings": [
+  "expander.overlap=true",
+  "search.score_children_early=true"
+ ],
+ "processes": 1,
+ "concurrency_per_process": 40,
+ "background_cpus": null,
+ "orchestrator_cpu_cores": [
+  0.33925641025641023
+ ],
+ "window_seconds": 269.26747609791346,
+ "gpu_utilization": [
+  70.41481481481482,
+  72.67037037037036
+ ],
+ "gpu_power_watts": [
+  304.63227777777774,
+  307.99254814814816
+ ],
+ "cpu_cores_used": 32.36383122940232,
+ "throttled_fraction": 0.0,
+ "load_average": 42.14596296296296,
+ "peak_anonymous_memory_gib": 27.236621856689453,
+ "generated_tokens_per_second": 2297.217654965026,
+ "prompt_tokens_per_second": 22395.09608582367,
+ "policy_samples_per_second": 94.30028597574379,
+ "requests_per_second": 28.978620489474203,
+ "running_sequences": 66.18148148148148,
+ "waiting_sequences": 8.366666666666667,
+ "finished_searches_per_hour": 815.5459514915462
+}

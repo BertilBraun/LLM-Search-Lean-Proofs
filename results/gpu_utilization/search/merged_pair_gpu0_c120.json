@@ -1,0 +1,30 @@
+{
+ "name": "merged_pair_gpu0_c120",
+ "settings": [],
+ "processes": 1,
+ "concurrency_per_process": 120,
+ "background_cpus": 40,
+ "orchestrator_cpu_cores": [
+  0.2352051282051282
+ ],
+ "window_seconds": 269.3610375110293,
+ "gpu_utilization": [
+  96.50740740740741,
+  3.2074074074074073
+ ],
+ "gpu_power_watts": [
+  342.54114074074073,
+  36.52668518518519
+ ],
+ "cpu_cores_used": 35.431822861942884,
+ "throttled_fraction": 0.06050482553823311,
+ "load_average": 54.051111111111105,
+ "peak_anonymous_memory_gib": 47.78892517089844,
+ "generated_tokens_per_second": 2075.9312674428793,
+ "prompt_tokens_per_second": 21454.732478758626,
+ "policy_samples_per_second": 91.23813981075013,
+ "requests_per_second": 27.65433363648591,
+ "running_sequences": 194.85555555555555,
+ "waiting_sequences": 541.4592592592593,
+ "finished_searches_per_hour": 521.2335135672737
+}

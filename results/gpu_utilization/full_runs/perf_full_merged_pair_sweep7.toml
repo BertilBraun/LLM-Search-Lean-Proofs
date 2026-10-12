@@ -1,0 +1,70 @@
+# Ablation-ladder row 4 with SFT v2: row 2's policy and budget (experiments/configs/phase2_sft_v2_search.toml),
+# best-first on A*'s f = depth + λ·h with h from the value adapter value-v0. Both vLLM servers serve the policy and
+# value adapters; requests go round-robin.
+
+[lean]
+pool_size = 120
+concurrency = 120
+
+[search]
+max_expansions = 64
+max_wall_seconds = 600.0
+max_depth = 16
+score_children_early = true
+tactic_timeout_seconds = 10.0
+forbidden_steps = [
+    "exact?",
+    "apply?",
+    "rw?",
+    "simp?",
+    "simp_all?",
+    "dsimp?",
+    "aesop?",
+    "hint",
+    "rw_search",
+    "library_search",
+]
+
+[expander]
+kind = "automation_then_policy"
+overlap = true
+
+[automation]
+tactics = [
+    "omega",
+    "constructor",
+    "rfl",
+    "field_simp",
+    "ring_nf",
+    "simp_all",
+    "nlinarith",
+]
+timeout_seconds = 10.0
+max_wall_clock_timeouts_per_tactic = 1
+
+[priority]
+kind = "a_star"
+# The v1 pair's sweep choice (results/phase3_astar_v0/), not re-swept for v2.
+value_weight = 0.5
+
+[policy]
+model = "policy-merged"
+server_urls = ["http://127.0.0.1:8100/v1", "http://127.0.0.1:8101/v1"]
+tokenizer = "Qwen/Qwen3.5-2B"
+sample_count = 16
+temperature = 0.8
+top_p = 1.0
+# SFT completions were capped at 256 tokens; SFT samples average ~26 tokens, so the cap rarely binds.
+max_tokens = 256
+thinking = false
+few_shot = false
+
+[value]
+model = "value-merged"
+server_urls = ["http://127.0.0.1:8200/v1", "http://127.0.0.1:8201/v1"]
+tokenizer = "Qwen/Qwen3.5-2B"
+
+[value.readout]
+eight_or_more_steps = 12.0
+# v0 has no dead labels: p_dead is ~1e-7, so D does not change h.
+dead_steps = 16.0

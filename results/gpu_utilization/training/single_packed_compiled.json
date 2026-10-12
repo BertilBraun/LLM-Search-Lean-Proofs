@@ -1,0 +1,16 @@
+{
+ "run_name": "single_packed_compiled",
+ "world_size": 1,
+ "packing": true,
+ "micro_batch_tokens": 32768,
+ "micro_batches_per_step": 1,
+ "gradient_checkpointing": true,
+ "compile_layers": true,
+ "measured_steps": 12,
+ "tokens": 391826,
+ "padded_tokens": 391826,
+ "seconds": 74.38645211001858,
+ "tokens_per_second": 5267.437670242479,
+ "padding_overhead": 0.0,
+ "peak_memory_gib": 12.888320446014404
+}

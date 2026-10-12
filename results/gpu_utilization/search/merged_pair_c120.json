@@ -1,0 +1,30 @@
+{
+ "name": "merged_pair_c120",
+ "settings": [],
+ "processes": 1,
+ "concurrency_per_process": 120,
+ "background_cpus": 40,
+ "orchestrator_cpu_cores": [
+  0.29456410256410254
+ ],
+ "window_seconds": 269.266811714042,
+ "gpu_utilization": [
+  95.41481481481482,
+  95.93333333333334
+ ],
+ "gpu_power_watts": [
+  340.5907740740741,
+  338.8334370370371
+ ],
+ "cpu_cores_used": 43.74327972326826,
+ "throttled_fraction": 0.0007429420505200594,
+ "load_average": 90.02403703703705,
+ "peak_anonymous_memory_gib": 55.57767105102539,
+ "generated_tokens_per_second": 3357.736492829171,
+ "prompt_tokens_per_second": 34875.1149100871,
+ "policy_samples_per_second": 151.5819931174663,
+ "requests_per_second": 43.82641858043952,
+ "running_sequences": 116.00740740740741,
+ "waiting_sequences": 17.133333333333333,
+ "finished_searches_per_hour": 467.9373562524684
+}

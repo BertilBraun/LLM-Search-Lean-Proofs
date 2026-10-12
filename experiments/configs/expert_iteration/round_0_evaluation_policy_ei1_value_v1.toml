@@ -31,20 +31,16 @@ kind = "automation_then_policy"
 overlap = true
 
 [automation]
+# Row 0's 7-tactic sweep: 23% less Lean time per expansion at row 4's solve rate (results/gpu_utilization/; the
+# results of rows 2 and 4 used all 13: decide, intros, simp, norm_num, linarith, aesop too).
 tactics = [
-    "decide",
     "omega",
-    "intros",
     "constructor",
     "rfl",
-    "simp",
     "field_simp",
-    "norm_num",
-    "linarith",
     "ring_nf",
     "simp_all",
     "nlinarith",
-    "aesop",
 ]
 timeout_seconds = 10.0
 max_wall_clock_timeouts_per_tactic = 1
