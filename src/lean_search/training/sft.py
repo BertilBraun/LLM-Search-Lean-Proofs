@@ -31,7 +31,12 @@ from lean_search.training.sft_data import IGNORE_INDEX, TokenizedExample
 
 VISION_PARAMETER = re.compile(r"\bvisual\b")
 # Element-wise chains (norms, SiLU gating, LoRA scaling and sums) that torch.compile fuses; matmuls stay cuBLAS.
-COMPILED_MODULE = re.compile(r"\.layers\.\d+\.(mlp|input_layernorm|post_attention_layernorm|linear_attn\.norm)$")
+# Not the token mixers as a whole: compiled around the FLA kernels and varlen attention, training diverges.
+COMPILED_MODULE = re.compile(
+    r"\.layers\.\d+\.(mlp|input_layernorm|post_attention_layernorm"
+    r"|linear_attn\.(norm|in_proj_qkv|in_proj_z|in_proj_a|in_proj_b|out_proj)"
+    r"|self_attn\.(q_proj|k_proj|v_proj|o_proj|q_norm|k_norm))$"
+)
 LOSS_CHUNK_POSITIONS = 1024
 
 
