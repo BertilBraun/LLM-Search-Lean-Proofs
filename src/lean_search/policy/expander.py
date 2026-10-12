@@ -21,6 +21,8 @@ from lean_search.policy.prompts import (
     render_prompt,
     stop_sequences,
 )
+from lean_search.retrieval.provider import LemmaProvider, load_lemma_provider
+from lean_search.retrieval.statistics import LemmaStatistics
 from lean_search.search.expanders import Candidate, CandidateBatches, SearchContext
 from lean_search.search.tree import Node, StepSource
 
@@ -51,6 +53,7 @@ class PolicyStatistics:
     request_seconds: float = 0.0
     # From the first request's start to the latest response, for samples per second under the search's load.
     window_seconds: float = 0.0
+    lemmas: LemmaStatistics | None = None
 
     def record(self, generation: Generation, parsed: ParsedSamples, seconds: float) -> None:
         self.requests += 1
@@ -98,17 +101,22 @@ class PolicyExpander:
         clients: Sequence[PolicyClient],
         max_model_length: int,
         forbidden_steps: Sequence[str] = (),
+        lemma_provider: LemmaProvider | None = None,
     ) -> None:
         self.config = config
         self.tokenizer = tokenizer
         self.max_model_length = max_model_length
         self.forbidden_tokens = FORBIDDEN_TOKENS | frozenset(forbidden_steps)
-        self.statistics = PolicyStatistics()
+        self.lemma_provider = lemma_provider
+        self.statistics = PolicyStatistics(lemmas=lemma_provider.statistics if lemma_provider else None)
         self._clients = itertools.cycle(clients)
         self._first_request_started: float | None = None
 
     async def expand(self, node: Node, context: SearchContext) -> CandidateBatches:
-        prompt = render_prompt(self.tokenizer, node.goals, few_shot=self.config.few_shot, thinking=self.config.thinking)
+        lemmas = await self.lemma_provider.lemma_lines(node.state, context.repl) if self.lemma_provider else ()
+        prompt = render_prompt(
+            self.tokenizer, node.goals, lemmas, few_shot=self.config.few_shot, thinking=self.config.thinking
+        )
         prompt_tokens = len(self.tokenizer.encode(prompt, add_special_tokens=False))
         max_tokens = min(self.config.max_tokens, self.max_model_length - prompt_tokens)
         if max_tokens < MINIMUM_GENERATED_TOKENS:
@@ -161,6 +169,7 @@ async def open_policy_expander(
     max_model_length = min(
         [await served_max_model_length(server_url, config.model) for server_url in config.server_urls]
     )
+    lemma_provider = await load_lemma_provider(config.retrieval) if config.retrieval.enabled else None
     async with contextlib.AsyncExitStack() as stack:
         clients = [
             await stack.enter_async_context(
@@ -168,4 +177,4 @@ async def open_policy_expander(
             )
             for server_url in config.server_urls
         ]
-        yield PolicyExpander(config, tokenizer, clients, max_model_length, forbidden_steps)
+        yield PolicyExpander(config, tokenizer, clients, max_model_length, forbidden_steps, lemma_provider)

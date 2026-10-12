@@ -24,6 +24,13 @@ class PremiseSignature:
     signature: str
 
 
+@dataclass(frozen=True)
+class RetrievedPremise:
+    full_name: str
+    signature: str
+    score: float
+
+
 def serialize_premise(full_name: str, code: str) -> str:
     """ReProver's `Premise.serialize`: the declaration's source with its name marked."""
     marked_name = f"{MARK_START}{full_name}{MARK_END}"

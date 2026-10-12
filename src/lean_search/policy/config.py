@@ -1,4 +1,6 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+from lean_search.retrieval.config import RetrievalConfig
 
 
 @dataclass(frozen=True)
@@ -17,3 +19,4 @@ class PolicyConfig:
     thinking: bool = False
     few_shot: bool = True
     request_timeout_seconds: float = 900.0
+    retrieval: RetrievalConfig = field(default_factory=RetrievalConfig)
