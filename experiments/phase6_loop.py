@@ -3,13 +3,13 @@
     python experiments/phase6_loop.py --config experiments/configs/expert_iteration/loop.toml init
     python experiments/phase6_loop.py --config ... status | metrics | serve-commands | commands
 
-init writes version 0 (the configured initial adapters) and refuses an existing loop. status prints the current
-version, the time since the last phase, statements processed, proofs found, the search service's heartbeat and the
-training phase in progress. metrics computes per-version solve rates, proofs per hour and value calibration on fresh
-trees, each budget stage's proofs per GPU-hour (to tune the stage gates), and the phases' buffer statistics, into
-$LEAN_SEARCH_RUNS/<loop>/summary/{metrics.json,README.md}.
+init writes version 0 (the configured initial adapters, merged into full weights) and refuses an existing loop.
+status prints one block for the watchdog: service alive, version, statements processed, proofs, the last phase, the
+curriculum band, GPU utilization and the verifier's lead. metrics computes per-version solve rates, proofs per hour
+and value calibration on fresh trees, each budget stage's proofs per GPU-hour (to tune the stage gates), and the
+phases' buffer statistics, into $LEAN_SEARCH_RUNS/<loop>/summary/{metrics.json,README.md}.
 serve-commands prints how to start each vLLM server with the current version (also after a reboot); commands prints
-how to start every process.
+the launch sequence: init, servers, verifier, service, evaluator, status.
 """
 
 import argparse
@@ -18,10 +18,12 @@ import datetime
 import json
 import os
 import shutil
+import subprocess
 from enum import StrEnum
 from pathlib import Path
 
 from lean_search.expert_iteration.digests import all_values
+from lean_search.expert_iteration.known_proofs import read_verified
 from lean_search.expert_iteration.loop_config import LoopConfig, load_loop_config
 from lean_search.expert_iteration.loop_evaluation import read_evaluations
 from lean_search.expert_iteration.loop_metrics import (
@@ -39,8 +41,10 @@ from lean_search.expert_iteration.search_service import ServiceHeartbeat
 from lean_search.expert_iteration.serving import (
     LoopPaths,
     ModelVersion,
+    merged_directory,
     read_current,
     record_published,
+    server_port,
 )
 from lean_search.expert_iteration.shards import all_attempts, now
 from lean_search.expert_iteration.trainer import PhaseRecord, PhaseStage, read_phase_state
@@ -50,6 +54,9 @@ from lean_search.search.summary import markdown_table
 DATA_DIRECTORY = Path(os.environ["LEAN_SEARCH_DATA"])
 RUNS_DIRECTORY = Path(os.environ["LEAN_SEARCH_RUNS"])
 CHECKPOINTS_DIRECTORY = Path(os.environ["LEAN_SEARCH_CHECKPOINTS"])
+# A heartbeat older than this many heartbeat intervals means the service is gone or hung.
+HEARTBEAT_TOLERANCE = 4
+VERIFIER_PATTERN = "^python experiments/phase6_pool_v3.py .*--step verify"
 
 
 class Command(StrEnum):
@@ -108,57 +115,108 @@ def age_minutes(timestamp: str) -> float:
     return (datetime.datetime.now(datetime.UTC) - datetime.datetime.fromisoformat(timestamp)).total_seconds() / 60
 
 
-def print_status(paths: LoopPaths) -> None:
+def gpu_lines() -> list[str]:
+    try:
+        output = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=index,utilization.gpu,memory.used,memory.total",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=30,
+        ).stdout
+    except (OSError, subprocess.SubprocessError) as error:
+        return [f"gpus: unavailable ({type(error).__name__})"]
+    lines = []
+    for row in output.strip().splitlines():
+        index, utilization, used, total = (field.strip() for field in row.split(","))
+        lines.append(f"gpu {index}: {utilization}% util, {int(used) / 1024:.1f}/{int(total) / 1024:.1f} GiB")
+    return lines
+
+
+def verifier_running() -> bool:
+    found = subprocess.run(["pgrep", "-f", VERIFIER_PATTERN], capture_output=True, text=True, check=False)
+    return bool(found.stdout.strip())
+
+
+def verifier_line(config: LoopConfig, started: set[str]) -> str:
+    records, _ = read_verified(DATA_DIRECTORY / config.search.curriculum.verified)
+    usable = [record for record in records if record.verified and not record.automation_solved]
+    lead = sum(record.name not in started for record in usable)
+    state = "running" if verifier_running() else "not running"
+    return (
+        f"verifier: {state}; {len(records):,} checked, {len(usable):,} usable, lead {lead:,} not started "
+        f"(launch needs {config.search.curriculum.minimum_statements:,} usable)"
+    )
+
+
+def print_status(config: LoopConfig, paths: LoopPaths) -> None:
+    """One block for the watchdog: each line `key: value`, alive/stale states spelled out."""
+    current_time = datetime.datetime.now(datetime.UTC)
+    attempts = list(all_attempts(paths.shards))
+    started = {attempt.problem_name for attempt in attempts}
+    lines = [f"loop: {paths.directory} at {current_time.isoformat(timespec='seconds')}"]
+    if not paths.current.exists():
+        lines += ["service: not initialized (phase6_loop.py init)", *gpu_lines(), verifier_line(config, started)]
+        print("\n".join(lines))
+        return
     current = read_current(paths)
-    totals = run_totals(list(all_attempts(paths.shards)), datetime.datetime.now(datetime.UTC))
-    lines = [
-        f"Loop {paths.directory}",
-        f"Version {current.version} (published {current.published_at}, {age_minutes(current.published_at):.0f} min "
-        f"ago, trigger {current.trigger}); policy {current.policy_adapter}, value {current.value_adapter}",
-        f"Statements processed {totals.statements:,}, solved {totals.solved_statements:,}, {totals.proofs:,} proofs "
-        f"(with harvested ones); {totals.attempts:,} stage records; last hour: {totals.attempts_last_hour:,} stages, "
-        f"{totals.proofs_last_hour:,} proofs",
-    ]
+    totals = run_totals(attempts, current_time)
     if paths.heartbeat.exists():
         heartbeat = from_json_object(ServiceHeartbeat, json.loads(paths.heartbeat.read_text(encoding="utf-8")))
-        counts = heartbeat.scheduler
-        activity = "paused" if heartbeat.paused else "running"
+        age = age_minutes(heartbeat.written_at)
+        alive = age * 60 <= HEARTBEAT_TOLERANCE * config.search.heartbeat_seconds
+        activity = "paused for training" if heartbeat.paused else "searching"
+        stages = "/".join(str(count) for count in heartbeat.live_by_stage)
         lines.append(
-            f"Search service ({age_minutes(heartbeat.written_at):.1f} min ago, {activity}"
-            f", version {heartbeat.version}): {heartbeat.live_searches} searches in flight (by stage "
-            f"{'/'.join(str(count) for count in heartbeat.live_by_stage)}), {counts.fresh:,} fresh, {counts.queued:,} "
-            f"queued to restart, {counts.solved:,} solved, {counts.retired:,} retired; this session "
-            f"{heartbeat.session_attempts:,} stages, {heartbeat.session_proofs:,} proofs (+"
-            f"{heartbeat.session_harvested_proofs:,} harvested), {heartbeat.session_failures} server errors"
+            f"service: {'alive' if alive else 'STALE'} (heartbeat {age:.1f} min ago), {activity}, "
+            f"{heartbeat.live_searches} searches in flight (by stage {stages}), {heartbeat.session_failures} server "
+            "errors this session"
         )
-        curriculum = heartbeat.curriculum
-        if curriculum is not None:
-            rate = "–" if curriculum.solve_rate is None else f"{curriculum.solve_rate:.0%}"
-            lines.append(
-                f"Curriculum: {curriculum.statements:,} verified statements, {curriculum.available:,} not started; "
-                f"band {curriculum.band_low} – {curriculum.band_high} ({curriculum.band_available:,} statements, "
-                f"move {curriculum.generation}), solve rate {rate} over {curriculum.outcomes} outcomes; "
-                f"{curriculum.roots_scored_by_current_model:,} roots scored by the current value model"
-            )
     else:
-        lines.append("Search service: no heartbeat yet")
+        heartbeat = None
+        lines.append("service: no heartbeat (not started)")
+    lines += [
+        f"version: {current.version} (published {age_minutes(current.published_at):.0f} min ago, {current.trigger})",
+        f"statements: {totals.statements:,} processed, {totals.solved_statements:,} solved",
+        f"proofs: {totals.proofs:,} in all, {totals.proofs_last_hour:,} in the last hour",
+    ]
     state = read_phase_state(paths)
-    if state is not None and state.stage != PhaseStage.DONE:
-        lines.append(f"Training phase {state.phase} at {state.stage} (started {state.started_at}, {state.trigger})")
     phases = read_phases(paths)
-    if phases and phases[-1].data is not None:
-        data = phases[-1].data
+    if state is not None and state.stage != PhaseStage.DONE:
         lines.append(
-            f"Last phase {phases[-1].phase}: policy buffer {data.policy.size:,}/{data.policy.capacity:,} "
-            f"({data.policy.dataset_share:.0%} dataset), {data.policy.added:,} added, {data.policy.trained:,} trained; "
-            f"value buffer {data.value.size:,}/{data.value.capacity:,} ({data.value.dataset_share:.0%} dataset), "
-            f"{data.value.added:,} added; value gate {'open' if data.gate.open else 'closed'} "
-            f"(Spearman {data.gate.spearman}, dead AUC {data.gate.dead_auc})"
+            f"phase: {state.phase} in progress at {state.stage} (started {age_minutes(state.started_at):.0f} min ago)"
         )
+    elif phases:
+        last = phases[-1]
+        took = age_minutes(last.started_at) - age_minutes(last.finished_at)
+        lines.append(
+            f"phase: last {last.phase} finished {age_minutes(last.finished_at):.0f} min ago, took {took:.0f} min"
+        )
+    else:
+        lines.append("phase: none yet")
+    curriculum = None if heartbeat is None else heartbeat.curriculum
+    if curriculum is not None and curriculum.band_low is not None:
+        rate = "–" if curriculum.solve_rate is None else f"{curriculum.solve_rate:.0%}"
+        lines.append(
+            f"curriculum: band {curriculum.band_low:.2f}–{curriculum.band_high:.2f} ({curriculum.band_available:,} "
+            f"statements, move {curriculum.generation}), solve rate {rate} over {curriculum.outcomes} outcomes, "
+            f"{curriculum.available:,} of {curriculum.statements:,} not started"
+        )
+    else:
+        lines.append("curriculum: no band yet")
+    lines += gpu_lines()
+    lines.append(verifier_line(config, started))
     evaluations = read_evaluations(paths.evaluations)
     if evaluations:
-        last = evaluations[-1]
-        lines.append(f"Last evaluation: version {last.version}, {last.solved}/{last.problems} on miniF2F-valid")
+        last_evaluation = evaluations[-1]
+        lines.append(
+            f"evaluation: version {last_evaluation.version} {last_evaluation.solved}/{last_evaluation.problems} "
+            "on miniF2F-valid"
+        )
     print("\n".join(lines))
 
 
@@ -294,26 +352,42 @@ def write_metrics(config: LoopConfig, paths: LoopPaths) -> None:
     print(markdown)
 
 
-def print_commands(config_path: Path, paths: LoopPaths) -> None:
-    config = f"--config {config_path.as_posix()}"
+def print_commands(config: LoopConfig, config_path: Path, paths: LoopPaths) -> None:
+    """The launch sequence, in order (run from the repository on the node)."""
+    option = f"--config {config_path.as_posix()}"
     log = f"$LEAN_SEARCH_RUNS/{paths.name}"
+    publisher = merged_publisher(config, CHECKPOINTS_DIRECTORY)
+    initial = ModelVersion(
+        0,
+        config.initial.policy_adapter,
+        config.initial.value_adapter,
+        "",
+        "initial",
+        str(merged_directory(publisher.weights_root, 0, "policy")),
+        str(merged_directory(publisher.weights_root, 0, "value")),
+    )
+    ports = " ".join(str(server_port(server)) for server in config.serving.servers)
+    background = "BACKGROUND_CPUS=40 setsid nohup deployment/background.sh python"
     print(
         "\n".join(
             [
-                f"python experiments/phase6_loop.py {config} init",
-                "# start the servers with the commands init (or serve-commands) prints, then:",
-                "# the searches' Lean REPLs are the CPU load: 40 pinned CPUs (deployment/README.md, CPU budget)",
-                "BACKGROUND_CPUS=40 setsid nohup deployment/background.sh python experiments/phase6_service.py "
-                f"{config} >> {log}/service.log 2>&1 < /dev/null &",
-                f"BACKGROUND_CPUS=40 setsid nohup deployment/background.sh python experiments/phase6_evaluator.py "
-                f"{config} >> {log}/evaluator.log 2>&1 < /dev/null &",
-                "# pool v3 verification ahead of the curriculum (shares the 40 background CPUs; 6 Lean processes, more "
-                "with --concurrency N before launch: the service waits for search.curriculum.minimum_statements)",
-                "BACKGROUND_CPUS=40 setsid nohup deployment/background.sh python experiments/phase6_pool_v3.py "
-                "--config experiments/configs/expert_iteration/pool_v3.toml --step verify "
-                f"--loop-config {config_path.as_posix()} >> {log}/verify.log 2>&1 < /dev/null &",
-                f"python experiments/phase6_loop.py {config} status",
-                "# stop a process with kill (SIGTERM) on its python PID; each resumes from disk",
+                "# 1. Version 0: merge the initial policy and value adapters into full weights (CPU, about a minute)",
+                f"python experiments/phase6_loop.py {option} init",
+                "# 2. Servers: per GPU the merged policy and the merged value, in sleep mode for the phases",
+                *(publisher.serve_command(initial, server) for server in config.serving.servers),
+                f"for port in {ports}; do until curl -sf http://127.0.0.1:$port/v1/models > /dev/null; do sleep 10; "
+                "done; done",
+                "# 3. The verifier at its loop setting (6 Lean processes): stop the faster pre-launch one by its PID",
+                f'kill $(pgrep -f "{VERIFIER_PATTERN}")',
+                f"{background} experiments/phase6_pool_v3.py --config experiments/configs/expert_iteration/pool_v3.toml"
+                f" --step verify --loop-config {config_path.as_posix()} >> {log}/verify.log 2>&1 < /dev/null &",
+                "# 4. The search service with its training phases (searches start at "
+                f"{config.search.curriculum.minimum_statements:,} usable statements), then the evaluator",
+                f"{background} experiments/phase6_service.py {option} >> {log}/service.log 2>&1 < /dev/null &",
+                f"{background} experiments/phase6_evaluator.py {option} >> {log}/evaluator.log 2>&1 < /dev/null &",
+                "# 5. Watch: one status block (service, version, statements, proofs, phase, band, GPUs, verifier)",
+                f"python experiments/phase6_loop.py {option} status",
+                "# Stop a process with kill (SIGTERM) on its python PID; each resumes from disk.",
             ]
         )
     )
@@ -327,13 +401,13 @@ def main() -> None:
         case Command.INIT:
             initialize(config, arguments.config, paths)
         case Command.STATUS:
-            print_status(paths)
+            print_status(config, paths)
         case Command.METRICS:
             write_metrics(config, paths)
         case Command.SERVE_COMMANDS:
             print_serve_commands(config, paths)
         case Command.COMMANDS:
-            print_commands(arguments.config, paths)
+            print_commands(config, arguments.config, paths)
 
 
 if __name__ == "__main__":

@@ -65,12 +65,12 @@ class HarvestConfig:
 
 @dataclass(frozen=True)
 class SchedulerConfig:
-    # Budget escalation: 32 expansions for every statement, then 128 and 512 in total while the open frontier stays
-    # close to a proof by the value model; the wall caps scale with the stage.
+    # Budget escalation at n = 8: 64 expansions for every statement, then 192 and 512 in total while the open
+    # frontier stays close to a proof by the value model; the wall caps scale with the stage.
     stages: tuple[SearchStage, ...] = (
-        SearchStage(32, 600.0),
-        SearchStage(128, 2400.0, 3.0),
-        SearchStage(512, 9600.0, 2.0),
+        SearchStage(64, 600.0),
+        SearchStage(192, 1800.0, 3.0),
+        SearchStage(512, 4800.0, 2.0),
     )
     # Statements of the open pool (no known proofs) are drawn by these weights; sources not listed weigh 1, weight 0
     # leaves a source out.

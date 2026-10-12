@@ -51,9 +51,9 @@ automation_log_probability = -1.0
 model = "policy-merged"
 tokenizer = "Qwen/Qwen3.5-2B"
 server_urls = ["http://127.0.0.1:8100/v1", "http://127.0.0.1:8101/v1"]
-# Samples per expansion: the budget-shape test (16 x 64 vs 8 x 128 vs 4 x 256 at equal generations) sets it; with
-# n = 4 the stage budgets (loop.toml, in expansions) should rise so that a stage generates about as much.
-sample_count = 16
+# The budget-shape test on miniF2F-valid at equal generations: 16 x 64 = 156, 8 x 128 = 154, 4 x 256 = 153 solved,
+# equal within noise; n = 8 halves the cost of an expansion, so the loop's stages count twice the expansions.
+sample_count = 8
 temperature = 0.8
 top_p = 1.0
 # Thinking mode: thinking = true with max_tokens up to 2048 (and the same thinking_instruction in loop_policy.toml);

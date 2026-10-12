@@ -3,7 +3,7 @@
 LoopSearch extends the search core's theorem search (lean_search.search.search._TheoremSearch, whose loop it reuses)
 with what the loop needs; it belongs in the core once its owner adds it there:
 
-- stages: the budget escalates in stages on the same tree (32, 128, 512 expansions in total by default), each
+- stages: the budget escalates in stages on the same tree (64, 192, 512 expansions in total by default), each
   stage entered only while the open frontier stays close to a proof;
 - harvesting: after the first verified proof, frontier states the value model puts within `max_remaining_steps` of
   done are expanded for up to `max_expansions` more expansions, so near-proofs become further proofs;
