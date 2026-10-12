@@ -1,7 +1,7 @@
 """Compare the list-length arms of the retrieval ablation (ladder row 3) on the same problems.
 
     python experiments/phase4_ablation_report.py --run-name phase4_ablation \
-        --runs phase4_lemmas_00 phase4_lemmas_04 phase4_lemmas_08 phase4_lemmas_16 phase4_lemmas_32
+        --runs phase4_lemmas_00 phase4_lemmas_08 phase4_lemmas_32
 
 Reads each run's config.toml, results.jsonl and policy.json under $LEAN_SEARCH_RUNS; writes
 $LEAN_SEARCH_RUNS/<run-name>/summary/{summary.json,README.md}. The first run is the reference for paired counts.
@@ -22,7 +22,7 @@ from lean_search.search.records import from_json_object
 from lean_search.search.summary import markdown_table
 
 RUNS_DIRECTORY = Path(os.environ["LEAN_SEARCH_RUNS"])
-EXPANSION_BUDGETS = (1, 4, 16, 64)
+EXPANSION_BUDGETS = (1, 4, 8, 16, 32)
 
 
 @dataclass(frozen=True)
@@ -36,6 +36,7 @@ class ArmOutcome:
     only_reference: int
     mean_expansions: float
     prompt_tokens_per_expansion: float
+    value_prompt_tokens_per_expansion: float
     generated_tokens_per_expansion: float
     search_lean_seconds_per_expansion: float
     annotation_lean_seconds_per_expansion: float
@@ -78,6 +79,8 @@ def arm_outcome(run: str, results: Sequence[SearchResult], reference: Sequence[S
         only_reference=len(solved_names(reference) - solved),
         mean_expansions=expansions / len(results),
         prompt_tokens_per_expansion=sum(accounting.prompt_tokens for accounting in accountings) / expansions,
+        value_prompt_tokens_per_expansion=sum(accounting.value_prompt_tokens for accounting in accountings)
+        / expansions,
         generated_tokens_per_expansion=sum(accounting.generated_tokens for accounting in accountings) / expansions,
         search_lean_seconds_per_expansion=sum(accounting.lean_seconds for accounting in accountings) / expansions,
         annotation_lean_seconds_per_expansion=lemmas.annotation_lean_seconds / lemma_expansions if lemmas else 0.0,
@@ -96,6 +99,7 @@ def render_markdown(arms: Sequence[ArmOutcome]) -> str:
             f"+{arm.only_this_arm} / -{arm.only_reference}",
             f"{arm.mean_expansions:.1f}",
             f"{arm.prompt_tokens_per_expansion:.0f}",
+            f"{arm.value_prompt_tokens_per_expansion:.0f}",
             f"{arm.generated_tokens_per_expansion:.0f}",
             f"{arm.search_lean_seconds_per_expansion:.2f}",
             f"{arm.annotation_lean_seconds_per_expansion:.2f}",
@@ -111,7 +115,8 @@ def render_markdown(arms: Sequence[ArmOutcome]) -> str:
         *[f"≤{budget} exp." for budget in EXPANSION_BUDGETS],
         f"vs {arms[0].lemma_count}",
         "Expansions",
-        "Prompt tok/exp.",
+        "Policy prompt tok/exp.",
+        "Value prompt tok/exp.",
         "Generated tok/exp.",
         "Search Lean s/exp.",
         "Check Lean s/exp.",

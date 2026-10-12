@@ -1,15 +1,17 @@
-# Ablation-ladder row 3, list length 0: row 2 (automation sweep, then the policy; best-first on the
-# cumulative log-probability; same budget) with the lemma-aware adapter `policy-lemmas` (phase4_sft.py), which
-# saw lists of length 0-32 in training, so every arm uses the same adapter. Run on the 64 problems of
-# experiments/configs/retrieval/phase4_subset.txt.
-# Length 0: no retrieval and no applicability check; the prompt is the plain row-2 prompt.
+# Ablation-ladder row 3, list length 0: row 4 with SFT v2 (experiments/configs/phase3_astar_v0_sft_v2.toml:
+# A* with value v0, lambda = 0.5) at 32 expansions, with the lemma-aware adapter `policy-lemmas`
+# (experiments/configs/retrieval/phase4_sft.toml), which saw lists of length 0-32, so every arm uses it.
+# Run on the 64 problems of experiments/configs/retrieval/phase4_subset.txt. Before running, take [lean], the
+# serving fields of [policy] and [value] from the then-current row-4 config (the performance agent's settings);
+# the arms differ only in [policy.retrieval].
+# Length 0: no retrieval and no applicability check; the prompt is the plain row-4 prompt.
 
 [lean]
 pool_size = 40
 concurrency = 40
 
 [search]
-max_expansions = 64
+max_expansions = 32
 max_wall_seconds = 600.0
 max_depth = 16
 tactic_timeout_seconds = 10.0
@@ -49,10 +51,9 @@ timeout_seconds = 10.0
 max_wall_clock_timeouts_per_tactic = 1
 
 [priority]
-kind = "cumulative_log_probability"
-length_exponent = 1.0
-# Median log-probability of the SFT v1 probe samples that made progress (-2.39; row 1 used the same rule).
-automation_log_probability = -2.4
+kind = "a_star"
+# The v1 pair's sweep choice (results/phase3_astar_v0/), not re-swept for v2.
+value_weight = 0.5
 
 [policy]
 model = "search-qwen3.5-2b"
@@ -66,3 +67,14 @@ top_p = 1.0
 max_tokens = 256
 thinking = false
 few_shot = false
+
+[value]
+model = "search-qwen3.5-2b"
+tokenizer = "Qwen/Qwen3.5-2B"
+server_urls = ["http://127.0.0.1:8100/v1", "http://127.0.0.1:8101/v1"]
+adapter = "value-v0"
+
+[value.readout]
+eight_or_more_steps = 12.0
+# v0 has no dead labels: p_dead is ~1e-7, so D does not change h.
+dead_steps = 16.0

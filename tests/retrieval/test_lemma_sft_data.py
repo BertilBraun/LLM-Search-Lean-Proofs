@@ -7,6 +7,7 @@ from lean_search.retrieval.sft_data import (
     inject_step_premises,
     lemma_count_for,
     select_proofs,
+    subsample_indices,
     tokenize_lemma_example,
 )
 
@@ -70,3 +71,30 @@ def test_lemma_example_prompt_carries_the_lemmas() -> None:
     tokenized = tokenize_lemma_example(CharacterTokenizer(), example)
     prompt = "".join(chr(token) for token in tokenized.input_ids[: tokenized.prompt_token_count])
     assert "Lemmas that may help:\n```lean\ntrivial : True  -- exact: closes the goal\n```" in prompt
+
+
+def example(index: int, lemma_count: int) -> LemmaSftExample:
+    return LemmaSftExample("s", f"p{index}", 0, ("⊢ True",), (), "trivial", lemma_count)
+
+
+def subsampled_tokens_by_length() -> dict[int, int]:
+    examples = [example(index, (0, 8, 32)[index % 3]) for index in range(3000)]
+    counts = [(100, 300, 900)[index % 3] for index in range(3000)]
+    tokens = {0: 0, 8: 0, 32: 0}
+    for index in subsample_indices(examples, counts, 260_000, "seed"):
+        tokens[examples[index].lemma_count] += counts[index]
+    return tokens
+
+
+def test_subsample_meets_the_token_budget() -> None:
+    assert sum(subsampled_tokens_by_length().values()) == pytest.approx(260_000, rel=0.01)
+
+
+def test_subsample_keeps_each_list_lengths_token_share() -> None:
+    tokens = subsampled_tokens_by_length()
+    assert (tokens[0] / 20_000, tokens[8] / 60_000, tokens[32] / 180_000) == pytest.approx((1, 1, 1), rel=0.01)
+
+
+def test_subsample_indices_ascend() -> None:
+    indices = subsample_indices([example(index, 4) for index in range(100)], [10] * 100, 500, "seed")
+    assert indices == sorted(indices)

@@ -1,10 +1,13 @@
-# Lemma-aware policy adapter: continues the SFT v2 adapter for one epoch on the lemma data `lemmas_v1`
-# (~30M tokens, mostly prompt) at half the SFT learning rate. Served as the adapter `policy-lemmas` for every arm of
+# Lemma-aware policy adapter: continues the SFT v2 adapter for one epoch on `lemmas_v1_15m` (15M tokens, mostly
+# prompt; `lemmas_v1` subsampled with each list length 0/4/8/16/32 keeping its token share) at half the SFT learning
+# rate, ~35-40 min on both GPUs. Build the data first (CPU):
+#   python experiments/phase4_sft_data.py --config experiments/configs/retrieval/phase4_sft_data.toml #       --name lemmas_v1_15m --stage subsample --from-name lemmas_v1 --token-budget 15000000
+# The adapter is Served as the adapter `policy-lemmas` for every arm of
 # the list-length ablation. On both GPUs:
 #   torchrun --nproc-per-node 2 experiments/phase4_sft.py --config experiments/configs/retrieval/phase4_sft.toml \
 #       --run-name phase4_sft_lemmas
 model = "Qwen/Qwen3.5-2B"
-data = "lemmas_v1"
+data = "lemmas_v1_15m"
 merge = false
 initial_adapter = "/workspace/checkpoints/phase2_sft_v2/adapter"
 
@@ -27,10 +30,11 @@ length_group_examples = 4096
 gradient_checkpointing = true
 seed = 0
 
+# ~250 optimizer steps of 64k padded tokens; lemma prompts are long, so evaluations are kept small.
 [evaluation]
-interval_steps = 200
-validation_examples = 2000
+interval_steps = 125
+validation_examples = 1000
 micro_batch_tokens = 16384
-generation_examples = 256
+generation_examples = 128
 generation_batch_size = 32
 max_new_tokens = 256

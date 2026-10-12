@@ -2,13 +2,16 @@
 
     python experiments/phase4_sft_data.py --config experiments/configs/retrieval/phase4_sft_data.toml \
         --name lemmas_v1 --stage {select,retrieve,annotate,finish} [--device cuda:0] [--processes 8]
+    python experiments/phase4_sft_data.py --config ... --name lemmas_v1_15m --stage subsample \
+        --from-name lemmas_v1 --token-budget 15000000
 
 select (CPU, minutes): whole proofs per source in a fixed pseudo-random order up to the estimated token budget;
 retrieve (GPU or CPU): top-N candidates of the deployed index for every step with a non-empty list;
 annotate (Lean, resumable): replay each proof on one REPL, inject premises the step names with some probability,
 check the candidates as the search does and keep the best k as prompt lines;
 finish (CPU): tokenize, drop over-length examples, write $LEAN_SEARCH_DATA/sft/<name>/{train,validation}.jsonl and
-$LEAN_SEARCH_RUNS/phase4_sft_data/summary/<name>.{json,md}.
+$LEAN_SEARCH_RUNS/phase4_sft_data/summary/<name>.{json,md};
+subsample (CPU): a smaller training set from a finished one, each list length keeping its token share.
 """
 
 import argparse
@@ -51,6 +54,7 @@ from lean_search.retrieval.sft_data import (
     select_proofs,
     stable_fraction,
     step_key,
+    subsample_indices,
     tokenize_lemma_example,
     write_lemma_examples,
 )
@@ -72,6 +76,7 @@ class Stage(StrEnum):
     RETRIEVE = "retrieve"
     ANNOTATE = "annotate"
     FINISH = "finish"
+    SUBSAMPLE = "subsample"
 
 
 @dataclass(frozen=True)
@@ -113,6 +118,8 @@ class DataSummary:
     selected_steps: dict[str, int]
     replay_failures: dict[str, int]
     splits: tuple[SplitSummary, ...]
+    subsample_of: str = ""
+    subsample_token_budget: int = 0
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -122,6 +129,8 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--stage", type=Stage, choices=list(Stage), required=True)
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--processes", type=int, default=8)
+    parser.add_argument("--from-name", help="subsample: the finished data set to subsample")
+    parser.add_argument("--token-budget", type=int, help="subsample: training tokens to keep")
     return parser.parse_args()
 
 
@@ -341,57 +350,103 @@ def count_rows(examples: Sequence[LemmaSftExample], group_of: Callable[[LemmaSft
     )
 
 
+def tokenized_examples(
+    tokenizer: transformers.PreTrainedTokenizerBase, examples: Sequence[LemmaSftExample], config: LemmaDataConfig
+) -> tuple[list[LemmaSftExample], list[int], list[int]]:
+    """The examples within the length caps, with their prompt and completion token counts."""
+    kept: list[LemmaSftExample] = []
+    prompt_tokens: list[int] = []
+    completion_tokens: list[int] = []
+    for example in examples:
+        tokenized = tokenize_lemma_example(tokenizer, example)
+        if (
+            tokenized.prompt_token_count > config.max_prompt_tokens
+            or tokenized.completion_token_count > config.max_completion_tokens
+        ):
+            continue
+        kept.append(example)
+        prompt_tokens.append(tokenized.prompt_token_count)
+        completion_tokens.append(tokenized.completion_token_count)
+    return kept, prompt_tokens, completion_tokens
+
+
+def split_summary(
+    split: str, annotated: int, kept: Sequence[LemmaSftExample], prompt_tokens: list[int], completion_tokens: list[int]
+) -> SplitSummary:
+    prompt = length_statistics(prompt_tokens)
+    return SplitSummary(
+        split=split,
+        annotated=annotated,
+        over_length=annotated - len(kept),
+        examples=len(kept),
+        prompt_tokens_mean=prompt.mean,
+        prompt_tokens_p90=prompt.p90,
+        prompt_tokens_max=prompt.maximum,
+        completion_tokens_mean=statistics.fmean(completion_tokens),
+        total_tokens=prompt.total + sum(completion_tokens),
+        by_lemma_count=count_rows(kept, lambda example: f"{example.lemma_count:02d}"),
+        by_source=count_rows(kept, lambda example: example.source),
+    )
+
+
+def write_summary(summary: DataSummary) -> None:
+    summary_directory = RUN_DIRECTORY / "summary"
+    summary_directory.mkdir(parents=True, exist_ok=True)
+    (summary_directory / f"{summary.name}.json").write_text(
+        json.dumps(dataclasses.asdict(summary), indent=1, ensure_ascii=False), encoding="utf-8"
+    )
+    markdown = render_markdown(summary)
+    (summary_directory / f"{summary.name}.md").write_text(markdown, encoding="utf-8")
+    print(markdown)
+
+
 def finish(config: LemmaDataConfig, directory: Path, name: str, replay_failures: dict[str, int]) -> None:
     tokenizer = transformers.AutoTokenizer.from_pretrained(config.reference_tokenizer)
     split_summaries = []
     for split in SPLITS:
         annotated = list(read_lemma_examples(directory / f"examples_{split}.jsonl"))
-        kept: list[LemmaSftExample] = []
-        prompt_tokens: list[int] = []
-        completion_tokens: list[int] = []
-        for example in annotated:
-            tokenized = tokenize_lemma_example(tokenizer, example)
-            if (
-                tokenized.prompt_token_count > config.max_prompt_tokens
-                or tokenized.completion_token_count > config.max_completion_tokens
-            ):
-                continue
-            kept.append(example)
-            prompt_tokens.append(tokenized.prompt_token_count)
-            completion_tokens.append(tokenized.completion_token_count)
+        kept, prompt_tokens, completion_tokens = tokenized_examples(tokenizer, annotated, config)
         write_lemma_examples(DATA_DIRECTORY / "sft" / name / f"{split}.jsonl", kept)
-        prompt = length_statistics(prompt_tokens)
-        split_summaries.append(
-            SplitSummary(
-                split=split,
-                annotated=len(annotated),
-                over_length=len(annotated) - len(kept),
-                examples=len(kept),
-                prompt_tokens_mean=prompt.mean,
-                prompt_tokens_p90=prompt.p90,
-                prompt_tokens_max=prompt.maximum,
-                completion_tokens_mean=statistics.fmean(completion_tokens),
-                total_tokens=prompt.total + sum(completion_tokens),
-                by_lemma_count=count_rows(kept, lambda example: f"{example.lemma_count:02d}"),
-                by_source=count_rows(kept, lambda example: example.source),
-            )
+        split_summaries.append(split_summary(split, len(annotated), kept, prompt_tokens, completion_tokens))
+    write_summary(
+        DataSummary(
+            name=name,
+            config=config,
+            applicability=RetrievalConfig().applicability,
+            selected_steps={split: len(read_selection(directory, split)) for split in SPLITS},
+            replay_failures=replay_failures,
+            splits=tuple(split_summaries),
         )
-    summary = DataSummary(
-        name=name,
-        config=config,
-        applicability=RetrievalConfig().applicability,
-        selected_steps={split: len(read_selection(directory, split)) for split in SPLITS},
-        replay_failures=replay_failures,
-        splits=tuple(split_summaries),
     )
-    summary_directory = RUN_DIRECTORY / "summary"
-    summary_directory.mkdir(parents=True, exist_ok=True)
-    (summary_directory / f"{name}.json").write_text(
-        json.dumps(dataclasses.asdict(summary), indent=1, ensure_ascii=False), encoding="utf-8"
+
+
+def subsample(config: LemmaDataConfig, source_name: str, name: str, token_budget: int) -> None:
+    """A smaller training set from a finished one, each list length keeping its token share; validation is kept."""
+    tokenizer = transformers.AutoTokenizer.from_pretrained(config.reference_tokenizer)
+    split_summaries = []
+    for split in SPLITS:
+        examples = list(read_lemma_examples(DATA_DIRECTORY / "sft" / source_name / f"{split}.jsonl"))
+        kept, prompt_tokens, completion_tokens = tokenized_examples(tokenizer, examples, config)
+        if split == "train":
+            totals = [prompt + completion for prompt, completion in zip(prompt_tokens, completion_tokens, strict=True)]
+            chosen = subsample_indices(kept, totals, token_budget, config.seed)
+            kept = [kept[index] for index in chosen]
+            prompt_tokens = [prompt_tokens[index] for index in chosen]
+            completion_tokens = [completion_tokens[index] for index in chosen]
+        write_lemma_examples(DATA_DIRECTORY / "sft" / name / f"{split}.jsonl", kept)
+        split_summaries.append(split_summary(split, len(examples), kept, prompt_tokens, completion_tokens))
+    write_summary(
+        DataSummary(
+            name=name,
+            config=config,
+            applicability=RetrievalConfig().applicability,
+            selected_steps={},
+            replay_failures={},
+            splits=tuple(split_summaries),
+            subsample_of=source_name,
+            subsample_token_budget=token_budget,
+        )
     )
-    markdown = render_markdown(summary)
-    (summary_directory / f"{name}.md").write_text(markdown, encoding="utf-8")
-    print(markdown)
 
 
 def render_markdown(summary: DataSummary) -> str:
@@ -421,6 +476,12 @@ def render_markdown(summary: DataSummary) -> str:
         f"With probability {config.step_premise_injection:g}, premises the step names but retrieval missed replace "
         f"low-ranked candidates. Replay failures (dropped): {summary.replay_failures}.",
     ]
+    if summary.subsample_of:
+        sections.append(
+            f"This set subsamples the training split of `{summary.subsample_of}` to about "
+            f"{summary.subsample_token_budget:,} tokens: examples in a fixed pseudo-random order, each list length "
+            "keeping its share of the tokens. The validation split is the same."
+        )
     for split in summary.splits:
         sections += [
             f"## {split.split}",
@@ -457,6 +518,8 @@ def main() -> None:
         case Stage.FINISH:
             failures = json.loads(failures_path.read_text()) if failures_path.exists() else {}
             finish(config, directory, arguments.name, failures)
+        case Stage.SUBSAMPLE:
+            subsample(config, arguments.from_name, arguments.name, arguments.token_budget)
 
 
 if __name__ == "__main__":

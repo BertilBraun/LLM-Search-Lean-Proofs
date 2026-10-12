@@ -4,6 +4,7 @@ import dataclasses
 import hashlib
 import json
 import math
+from collections import Counter
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -104,6 +105,30 @@ def select_proofs(proofs_by_source: Mapping[str, Sequence[ProofUnit]], token_bud
         remaining -= sum(tokens[source] for source in exhausted)
         active -= exhausted
     return selected
+
+
+def subsample_indices(
+    examples: Sequence[LemmaSftExample], token_counts: Sequence[int], token_budget: int, seed: str
+) -> list[int]:
+    """Ascending indices of about `token_budget` tokens in which each list length keeps its token share."""
+    totals: Counter[int] = Counter()
+    for example, count in zip(examples, token_counts, strict=True):
+        totals[example.lemma_count] += count
+    total = sum(totals.values())
+    order = sorted(
+        range(len(examples)),
+        key=lambda index: stable_fraction(
+            seed, "subsample", f"{examples[index].proof_identifier}#{examples[index].step_index}"
+        ),
+    )
+    taken: Counter[int] = Counter()
+    chosen: set[int] = set()
+    for index in order:
+        lemma_count = examples[index].lemma_count
+        if taken[lemma_count] < token_budget * totals[lemma_count] / total:
+            chosen.add(index)
+            taken[lemma_count] += token_counts[index]
+    return sorted(chosen)
 
 
 def tokenize_lemma_example(tokenizer: Tokenizer, example: LemmaSftExample) -> TokenizedExample:
