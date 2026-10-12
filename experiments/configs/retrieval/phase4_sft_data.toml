@@ -17,7 +17,8 @@ validation_examples = 2000
 lemma_counts = [0, 4, 8, 16, 32]
 candidate_count = 32
 step_premise_injection = 0.5
-estimated_tokens_per_lemma = 45
+# Measured on Qwen3.5-2B: 8 lemmas add ~220 prompt tokens, 32 add ~770.
+estimated_tokens_per_lemma = 27
 max_prompt_tokens = 4096
 max_completion_tokens = 256
 max_signature_characters = 256

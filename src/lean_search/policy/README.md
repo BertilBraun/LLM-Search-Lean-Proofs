@@ -37,7 +37,9 @@ message replaces its default one. The few-shot prompt is 435 tokens on Qwen3.5-2
 prefix across states, so vLLM's prefix cache serves all but the goals.
 
 With lemmas (for retrieval, Phase 4) the user turn continues with `\n\nLemmas that may help:\n```lean\n<one per
-line>\n```` after the proof state.
+line>\n```` after the proof state. The policy expander fills the list when `[policy.retrieval] lemma_count > 0`
+(`lean_search.retrieval`, see its README): one line per lemma, a compact signature and an applicability comment such
+as `  -- apply: leaves 2 goals`. With `lemma_count = 0` (the default) nothing is loaded and prompts are unchanged.
 
 Thinking (`thinking=True`) renders the same messages with `enable_thinking=True` and no prefill: the model thinks,
 closes `</think>` and writes the fenced block, which `parse_sample` reads from the first fence after `</think>`.
@@ -53,7 +55,7 @@ Generation then has no stop string (fences appear inside thoughts) and costs abo
 | `parse_sample(sample, *, thinking, forbidden_tokens) -> str \| ParseFailure` | one sample's normalized block (dedented, trailing spaces and a leading bare `by` line removed), or `TRUNCATED`, `NO_BLOCK`, `EMPTY`, `FORBIDDEN` |
 | `parse_samples(samples, *, thinking, forbidden_tokens) -> ParsedSamples` | distinct blocks, most likely first; duplicates merge, keep the best log-probability and sum their tokens |
 | `PolicyExpander.expand(node, context)` | one request with n samples per expansion; yields the distinct candidates as one batch |
-| `open_policy_expander(config, forbidden_steps)` | async context manager: loads the chat template, reads `max_model_len` from the server, opens one client per server URL |
+| `open_policy_expander(config, forbidden_steps)` | async context manager: loads the chat template, reads `max_model_len` from the server, opens one client per server URL, loads the retriever when `policy.retrieval.lemma_count > 0` |
 
 `render_prompt(...) + render_completion(block) + "\n"` equals the tokenizer's chat template applied to the full
 conversation for all five candidate models (`tests/policy/test_policy_live.py`), so SFT on these pairs trains exactly
