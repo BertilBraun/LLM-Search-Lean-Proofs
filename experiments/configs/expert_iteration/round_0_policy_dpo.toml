@@ -1,0 +1,29 @@
+# Expert-iteration round 0 DPO (experiments/phase6_dpo.py): on top of the round's SFT adapter, which is also the
+# frozen reference. Pairs from the round's proof nodes (experiments/phase6_data.py); a small NLL term on the chosen
+# steps keeps their likelihood from sinking together with the rejected ones. One epoch on one GPU.
+model = "Qwen/Qwen3.5-2B"
+initial_adapter = "/workspace/checkpoints/phase6_round_0_policy_sft/adapter"
+data = "expert_iteration/round_0/dpo"
+beta = 0.1
+chosen_nll_weight = 0.2
+max_prompt_tokens = 2048
+max_completion_tokens = 256
+
+[optimization]
+method = "lora"
+learning_rate = 1e-5
+warmup_fraction = 0.05
+minimum_learning_rate_ratio = 0.1
+weight_decay = 0.0
+max_gradient_norm = 1.0
+epochs = 1
+micro_batch_tokens = 16384
+micro_batches_per_step = 4
+length_group_examples = 4096
+gradient_checkpointing = true
+seed = 0
+
+[evaluation]
+interval_steps = 50
+validation_pairs = 1000
+micro_batch_tokens = 16384

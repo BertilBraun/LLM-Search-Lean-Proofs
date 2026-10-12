@@ -1,0 +1,94 @@
+# Expert-iteration round 0 (experiments/phase6_orchestrate.py prints the steps): search the first 4,000 prepared pool
+# statements with the SFT v2 policy and value v0 (A*, λ = 0.5), build SFT, DPO and value-v1 data from the trees, train
+# the next policy (SFT from the SFT v2 adapter, then DPO) and value v1, and evaluate both on miniF2F-valid with row 4's
+# settings. 4,000 statements is an estimated 5-6 h of search on both GPUs (row 4: ~3.7 policy requests/s).
+index = 0
+pool = "expert_iteration/pool_v1"
+offset = 0
+count = 4000
+base_model = "Qwen/Qwen3.5-2B"
+search_config = "experiments/configs/expert_iteration/round_0_search.toml"
+policy_sft_config = "experiments/configs/expert_iteration/round_0_policy_sft.toml"
+policy_dpo_config = "experiments/configs/expert_iteration/round_0_policy_dpo.toml"
+value_config = "experiments/configs/expert_iteration/round_0_value.toml"
+evaluation_config = "experiments/configs/expert_iteration/round_0_evaluation.toml"
+
+[policy]
+name = "policy-v2"
+path = "/workspace/checkpoints/phase2_sft_v2/adapter"
+
+[value]
+name = "value-v0"
+path = "/workspace/checkpoints/phase3_value_v0/adapter"
+
+[next_policy]
+name = "policy-ei1"
+path = "/workspace/checkpoints/phase6_round_0_policy_dpo/adapter"
+
+[next_value]
+name = "value-v1"
+path = "/workspace/checkpoints/phase6_round_0_value/adapter"
+
+[data]
+# Later rounds list every round's trees: proofs keep the shortest per statement, tree labels accumulate.
+tree_runs = ["phase6_round_0"]
+seed = "expert-iteration-round-0"
+held_out_fraction = 0.02
+
+[data.policy]
+policy_steps_only = true
+replay_fraction = 0.5
+max_prompt_tokens = 2048
+max_completion_tokens = 256
+validation_examples = 2000
+validation_seed = "sft-v2"
+reference_tokenizer = "Qwen/Qwen3.5-2B"
+
+# SFT v2's sources and equal shares (experiments/configs/training/phase2_sft_data_v2.toml).
+[[data.policy.replay_sources]]
+name = "goedel_lean_workbook_proofs"
+weight = 1.0
+
+[[data.policy.replay_sources]]
+name = "stp_lean_workbook"
+weight = 1.0
+
+[[data.policy.replay_sources]]
+name = "deepseek_prover_v1"
+weight = 1.0
+
+[[data.policy.replay_sources]]
+name = "lean_workbook"
+weight = 1.0
+
+[[data.policy.replay_sources]]
+name = "goedel_sft_v2"
+weight = 1.0
+
+[[data.policy.replay_sources]]
+name = "numinamath_lean_kimina"
+weight = 1.0
+
+[[data.policy.replay_sources]]
+name = "numinamath_lean_human"
+weight = 1.0
+
+[[data.policy.replay_sources]]
+name = "leanabell_sft"
+weight = 1.0
+
+[data.preferences]
+max_pairs_per_node = 4
+policy_steps_only = true
+dead_subtrees = true
+
+[data.value]
+replay_data = "v0"
+replay_fraction = 0.5
+prefilter_runs = ["phase6_pool_v1_prefilter"]
+prefilter_fraction = 0.1
+
+[data.value.labels]
+at_least_weight = 1.0
+# A dead end only means that this search expanded everything below the state without a proof.
+dead_weight = 0.5

@@ -68,7 +68,9 @@ def problem_name(statement: StatementRecord) -> str:
 
 
 def problem_source(problem_name: str) -> str:
-    return problem_name.split(".", 1)[0]
+    """The pool source a problem name starts with; names without one (miniF2F's) count as `other`."""
+    source, separator, _ = problem_name.partition(".")
+    return source if separator else "other"
 
 
 def pool_problem(statement: StatementRecord) -> Problem:

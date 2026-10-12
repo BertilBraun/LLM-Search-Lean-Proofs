@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from lean_search.expert_iteration.pool import SourceQuota
+from lean_search.search.config import RunConfig
 from lean_search.search.records import from_json_object
 from lean_search.training.sft_data import SourceWeight
 from lean_search.value.labels import TreeLabelConfig
@@ -39,6 +40,8 @@ class PolicyDataConfig:
     max_prompt_tokens: int = 2048
     max_completion_tokens: int = 256
     validation_examples: int = 2000
+    # The SFT data's seed selects the same traced validation steps, so validation losses compare across runs.
+    validation_seed: str = "sft-v2"
     reference_tokenizer: str = "Qwen/Qwen3.5-2B"
 
 
@@ -89,11 +92,14 @@ class RoundConfig:
     value: AdapterReference
     search_config: str
     data: RoundDataConfig
-    # Training configs; an empty DPO config skips DPO.
+    # Training configs (experiments/phase2_sft.py, phase6_dpo.py, phase3_value.py); an empty DPO config skips DPO.
     policy_sft_config: str
     value_config: str
+    policy_dpo_config: str
+    # The adapters this round trains, and the miniF2F-valid run config that evaluates them together.
+    next_policy: AdapterReference
+    next_value: AdapterReference
     evaluation_config: str
-    policy_dpo_config: str = ""
 
     @property
     def run_name(self) -> str:
@@ -102,6 +108,9 @@ class RoundConfig:
     @property
     def data_name(self) -> str:
         return f"round_{self.index}"
+
+    def stage_run_name(self, stage: str) -> str:
+        return f"{self.run_name}_{stage}"
 
 
 def load_pool_config(path: Path) -> PoolConfig:
@@ -115,3 +124,9 @@ def load_round_config(path: Path) -> RoundConfig:
     if not 0 <= config.data.policy.replay_fraction < 1 or not 0 <= config.data.value.replay_fraction < 1:
         raise ValueError("Replay fractions must lie in [0, 1).")
     return config
+
+
+def adapter_mismatches(run_config: RunConfig, policy: AdapterReference, value: AdapterReference) -> list[str]:
+    """Where a search run config does not request the adapters the round serves for it."""
+    requested = (("policy", run_config.policy.adapter, policy.name), ("value", run_config.value.adapter, value.name))
+    return [f"{role} adapter {name!r}, served {served!r}" for role, name, served in requested if name != served]

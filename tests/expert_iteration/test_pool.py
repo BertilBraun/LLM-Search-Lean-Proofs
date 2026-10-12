@@ -13,6 +13,7 @@ from lean_search.expert_iteration.pool import (
     ordering_key,
     prefilter_outcome,
     problem_name,
+    problem_source,
     select_by_source,
 )
 from lean_search.search import Accounting, SearchResult, StopReason
@@ -113,3 +114,10 @@ def test_only_the_first_statement_of_a_name_is_kept() -> None:
     first = statement("a", 1)
     second = StatementRecord("a", first.identifier, "", "theorem other : True := by", "", "")
     assert first_per_name([first, second, statement("a", 2)]) == ([first, statement("a", 2)], 1)
+
+
+@pytest.mark.parametrize(
+    ("name", "source"), [("lean_workbook.lean_workbook_7", "lean_workbook"), ("mathd_algebra_11", "other")]
+)
+def test_problem_source(name: str, source: str) -> None:
+    assert problem_source(name) == source

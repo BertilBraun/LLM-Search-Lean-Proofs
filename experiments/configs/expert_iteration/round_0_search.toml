@@ -1,0 +1,73 @@
+# Expert-iteration round 0 pool search (experiments/phase6_round.py): row 4's A* (λ = 0.5) and sampling with the
+# SFT v2 policy adapter and value v0, at a pool budget of 24 expansions (row 4: 64) and 300 s per statement. Both
+# vLLM servers serve both adapters; requests go round-robin. 40 searches as in rows 2 and 4.
+
+[lean]
+pool_size = 40
+concurrency = 40
+
+[search]
+max_expansions = 24
+max_wall_seconds = 300.0
+max_depth = 16
+tactic_timeout_seconds = 10.0
+forbidden_steps = [
+    "exact?",
+    "apply?",
+    "rw?",
+    "simp?",
+    "simp_all?",
+    "dsimp?",
+    "aesop?",
+    "hint",
+    "rw_search",
+    "library_search",
+]
+
+[expander]
+kind = "automation_then_policy"
+
+[automation]
+tactics = [
+    "decide",
+    "omega",
+    "intros",
+    "constructor",
+    "rfl",
+    "simp",
+    "field_simp",
+    "norm_num",
+    "linarith",
+    "ring_nf",
+    "simp_all",
+    "nlinarith",
+    "aesop",
+]
+timeout_seconds = 10.0
+max_wall_clock_timeouts_per_tactic = 1
+
+[priority]
+kind = "a_star"
+value_weight = 0.5
+
+[policy]
+model = "search-qwen3.5-2b"
+tokenizer = "Qwen/Qwen3.5-2B"
+server_urls = ["http://127.0.0.1:8100/v1", "http://127.0.0.1:8101/v1"]
+adapter = "policy-v2"
+sample_count = 16
+temperature = 0.8
+top_p = 1.0
+max_tokens = 256
+thinking = false
+few_shot = false
+
+[value]
+model = "search-qwen3.5-2b"
+tokenizer = "Qwen/Qwen3.5-2B"
+server_urls = ["http://127.0.0.1:8100/v1", "http://127.0.0.1:8101/v1"]
+adapter = "value-v0"
+
+[value.readout]
+eight_or_more_steps = 12.0
+dead_steps = 16.0
