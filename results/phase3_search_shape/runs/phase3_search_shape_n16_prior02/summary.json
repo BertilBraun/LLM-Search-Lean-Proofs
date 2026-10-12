@@ -1,0 +1,1236 @@
+{
+ "metadata": {
+  "run_name": "phase3_search_shape_n16_prior02",
+  "split": "valid",
+  "git_revision": "874e8fe559e2fa0332e8fd3b8370c4baf0a3eec9",
+  "git_dirty": false,
+  "config_file": "experiments/configs/phase3_search_shape_n16_prior02.toml",
+  "started_at": "2026-10-12T19:56:08+00:00",
+  "run_wall_seconds": 3674.9151567929657,
+  "cpu_count": 46,
+  "load_average_at_start": 19.216796875
+ },
+ "problems": 244,
+ "solved": 154,
+ "solve_rate": 0.6311475409836066,
+ "categories": [
+  {
+   "category": "mathd_algebra",
+   "problems": 70,
+   "solved": 54,
+   "solve_rate": 0.7714285714285715
+  },
+  {
+   "category": "mathd_numbertheory",
+   "problems": 60,
+   "solved": 49,
+   "solve_rate": 0.8166666666666667
+  },
+  {
+   "category": "amc12",
+   "problems": 45,
+   "solved": 20,
+   "solve_rate": 0.4444444444444444
+  },
+  {
+   "category": "aime",
+   "problems": 15,
+   "solved": 2,
+   "solve_rate": 0.13333333333333333
+  },
+  {
+   "category": "imo",
+   "problems": 20,
+   "solved": 2,
+   "solve_rate": 0.1
+  },
+  {
+   "category": "algebra",
+   "problems": 18,
+   "solved": 16,
+   "solve_rate": 0.8888888888888888
+  },
+  {
+   "category": "numbertheory",
+   "problems": 8,
+   "solved": 4,
+   "solve_rate": 0.5
+  },
+  {
+   "category": "induction",
+   "problems": 8,
+   "solved": 7,
+   "solve_rate": 0.875
+  }
+ ],
+ "stop_reasons": [
+  {
+   "stop_reason": "proved",
+   "problems": 154
+  },
+  {
+   "stop_reason": "expansion_budget",
+   "problems": 83
+  },
+  {
+   "stop_reason": "wall_clock_budget",
+   "problems": 4
+  },
+  {
+   "stop_reason": "frontier_exhausted",
+   "problems": 3
+  }
+ ],
+ "curves": [
+  {
+   "metric": "expansions",
+   "points": [
+    {
+     "budget": 1.0,
+     "solved": 90,
+     "solve_rate": 0.36885245901639346
+    },
+    {
+     "budget": 2.0,
+     "solved": 113,
+     "solve_rate": 0.46311475409836067
+    },
+    {
+     "budget": 4.0,
+     "solved": 136,
+     "solve_rate": 0.5573770491803278
+    },
+    {
+     "budget": 8.0,
+     "solved": 144,
+     "solve_rate": 0.5901639344262295
+    },
+    {
+     "budget": 16.0,
+     "solved": 146,
+     "solve_rate": 0.5983606557377049
+    },
+    {
+     "budget": 32.0,
+     "solved": 151,
+     "solve_rate": 0.6188524590163934
+    },
+    {
+     "budget": 64.0,
+     "solved": 154,
+     "solve_rate": 0.6311475409836066
+    }
+   ]
+  },
+  {
+   "metric": "wall_seconds",
+   "points": [
+    {
+     "budget": 1.0,
+     "solved": 17,
+     "solve_rate": 0.06967213114754098
+    },
+    {
+     "budget": 2.0,
+     "solved": 36,
+     "solve_rate": 0.14754098360655737
+    },
+    {
+     "budget": 5.0,
+     "solved": 61,
+     "solve_rate": 0.25
+    },
+    {
+     "budget": 10.0,
+     "solved": 74,
+     "solve_rate": 0.30327868852459017
+    },
+    {
+     "budget": 20.0,
+     "solved": 108,
+     "solve_rate": 0.4426229508196721
+    },
+    {
+     "budget": 30.0,
+     "solved": 120,
+     "solve_rate": 0.4918032786885246
+    },
+    {
+     "budget": 60.0,
+     "solved": 137,
+     "solve_rate": 0.5614754098360656
+    },
+    {
+     "budget": 120.0,
+     "solved": 145,
+     "solve_rate": 0.5942622950819673
+    },
+    {
+     "budget": 180.0,
+     "solved": 147,
+     "solve_rate": 0.6024590163934426
+    },
+    {
+     "budget": 300.0,
+     "solved": 151,
+     "solve_rate": 0.6188524590163934
+    },
+    {
+     "budget": 600.0,
+     "solved": 152,
+     "solve_rate": 0.6229508196721312
+    },
+    {
+     "budget": 1200.0,
+     "solved": 154,
+     "solve_rate": 0.6311475409836066
+    },
+    {
+     "budget": 1800.0,
+     "solved": 154,
+     "solve_rate": 0.6311475409836066
+    },
+    {
+     "budget": 3600.0,
+     "solved": 154,
+     "solve_rate": 0.6311475409836066
+    }
+   ]
+  },
+  {
+   "metric": "lean_seconds",
+   "points": [
+    {
+     "budget": 1.0,
+     "solved": 57,
+     "solve_rate": 0.2336065573770492
+    },
+    {
+     "budget": 2.0,
+     "solved": 83,
+     "solve_rate": 0.3401639344262295
+    },
+    {
+     "budget": 5.0,
+     "solved": 115,
+     "solve_rate": 0.4713114754098361
+    },
+    {
+     "budget": 10.0,
+     "solved": 127,
+     "solve_rate": 0.5204918032786885
+    },
+    {
+     "budget": 20.0,
+     "solved": 134,
+     "solve_rate": 0.5491803278688525
+    },
+    {
+     "budget": 30.0,
+     "solved": 138,
+     "solve_rate": 0.5655737704918032
+    },
+    {
+     "budget": 60.0,
+     "solved": 145,
+     "solve_rate": 0.5942622950819673
+    },
+    {
+     "budget": 120.0,
+     "solved": 147,
+     "solve_rate": 0.6024590163934426
+    },
+    {
+     "budget": 180.0,
+     "solved": 150,
+     "solve_rate": 0.6147540983606558
+    },
+    {
+     "budget": 300.0,
+     "solved": 151,
+     "solve_rate": 0.6188524590163934
+    },
+    {
+     "budget": 600.0,
+     "solved": 153,
+     "solve_rate": 0.6270491803278688
+    },
+    {
+     "budget": 1200.0,
+     "solved": 154,
+     "solve_rate": 0.6311475409836066
+    },
+    {
+     "budget": 1800.0,
+     "solved": 154,
+     "solve_rate": 0.6311475409836066
+    },
+    {
+     "budget": 3600.0,
+     "solved": 154,
+     "solve_rate": 0.6311475409836066
+    }
+   ]
+  }
+ ],
+ "costs": [
+  {
+   "group": "all",
+   "problems": 244,
+   "distributions": [
+    {
+     "metric": "expansions",
+     "mean": 24.889344262295083,
+     "median": 3.0,
+     "p90": 64,
+     "maximum": 64,
+     "total": 6073
+    },
+    {
+     "metric": "nodes",
+     "mean": 75.07786885245902,
+     "median": 12.0,
+     "p90": 228,
+     "maximum": 373,
+     "total": 18319
+    },
+    {
+     "metric": "edges",
+     "mean": 425.1024590163934,
+     "median": 41.5,
+     "p90": 1218,
+     "maximum": 1353,
+     "total": 103725
+    },
+    {
+     "metric": "lean_seconds",
+     "mean": 262.21461162847976,
+     "median": 7.745506486389786,
+     "p90": 628.4278133652406,
+     "maximum": 3584.086690920056,
+     "total": 63980.36523734906
+    },
+    {
+     "metric": "wall_seconds",
+     "mean": 310.69001684257125,
+     "median": 35.666896956041455,
+     "p90": 687.1975226140348,
+     "maximum": 3616.5206118579954,
+     "total": 75808.36410958739
+    },
+    {
+     "metric": "duplicates",
+     "mean": 89.13524590163935,
+     "median": 7.0,
+     "p90": 278,
+     "maximum": 514,
+     "total": 21749
+    },
+    {
+     "metric": "errors",
+     "mean": 235.63934426229508,
+     "median": 20.0,
+     "p90": 679,
+     "maximum": 1020,
+     "total": 57496
+    },
+    {
+     "metric": "timeouts",
+     "mean": 5.524590163934426,
+     "median": 0.0,
+     "p90": 6,
+     "maximum": 226,
+     "total": 1348
+    },
+    {
+     "metric": "repl_failures",
+     "mean": 0.00819672131147541,
+     "median": 0.0,
+     "p90": 0,
+     "maximum": 2,
+     "total": 2
+    },
+    {
+     "metric": "verification_seconds",
+     "mean": 1.780759412381172,
+     "median": 0.5479497089982033,
+     "p90": 4.876653673942201,
+     "maximum": 32.454840834019706,
+     "total": 434.505296621006
+    }
+   ]
+  },
+  {
+   "group": "solved",
+   "problems": 154,
+   "distributions": [
+    {
+     "metric": "expansions",
+     "mean": 3.2857142857142856,
+     "median": 1.0,
+     "p90": 5,
+     "maximum": 53,
+     "total": 506
+    },
+    {
+     "metric": "nodes",
+     "mean": 11.292207792207792,
+     "median": 5.0,
+     "p90": 21,
+     "maximum": 266,
+     "total": 1739
+    },
+    {
+     "metric": "edges",
+     "mean": 47.02597402597402,
+     "median": 11.5,
+     "p90": 89,
+     "maximum": 1113,
+     "total": 7242
+    },
+    {
+     "metric": "lean_seconds",
+     "mean": 19.942413508439248,
+     "median": 1.72177556110546,
+     "p90": 30.008526885532774,
+     "maximum": 604.9104231306119,
+     "total": 3071.1316802996444
+    },
+    {
+     "metric": "wall_seconds",
+     "mean": 37.607455860255676,
+     "median": 13.361560225021094,
+     "p90": 68.43977648194414,
+     "maximum": 677.0839935939293,
+     "total": 5791.548202479375
+    },
+    {
+     "metric": "duplicates",
+     "mean": 7.538961038961039,
+     "median": 1.0,
+     "p90": 14,
+     "maximum": 199,
+     "total": 1161
+    },
+    {
+     "metric": "errors",
+     "mean": 27.18831168831169,
+     "median": 6.0,
+     "p90": 44,
+     "maximum": 624,
+     "total": 4187
+    },
+    {
+     "metric": "timeouts",
+     "mean": 0.19480519480519481,
+     "median": 0.0,
+     "p90": 0,
+     "maximum": 16,
+     "total": 30
+    },
+    {
+     "metric": "repl_failures",
+     "mean": 0.0,
+     "median": 0.0,
+     "p90": 0,
+     "maximum": 0,
+     "total": 0
+    },
+    {
+     "metric": "verification_seconds",
+     "mean": 2.8214629650714675,
+     "median": 1.462408268940635,
+     "p90": 7.054401014000177,
+     "maximum": 32.454840834019706,
+     "total": 434.505296621006
+    }
+   ]
+  },
+  {
+   "group": "unsolved",
+   "problems": 90,
+   "distributions": [
+    {
+     "metric": "expansions",
+     "mean": 61.855555555555554,
+     "median": 64.0,
+     "p90": 64,
+     "maximum": 64,
+     "total": 5567
+    },
+    {
+     "metric": "nodes",
+     "mean": 184.22222222222223,
+     "median": 182.5,
+     "p90": 275,
+     "maximum": 373,
+     "total": 16580
+    },
+    {
+     "metric": "edges",
+     "mean": 1072.0333333333333,
+     "median": 1088.0,
+     "p90": 1313,
+     "maximum": 1353,
+     "total": 96483
+    },
+    {
+     "metric": "lean_seconds",
+     "mean": 676.7692617449935,
+     "median": 367.1658232031623,
+     "p90": 1824.3349375249818,
+     "maximum": 3584.086690920056,
+     "total": 60909.23355704942
+    },
+    {
+     "metric": "wall_seconds",
+     "mean": 777.964621190089,
+     "median": 500.8619461739436,
+     "p90": 1884.096135049942,
+     "maximum": 3616.5206118579954,
+     "total": 70016.81590710802
+    },
+    {
+     "metric": "duplicates",
+     "mean": 228.75555555555556,
+     "median": 225.5,
+     "p90": 352,
+     "maximum": 514,
+     "total": 20588
+    },
+    {
+     "metric": "errors",
+     "mean": 592.3222222222222,
+     "median": 598.5,
+     "p90": 770,
+     "maximum": 1020,
+     "total": 53309
+    },
+    {
+     "metric": "timeouts",
+     "mean": 14.644444444444444,
+     "median": 1.0,
+     "p90": 36,
+     "maximum": 226,
+     "total": 1318
+    },
+    {
+     "metric": "repl_failures",
+     "mean": 0.022222222222222223,
+     "median": 0.0,
+     "p90": 0,
+     "maximum": 2,
+     "total": 2
+    },
+    {
+     "metric": "verification_seconds",
+     "mean": 0.0,
+     "median": 0.0,
+     "p90": 0.0,
+     "maximum": 0.0,
+     "total": 0.0
+    }
+   ]
+  }
+ ],
+ "steps": [
+  {
+   "step": "<policy>",
+   "attempts": 61871,
+   "lean_seconds": 55021.814675834845,
+   "lean_seconds_fraction": 0.8603877119124033,
+   "mean_seconds": 0.8892989393388638,
+   "children": 13821,
+   "duplicates": 13813,
+   "failures": 29179,
+   "errors": 27844,
+   "heartbeat_timeouts": 0,
+   "wall_clock_timeouts": 1338,
+   "repl_failures": 0,
+   "rejected": 0,
+   "closing": 67,
+   "on_proof_paths": 0
+  },
+  {
+   "step": "simp_all",
+   "attempts": 5858,
+   "lean_seconds": 2986.0362517740577,
+   "lean_seconds_fraction": 0.04669327817498758,
+   "mean_seconds": 0.5097364717948204,
+   "children": 1380,
+   "duplicates": 2257,
+   "failures": 2221,
+   "errors": 2218,
+   "heartbeat_timeouts": 0,
+   "wall_clock_timeouts": 3,
+   "repl_failures": 0,
+   "rejected": 0,
+   "closing": 6,
+   "on_proof_paths": 22
+  },
+  {
+   "step": "nlinarith",
+   "attempts": 5881,
+   "lean_seconds": 2217.372149392497,
+   "lean_seconds_fraction": 0.03467351561038187,
+   "mean_seconds": 0.3770399845931809,
+   "children": 28,
+   "duplicates": 28,
+   "failures": 5825,
+   "errors": 5822,
+   "heartbeat_timeouts": 0,
+   "wall_clock_timeouts": 3,
+   "repl_failures": 0,
+   "rejected": 0,
+   "closing": 26,
+   "on_proof_paths": 28
+  },
+  {
+   "step": "omega",
+   "attempts": 6073,
+   "lean_seconds": 1394.3521527718985,
+   "lean_seconds_fraction": 0.021803778472076443,
+   "mean_seconds": 0.2295985761191995,
+   "children": 39,
+   "duplicates": 6,
+   "failures": 6028,
+   "errors": 6027,
+   "heartbeat_timeouts": 0,
+   "wall_clock_timeouts": 0,
+   "repl_failures": 1,
+   "rejected": 0,
+   "closing": 26,
+   "on_proof_paths": 26
+  },
+  {
+   "step": "field_simp",
+   "attempts": 5971,
+   "lean_seconds": 1093.487066259142,
+   "lean_seconds_fraction": 0.017099087707074696,
+   "mean_seconds": 0.18313298714773774,
+   "children": 967,
+   "duplicates": 679,
+   "failures": 4325,
+   "errors": 4324,
+   "heartbeat_timeouts": 0,
+   "wall_clock_timeouts": 1,
+   "repl_failures": 0,
+   "rejected": 0,
+   "closing": 0,
+   "on_proof_paths": 7
+  },
+  {
+   "step": "ring_nf",
+   "attempts": 6017,
+   "lean_seconds": 886.5711071961559,
+   "lean_seconds_fraction": 0.013863499247747643,
+   "mean_seconds": 0.1473443754688642,
+   "children": 1175,
+   "duplicates": 4840,
+   "failures": 2,
+   "errors": 0,
+   "heartbeat_timeouts": 0,
+   "wall_clock_timeouts": 2,
+   "repl_failures": 0,
+   "rejected": 0,
+   "closing": 11,
+   "on_proof_paths": 18
+  },
+  {
+   "step": "constructor",
+   "attempts": 6047,
+   "lean_seconds": 176.7663480937481,
+   "lean_seconds_fraction": 0.0027641326385821115,
+   "mean_seconds": 0.029232073440342003,
+   "children": 660,
+   "duplicates": 98,
+   "failures": 5289,
+   "errors": 5288,
+   "heartbeat_timeouts": 0,
+   "wall_clock_timeouts": 0,
+   "repl_failures": 1,
+   "rejected": 0,
+   "closing": 14,
+   "on_proof_paths": 20
+  },
+  {
+   "step": "rfl",
+   "attempts": 6007,
+   "lean_seconds": 173.62407402566168,
+   "lean_seconds_fraction": 0.002714996236746388,
+   "mean_seconds": 0.028903624775372345,
+   "children": 5,
+   "duplicates": 28,
+   "failures": 5974,
+   "errors": 5973,
+   "heartbeat_timeouts": 0,
+   "wall_clock_timeouts": 1,
+   "repl_failures": 0,
+   "rejected": 0,
+   "closing": 4,
+   "on_proof_paths": 4
+  }
+ ],
+ "proof_depths": [
+  {
+   "depth": 1,
+   "solved": 90
+  },
+  {
+   "depth": 2,
+   "solved": 24
+  },
+  {
+   "depth": 3,
+   "solved": 22
+  },
+  {
+   "depth": 4,
+   "solved": 7
+  },
+  {
+   "depth": 5,
+   "solved": 4
+  },
+  {
+   "depth": 6,
+   "solved": 5
+  },
+  {
+   "depth": 7,
+   "solved": 2
+  }
+ ],
+ "solved_at_depth_two_or_more": 64,
+ "multi_step_proofs": [
+  {
+   "problem_name": "mathd_algebra_48",
+   "proof_steps": [
+    "rw [h₀, h₁]",
+    "ring_nf"
+   ]
+  },
+  {
+   "problem_name": "mathd_algebra_35",
+   "proof_steps": [
+    "simp_all",
+    "ring_nf"
+   ]
+  },
+  {
+   "problem_name": "mathd_algebra_43",
+   "proof_steps": [
+    "simp only [h₀, h₁, h₂] at *",
+    "nlinarith"
+   ]
+  },
+  {
+   "problem_name": "mathd_algebra_214",
+   "proof_steps": [
+    "simp [h₀, h₁] at *",
+    "nlinarith"
+   ]
+  },
+  {
+   "problem_name": "numbertheory_sqmod4in01d",
+   "proof_steps": [
+    "have : a % 4 = 0 ∨ a % 4 = 1 ∨ a % 4 = 2 ∨ a % 4 = 3 := by omega",
+    "rcases this with (h | h | h | h) <;>\nsimp [h, pow_two, Int.mul_emod, Int.add_emod]"
+   ]
+  },
+  {
+   "problem_name": "mathd_numbertheory_461",
+   "proof_steps": [
+    "simp_all",
+    "constructor"
+   ]
+  },
+  {
+   "problem_name": "amc12b_2003_p9",
+   "proof_steps": [
+    "simp only [h₀] at h₁ ⊢",
+    "nlinarith"
+   ]
+  },
+  {
+   "problem_name": "mathd_algebra_28",
+   "proof_steps": [
+    "obtain ⟨x, hx⟩ := h₁",
+    "simp [h₀, hx] at *",
+    "nlinarith [sq_nonneg (x + 5 / 4)]"
+   ]
+  },
+  {
+   "problem_name": "mathd_algebra_73",
+   "proof_steps": [
+    "apply mul_left_cancel₀ (sub_ne_zero_of_ne h₁)",
+    "ring_nf at h₀ ⊢",
+    "linear_combination h₀"
+   ]
+  },
+  {
+   "problem_name": "induction_divisibility_3divnto3m2n",
+   "proof_steps": [
+    "apply Nat.dvd_of_mod_eq_zero",
+    "have : n % 3 = 0 ∨ n % 3 = 1 ∨ n % 3 = 2 := by omega",
+    "rcases this with (h | h | h) <;> simp [h, Nat.pow_succ, Nat.mul_mod, Nat.add_mod]"
+   ]
+  },
+  {
+   "problem_name": "mathd_algebra_132",
+   "proof_steps": [
+    "field_simp",
+    "simp only [h₀, h₁, h₂] at *",
+    "nlinarith"
+   ]
+  },
+  {
+   "problem_name": "numbertheory_sqmod3in01d",
+   "proof_steps": [
+    "have : a % 3 = 0 ∨ a % 3 = 1 ∨ a % 3 = 2 := by omega",
+    "rcases this with (h | h | h) <;>\nsimp [h, pow_two, Int.mul_emod, Int.add_emod]"
+   ]
+  },
+  {
+   "problem_name": "mathd_algebra_245",
+   "proof_steps": [
+    "field_simp [h₀, mul_comm]",
+    "ring_nf"
+   ]
+  },
+  {
+   "problem_name": "mathd_algebra_116",
+   "proof_steps": [
+    "field_simp [h₀] at h₁ ⊢",
+    "nlinarith [sq_sqrt (show (0 : ℝ) ≤ 131 by norm_num)]"
+   ]
+  },
+  {
+   "problem_name": "amc12a_2009_p9",
+   "proof_steps": [
+    "simp_all",
+    "have h₂ := h₀ (-3)",
+    "simp_all",
+    "linarith [h₀ 0, h₀ 1, h₀ (-1)]"
+   ]
+  },
+  {
+   "problem_name": "amc12_2001_p9",
+   "proof_steps": [
+    "have h₂ := h₀ 500 (by norm_num) 600 (by norm_num)",
+    "field_simp",
+    "have h₃ := h₀ 600 (by norm_num) 500 (by norm_num)",
+    "norm_num at h₂ h₃",
+    "nlinarith"
+   ]
+  },
+  {
+   "problem_name": "mathd_algebra_159",
+   "proof_steps": [
+    "simp [h₀, h₁] at *",
+    "nlinarith"
+   ]
+  },
+  {
+   "problem_name": "amc12a_2013_p7",
+   "proof_steps": [
+    "simp_all",
+    "nlinarith"
+   ]
+  },
+  {
+   "problem_name": "mathd_algebra_140",
+   "proof_steps": [
+    "have h₂ := h₁ 0",
+    "simp_all",
+    "nlinarith [h₀.1, h₀.2.1, h₀.2.2, h₁ 0, h₁ 1, h₁ (-1), h₁ (1 / 2), h₁ (0.5)]"
+   ]
+  },
+  {
+   "problem_name": "mathd_numbertheory_64",
+   "proof_steps": [
+    "constructor",
+    "constructor",
+    "·\n  intro x hx\n  simp [Nat.ModEq] at hx\n  omega"
+   ]
+  },
+  {
+   "problem_name": "mathd_algebra_192",
+   "proof_steps": [
+    "simp_all",
+    "ring_nf\n<;> simp [Complex.ext_iff, pow_two, pow_three]\n<;> norm_num\n<;> ring_nf\n<;> norm_num\n<;> ring_nf\n<;> norm_num"
+   ]
+  },
+  {
+   "problem_name": "mathd_numbertheory_780",
+   "proof_steps": [
+    "rcases h₁ with ⟨h₁_left, h₁_right⟩",
+    "interval_cases m <;> omega"
+   ]
+  },
+  {
+   "problem_name": "mathd_numbertheory_326",
+   "proof_steps": [
+    "apply Eq.symm",
+    "ring_nf at h₀",
+    "nlinarith [h₀, sq_nonneg (n - 4), sq_nonneg (n + 4)]"
+   ]
+  },
+  {
+   "problem_name": "mathd_algebra_11",
+   "proof_steps": [
+    "field_simp [sub_ne_zero.2 h₀, sub_ne_zero.2 h₁] at h₂ ⊢",
+    "nlinarith"
+   ]
+  },
+  {
+   "problem_name": "algebra_manipexpr_apbeq2cceqiacpbceqm2",
+   "proof_steps": [
+    "simp_all",
+    "simp [Complex.ext_iff, Complex.I_mul_I] at h₀ h₁ ⊢",
+    "constructor <;> linarith"
+   ]
+  },
+  {
+   "problem_name": "mathd_algebra_267",
+   "proof_steps": [
+    "field_simp [h₀, h₁, sub_eq_zero, add_eq_zero_iff_eq_neg] at h₂",
+    "nlinarith"
+   ]
+  },
+  {
+   "problem_name": "mathd_numbertheory_257",
+   "proof_steps": [
+    "norm_num at h₁",
+    "omega"
+   ]
+  },
+  {
+   "problem_name": "mathd_algebra_59",
+   "proof_steps": [
+    "norm_num at h₀",
+    "have h₁ : (4 : ℝ) ^ b = 4 := by linarith",
+    "have h₂ : b = 1 := by\n  apply_fun fun x => Real.logb 4 x at h₁\n  simp at h₁\n  linarith",
+    "simp_all"
+   ]
+  },
+  {
+   "problem_name": "mathd_algebra_151",
+   "proof_steps": [
+    "have h1 : ⌈Real.sqrt 27⌉ = 6 := by\n  rw [Int.ceil_eq_iff]\n  constructor <;> norm_num [Real.sqrt_le_iff, Real.lt_sqrt] <;>\n  nlinarith [Real.sqrt_nonneg 27, Real.sqrt_nonneg 26]",
+    "have h2 : ⌊Real.sqrt 26⌋ = 5 := by\n  rw [Int.floor_eq_iff]\n  norm_num\n  constructor <;> norm_num <;>\n    nlinarith [Real.sq_sqrt (show 0 ≤ 26 by norm_num), Real.sqrt_nonneg 26]",
+    "omega"
+   ]
+  },
+  {
+   "problem_name": "algebra_amgm_faxinrrp2msqrt2geq2mxm1div2x",
+   "proof_steps": [
+    "intro x hx",
+    "field_simp",
+    "rw [div_le_iff (by positivity)]",
+    "ring_nf",
+    "nlinarith [Real.sqrt_nonneg 2, sq_sqrt (show 0 ≤ 2 by norm_num), mul_self_nonneg (x - Real.sqrt 2 / 2)]"
+   ]
+  },
+  {
+   "problem_name": "mathd_algebra_22",
+   "proof_steps": [
+    "rw [Real.logb]",
+    "field_simp",
+    "ring_nf"
+   ]
+  },
+  {
+   "problem_name": "amc12a_2013_p8",
+   "proof_steps": [
+    "field_simp at h₃",
+    "apply mul_left_cancel₀ (sub_ne_zero_of_ne h₂)",
+    "nlinarith"
+   ]
+  },
+  {
+   "problem_name": "mathd_numbertheory_22",
+   "proof_steps": [
+    "have h₂ : b ≤ 9 := by linarith",
+    "interval_cases b <;> norm_num at h₀ h₁ ⊢"
+   ]
+  },
+  {
+   "problem_name": "amc12b_2003_p17",
+   "proof_steps": [
+    "field_simp",
+    "field_simp [Real.log_mul, h₀.1.ne', h₀.2.ne'] at h₁ h₂ ⊢",
+    "nlinarith"
+   ]
+  },
+  {
+   "problem_name": "amc12a_2003_p1",
+   "proof_steps": [
+    "simp_all",
+    "rfl"
+   ]
+  },
+  {
+   "problem_name": "mathd_numbertheory_35",
+   "proof_steps": [
+    "have h₁ : 24 ∣ Nat.sqrt 196 := h₀ 24",
+    "have h₂ := h₀ 24",
+    "norm_num at h₂"
+   ]
+  },
+  {
+   "problem_name": "mathd_algebra_536",
+   "proof_steps": [
+    "norm_num [Nat.factorial]",
+    "rw [mul_comm]",
+    "norm_num [show (8 + Real.sqrt (9 : ℝ)) * 6 / 2 = 33 by\n  have h₁ : Real.sqrt (9 : ℝ) = 3 := by\n    rw [Real.sqrt_eq_iff_sq_eq] <;> norm_num\n  rw [h₁]\n  norm_num]"
+   ]
+  },
+  {
+   "problem_name": "mathd_algebra_251",
+   "proof_steps": [
+    "have h₂ : x = 2 := by\n  field_simp [h₀] at h₁\n  linarith",
+    "simp_all"
+   ]
+  },
+  {
+   "problem_name": "amc12_2000_p11",
+   "proof_steps": [
+    "field_simp [h₀.1, h₀.2]",
+    "ring_nf",
+    "nlinarith [sq_nonneg (a - b), sq_nonneg (a + b), sq_nonneg (a * b), sq_nonneg (a * b - b), sq_nonneg (a * b + b)]"
+   ]
+  },
+  {
+   "problem_name": "mathd_numbertheory_668",
+   "proof_steps": [
+    "simp_all",
+    "rfl"
+   ]
+  },
+  {
+   "problem_name": "amc12a_2017_p2",
+   "proof_steps": [
+    "field_simp",
+    "nlinarith"
+   ]
+  },
+  {
+   "problem_name": "mathd_algebra_181",
+   "proof_steps": [
+    "have h₂ : n - 3 ≠ 0 := by\n  intro h\n  apply h₀\n  linarith",
+    "have h₃ : n = 11 := by\n  field_simp at h₁\n  linarith",
+    "simp_all"
+   ]
+  },
+  {
+   "problem_name": "mathd_algebra_206",
+   "proof_steps": [
+    "simp only [h₀, h₁, h₂, h₃] at *",
+    "nlinarith [sq_pos_of_ne_zero (show 2 * a - b ≠ 0 by intro h; apply h₁ <;> linarith)]"
+   ]
+  },
+  {
+   "problem_name": "induction_ineq_nsqlefactn",
+   "proof_steps": [
+    "induction' h₀ with n hn",
+    "simp [Nat.factorial]",
+    "cases n with\n| zero => contradiction\n| succ n =>\n  cases n with\n  | zero => contradiction\n  | succ n =>\n    simp_all [Nat.factorial_succ, Nat.mul_succ]\n    nlinarith"
+   ]
+  },
+  {
+   "problem_name": "amc12b_2020_p5",
+   "proof_steps": [
+    "simp_all [mul_comm]",
+    "ring_nf at h₀ h₁",
+    "field_simp at h₀ h₁",
+    "norm_cast at h₀ h₁",
+    "simp_all",
+    "omega"
+   ]
+  },
+  {
+   "problem_name": "mathd_numbertheory_690",
+   "proof_steps": [
+    "constructor",
+    "·\n  constructor\n  ·\n    norm_num\n  constructor\n  ·\n    norm_num [Nat.ModEq]\n  constructor\n  ·\n    norm_num [Nat.ModEq]\n  constructor\n  ·\n    norm_num [Nat.ModEq]\n  ·\n    norm_num [Nat.ModEq]",
+    "·\n  intro a h\n  rcases h with ⟨h1, h2, h3, h4, h5⟩\n  by_contra h6\n  push_neg at h6\n  interval_cases a <;> norm_num [Nat.ModEq, Nat.ModEq] at h2 h3 h4 h5 <;> omega"
+   ]
+  },
+  {
+   "problem_name": "mathd_numbertheory_629",
+   "proof_steps": [
+    "constructor",
+    "·\n  constructor\n  ·\n    norm_num\n  ·\n    norm_num [Nat.lcm]",
+    "·\n  intro t ht\n  rcases ht with ⟨ht1, ht2⟩\n  by_contra h\n  push_neg at h\n  have h1 : t ≤ 18 := by linarith\n  interval_cases t <;> norm_num at ht1 ht2 ⊢\n  all_goals omega"
+   ]
+  },
+  {
+   "problem_name": "mathd_algebra_433",
+   "proof_steps": [
+    "have h₁ : f 8 = 3 * Real.sqrt (2 * 8 - 7) - 8 := by\n  rw [h₀]",
+    "rw [h₁]",
+    "ring_nf at h₁ ⊢",
+    "simp_all",
+    "ring_nf at h₁ ⊢",
+    "nlinarith [Real.sqrt_nonneg 9, Real.sq_sqrt (show (0 : ℝ) ≤ 9 by norm_num)]"
+   ]
+  },
+  {
+   "problem_name": "algebra_2varlineareq_xpeeq7_2xpeeq3_eeq11_xeqn4",
+   "proof_steps": [
+    "refine' ⟨_, _⟩",
+    "all_goals\n  simp_all [Complex.ext_iff, add_comm]",
+    "all_goals\n  ring_nf at *\n  constructor\n  nlinarith\n  nlinarith"
+   ]
+  },
+  {
+   "problem_name": "amc12b_2002_p6",
+   "proof_steps": [
+    "constructor",
+    "{\n  have h₂ := h₁ 0\n  have h₃ := h₁ 1\n  have h₄ := h₁ (-1)\n  have h₅ := h₁ 2\n  have h₆ := h₁ (-2)\n  norm_num at h₂ h₃ h₄ h₅ h₆\n  nlinarith [sq_pos_of_ne_zero h₀.1, sq_pos_of_ne_zero h₀.2]\n}",
+    "apply mul_left_cancel₀ (sub_ne_zero.mpr h₀.2)",
+    "nlinarith [h₀.1, h₀.2, h₁ 0, h₁ 2, h₁ (a + b)]"
+   ]
+  },
+  {
+   "problem_name": "aime_1984_p15",
+   "proof_steps": [
+    "field_simp at h₀ h₁ h₂ h₃",
+    "nlinarith"
+   ]
+  },
+  {
+   "problem_name": "mathd_numbertheory_32",
+   "proof_steps": [
+    "rw [Finset.sum_eq_multiset_sum]",
+    "have h₁ : S = Finset.filter (λ n => n ∣ 36) (Finset.range (37)) := by\n  ext n\n  simp [h₀]\n  <;> aesop",
+    "rw [h₁]",
+    "constructor"
+   ]
+  },
+  {
+   "problem_name": "induction_seq_mul2pnp1",
+   "proof_steps": [
+    "ring_nf",
+    "induction' n with n ih",
+    "all_goals simp_all [pow_succ, Nat.mul_succ]",
+    "cases n <;> simp_all [Nat.mul_succ, Nat.pow_succ, Nat.mul_zero, Nat.add_zero]\n<;> omega"
+   ]
+  },
+  {
+   "problem_name": "amc12a_2015_p10",
+   "proof_steps": [
+    "ring_nf at h₂",
+    "have h₃ : y ≠ 0 := by linarith",
+    "have h₄ : y < x := h₁",
+    "have h₅ : x ≤ 80 := by\n  nlinarith",
+    "have h₆ : y < 80 := by linarith",
+    "interval_cases y <;> omega"
+   ]
+  },
+  {
+   "problem_name": "mathd_algebra_77",
+   "proof_steps": [
+    "refine' ⟨_, _⟩",
+    "all_goals simp_all [h₂, h₃, h₄]",
+    "all_goals\n  apply mul_left_cancel₀ (sub_ne_zero_of_ne h₁)\n  nlinarith"
+   ]
+  },
+  {
+   "problem_name": "mathd_algebra_13",
+   "proof_steps": [
+    "constructor",
+    "next =>\n  have h₁ := h₀ 4\n  have h₂ := h₀ 8\n  norm_num [pow_two] at h₁ h₂\n  field_simp at h₁ h₂\n  all_goals ring_nf at h₁ h₂\n  all_goals linarith",
+    "simp_all",
+    "next =>\n  have h₁ := h₀ 0\n  have h₂ := h₀ 6\n  have h₃ := h₀ 12\n  have h₄ := h₀ 14\n  have h₅ := h₀ 17\n  have h₆ := h₀ 20\n  have h₇ := h₀ 22\n  have h₈ := h₀ 25\n  have h₉ := h₀ 28\n  have h₁₀ := h₀ 31\n  norm_num at *\n  <;> linarith"
+   ]
+  },
+  {
+   "problem_name": "imo_1984_p2",
+   "proof_steps": [
+    "rcases h₀ with ⟨h₀_left, h₀_right⟩",
+    "have h₅ : 0 < a + b := by linarith",
+    "contrapose! h₁",
+    "have h₆ : a + b < 19 := by linarith",
+    "have h₇ : a < 19 := by linarith",
+    "have h₈ : b < 19 := by linarith",
+    "interval_cases a <;> interval_cases b <;> omega"
+   ]
+  },
+  {
+   "problem_name": "algebra_xmysqpymzsqpzmxsqeqxyz_xpypzp6dvdx3y3z3",
+   "proof_steps": [
+    "rw [add_assoc]",
+    "rw [add_assoc]",
+    "use x^2 + y^2 + z^2 - x * y - x * z - y * z",
+    "nlinarith"
+   ]
+  },
+  {
+   "problem_name": "mathd_algebra_493",
+   "proof_steps": [
+    "simp only [h₀, Real.sqrt_sq, sq, mul_comm]",
+    "have h₁ : Real.sqrt 4 = 2 := by\n  rw [Real.sqrt_eq_iff_sq_eq] <;> norm_num",
+    "have h₂ : ∀ x, f x = x^2 - 4 * Real.sqrt x + 1 := h₀",
+    "simp_all",
+    "ring_nf",
+    "have h₃ : Real.sqrt 9 = 3 := by\n  rw [Real.sqrt_eq_iff_sq_eq] <;> norm_num",
+    "nlinarith"
+   ]
+  },
+  {
+   "problem_name": "algebra_amgm_sqrtxymulxmyeqxpy_xpygeq4",
+   "proof_steps": [
+    "have h₃ : Real.sqrt (x * y) ≥ 0 := Real.sqrt_nonneg (x * y)",
+    "simp_all",
+    "nlinarith [sq_sqrt (mul_nonneg (le_of_lt h₀.1) (le_of_lt h₀.2)),\n  sq_nonneg (Real.sqrt (x * y) - (x - y) / 2)]"
+   ]
+  },
+  {
+   "problem_name": "mathd_algebra_451",
+   "proof_steps": [
+    "simp_all",
+    "have h₄ := h₀",
+    "have h₅ := h₁.symm",
+    "have h₆ := h₁.symm",
+    "have h₇ := h₂.symm",
+    "simp_all"
+   ]
+  },
+  {
+   "problem_name": "imo_1961_p1",
+   "proof_steps": [
+    "ring_nf",
+    "refine' ⟨_, _, _⟩",
+    "nlinarith",
+    "nlinarith",
+    "nlinarith [sq_pos_of_ne_zero (sub_ne_zero.mpr h₁), sq_pos_of_ne_zero (sub_ne_zero.mpr h₂), sq_pos_of_ne_zero (sub_ne_zero.mpr h₃)]"
+   ]
+  },
+  {
+   "problem_name": "amc12a_2008_p8",
+   "proof_steps": [
+    "ring_nf",
+    "have h₃ : y = 1 := by nlinarith",
+    "rw [h₃] at h₂",
+    "have h₄ : x^2 = 2 := by\n  nlinarith",
+    "have h₅ : x = Real.sqrt 2 := by\n  nlinarith [Real.sqrt_nonneg 2, Real.sq_sqrt (show 0 ≤ 2 by norm_num)]",
+    "nlinarith"
+   ]
+  },
+  {
+   "problem_name": "aime_1983_p9",
+   "proof_steps": [
+    "ring_nf",
+    "have h₁ : 0 < Real.sin x := Real.sin_pos_of_pos_of_lt_pi h₀.1 (by linarith [Real.pi_pos])",
+    "field_simp",
+    "rw [le_div_iff (by nlinarith [Real.sin_pos_of_pos_of_lt_pi h₀.1 (by linarith : x < Real.pi)])]",
+    "nlinarith [sq_nonneg (x * Real.sin x - 2 / 3), sq_nonneg (x - Real.sin x), sq_nonneg (x + Real.sin x),\n  sq_nonneg (x - 2 / 3), sq_nonneg (x + 2 / 3)]\n<;> linarith\n<;> linarith\n<;> linarith\n<;> linarith\n<;> linarith"
+   ]
+  }
+ ],
+ "verification_failures": 0,
+ "plain_verified": 154,
+ "start_failures": 0
+}
