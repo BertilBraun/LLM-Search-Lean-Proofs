@@ -1,0 +1,12 @@
+{
+ "retriever": "kaiyuy/leandojo-lean4-retriever-byt5-small",
+ "device": "cuda:0",
+ "dtype": "bfloat16",
+ "premises": 206463,
+ "serialized_bytes": 42702725,
+ "seconds": 530.4184411739698,
+ "premises_per_second": 389.24551631922435,
+ "float32_cosine_mean": 0.9999544024467468,
+ "float32_cosine_min": 0.9991968870162964,
+ "written": true
+}

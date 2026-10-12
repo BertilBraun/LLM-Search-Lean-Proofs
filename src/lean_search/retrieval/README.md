@@ -24,9 +24,13 @@ The premise embeddings are precomputed (`experiments/phase4_embed_premises.py`) 
 float16 on a GPU. `BatchingRetriever` serves the concurrent searches of one process: requests that arrive while a
 batch is encoded form the next batch, encoded in a worker thread.
 
-Encode on the GPU next to the vLLM server: the bfloat16 encoder and the float16 index take about 1 GiB of the 10%
-vLLM leaves free. On the shared CPU of the node one goal takes ~200 ms with 8 threads and batching does not amortize
-(`results/phase4_retrieval_latency/`), which competes with the Lean processes of a Lean-bound search.
+Encode on the GPU next to the vLLM server (`results/phase4_retrieval_latency/`): one goal takes 14 ms (13 ms
+encoding, 1 ms search over 199,810 premises), batches of 8 or 32 take 3 ms per goal. Torch's peak allocation is
+1.9 GiB with batches of 32 short goals (bfloat16 encoder 0.4, float16 index 0.6, the rest activations), plus the CUDA
+context, against the ~2.4 GiB a vLLM server at `GPU_MEMORY_UTILIZATION=0.90` leaves free: hence the default of 8
+goals per batch, and serve that GPU at 0.85. On the shared CPU of the node one goal takes ~200 ms with 8 threads and
+batching does not amortize, which competes with the Lean processes of a Lean-bound search. Embedding the 206,463
+premises takes 9 minutes on one RTX 3090 in bfloat16 (cosine 0.99995 to float32); on the CPU it would take ~36 h.
 
 ## Corpus (`environment.py`, `experiments/phase4_premise_names.py`)
 
@@ -57,9 +61,10 @@ The best try wins (closes, then fewer goals, then the earlier tactic). Candidate
 they may be hints for `nlinarith`, rewrites under binders or lemmas the model applies with arguments. The shown
 lemmas are the best k of the N candidates ordered by applicability class, then retrieval score.
 
-Cost on miniF2F-valid roots and traced competition states (32 candidates, 8 processes,
-`results/phase4_annotation_cost/`): ~96 tactic calls and 0.75–1.6 Lean-seconds per expansion depending on the
-node's load (failing calls take 2–8 ms at the median). Every call leaves a REPL proof state, so a process reaches
+Cost on miniF2F-valid roots and traced competition states (32 retrieved candidates, 8 processes,
+`results/phase4_annotation_cost/`): ~96 tactic calls and 0.98 Lean-seconds per expansion (p50 0.60, p90 1.29; 0.75–1.6
+with a stand-in candidate list, depending on the node's load); failing calls take 3–7 ms at the median. Retrieved
+candidates rarely apply directly: per state 0.07 close the goal and 1.8 leave goals, 30 do not match. Every call leaves a REPL proof state, so a process reaches
 the pool's restart threshold (half of 8,000 states) after about 40 expanded nodes. The row-2 search spends ~5.5
 Lean-seconds per expansion, so the check adds 15–30%. These seconds are not in the search's `lean_seconds`
 accounting; `policy.json` reports them under `lemmas`.
@@ -104,7 +109,7 @@ lemma_count = 8          # 0 disables retrieval
 candidate_count = 32     # retrieved and checked per expansion
 device = "cuda:0"        # where goals are encoded and the index lives
 cpu_threads = 8          # torch threads when device = "cpu"
-max_batch_goals = 32
+max_batch_goals = 8
 max_signature_characters = 256
 
 [policy.retrieval.applicability]
@@ -129,4 +134,15 @@ annotate in Lean, finish) and the adapter continues the SFT v2 adapter with the 
 Recall@k (ReProver's R@k: the mean fraction of a state's gold premises in the top k), hit rate@k and MRR on the
 LeanDojo novel-premises validation and test states with at least one gold premise, ranked against all LeanDojo
 premises, against the accessible ones (ReProver's protocol) and against the deployed index; and on traced
-competition steps whose named premises are the gold set.
+competition steps whose named premises are the gold set (`results/phase4_recall/`):
+
+| States | R@4 | R@8 | R@16 | R@32 | Hit@8 | Hit@32 | MRR |
+|---|---|---|---|---|---|---|---|
+| LeanDojo novel premises, test, all premises (4,141) | 0.430 | 0.549 | 0.657 | 0.752 | 0.736 | 0.879 | 0.485 |
+| same, accessible premises | 0.473 | 0.599 | 0.713 | 0.811 | 0.778 | 0.910 | 0.530 |
+| same, deployed index (4,104) | 0.429 | 0.546 | 0.655 | 0.747 | 0.734 | 0.874 | 0.483 |
+| traced competition steps, validation split (3,216) | 0.101 | 0.156 | 0.236 | 0.328 | 0.216 | 0.432 | 0.124 |
+
+The LeanDojo numbers are an upper bound: this checkpoint was most likely trained on LeanDojo's random split, whose
+training theorems include the novel-premises test theorems. The competition steps are held out from it entirely and
+are what the search sees: for 22% of the steps that name a theorem, one of them is in the top 8 (43% in the top 32).

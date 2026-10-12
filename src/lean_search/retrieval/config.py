@@ -27,7 +27,7 @@ class RetrievalConfig:
     # Torch threads for encoding on the CPU; the Lean processes share the cores.
     cpu_threads: int = 8
     # Goals encoded per forward pass at most; concurrent expansions share one pass.
-    max_batch_goals: int = 32
+    max_batch_goals: int = 8
     max_signature_characters: int = 256
     applicability: ApplicabilityConfig = field(default_factory=ApplicabilityConfig)
 
