@@ -9,6 +9,7 @@ from lean_search.training.dpo import (  # noqa: E402
     dpo_losses,
     dpo_metrics,
     pair_batch,
+    plan_item_steps,
     plan_pair_steps,
     sequence_log_probabilities,
 )
@@ -142,3 +143,47 @@ def test_pairs_round_trip_through_json_lines(tmp_path) -> None:
     path = tmp_path / "pairs.jsonl"
     write_pairs(path, [pair(), pair(rejected="other")])
     assert list(read_pairs(path)) == [pair(), pair(rejected="other")]
+
+
+def chosen_only(prompt_tokens: int, chosen_tokens: int, number: int = 0) -> TokenizedPair:
+    example = SftExample("s", f"p{number}", 0, GOALS, "simp")
+    return TokenizedPair(
+        pair(rejected=None), TokenizedExample(example, (3,) * (prompt_tokens + chosen_tokens), prompt_tokens), None
+    )
+
+
+def test_chosen_only_items_add_no_rejected_row() -> None:
+    batch = pair_batch([tokenized(3, 2, 2), chosen_only(3, 1)], pad_token_id=0, device=torch.device("cpu"))
+    assert batch.input_ids[:, 0].tolist() == [1, 3, 2]
+
+
+def test_steps_count_the_pairs_among_their_items() -> None:
+    items = [tokenized(5, 2, 2, 0), chosen_only(5, 2, 1), chosen_only(5, 2, 2)]
+    config = OptimizationConfig(micro_batch_tokens=1000, micro_batches_per_step=1, length_group_examples=10)
+    (step,) = plan_pair_steps(items, config)
+    assert (step.items, step.pairs) == (3, 1)
+
+
+def test_metrics_without_pairs_are_empty() -> None:
+    assert dpo_metrics(scores([], []), scores([], []), beta=0.1).pairs == 0
+
+
+def test_a_chosen_only_item_tokenizes_without_a_rejected_completion() -> None:
+    assert tokenize_pair(CharacterTokenizer(), pair(rejected=None)).rejected is None
+
+
+def test_a_chosen_only_item_differs_from_a_pair_in_deduplication() -> None:
+    assert len(deduplicate_pairs([pair(), pair(rejected=None)])) == 2
+
+
+def test_item_steps_hold_the_requested_number_of_items() -> None:
+    items = [tokenized(5, number % 3 + 1, 2, number) for number in range(10)]
+    config = OptimizationConfig(micro_batch_tokens=30, epochs=1)
+    steps = plan_item_steps(items, config, batch_items=4)
+    assert [step.items for step in steps] == [4, 4]
+
+
+def test_item_steps_split_into_micro_batches_within_the_token_budget() -> None:
+    items = [tokenized(5, 2, 2, number) for number in range(8)]
+    (step,) = plan_item_steps(items, OptimizationConfig(micro_batch_tokens=30, epochs=1), batch_items=8)
+    assert max(len(batch) for batch in step.micro_batches) * items[0].padded_length <= 30

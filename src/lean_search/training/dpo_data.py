@@ -1,4 +1,8 @@
-"""Preference pairs for DPO: one proof state, a chosen and a rejected step, rendered in the policy's SFT format."""
+"""Preference pairs for DPO: one proof state, a chosen and a rejected step, rendered in the policy's SFT format.
+
+A pair without a rejected step trains only the chosen step's negative log-likelihood (dataset steps, proof steps
+whose siblings all made progress).
+"""
 
 import dataclasses
 import hashlib
@@ -17,7 +21,7 @@ class PreferencePair:
     step_index: int
     goals: tuple[str, ...]
     chosen: str
-    rejected: str
+    rejected: str | None
     # Why the rejected step lost, e.g. a Lean error, a timeout or a dead subtree.
     rejection: str
 
@@ -26,15 +30,17 @@ class PreferencePair:
 class TokenizedPair:
     pair: PreferencePair
     chosen: TokenizedExample
-    rejected: TokenizedExample
+    rejected: TokenizedExample | None
 
     @property
     def token_count(self) -> int:
-        return self.chosen.token_count + self.rejected.token_count
+        return self.chosen.token_count + (0 if self.rejected is None else self.rejected.token_count)
 
     @property
     def padded_length(self) -> int:
         """Both sequences share a micro-batch, padded to the longer one."""
+        if self.rejected is None:
+            return self.chosen.token_count
         return 2 * max(self.chosen.token_count, self.rejected.token_count)
 
 
@@ -43,17 +49,19 @@ def tokenize_pair(tokenizer: Tokenizer, pair: PreferencePair) -> TokenizedPair:
         example = SftExample(pair.source, pair.proof_identifier, pair.step_index, pair.goals, tactic_block)
         return tokenize_example(tokenizer, example)
 
-    return TokenizedPair(pair, completion(pair.chosen), completion(pair.rejected))
+    return TokenizedPair(pair, completion(pair.chosen), None if pair.rejected is None else completion(pair.rejected))
 
 
 def fits(pair: TokenizedPair, max_prompt_tokens: int, max_completion_tokens: int) -> bool:
-    return pair.chosen.prompt_token_count <= max_prompt_tokens and (
-        max(pair.chosen.completion_token_count, pair.rejected.completion_token_count) <= max_completion_tokens
+    completions = [pair.chosen] if pair.rejected is None else [pair.chosen, pair.rejected]
+    return pair.chosen.prompt_token_count <= max_prompt_tokens and all(
+        completion.completion_token_count <= max_completion_tokens for completion in completions
     )
 
 
 def pair_key(pair: PreferencePair) -> bytes:
-    return hashlib.sha256("\0".join((*pair.goals, "\1", pair.chosen, "\1", pair.rejected)).encode()).digest()
+    rejected = "\2" if pair.rejected is None else pair.rejected
+    return hashlib.sha256("\0".join((*pair.goals, "\1", pair.chosen, "\1", rejected)).encode()).digest()
 
 
 def deduplicate_pairs(pairs: Iterable[PreferencePair]) -> list[PreferencePair]:

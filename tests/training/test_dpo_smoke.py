@@ -54,13 +54,15 @@ def tiny_model(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
 
 
 def preference_pairs() -> list[TokenizedPair]:
+    """Eight pairs and four chosen-only steps (the NLL term alone)."""
     tokenizer = CharacterTokenizer()
-    return [
-        tokenize_pair(
-            tokenizer, PreferencePair("s", f"p{number}", 0, (f"⊢ {number} = {number}",), "rfl", "simp", "error")
-        )
-        for number in range(8)
+    pairs = [
+        PreferencePair("s", f"p{number}", 0, (f"⊢ {number} = {number}",), "rfl", "simp", "error") for number in range(8)
     ]
+    pairs += [
+        PreferencePair("s", f"q{number}", 0, (f"⊢ {number} ≤ {number}",), "rfl", None, "dataset") for number in range(4)
+    ]
+    return [tokenize_pair(tokenizer, pair) for pair in pairs]
 
 
 def test_dpo_opens_a_reward_margin_on_its_training_pairs(tiny_model: tuple[Path, Path], tmp_path: Path) -> None:

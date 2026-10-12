@@ -130,7 +130,7 @@ def render_markdown(summary: DpoRunSummary) -> str:
     ]
     throughput = [
         ["Steps", f"{result.steps:,}"],
-        ["Pairs", f"{result.pairs:,}"],
+        ["Items (pairs)", f"{result.items:,} ({result.pairs:,})"],
         ["Tokens", f"{result.tokens:,}"],
         ["Padding overhead", f"{result.padded_tokens / max(1, result.tokens) - 1:.1%}"],
         ["Reference log-probabilities", f"{result.reference_seconds / 60:.1f} min"],
@@ -139,7 +139,10 @@ def render_markdown(summary: DpoRunSummary) -> str:
         ["Peak GPU memory", f"{result.peak_memory_gib:.1f} GiB"],
         ["Trainable parameters", f"{result.trainable_parameters:,}"],
     ]
-    evaluations = [[evaluation.step, *metrics_cells(evaluation.metrics)] for evaluation in result.evaluations]
+    evaluations = [
+        [evaluation.step, *metrics_cells(evaluation.metrics), f"{evaluation.chosen_nll:.4f}"]
+        for evaluation in result.evaluations
+    ]
     sections = [
         f"# DPO run `{summary.run_name}`",
         markdown_table(["Setting", "Value"], settings),
@@ -148,9 +151,18 @@ def render_markdown(summary: DpoRunSummary) -> str:
         "## Validation",
         "Rewards are beta · (log π − log π_ref) of the whole completion; reward accuracy counts pairs whose chosen "
         "reward is the larger, chosen preferred pairs where the policy itself gives the chosen step the higher "
-        "log-probability.",
+        "log-probability; chosen NLL is the mean token NLL of every chosen step, pairs and chosen-only items.",
         markdown_table(
-            ["Step", "Loss", "Reward accuracy", "Margin", "Chosen reward", "Rejected reward", "Chosen preferred"],
+            [
+                "Step",
+                "Loss",
+                "Reward accuracy",
+                "Margin",
+                "Chosen reward",
+                "Rejected reward",
+                "Chosen preferred",
+                "Chosen NLL",
+            ],
             evaluations,
         ),
         f"Started {summary.started}, git {summary.git_revision[:10]}; adapter `{summary.adapter_directory}`.",
