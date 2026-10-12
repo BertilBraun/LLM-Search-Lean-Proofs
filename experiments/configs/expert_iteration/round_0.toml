@@ -12,18 +12,19 @@ policy_dpo_config = "experiments/configs/expert_iteration/round_0_policy_dpo.tom
 value_config = "experiments/configs/expert_iteration/round_0_value.toml"
 evaluation_config = "experiments/configs/expert_iteration/round_0_evaluation.toml"
 
-# Half Goedel-Pset: the pool's Lean Workbook and NuminaMath statements are those no prover in our corpora proved (the
-# proved ones were traced for SFT and are left out), and automation solved none of the first 550 of them. Later rounds
-# continue each source at offset = the counts used so far.
+# Statements whose proofs were traced for SFT are left out of the pool, so automation solved none of the first 550
+# Lean Workbook and NuminaMath candidates. Of the first 12,000 candidates, a proof in the untraced Goedel-Prover SFT
+# set exists for 18% of Lean Workbook, 8.5% of Goedel-Pset and 0.1% of NuminaMath ones, so NuminaMath gets the
+# smallest share. Later rounds continue each source at offset = the counts used so far.
 [[statements]]
 source = "goedel_pset_v1"
 offset = 0
-count = 2000
+count = 1600
 
 [[statements]]
 source = "lean_workbook"
 offset = 0
-count = 800
+count = 1200
 
 [[statements]]
 source = "numinamath_lean"
