@@ -1,10 +1,13 @@
 import dataclasses
+import tomllib
 from pathlib import Path
 
 import pytest
 
 from lean_search.retrieval.config import DEFAULT_CHECK_TACTICS, RetrievalConfig
+from lean_search.retrieval.finetune import RetrieverFinetuneConfig
 from lean_search.search.config import load_run_config, parse_run_config
+from lean_search.search.records import from_json_object
 
 POLICY_SECTION = """
 [expander]
@@ -65,3 +68,9 @@ def test_shipped_ablation_arms_differ_only_in_retrieval() -> None:
         for config in configs
     }
     assert len(without_retrieval) == 1
+
+
+def test_shipped_retriever_finetune_config_parses() -> None:
+    path = Path(__file__).parents[2] / "experiments" / "configs" / "retrieval" / "phase4_retriever_finetune.toml"
+    config = from_json_object(RetrieverFinetuneConfig, tomllib.loads(path.read_text(encoding="utf-8")))
+    assert config.training.max_training_seconds == 1200.0

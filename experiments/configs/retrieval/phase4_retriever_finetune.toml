@@ -1,0 +1,29 @@
+# Retriever fine-tuning (phase4_retriever_finetune.py): ReProver's Lean 4 retriever on traced competition steps that
+# name a premise of the deployed index (traced train split only), with LeanDojo novel-premises train states mixed
+# in against forgetting. About 20 minutes of training on one RTX 3090 (the step count is fixed after 20 probe steps
+# to fit `max_training_seconds`); with torchrun on two GPUs each step sees twice the queries.
+base_model = "kaiyuy/leandojo-lean4-retriever-byt5-small"
+
+[data]
+max_competition_examples = 48000
+max_leandojo_examples = 12000
+mined_candidates = 32
+seed = "phase4-retriever"
+
+[training]
+# A tenth of ReProver's training rate: the checkpoint is converged and must keep its premise embedding geometry.
+learning_rate = 3e-5
+warmup_fraction = 0.05
+minimum_learning_rate_ratio = 0.1
+weight_decay = 0.0
+max_gradient_norm = 1.0
+batch_examples = 16
+hard_negatives = 3
+max_steps = 3000
+max_training_seconds = 1200.0
+probe_steps = 20
+max_chunk_tokens = 16384
+evaluation_interval_steps = 250
+validation_examples = 1024
+gradient_checkpointing = true
+seed = 0

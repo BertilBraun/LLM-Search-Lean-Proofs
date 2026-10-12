@@ -21,20 +21,19 @@ import os
 import statistics
 import time
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
 import torch
 
 from lean_search.corpora.records import read_premise_records, read_tactic_examples, read_traced_steps
-from lean_search.retrieval.config import DEFAULT_RETRIEVER
 from lean_search.retrieval.encoder import TextEncoder
 from lean_search.retrieval.finetune import (
     RetrieverEvaluation,
     RetrieverExample,
+    RetrieverFinetuneConfig,
     RetrieverStepRecord,
-    RetrieverTrainingConfig,
     RetrieverTrainingResult,
     competition_examples,
     in_fixed_order,
@@ -65,23 +64,6 @@ class Stage(StrEnum):
     DATA = "data"
     MINE = "mine"
     TRAIN = "train"
-
-
-@dataclass(frozen=True)
-class RetrieverDataConfig:
-    # Taken in a fixed pseudo-random order; the training budget usually ends before one epoch.
-    max_competition_examples: int = 48_000
-    # LeanDojo novel-premises train states (disjoint from the guard's validation and test theorems).
-    max_leandojo_examples: int = 12_000
-    mined_candidates: int = 32
-    seed: str = "phase4-retriever"
-
-
-@dataclass(frozen=True)
-class RetrieverFinetuneConfig:
-    base_model: str = DEFAULT_RETRIEVER
-    data: RetrieverDataConfig = field(default_factory=RetrieverDataConfig)
-    training: RetrieverTrainingConfig = field(default_factory=RetrieverTrainingConfig)
 
 
 @dataclass(frozen=True)

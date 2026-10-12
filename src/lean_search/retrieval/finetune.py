@@ -5,7 +5,7 @@ import json
 import random
 import time
 from collections.abc import Callable, Collection, Iterable, Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import torch
@@ -13,6 +13,7 @@ import torch.nn.functional as functional
 import transformers
 
 from lean_search.corpora.records import TacticExample, TracedStep
+from lean_search.retrieval.config import DEFAULT_RETRIEVER
 from lean_search.retrieval.encoder import MAX_LENGTH, byte_token_ids, length_batches, padded_batch, pooled_embeddings
 from lean_search.retrieval.premises import (
     MINIF2F_OPEN_NAMESPACES,
@@ -56,6 +57,23 @@ class RetrieverTrainingConfig:
     validation_examples: int = 1024
     gradient_checkpointing: bool = True
     seed: int = 0
+
+
+@dataclass(frozen=True)
+class RetrieverDataConfig:
+    # Taken in a fixed pseudo-random order; the training budget usually ends before one epoch.
+    max_competition_examples: int = 48_000
+    # LeanDojo novel-premises train states (disjoint from the guard's validation and test theorems).
+    max_leandojo_examples: int = 12_000
+    mined_candidates: int = 32
+    seed: str = "phase4-retriever"
+
+
+@dataclass(frozen=True)
+class RetrieverFinetuneConfig:
+    base_model: str = DEFAULT_RETRIEVER
+    data: RetrieverDataConfig = field(default_factory=RetrieverDataConfig)
+    training: RetrieverTrainingConfig = field(default_factory=RetrieverTrainingConfig)
 
 
 @dataclass(frozen=True)
