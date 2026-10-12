@@ -1,0 +1,26 @@
+# The bootstrap's shortening with rationalization (`shorten --shortening-config` this file `--name 2b_rat`): the
+# 2B rewriter of phase5_bootstrap_r1.toml, plus short reasoning for the successful steps of the non-thinking run
+# on states where thinking found nothing.
+
+max_kept_reasoning_tokens = 256
+candidates_per_state = 3
+# Optional: a run of the SFT v2 policy without thinking on the same states (phase5_bootstrap_r1_nothinking.toml),
+# whose successful steps get a rationalization where thinking found nothing.
+rationalize_runs = ["phase5_bootstrap_r1_nothinking"]
+
+[rewrite]
+model = "search-qwen3.5-2b"
+tokenizer = "Qwen/Qwen3.5-2B"
+server_urls = ["http://127.0.0.1:8100/v1", "http://127.0.0.1:8101/v1"]
+target_tokens = 150
+max_accepted_tokens = 200
+max_tokens = 320
+candidates = 2
+temperature = 0.7
+top_p = 1.0
+
+[sufficiency]
+sample_count = 4
+temperature = 0.8
+top_p = 1.0
+max_tokens = 256

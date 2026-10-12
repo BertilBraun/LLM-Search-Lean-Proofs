@@ -669,6 +669,10 @@ def render_shortening_summary(summary: ShorteningSummary) -> str:
 
 def command_shorten(arguments: argparse.Namespace, config: ReasoningRunConfig, directory: RunDirectory) -> None:
     shortening = config.shortening
+    if arguments.pool_size is not None:
+        config = dataclasses.replace(
+            config, execution=dataclasses.replace(config.execution, pool_size=arguments.pool_size)
+        )
     if arguments.shortening_config:
         text = arguments.shortening_config.read_text(encoding="utf-8")
         shortening = from_json_object(ShorteningConfig, tomllib.loads(text))
@@ -810,6 +814,7 @@ def parse_arguments() -> argparse.Namespace:
         "--shortening-config", type=Path, help="a ShorteningConfig TOML instead of the run config's [shortening]"
     )
     shorten_command.add_argument("--chunks", type=int, help="only the first N chunks (a quality pilot)")
+    shorten_command.add_argument("--pool-size", type=int, help="overrides execution.pool_size")
 
     select = commands.add_parser("select", help="build a rejection-sampled SFT data set (config: ReasoningDataConfig)")
     select.add_argument("--config", type=Path, required=True)

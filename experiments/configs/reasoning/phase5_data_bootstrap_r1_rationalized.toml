@@ -1,0 +1,23 @@
+# Phase 5 short-reasoning bootstrap data with rationalized steps (select --name bootstrap_r1): per state at most two
+# successes with at most 256 reasoning tokens as sampled or with a sufficient compression, and for states without a
+# thinking success the non-thinking run's steps with a sufficient short reasoning (shortening `2b_rat`); half of the
+# examples non-thinking replay from the SFT v2 data (the owner's 50/50 mix).
+runs = ["phase5_bootstrap_r1"]
+replay_data = "v2"
+replay_ratio = 1.0
+validation_fraction = 0.03
+validation_replay_examples = 500
+tokenizer = "Qwen/Qwen3.5-2B"
+seed = "bootstrap-r1"
+max_kept_reasoning_tokens = 256
+shortening = "2b_rat"
+
+[reward]
+accept_later_reference_states = true
+value_progress = false
+value_progress_margin = 1.0
+
+[selection]
+max_per_state = 2
+min_reasoning_tokens = 16
+max_reasoning_tokens = 0
