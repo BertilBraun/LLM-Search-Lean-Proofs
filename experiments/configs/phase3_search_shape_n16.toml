@@ -1,0 +1,75 @@
+# Search shape test (results/phase3_search_shape/): n = 16 samples × 64 expansions (~1,024 generations
+# per theorem), policy prior weight 0.0. SFT v2 policy and value v0 as merged models, two instances per GPU
+# (deployment/README.md), 120 searches pinned to 40 CPUs, overlap and early value scoring, 7-tactic sweep.
+
+[lean]
+pool_size = 120
+concurrency = 120
+
+[search]
+max_expansions = 64
+# Raised so that no search stops on wall-clock time; shapes compare at equal expansions × samples.
+max_wall_seconds = 3600.0
+max_depth = 16
+score_children_early = true
+tactic_timeout_seconds = 10.0
+forbidden_steps = [
+    "exact?",
+    "apply?",
+    "rw?",
+    "simp?",
+    "simp_all?",
+    "dsimp?",
+    "aesop?",
+    "hint",
+    "rw_search",
+    "library_search",
+]
+
+[expander]
+kind = "automation_then_policy"
+overlap = true
+
+[automation]
+tactics = [
+    "omega",
+    "constructor",
+    "rfl",
+    "field_simp",
+    "ring_nf",
+    "simp_all",
+    "nlinarith",
+]
+timeout_seconds = 10.0
+max_wall_clock_timeouts_per_tactic = 1
+
+[priority]
+kind = "a_star"
+# f = 0.25·depth + h + w_p·(mean negative step log-probability on the path); automation steps count as the SFT v2
+# probe's median progress log-probability.
+value_weight = 1.0
+depth_weight = 0.25
+policy_prior_weight = 0.0
+automation_log_probability = -2.8
+
+[policy]
+model = "policy-merged"
+server_urls = ["http://127.0.0.1:8100/v1", "http://127.0.0.1:8101/v1"]
+tokenizer = "Qwen/Qwen3.5-2B"
+sample_count = 16
+temperature = 0.8
+top_p = 1.0
+# SFT completions were capped at 256 tokens; SFT samples average ~26 tokens, so the cap rarely binds.
+max_tokens = 256
+thinking = false
+few_shot = false
+
+[value]
+model = "value-merged"
+server_urls = ["http://127.0.0.1:8200/v1", "http://127.0.0.1:8201/v1"]
+tokenizer = "Qwen/Qwen3.5-2B"
+
+[value.readout]
+eight_or_more_steps = 12.0
+# v0 has no dead labels: p_dead is ~1e-7, so D does not change h.
+dead_steps = 16.0
