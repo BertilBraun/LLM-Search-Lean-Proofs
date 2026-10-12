@@ -9,6 +9,13 @@ pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="varlen ke
 from lean_search.training.packing import enable_packed_sequences  # noqa: E402
 from lean_search.training.sft import CompletionLoss, collate, pack  # noqa: E402
 from lean_search.training.sft_data import SftExample, TokenizedExample  # noqa: E402
+from lean_search.value.labels import LabelKind, ValueExample  # noqa: E402
+from lean_search.value.training import (  # noqa: E402
+    LastPositionLogits,
+    TokenizedValueExample,
+    collate_prompts,
+    pack_prompts,
+)
 
 LENGTHS = (37, 90, 5, 64, 130, 21)
 
@@ -89,3 +96,22 @@ def test_changing_the_other_examples_leaves_an_example_losses_unchanged() -> Non
     start = sum(example.completion_token_count for example in original[:2])
     kept = slice(start, start + original[2].completion_token_count)
     assert torch.equal(completion_losses(model, neighbours_changed)[kept], completion_losses(model, original)[kept])
+
+
+def test_packed_value_prompts_give_each_prompt_its_own_last_logits() -> None:
+    model = tiny_qwen3_5()
+    prompts = [
+        TokenizedValueExample(
+            ValueExample(("⊢ True",), LabelKind.EXACT, 1, 1.0, "source", str(index), 0), example.input_ids
+        )
+        for index, example in enumerate(examples(0))
+    ]
+    with torch.no_grad():
+        packed = LastPositionLogits(model)(pack_prompts(prompts, torch.device("cuda"))).float()
+        alone = torch.cat(
+            [
+                LastPositionLogits(model)(collate_prompts([prompt], 0, torch.device("cuda"))).float()
+                for prompt in prompts
+            ]
+        )
+    torch.testing.assert_close(packed, alone, atol=0.05, rtol=0.0)
