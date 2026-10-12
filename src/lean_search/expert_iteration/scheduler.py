@@ -1,10 +1,11 @@
-"""Which statement the searches take next, at which pass, and what happens to it after an attempt.
+"""Which statement the searches take next, and how far each statement's search escalates.
 
-Fresh statements come from the pool in its order, drawn across sources by weight. After an attempt, an unsolved
-statement is requeued for the next pass (a larger budget, each pass once) only when an open state of its search is
-close to a proof by the value model; otherwise, or after the last pass, it is retired. Requeued statements are
-retried most promising first, up to a share of the attempts while fresh statements remain. The state is rebuilt from
-the attempt log, so the service resumes after a crash: searches that were in flight simply start again.
+Fresh statements come from the pool in its order, drawn across sources by weight. A search runs stage by stage on
+the same tree: after each stage, an unsolved statement continues into the next stage (a larger total budget) when the
+best open state of its tree is close enough to a proof by the value model; otherwise, or after the last stage, it is
+retired. The state is rebuilt from the attempt log, so the service resumes after a crash: a search cut off before it
+ended starts again from scratch at the stage it had reached, waiting in a queue ahead of fresh statements, most
+promising first.
 """
 
 import heapq
@@ -15,7 +16,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from lean_search.corpora.records import StatementRecord
-from lean_search.expert_iteration.loop_config import PassBudget, SchedulerConfig
+from lean_search.expert_iteration.loop_config import SchedulerConfig, SearchStage
 from lean_search.expert_iteration.pool import problem_name
 from lean_search.expert_iteration.shards import AttemptRecord, Decision
 
@@ -31,8 +32,8 @@ class StatementStatus(StrEnum):
 @dataclass(frozen=True)
 class Job:
     statement: StatementRecord
-    pass_index: int
-    budget: PassBudget
+    # The stage the search starts at: 0, or a later stage when a cut-off search starts again.
+    stage: int
 
     @property
     def name(self) -> str:
@@ -40,12 +41,12 @@ class Job:
 
 
 @dataclass(frozen=True)
-class AttemptOutcome:
+class StageOutcome:
     proved: bool
     start_failed: bool
-    # The smallest value estimate h on the open frontier when the search stopped; None without one.
+    frontier_exhausted: bool
+    # The smallest value estimate h on the open frontier when the stage ended; None without one.
     best_frontier_value: float | None
-    root_dead: bool
     max_depth: int
 
 
@@ -58,32 +59,35 @@ class SchedulerCounts:
     solved: int
     retired: int
     fresh_started: int
-    retries_started: int
+    restarts_started: int
 
 
 @dataclass
 class _Entry:
     statement: StatementRecord | None
     status: StatementStatus
-    next_pass: int = 0
+    stage: int = 0
     priority: float = math.inf
 
 
-def decide(outcome: AttemptOutcome, pass_index: int, config: SchedulerConfig) -> Decision:
+def decide(outcome: StageOutcome, stage: int, config: SchedulerConfig) -> Decision:
     if outcome.proved:
         return Decision.SOLVED
     if outcome.start_failed:
         return Decision.RETIRED_LOAD_FAILURE
-    if pass_index + 1 >= len(config.budgets):
-        return Decision.RETIRED_LAST_PASS
-    if outcome.root_dead:
+    if outcome.frontier_exhausted:
         return Decision.RETIRED_DEAD
-    close = outcome.best_frontier_value is not None and outcome.best_frontier_value <= config.promising_value
-    deep = config.promising_depth > 0 and outcome.max_depth >= config.promising_depth
-    return Decision.REQUEUED if close or deep else Decision.RETIRED_UNPROMISING
+    if stage + 1 >= len(config.stages):
+        return Decision.RETIRED_LAST_STAGE
+    if outcome.best_frontier_value is None:
+        deep = config.promising_depth > 0 and outcome.max_depth >= config.promising_depth
+        return Decision.ESCALATED if deep else Decision.RETIRED_UNPROMISING
+    gate = config.stages[stage + 1].max_frontier_value
+    close = gate is None or outcome.best_frontier_value <= gate
+    return Decision.ESCALATED if close else Decision.RETIRED_UNPROMISING
 
 
-def retry_priority(attempt: AttemptRecord) -> float:
+def restart_priority(attempt: AttemptRecord) -> float:
     """Lower first: the closest open state to a proof by h; without a value model, the deepest search."""
     if attempt.best_frontier_value is not None:
         return attempt.best_frontier_value
@@ -97,9 +101,12 @@ class Scheduler:
         self.entries: dict[str, _Entry] = {}
         self.fresh_by_source: dict[str, deque[str]] = {}
         self.fresh_started_by_source: Counter[str] = Counter()
-        self.retries: list[tuple[float, str]] = []
+        self.restarts: list[tuple[float, str]] = []
         self.fresh_started = 0
-        self.retries_started = 0
+        self.restarts_started = 0
+
+    def stage(self, index: int) -> SearchStage:
+        return self.config.stages[index]
 
     def add_statements(self, statements: Iterable[StatementRecord]) -> int:
         """New statements become fresh; ones seen before (also in the attempt log) are skipped."""
@@ -109,7 +116,7 @@ class Scheduler:
             entry = self.entries.get(name)
             if entry is not None:
                 if entry.statement is None and entry.status == StatementStatus.QUEUED:
-                    heapq.heappush(self.retries, (entry.priority, name))
+                    heapq.heappush(self.restarts, (entry.priority, name))
                 entry.statement = entry.statement or statement
                 continue
             self.entries[name] = _Entry(statement, StatementStatus.FRESH)
@@ -118,47 +125,60 @@ class Scheduler:
         return added
 
     def replay(self, attempts: Iterable[AttemptRecord]) -> int:
+        """The attempt log of earlier sessions: a search whose last record escalated was cut off and starts again."""
         count = 0
         for attempt in attempts:
             entry = self.entries.setdefault(attempt.problem_name, _Entry(None, StatementStatus.FRESH))
-            self._count_start(attempt.source, attempt.pass_index)
-            self._apply(attempt.problem_name, entry, attempt)
+            if attempt.stage == 0 and entry.status == StatementStatus.FRESH:
+                self.fresh_started += 1
+                self.fresh_started_by_source[attempt.source] += 1
+            if attempt.decision == Decision.ESCALATED:
+                entry.status = StatementStatus.QUEUED
+                entry.stage = attempt.stage + 1
+                entry.priority = restart_priority(attempt)
+                if entry.statement is not None:
+                    heapq.heappush(self.restarts, (entry.priority, attempt.problem_name))
+            else:
+                self._finish(entry, attempt.decision)
             count += 1
         return count
 
     def next_job(self) -> Job | None:
-        fresh_source = self._fresh_source()
-        take_retry = self._has_retry() and (
-            fresh_source is None
-            or self.retries_started < self.config.retry_share * (self.fresh_started + self.retries_started + 1)
-        )
-        if take_retry:
-            _, name = heapq.heappop(self.retries)
-        elif fresh_source is not None:
-            name = self.fresh_by_source[fresh_source].popleft()
+        if self._has_restart():
+            _, name = heapq.heappop(self.restarts)
+            self.restarts_started += 1
         else:
-            return None
+            fresh_source = self._fresh_source()
+            if fresh_source is None:
+                return None
+            name = self.fresh_by_source[fresh_source].popleft()
+            self.fresh_started += 1
+            self.fresh_started_by_source[fresh_source] += 1
         entry = self.entries[name]
         assert entry.statement is not None, name
         entry.status = StatementStatus.IN_FLIGHT
-        self._count_start(entry.statement.source, entry.next_pass)
-        return Job(entry.statement, entry.next_pass, self.config.budgets[entry.next_pass])
+        return Job(entry.statement, entry.stage)
 
     def record(self, attempt: AttemptRecord) -> None:
-        self._apply(attempt.problem_name, self.entries[attempt.problem_name], attempt)
+        """A stage of a live search ended; an escalated search goes on in place."""
+        entry = self.entries[attempt.problem_name]
+        if attempt.decision == Decision.ESCALATED:
+            entry.stage = attempt.stage + 1
+            entry.priority = restart_priority(attempt)
+        else:
+            self._finish(entry, attempt.decision)
 
     def release(self, job: Job) -> None:
-        """A search that failed for infrastructure reasons: the statement waits for the same pass again."""
+        """A search that failed for infrastructure reasons starts again at the stage it had reached."""
         entry = self.entries[job.name]
-        if job.pass_index == 0:
+        if entry.stage == 0:
             self.fresh_started -= 1
             self.fresh_started_by_source[job.statement.source] -= 1
             entry.status = StatementStatus.FRESH
             self.fresh_by_source[job.statement.source].appendleft(job.name)
         else:
-            self.retries_started -= 1
             entry.status = StatementStatus.QUEUED
-            heapq.heappush(self.retries, (entry.priority, job.name))
+            heapq.heappush(self.restarts, (entry.priority, job.name))
 
     def counts(self) -> SchedulerCounts:
         statuses = Counter(entry.status for entry in self.entries.values())
@@ -170,35 +190,19 @@ class Scheduler:
             solved=statuses[StatementStatus.SOLVED],
             retired=statuses[StatementStatus.RETIRED],
             fresh_started=self.fresh_started,
-            retries_started=self.retries_started,
+            restarts_started=self.restarts_started,
         )
 
-    def _apply(self, name: str, entry: _Entry, attempt: AttemptRecord) -> None:
-        match attempt.decision:
-            case Decision.SOLVED:
-                entry.status = StatementStatus.SOLVED
-            case Decision.REQUEUED:
-                entry.status = StatementStatus.QUEUED
-                entry.next_pass = attempt.pass_index + 1
-                entry.priority = retry_priority(attempt)
-                heapq.heappush(self.retries, (entry.priority, name))
-            case _:
-                entry.status = StatementStatus.RETIRED
+    def _finish(self, entry: _Entry, decision: Decision) -> None:
+        entry.status = StatementStatus.SOLVED if decision == Decision.SOLVED else StatementStatus.RETIRED
 
-    def _count_start(self, source: str, pass_index: int) -> None:
-        if pass_index == 0:
-            self.fresh_started += 1
-            self.fresh_started_by_source[source] += 1
-        else:
-            self.retries_started += 1
-
-    def _has_retry(self) -> bool:
-        while self.retries:
-            _, name = self.retries[0]
+    def _has_restart(self) -> bool:
+        while self.restarts:
+            _, name = self.restarts[0]
             entry = self.entries[name]
             if entry.status == StatementStatus.QUEUED and entry.statement is not None:
                 return True
-            heapq.heappop(self.retries)
+            heapq.heappop(self.restarts)
         return False
 
     def _fresh_source(self) -> str | None:

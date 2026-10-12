@@ -1,12 +1,12 @@
 import shutil
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 
 import pytest
 import pytest_asyncio
 
 from lean_search.data import Problem, Split
 from lean_search.expert_iteration.loop_config import HarvestConfig
-from lean_search.expert_iteration.loop_search import LoopSearch, PauseGate
+from lean_search.expert_iteration.loop_search import LoopSearch, PauseGate, StageResult, never_continue
 from lean_search.expert_iteration.proofs import found_proofs
 from lean_search.lean import LeanRepl, LeanReplConfig
 from lean_search.lean.repl import PROJECT_DIRECTORY, REPL_BINARY
@@ -61,18 +61,28 @@ async def repl() -> AsyncIterator[LeanRepl]:
 
 
 async def searched(
-    repl: LeanRepl, harvest: HarvestConfig, estimator: AdjustableEstimator, max_expansions: int = 4
+    repl: LeanRepl,
+    harvest: HarvestConfig,
+    estimator: AdjustableEstimator,
+    stage_expansions: tuple[int, ...] = (4,),
+    continue_search: Callable[[StageResult], Awaitable[bool]] = never_continue,
 ) -> tuple[LoopSearch, CompletedSearch]:
     search = LoopSearch(
         PROBLEM,
         repl,
         TwoIntroductionsThenSimp(),
         AStar(estimator, 0.5),
-        SearchConfig(max_expansions=max_expansions),
+        [SearchConfig(max_expansions=expansions) for expansions in stage_expansions],
+        0,
         harvest,
         PauseGate(),
+        continue_search,
     )
     return search, await search.run()
+
+
+async def always_continue(result: StageResult) -> bool:
+    return True
 
 
 def proof_step_sequences(completed: CompletedSearch) -> set[tuple[str, ...]]:
@@ -105,7 +115,7 @@ async def test_harvesting_keeps_the_cost_of_the_first_proof(repl: LeanRepl) -> N
 
 async def test_rescoring_takes_the_new_estimates(repl: LeanRepl) -> None:
     estimator = AdjustableEstimator(1.0)
-    search, completed = await searched(repl, HarvestConfig(max_expansions=0), estimator, max_expansions=1)
+    search, completed = await searched(repl, HarvestConfig(max_expansions=0), estimator, (1,))
     estimator.remaining_steps = 4.0
     await search.rescore()
     assert completed.tree is not None
@@ -114,3 +124,27 @@ async def test_rescoring_takes_the_new_estimates(repl: LeanRepl) -> None:
         (NodeStatus.OPEN, 4.0, 3.0),
         (NodeStatus.OPEN, 4.0, 3.0),
     ]
+
+
+@pytest.mark.parametrize(
+    ("continue_search", "outcome"),
+    [
+        (never_continue, [("expansion_budget", False)]),
+        (always_continue, [("expansion_budget", False), ("proved", True)]),
+    ],
+    ids=["stops", "escalates"],
+)
+async def test_a_search_escalates_on_the_same_tree(
+    repl: LeanRepl,
+    continue_search: Callable[[StageResult], Awaitable[bool]],
+    outcome: list[tuple[str, bool]],
+) -> None:
+    harvest = HarvestConfig(max_expansions=0)
+    search, _ = await searched(repl, harvest, AdjustableEstimator(1.0), (1, 4), continue_search)
+    assert [(result.stop_reason, result.proved) for result in search.stage_results] == outcome
+
+
+async def test_a_stage_counts_only_its_own_expansions(repl: LeanRepl) -> None:
+    harvest = HarvestConfig(max_expansions=0)
+    search, _ = await searched(repl, harvest, AdjustableEstimator(1.0), (1, 4), always_continue)
+    assert [result.expansions for result in search.stage_results] == [1, 1]

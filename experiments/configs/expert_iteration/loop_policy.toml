@@ -7,7 +7,10 @@ chosen_nll_weight = 0.5
 batch_items = 64
 warmup_steps = 10
 max_prompt_tokens = 2048
-max_completion_tokens = 256
+# 512 as the search samples; in thinking mode the reasoning counts too (e.g. 2560 for max_tokens = 2048), and
+# thinking_instruction must match the search's policy.thinking_instruction.
+max_completion_tokens = 512
+thinking_instruction = ""
 
 [optimization]
 method = "lora"

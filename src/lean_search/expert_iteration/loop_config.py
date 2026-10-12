@@ -31,10 +31,15 @@ class ServingConfig:
 
 
 @dataclass(frozen=True)
-class PassBudget:
+class SearchStage:
+    """A statement's search budget up to and including this stage; each stage continues the previous stage's tree."""
+
     max_expansions: int
     # Search time without training pauses; a backstop next to the expansion cap.
     max_wall_seconds: float
+    # An unsolved statement enters this stage when the best h on its open frontier is at most this; None for the
+    # first stage, which every statement gets.
+    max_frontier_value: float | None = None
 
 
 @dataclass(frozen=True)
@@ -48,16 +53,16 @@ class HarvestConfig:
 
 @dataclass(frozen=True)
 class SchedulerConfig:
-    # One budget per pass: the first pass for every statement, later ones (each at most once) for promising unsolved
-    # statements. Row 4 found 88% of its miniF2F-valid proofs within 8 expansions; the first pass allows twice that.
-    budgets: tuple[PassBudget, ...] = (PassBudget(16, 300.0), PassBudget(64, 1200.0))
+    # Budget escalation: 32 expansions for every statement, then 128 and 512 in total while the open frontier stays
+    # close to a proof by the value model; the wall caps scale with the stage.
+    stages: tuple[SearchStage, ...] = (
+        SearchStage(32, 600.0),
+        SearchStage(128, 2400.0, 3.0),
+        SearchStage(512, 9600.0, 2.0),
+    )
     # Fresh statements are drawn by these weights; sources not listed weigh 1, weight 0 leaves a source out.
     source_weights: tuple[SourceWeight, ...] = ()
-    # While fresh statements remain, at most this share of the started attempts are later passes.
-    retry_share: float = 0.2
-    # An unsolved statement gets the next pass when the best h on its open frontier is at most this; without a value
-    # model, when the search got `promising_depth` deep (0 never).
-    promising_value: float = 2.5
+    # Without a value model, an unsolved statement enters the next stage when its search got this deep (0 never).
     promising_depth: int = 0
 
 
@@ -66,7 +71,7 @@ class SearchServiceConfig:
     # Statements under $LEAN_SEARCH_DATA (phase6_pool.py --step select): load failures and statements the automation
     # sweep proves surface in the search itself.
     candidates: str
-    # A run config whose sections are the template for every search; budgets come from the scheduler's passes.
+    # A run config whose sections are the template for every search; budgets come from the scheduler's stages.
     search_config: str
     # Concurrent searches, each holding a REPL; REPLs mostly wait on the GPU, so this may exceed the core count.
     concurrency: int = 128
@@ -107,8 +112,10 @@ class TrainingConfig:
     max_minutes: float = 60.0
     minimum_new_proofs: int = 20
     check_seconds: float = 30.0
-    # Re-score every open frontier node with the new value model after a phase (one prefill each).
+    # Re-score every open frontier node with the new value model after a phase (one prefill each), skipped when the
+    # last measured rate predicts more than `rescore_max_seconds`; re-scoring stops at that limit either way.
     rescore_frontier: bool = True
+    rescore_max_seconds: float = 60.0
     seed: str = "loop"
     # Statements whose trees only validate (the value gate, validation sets), by hash.
     held_out_fraction: float = 0.02
@@ -162,8 +169,11 @@ class LoopConfig:
 
 def load_loop_config(path: Path) -> LoopConfig:
     config = from_json_object(LoopConfig, tomllib.loads(path.read_text(encoding="utf-8")))
-    if not config.search.scheduler.budgets:
-        raise ValueError("The scheduler needs at least one pass budget.")
+    stages = config.search.scheduler.stages
+    if not stages or stages[0].max_frontier_value is not None:
+        raise ValueError("The scheduler needs a first stage, which every statement enters (no max_frontier_value).")
+    if any(later.max_expansions <= earlier.max_expansions for earlier, later in zip(stages, stages[1:], strict=False)):
+        raise ValueError("Each stage's max_expansions is a total and must exceed the previous stage's.")
     gpus = {server.gpu for server in config.serving.servers}
     if not {config.training.policy.gpu, config.training.value.gpu} <= gpus:
         raise ValueError("Training runs on the servers' GPUs, which a phase frees.")

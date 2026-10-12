@@ -185,7 +185,7 @@ def progress_since(shards: Path, since: str, current: datetime.datetime) -> Prog
             if attempt.finished_at >= since:
                 attempts += 1
                 solved += attempt.proved
-                proofs += attempt.proved + attempt.harvested_proofs
+                proofs += attempt.proofs
     return Progress(minutes_since(since, current), attempts, solved, proofs)
 
 

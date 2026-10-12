@@ -1,6 +1,6 @@
-# Template of the loop's searches (experiments/phase6_service.py): row 4's A* (f = depth + 0.5 h), automation sweep
-# and sampling (n = 16 at temperature 0.8, 256 tokens). The service fills in the served model and adapters, every
-# server, and the pass budget (loop.toml [search.scheduler]).
+# Template of the loop's searches (experiments/phase6_service.py): A* ordered by h + 0.25 depth, row 4's automation
+# sweep and sampling (n = 16 at temperature 0.8, 512 tokens). The service fills in the served model and adapters,
+# every server, and each stage's budget (loop.toml [search.scheduler]).
 
 [lean]
 # The service's REPL pool is search.concurrency; restarting REPLs past 30% of their memory limit keeps 100+
@@ -10,8 +10,8 @@ concurrency = 64
 restart_fraction = 0.3
 
 [search]
-max_expansions = 16
-max_wall_seconds = 300.0
+max_expansions = 32
+max_wall_seconds = 600.0
 max_depth = 16
 tactic_timeout_seconds = 10.0
 forbidden_steps = [
@@ -49,9 +49,10 @@ tactics = [
 timeout_seconds = 10.0
 max_wall_clock_timeouts_per_tactic = 1
 
+# Predicted remaining steps dominate: f = 4 h + depth, the order of h + 0.25 depth.
 [priority]
 kind = "a_star"
-value_weight = 0.5
+value_weight = 4.0
 
 [policy]
 model = "search-qwen3.5-2b"
@@ -61,7 +62,9 @@ adapter = "policy"
 sample_count = 16
 temperature = 0.8
 top_p = 1.0
-max_tokens = 256
+# Thinking mode: thinking = true with max_tokens up to 2048 (and the same thinking_instruction in loop_policy.toml);
+# the service then keeps each step's reasoning for training.
+max_tokens = 512
 thinking = false
 few_shot = false
 

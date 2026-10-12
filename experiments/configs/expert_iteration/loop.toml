@@ -1,8 +1,9 @@
 # The continuous expert-iteration loop (experiments/phase6_loop.py commands prints how to start it). Many concurrent
-# searches over a pool of ~250k statements; after 400 new proofs (or 60 minutes) they pause in place, both GPUs train
-# the policy (DPO + NLL) and the value model from FIFO replay buffers, the next version is published and the searches
-# continue. Version 0 is the SFT v2 policy with value v0. Every 3rd version is evaluated on miniF2F-valid at 32
-# expansions.
+# searches over a pool of ~250k statements, each escalating its budget on the same tree (32, 128, 512 expansions)
+# while its open frontier stays close to a proof; after 400 new proofs (or 60 minutes) they pause in place, both GPUs
+# train the policy (DPO + NLL) and the value model from FIFO replay buffers, the next version is published and the
+# searches continue. Version 0 is the SFT v2 policy with value v0. Every 3rd version (and version 0) is evaluated on
+# miniF2F-valid at 32 expansions.
 name = "phase6_loop"
 
 [initial]
@@ -40,18 +41,23 @@ max_remaining_steps = 1.5
 max_expansions = 8
 
 [search.scheduler]
-retry_share = 0.2
-promising_value = 2.5
 promising_depth = 0
 
-# Row 4 on miniF2F-valid: 89/123/138/144/153/157 solved within 1/2/8/16/32/64 expansions.
-[[search.scheduler.budgets]]
-max_expansions = 16
-max_wall_seconds = 300.0
+# Each stage's budget is a total over the statement's search; a stage is entered when the best h on the open frontier
+# is at most max_frontier_value. The stages' proofs per GPU-hour (phase6_loop.py metrics) tune these gates.
+[[search.scheduler.stages]]
+max_expansions = 32
+max_wall_seconds = 600.0
 
-[[search.scheduler.budgets]]
-max_expansions = 64
-max_wall_seconds = 1200.0
+[[search.scheduler.stages]]
+max_expansions = 128
+max_wall_seconds = 2400.0
+max_frontier_value = 3.0
+
+[[search.scheduler.stages]]
+max_expansions = 512
+max_wall_seconds = 9600.0
+max_frontier_value = 2.0
 
 # NuminaMath candidates rarely have any known proof (0.1% in the untraced Goedel-Prover set).
 [[search.scheduler.source_weights]]
@@ -65,6 +71,7 @@ max_minutes = 60.0
 minimum_new_proofs = 20
 check_seconds = 30.0
 rescore_frontier = true
+rescore_max_seconds = 60.0
 seed = "phase6-loop"
 held_out_fraction = 0.02
 max_labels_per_tree = 16
@@ -72,7 +79,7 @@ chosen_only_steps = false
 traced_directory = "traced"
 value_dataset = "v0"
 max_prompt_tokens = 2048
-max_completion_tokens = 256
+max_completion_tokens = 512
 
 [training.policy]
 config = "experiments/configs/expert_iteration/loop_policy.toml"
@@ -111,6 +118,7 @@ gate_spearman = 0.7
 gate_dead_auc = 0.75
 gate_minimum_states = 50
 
+# Dead-end labels stay: v0 puts dead ends ~2.3 steps from done, and they are what corrects that.
 [training.labels]
 at_least_weight = 1.0
 dead_weight = 0.5

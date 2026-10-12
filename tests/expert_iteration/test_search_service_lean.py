@@ -12,9 +12,9 @@ from lean_search.expert_iteration.loop_config import (
     EvaluationLoopConfig,
     InitialModels,
     LoopConfig,
-    PassBudget,
     SchedulerConfig,
     SearchServiceConfig,
+    SearchStage,
     ServerEndpoint,
     ServingConfig,
     TrainingConfig,
@@ -44,7 +44,7 @@ concurrency = 2
 tactics = ["norm_num", "have : (1 : ℕ) = 1 := rfl"]
 """
 SERVERS = (ServerEndpoint("gpu0", 0, "http://127.0.0.1:8100/v1"), ServerEndpoint("gpu1", 1, "http://127.0.0.1:8101/v1"))
-SCHEDULER = SchedulerConfig(budgets=(PassBudget(2, 60.0), PassBudget(2, 60.0)), retry_share=1.0, promising_depth=1)
+SCHEDULER = SchedulerConfig(stages=(SearchStage(2, 60.0), SearchStage(4, 60.0)), promising_depth=1)
 WAIT_SECONDS = 300
 
 lean_is_installed = (PROJECT_DIRECTORY / REPL_BINARY).exists() and shutil.which("lake") is not None
@@ -93,9 +93,14 @@ async def test_each_statement_ends_with_its_decision(service_run: LoopPaths) -> 
         decisions.setdefault(attempt.problem_name, []).append(attempt.decision)
     assert decisions == {
         "lean_workbook.solved": [Decision.SOLVED],
-        "lean_workbook.endless": [Decision.REQUEUED, Decision.RETIRED_LAST_PASS],
+        "lean_workbook.endless": [Decision.ESCALATED, Decision.RETIRED_LAST_STAGE],
         "lean_workbook.broken": [Decision.RETIRED_LOAD_FAILURE],
     }
+
+
+async def test_an_escalated_search_continues_its_tree(service_run: LoopPaths) -> None:
+    endless = [attempt for attempt in all_attempts(service_run.shards) if attempt.problem_name.endswith("endless")]
+    assert [(attempt.total_expansions, attempt.tree_file is not None) for attempt in endless] == [(2, False), (4, True)]
 
 
 async def test_attempts_carry_the_published_version(service_run: LoopPaths) -> None:

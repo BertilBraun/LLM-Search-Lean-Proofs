@@ -75,7 +75,7 @@ def test_the_round_training_configs_parse(path: Path) -> None:
 
 
 def test_the_loop_config_loads() -> None:
-    assert load_loop_config(CONFIG_DIRECTORY / "loop.toml").search.scheduler.budgets
+    assert load_loop_config(CONFIG_DIRECTORY / "loop.toml").search.scheduler.stages
 
 
 def test_the_loop_search_and_evaluation_templates_load() -> None:

@@ -1,7 +1,8 @@
 """Preference pairs for DPO: one proof state, a chosen and a rejected step, rendered in the policy's SFT format.
 
 A pair without a rejected step trains only the chosen step's negative log-likelihood (dataset steps, proof steps
-whose siblings all made progress).
+whose siblings all made progress). A pair whose chosen step has reasoning renders in thinking format: the thinking
+prompt, then each step's reasoning and block.
 """
 
 import dataclasses
@@ -11,6 +12,7 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
+from lean_search.policy.prompts import render_prompt, render_thinking_completion
 from lean_search.training.sft_data import SftExample, TokenizedExample, Tokenizer, tokenize_example
 
 
@@ -24,6 +26,9 @@ class PreferencePair:
     rejected: str | None
     # Why the rejected step lost, e.g. a Lean error, a timeout or a dead subtree.
     rejection: str
+    # The thoughts behind each step when the policy sampled them in thinking mode.
+    chosen_reasoning: str | None = None
+    rejected_reasoning: str | None = None
 
 
 @dataclass(frozen=True)
@@ -44,12 +49,28 @@ class TokenizedPair:
         return 2 * max(self.chosen.token_count, self.rejected.token_count)
 
 
-def tokenize_pair(tokenizer: Tokenizer, pair: PreferencePair) -> TokenizedPair:
-    def completion(tactic_block: str) -> TokenizedExample:
-        example = SftExample(pair.source, pair.proof_identifier, pair.step_index, pair.goals, tactic_block)
-        return tokenize_example(tokenizer, example)
+def tokenize_pair(tokenizer: Tokenizer, pair: PreferencePair, thinking_instruction: str = "") -> TokenizedPair:
+    """`thinking_instruction` is the system prompt addition the search sampled thinking steps with."""
+    thinking_prompt = (
+        None
+        if pair.chosen_reasoning is None
+        else tokenizer.encode(
+            render_prompt(tokenizer, pair.goals, thinking=True, thinking_instruction=thinking_instruction),
+            add_special_tokens=False,
+        )
+    )
 
-    return TokenizedPair(pair, completion(pair.chosen), None if pair.rejected is None else completion(pair.rejected))
+    def completion(tactic_block: str, reasoning: str | None) -> TokenizedExample:
+        example = SftExample(pair.source, pair.proof_identifier, pair.step_index, pair.goals, tactic_block)
+        if thinking_prompt is None:
+            return tokenize_example(tokenizer, example)
+        text = render_thinking_completion(reasoning or "", tactic_block)
+        completion_ids = tokenizer.encode(text, add_special_tokens=False)
+        return TokenizedExample(example, tuple(thinking_prompt + completion_ids), len(thinking_prompt))
+
+    chosen = completion(pair.chosen, pair.chosen_reasoning)
+    rejected = None if pair.rejected is None else completion(pair.rejected, pair.rejected_reasoning)
+    return TokenizedPair(pair, chosen, rejected)
 
 
 def fits(pair: TokenizedPair, max_prompt_tokens: int, max_completion_tokens: int) -> bool:

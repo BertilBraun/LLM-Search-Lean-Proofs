@@ -6,15 +6,16 @@ harvested ones, each step sequence once): at each policy step, the step against 
 caps), or alone (its NLL) when no sibling qualifies and `chosen_only_steps` is set; automation steps give nothing, so
 automation-only proofs add only value labels. Value-jump pairs are kept apart: training uses them only while the value
 model passes its gate. Value samples are a tree's labels except the lossless open frontier, at most
-`max_labels_per_tree`: exact ones first, then dead ones, then censored ones in a fixed pseudo-random order. Every record
-carries the model version that produced its tree.
+`max_labels_per_tree`: exact ones first, then dead ones, then censored ones in a fixed pseudo-random order; dead
+labels stay, as they teach the value model that dead ends are far from a proof. Every record carries the model version
+that produced its tree, and pairs carry the reasoning behind their steps when the policy thought.
 """
 
 import hashlib
 import json
 import os
 import shutil
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,7 +23,14 @@ from lean_search.expert_iteration.config import PreferenceConfig
 from lean_search.expert_iteration.pool import problem_source
 from lean_search.expert_iteration.preferences import ValueJumpConfig, node_pairs, value_jump_pairs
 from lean_search.expert_iteration.proofs import EXPERT_ITERATION_SOURCE, FoundProof, found_proofs, uses_policy
-from lean_search.expert_iteration.shards import closed_shards, read_attempt_tree, read_attempts, read_shard_summary
+from lean_search.expert_iteration.shards import (
+    closed_shards,
+    read_attempt_reasoning,
+    read_attempt_tree,
+    read_attempts,
+    read_shard_summary,
+)
+from lean_search.expert_iteration.thinking import edge_reasoning
 from lean_search.expert_iteration.value_data import carries_no_loss
 from lean_search.policy.prompts import normalize_tactic_block
 from lean_search.search import TreeRecord
@@ -101,10 +109,10 @@ def tree_value_samples(record: TreeRecord, version: int, config: DigestConfig) -
 
 
 def proof_policy_samples(
-    record: TreeRecord, proof: FoundProof, version: int, config: DigestConfig
+    record: TreeRecord, proof: FoundProof, version: int, config: DigestConfig, reasoning: Mapping[int, str]
 ) -> list[VersionedPair]:
     samples = []
-    for node in node_pairs(record, proof, config.preferences):
+    for node in node_pairs(record, proof, config.preferences, reasoning):
         if node.pairs:
             samples.extend(VersionedPair(version, pair) for pair in node.pairs)
         elif config.chosen_only_steps:
@@ -117,6 +125,7 @@ def proof_policy_samples(
                 normalize_tactic_block(step.step),
                 None,
                 "none",
+                reasoning.get(record.nodes[step.child_id].edge_id),
             )
             samples.append(VersionedPair(version, chosen))
     return samples
@@ -131,16 +140,19 @@ def digest_shard(shard: Path, config: DigestConfig) -> ShardDigest:
         if attempt.tree_file is None:
             continue
         record = read_attempt_tree(shard, attempt)
+        reasoning = edge_reasoning(record, read_attempt_reasoning(shard, attempt))
         version = attempt.model_version
         run = f"v{version}"
         values.extend(tree_value_samples(record, version, config))
         if config.value_jumps.enabled:
-            jumps.extend(VersionedPair(version, pair) for pair in value_jump_pairs(record, run, config.value_jumps))
+            jumps.extend(
+                VersionedPair(version, pair) for pair in value_jump_pairs(record, run, config.value_jumps, reasoning)
+            )
         for proof in found_proofs(run, record):
             proofs += 1
             if uses_policy(proof):
                 policy_proofs += 1
-                policy.extend(proof_policy_samples(record, proof, version, config))
+                policy.extend(proof_policy_samples(record, proof, version, config, reasoning))
     return ShardDigest(proofs, policy_proofs, policy, jumps, values)
 
 

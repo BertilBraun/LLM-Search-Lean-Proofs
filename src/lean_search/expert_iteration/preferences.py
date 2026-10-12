@@ -4,13 +4,15 @@ At each policy step of a found proof, the on-path step is chosen against sibling
 that led into a dead subtree (at most `max_dead_per_node`), then siblings Lean rejected or that timed out (at most
 `max_failed_per_node`; they mostly teach syntax), the policy's most likely mistakes first. Value-jump pairs set a
 child the value model puts near a proof against an alive sibling it puts much further away, at any expanded node;
-they are only as good as the value model and are used while it passes a quality gate.
+they are only as good as the value model and are used while it passes a quality gate. In thinking mode, each step
+carries the reasoning behind it (by edge id), so the pair trains in thinking format.
 """
 
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
+from types import MappingProxyType
 
 from lean_search.expert_iteration.config import PreferenceConfig
 from lean_search.expert_iteration.proofs import EXPERT_ITERATION_SOURCE, FoundProof
@@ -20,6 +22,7 @@ from lean_search.training.dpo_data import PreferencePair
 from lean_search.value.labels import distances_to, frontier_ids, predecessors
 
 TIMEOUT_FAILURES = frozenset({FailureKind.HEARTBEAT_TIMEOUT, FailureKind.WALL_CLOCK_TIMEOUT})
+NO_REASONING: Mapping[int, str] = MappingProxyType({})
 
 
 class RejectionKind(StrEnum):
@@ -91,7 +94,12 @@ def capped_by_kind(
     return dead + failed
 
 
-def node_pairs(record: TreeRecord, proof: FoundProof, config: PreferenceConfig) -> list[NodePairs]:
+def node_pairs(
+    record: TreeRecord,
+    proof: FoundProof,
+    config: PreferenceConfig,
+    reasoning: Mapping[int, str] = NO_REASONING,
+) -> list[NodePairs]:
     dead = dead_node_ids(record)
     edges_by_parent: dict[int, list[Edge]] = {}
     for edge in record.edges:
@@ -115,8 +123,18 @@ def node_pairs(record: TreeRecord, proof: FoundProof, config: PreferenceConfig) 
             rejectable.append((edge, kind, text))
         kept = capped_by_kind(rejectable, config)
         pairs = tuple(
-            PreferencePair(EXPERT_ITERATION_SOURCE, proof.identifier, step_index, step.goals, chosen, text, kind)
-            for _, kind, text in kept
+            PreferencePair(
+                EXPERT_ITERATION_SOURCE,
+                proof.identifier,
+                step_index,
+                step.goals,
+                chosen,
+                text,
+                kind,
+                reasoning.get(chosen_edge_id),
+                reasoning.get(edge.edge_id),
+            )
+            for edge, kind, text in kept
         )
         more_likely = sum(
             step.log_probability is not None
@@ -140,7 +158,9 @@ def chosen_value(node: NodeRecord) -> float | None:
     return node.value_estimate
 
 
-def value_jump_pairs(record: TreeRecord, run: str, config: ValueJumpConfig) -> list[PreferencePair]:
+def value_jump_pairs(
+    record: TreeRecord, run: str, config: ValueJumpConfig, reasoning: Mapping[int, str] = NO_REASONING
+) -> list[PreferencePair]:
     dead = dead_node_ids(record)
     pairs = []
     for parent in record.nodes:
@@ -172,6 +192,8 @@ def value_jump_pairs(record: TreeRecord, run: str, config: ValueJumpConfig) -> l
                     step_text(chosen),
                     step_text(sibling),
                     RejectionKind.VALUE_JUMP,
+                    reasoning.get(chosen.edge_id),
+                    reasoning.get(sibling.edge_id),
                 )
                 for sibling in rejected
             )

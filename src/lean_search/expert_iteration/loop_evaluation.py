@@ -25,11 +25,11 @@ class EvaluationRecord:
 def due_version(
     versions: Sequence[ModelVersion], evaluated: Collection[int], config: EvaluationLoopConfig
 ) -> ModelVersion | None:
-    """The current version when it is due (every `every_versions`-th) and not evaluated yet."""
+    """The current version when due (0, the baseline, then every `every_versions`-th) and not evaluated yet."""
     if not versions:
         return None
     current = versions[-1]
-    is_due = current.version > 0 and current.version % config.every_versions == 0
+    is_due = current.version % config.every_versions == 0
     return current if is_due and current.version not in evaluated else None
 
 

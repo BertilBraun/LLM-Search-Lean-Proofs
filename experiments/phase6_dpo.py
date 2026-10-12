@@ -92,7 +92,7 @@ def tokenized_split(
     tokenizer: transformers.PreTrainedTokenizerBase, path: Path, config: DpoConfig
 ) -> tuple[list[TokenizedPair], int]:
     """The pairs that fit the length caps, and how many did not."""
-    tokenized = [tokenize_pair(tokenizer, pair) for pair in read_pairs(path)]
+    tokenized = [tokenize_pair(tokenizer, pair, config.thinking_instruction) for pair in read_pairs(path)]
     kept = [pair for pair in tokenized if fits(pair, config.max_prompt_tokens, config.max_completion_tokens)]
     return kept, len(tokenized) - len(kept)
 

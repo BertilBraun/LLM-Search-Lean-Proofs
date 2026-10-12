@@ -1,8 +1,10 @@
 """The loop's search: the A* best-first search with harvesting after a proof, pausing in place and re-scoring.
 
 LoopSearch extends the search core's theorem search (lean_search.search.search._TheoremSearch, whose loop it reuses)
-with three things the loop needs; they belong in the core once its owner adds them there:
+with what the loop needs; it belongs in the core once its owner adds it there:
 
+- stages: the budget escalates in stages on the same tree (32, 128, 512 expansions in total by default), each
+  stage entered only while the open frontier stays close to a proof;
 - harvesting: after the first verified proof, frontier states the value model puts within `max_remaining_steps` of
   done are expanded for up to `max_expansions` more expansions, so near-proofs become further proofs;
 - pausing: every policy and value request passes a PauseGate, so a training phase stops all requests while the
@@ -13,12 +15,14 @@ with three things the loop needs; they belong in the core once its owner adds th
 import asyncio
 import contextlib
 import time
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass
 
 from lean_search.data import Problem
 from lean_search.expert_iteration.loop_config import HarvestConfig
 from lean_search.lean import LeanRepl
 from lean_search.search import (
+    Accounting,
     CandidateBatches,
     CompletedSearch,
     Expander,
@@ -107,23 +111,60 @@ class GatedValueEstimator:
             self.gate.leave()
 
 
+@dataclass(frozen=True)
+class StageResult:
+    """How a stage of a search ended; costs are the stage's own."""
+
+    stage: int
+    stop_reason: StopReason
+    proved: bool
+    # Expansions of the stage without harvesting.
+    expansions: int
+    harvest_expansions: int
+    harvested_proofs: int
+    wall_seconds: float
+    lean_seconds: float
+    prompt_tokens: int
+    generated_tokens: int
+    value_prompt_tokens: int
+    best_frontier_value: float | None
+    max_depth: int
+
+    @property
+    def frontier_exhausted(self) -> bool:
+        return self.stop_reason == StopReason.FRONTIER_EXHAUSTED
+
+
+async def never_continue(result: StageResult) -> bool:
+    return False
+
+
 class LoopSearch(_TheoremSearch):
+    """Stages raise the budget's totals on one tree; after an unproved stage, `continue_search` decides the next."""
+
     def __init__(
         self,
         problem: Problem,
         repl: LeanRepl,
         expander: Expander,
         priority_function: PriorityFunction,
-        config: SearchConfig,
+        stages: Sequence[SearchConfig],
+        first_stage: int,
         harvest: HarvestConfig,
         gate: PauseGate,
+        continue_search: Callable[[StageResult], Awaitable[bool]] = never_continue,
     ) -> None:
-        super().__init__(problem, repl, expander, priority_function, config)
+        super().__init__(problem, repl, expander, priority_function, stages[first_stage])
+        self.stages = stages
+        self.first_stage = first_stage
         self.harvest = harvest
         self.gate = gate
+        self.continue_search = continue_search
         self.paused_at_start = gate.paused_seconds()
         self.harvested: list[Node] = []
         self.harvest_expansions = 0
+        self.stage_results: list[StageResult] = []
+        self.stage = first_stage
 
     def wall_seconds(self) -> float:
         return super().wall_seconds() - (self.gate.paused_seconds() - self.paused_at_start)
@@ -139,12 +180,46 @@ class LoopSearch(_TheoremSearch):
         return completed
 
     async def _search(self) -> tuple[StopReason, Node | None]:
-        stop_reason, proved = await super()._search()
-        if proved is not None and self.harvest.max_expansions:
-            first_proof_cost = self.solved_at
-            self.harvested = await self._harvest()
-            self.solved_at = first_proof_cost
-        return stop_reason, proved
+        stage = self.first_stage
+        while True:
+            self.stage = stage
+            self.config = self.stages[stage]
+            before = self.snapshot()
+            stop_reason, proved = await super()._search()
+            if proved is not None and self.harvest.max_expansions:
+                first_proof_cost = self.solved_at
+                self.harvested = await self._harvest()
+                self.solved_at = first_proof_cost
+            result = self._stage_result(stage, stop_reason, proved, before)
+            self.stage_results.append(result)
+            if proved is not None or stage + 1 >= len(self.stages) or not await self.continue_search(result):
+                return stop_reason, proved
+            stage += 1
+
+    def _stage_result(
+        self, stage: int, stop_reason: StopReason, proved: Node | None, before: Accounting
+    ) -> StageResult:
+        after = self.snapshot()
+        estimates = [
+            node.value_estimate
+            for node in (self.tree.node(node_id) for node_id in self.frontier.node_ids())
+            if node.value_estimate is not None
+        ]
+        return StageResult(
+            stage=stage,
+            stop_reason=stop_reason,
+            proved=proved is not None,
+            expansions=after.expansions - before.expansions - self.harvest_expansions,
+            harvest_expansions=self.harvest_expansions,
+            harvested_proofs=len(self.harvested),
+            wall_seconds=after.wall_seconds - before.wall_seconds,
+            lean_seconds=after.lean_seconds - before.lean_seconds,
+            prompt_tokens=after.prompt_tokens - before.prompt_tokens,
+            generated_tokens=after.generated_tokens - before.generated_tokens,
+            value_prompt_tokens=after.value_prompt_tokens - before.value_prompt_tokens,
+            best_frontier_value=min(estimates, default=None),
+            max_depth=max(node.depth for node in self.tree.nodes),
+        )
 
     async def _harvest(self) -> list[Node]:
         proofs: list[Node] = []
@@ -160,11 +235,12 @@ class LoopSearch(_TheoremSearch):
                 break
         return proofs
 
-    async def rescore(self) -> None:
-        """New priorities for the open frontier; nodes the search popped or pushed meanwhile keep what they have."""
+    async def rescore(self) -> int:
+        """New priorities for the open frontier; returns how many states were scored."""
+        # Nodes the search pops or pushes while the scores are computed keep what they have.
         node_ids = self.frontier.node_ids()
         if not node_ids:
-            return
+            return 0
         nodes = [self.tree.node(node_id) for node_id in node_ids]
         scores = await self.priority_function.score(nodes, self.tree)
         estimates = scores.value_estimates or (None,) * len(nodes)
@@ -180,3 +256,4 @@ class LoopSearch(_TheoremSearch):
             assert node.priority is not None, node_id
             frontier.push(node_id, node.priority)
         self.frontier = frontier
+        return len(nodes)

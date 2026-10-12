@@ -1,9 +1,11 @@
-"""The actors' output: append-only shards of statement attempts and their trees, each attempt tagged with its model.
+"""The searches' output: append-only shards of search stages and their trees, each stage tagged with its model.
 
-A shard is a directory shards/<sequence>/ with attempts.jsonl (one AttemptRecord per line, written after the
-attempt's tree) and trees/<problem>.p<pass>.json.gz. It is open while an OPEN marker exists and immutable once closed
-(summary.json written, marker removed); readers use closed shards only. A shard left open by a crash is closed on the
-next start, without a line a kill cut short.
+A shard is a directory shards/<sequence>/ with attempts.jsonl (one AttemptRecord per search stage, written after the
+stage's tree) and trees/<problem>.s<stage>.json.gz (plus .reasoning.jsonl.gz with the thoughts behind each step when
+the policy thinks). A search that escalates to a further stage writes a record per stage; only its last record carries
+the tree. A shard is open while an OPEN marker exists and immutable once closed (summary.json written, marker removed);
+readers use closed shards only. A shard left open by a crash is closed on the next start, without a line a kill cut
+short.
 """
 
 import dataclasses
@@ -11,11 +13,12 @@ import datetime
 import json
 import os
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
+from lean_search.expert_iteration.thinking import StepReasoning, read_reasoning, write_reasoning
 from lean_search.search import StopReason, TreeRecord, read_tree, write_tree
 from lean_search.search.records import from_json_object, to_json
 
@@ -26,46 +29,57 @@ SUMMARY_FILE = "summary.json"
 
 class Decision(StrEnum):
     SOLVED = "solved"
-    REQUEUED = "requeued"
+    # The search continues with the next stage's budget on the same tree.
+    ESCALATED = "escalated"
     RETIRED_LOAD_FAILURE = "retired_load_failure"
-    RETIRED_LAST_PASS = "retired_last_pass"
-    # The root was expanded completely without a proof.
+    RETIRED_LAST_STAGE = "retired_last_stage"
+    # Every open state was expanded without a proof.
     RETIRED_DEAD = "retired_dead"
     RETIRED_UNPROMISING = "retired_unpromising"
-
-    @property
-    def is_final(self) -> bool:
-        return self != Decision.REQUEUED
 
 
 @dataclass(frozen=True)
 class AttemptRecord:
+    """One stage of a statement's search: costs are the stage's own, sizes are the tree's so far."""
+
     problem_name: str
     source: str
-    pass_index: int
+    stage: int
+    # The published version when the stage started.
     model_version: int
+    # The stage's total budget (over all stages so far).
     max_expansions: int
     started_at: str
     finished_at: str
+    # The first proof was found in this stage.
     proved: bool
     stop_reason: StopReason
     proof_steps: int
+    # Expansions of this stage, without harvesting.
     expansions: int
+    total_expansions: int
     nodes: int
     wall_seconds: float
     lean_seconds: float
+    prompt_tokens: int
     generated_tokens: int
+    value_prompt_tokens: int
     # The value model's h at the root; None without a value model.
     root_value: float | None
     best_frontier_value: float | None
-    root_dead: bool
+    frontier_exhausted: bool
     max_depth: int
     # Further proofs and expansions after the first proof (harvesting near-complete states).
     harvested_proofs: int
     harvest_expansions: int
     decision: Decision
-    # Relative to the shard directory; None when the statement did not start.
+    # Relative to the shard directory, on a search's last record only; None when the statement did not start.
     tree_file: str | None
+    reasoning_file: str | None = None
+
+    @property
+    def proofs(self) -> int:
+        return self.proved + self.harvested_proofs
 
 
 @dataclass(frozen=True)
@@ -82,8 +96,12 @@ def now() -> str:
     return datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds")
 
 
-def tree_file_name(problem_name: str, pass_index: int) -> str:
-    return f"trees/{problem_name}.p{pass_index}.json.gz"
+def tree_file_name(problem_name: str, stage: int) -> str:
+    return f"trees/{problem_name}.s{stage}.json.gz"
+
+
+def reasoning_file_name(problem_name: str, stage: int) -> str:
+    return f"trees/{problem_name}.s{stage}.reasoning.jsonl.gz"
 
 
 def read_attempts(shard: Path) -> list[AttemptRecord]:
@@ -103,6 +121,10 @@ def read_attempts(shard: Path) -> list[AttemptRecord]:
 def read_attempt_tree(shard: Path, attempt: AttemptRecord) -> TreeRecord:
     assert attempt.tree_file is not None, attempt.problem_name
     return read_tree(shard / attempt.tree_file)
+
+
+def read_attempt_reasoning(shard: Path, attempt: AttemptRecord) -> list[StepReasoning]:
+    return [] if attempt.reasoning_file is None else read_reasoning(shard / attempt.reasoning_file)
 
 
 def is_open(shard: Path) -> bool:
@@ -126,7 +148,7 @@ def close_shard(shard: Path, opened_at: str) -> ShardSummary:
     summary = ShardSummary(
         name=shard.name,
         attempts=len(attempts),
-        proofs=sum(attempt.proved for attempt in attempts),
+        proofs=sum(attempt.proofs for attempt in attempts),
         versions=tuple(sorted({attempt.model_version for attempt in attempts})),
         opened_at=opened_at,
         closed_at=now(),
@@ -170,15 +192,21 @@ class ShardWriter:
         self.count = 0
         self.closed: list[ShardSummary] = []
 
-    def write(self, attempt: AttemptRecord, tree: TreeRecord | None) -> AttemptRecord:
+    def write(
+        self, attempt: AttemptRecord, tree: TreeRecord | None, reasoning: Sequence[StepReasoning] = ()
+    ) -> AttemptRecord:
         if self.shard is not None and (
             self.count >= self.max_attempts or time.monotonic() - self.opened_monotonic >= self.max_seconds
         ):
             self.close()
         shard = self.shard if self.shard is not None else self._open()
         if tree is not None:
-            attempt = dataclasses.replace(attempt, tree_file=tree_file_name(attempt.problem_name, attempt.pass_index))
+            attempt = dataclasses.replace(attempt, tree_file=tree_file_name(attempt.problem_name, attempt.stage))
             write_tree(shard / attempt.tree_file, tree)
+        if reasoning:
+            reasoning_file = reasoning_file_name(attempt.problem_name, attempt.stage)
+            attempt = dataclasses.replace(attempt, reasoning_file=reasoning_file)
+            write_reasoning(shard / reasoning_file, reasoning)
         with (shard / ATTEMPTS_FILE).open("a", encoding="utf-8") as handle:
             handle.write(to_json(attempt) + "\n")
         self.count += 1

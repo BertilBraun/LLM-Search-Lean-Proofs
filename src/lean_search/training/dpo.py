@@ -51,7 +51,10 @@ class DpoConfig:
     # Warmup steps; 0 takes optimization.warmup_fraction of the steps.
     warmup_steps: int = 0
     max_prompt_tokens: int = 2048
-    max_completion_tokens: int = 256
+    # Reasoning included for pairs in thinking format.
+    max_completion_tokens: int = 512
+    # The thinking-mode system prompt addition the search used (policy.thinking_instruction), for thinking pairs.
+    thinking_instruction: str = ""
     optimization: OptimizationConfig = field(default_factory=OptimizationConfig)
     evaluation: DpoEvaluationConfig = field(default_factory=DpoEvaluationConfig)
 

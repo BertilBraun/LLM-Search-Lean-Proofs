@@ -6,7 +6,8 @@
 init writes version 0 (the configured initial adapters) and refuses an existing loop. status prints the current
 version, the time since the last phase, statements processed, proofs found, the search service's heartbeat and the
 training phase in progress. metrics computes per-version solve rates, proofs per hour and value calibration on fresh
-trees, and the phases' buffer statistics, into $LEAN_SEARCH_RUNS/<loop>/summary/{metrics.json,README.md}.
+trees, each budget stage's proofs per GPU-hour (to tune the stage gates), and the phases' buffer statistics, into
+$LEAN_SEARCH_RUNS/<loop>/summary/{metrics.json,README.md}.
 serve-commands prints how to start each vLLM server with the current version (also after a reboot); commands prints
 how to start every process.
 """
@@ -23,7 +24,16 @@ from pathlib import Path
 from lean_search.expert_iteration.digests import all_values
 from lean_search.expert_iteration.loop_config import LoopConfig, load_loop_config
 from lean_search.expert_iteration.loop_evaluation import read_evaluations
-from lean_search.expert_iteration.loop_metrics import RunTotals, VersionMetrics, run_totals, version_metrics
+from lean_search.expert_iteration.loop_metrics import (
+    Interval,
+    RunTotals,
+    StageMetrics,
+    VersionMetrics,
+    run_totals,
+    search_seconds,
+    stage_metrics,
+    version_metrics,
+)
 from lean_search.expert_iteration.search_service import ServiceHeartbeat
 from lean_search.expert_iteration.serving import (
     LoopPaths,
@@ -54,7 +64,9 @@ class LoopMetrics:
     computed_at: str
     current_version: int
     totals: RunTotals
+    search_seconds: float
     versions: tuple[VersionMetrics, ...]
+    stages: tuple[StageMetrics, ...]
     phases: tuple[PhaseRecord, ...]
 
 
@@ -101,8 +113,9 @@ def print_status(paths: LoopPaths) -> None:
         f"Loop {paths.directory}",
         f"Version {current.version} (published {current.published_at}, {age_minutes(current.published_at):.0f} min "
         f"ago, trigger {current.trigger}); policy {current.policy_adapter}, value {current.value_adapter}",
-        f"Statements processed {totals.statements:,}, solved {totals.solved_statements:,}; attempts "
-        f"{totals.attempts:,}; last hour: {totals.attempts_last_hour:,} attempts, {totals.proofs_last_hour:,} proofs",
+        f"Statements processed {totals.statements:,}, solved {totals.solved_statements:,}, {totals.proofs:,} proofs "
+        f"(with harvested ones); {totals.attempts:,} stage records; last hour: {totals.attempts_last_hour:,} stages, "
+        f"{totals.proofs_last_hour:,} proofs",
     ]
     if paths.heartbeat.exists():
         heartbeat = from_json_object(ServiceHeartbeat, json.loads(paths.heartbeat.read_text(encoding="utf-8")))
@@ -110,9 +123,10 @@ def print_status(paths: LoopPaths) -> None:
         activity = "paused" if heartbeat.paused else "running"
         lines.append(
             f"Search service ({age_minutes(heartbeat.written_at):.1f} min ago, {activity}"
-            f", version {heartbeat.version}): {heartbeat.live_searches} searches in flight, {counts.fresh:,} fresh, "
-            f"{counts.queued:,} queued for another pass, {counts.solved:,} solved, {counts.retired:,} retired; this "
-            f"session {heartbeat.session_attempts:,} attempts, {heartbeat.session_proofs:,} proofs (+"
+            f", version {heartbeat.version}): {heartbeat.live_searches} searches in flight (by stage "
+            f"{'/'.join(str(count) for count in heartbeat.live_by_stage)}), {counts.fresh:,} fresh, {counts.queued:,} "
+            f"queued to restart, {counts.solved:,} solved, {counts.retired:,} retired; this session "
+            f"{heartbeat.session_attempts:,} stages, {heartbeat.session_proofs:,} proofs (+"
             f"{heartbeat.session_harvested_proofs:,} harvested), {heartbeat.session_failures} server errors"
         )
     else:
@@ -141,27 +155,45 @@ def optional(value: float | None, specification: str) -> str:
     return "–" if value is None else format(value, specification)
 
 
-def write_metrics(paths: LoopPaths) -> None:
+def write_metrics(config: LoopConfig, paths: LoopPaths) -> None:
     attempts = list(all_attempts(paths.shards))
+    phases = read_phases(paths)
+    searched = search_seconds(attempts, [Interval(phase.started_at, phase.finished_at) for phase in phases])
     metrics = LoopMetrics(
         computed_at=now(),
         current_version=read_current(paths).version,
         totals=run_totals(attempts, datetime.datetime.now(datetime.UTC)),
+        search_seconds=searched,
         versions=tuple(version_metrics(attempts, all_values(paths.digests))),
-        phases=tuple(read_phases(paths)),
+        stages=tuple(stage_metrics(attempts, len(config.serving.servers), searched)),
+        phases=tuple(phases),
     )
     version_rows = [
         [
             entry.version,
             f"{entry.attempts:,}",
-            f"{entry.first_pass_solved:,}/{entry.first_pass_attempts:,}",
-            f"{entry.later_pass_solved:,}/{entry.later_pass_attempts:,}",
+            f"{entry.first_stage_solved:,}/{entry.first_stage_attempts:,}",
+            f"{entry.later_stage_solved:,}/{entry.later_stage_attempts:,}",
             f"{entry.proofs_per_hour:.0f}",
             f"{entry.attempts_per_hour:.0f}",
             optional(entry.spearman, ".3f"),
             optional(entry.dead_auc, ".3f"),
         ]
         for entry in metrics.versions
+    ]
+    stage_rows = [
+        [
+            entry.stage,
+            f"{entry.attempts:,}",
+            f"{entry.solved:,}",
+            f"{entry.proofs:,}",
+            f"{entry.escalated:,}",
+            f"{entry.expansions:,}",
+            f"{entry.gpu_seconds / 3600:.1f}",
+            f"{entry.proofs_per_gpu_hour:.1f}",
+            f"{entry.mean_wall_seconds:.0f}",
+        ]
+        for entry in metrics.stages
     ]
     phase_rows = [
         [
@@ -195,14 +227,33 @@ def write_metrics(paths: LoopPaths) -> None:
                 [
                     "Version",
                     "Attempts",
-                    "First pass solved",
-                    "Later passes solved",
+                    "First stage solved",
+                    "Later stages solved",
                     "Proofs/h",
                     "Attempts/h",
                     "Spearman",
                     "Dead AUC",
                 ],
                 version_rows,
+            ),
+            "## Per budget stage",
+            "Stage records, statements solved in the stage, proofs with harvested ones, statements escalated to the "
+            f"next stage, expansions, GPU-hours (the {len(config.serving.servers)} servers' search time "
+            f"{metrics.search_seconds / 3600:.1f} h attributed by generated tokens), proofs per GPU-hour and the mean "
+            "stage wall time (s).",
+            markdown_table(
+                [
+                    "Stage",
+                    "Records",
+                    "Solved",
+                    "Proofs",
+                    "Escalated",
+                    "Expansions",
+                    "GPU-hours",
+                    "Proofs/GPU-hour",
+                    "Wall (s)",
+                ],
+                stage_rows,
             ),
             "## Training phases",
             "Added / trained samples per buffer (reuse = trained / added), capacity and dataset share after the "
@@ -260,7 +311,7 @@ def main() -> None:
         case Command.STATUS:
             print_status(paths)
         case Command.METRICS:
-            write_metrics(paths)
+            write_metrics(config, paths)
         case Command.SERVE_COMMANDS:
             print_serve_commands(config, paths)
         case Command.COMMANDS:

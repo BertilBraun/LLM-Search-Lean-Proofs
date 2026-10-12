@@ -1,3 +1,4 @@
+import dataclasses
 import datetime
 import tomllib
 
@@ -7,9 +8,15 @@ from loop_fixtures import attempt
 from lean_search.expert_iteration.digests import VersionedValueExample
 from lean_search.expert_iteration.loop_config import EvaluationLoopConfig, ServerEndpoint, ServingConfig
 from lean_search.expert_iteration.loop_evaluation import due_version, evaluation_config_text
-from lean_search.expert_iteration.loop_metrics import run_totals, version_metrics
+from lean_search.expert_iteration.loop_metrics import (
+    Interval,
+    run_totals,
+    search_seconds,
+    stage_metrics,
+    version_metrics,
+)
 from lean_search.expert_iteration.serving import ModelVersion
-from lean_search.expert_iteration.shards import Decision
+from lean_search.expert_iteration.shards import AttemptRecord, Decision
 from lean_search.value.labels import LabelKind, ValueExample
 
 EVALUATION = EvaluationLoopConfig("evaluation.toml", every_versions=3, max_expansions=32, concurrency=16)
@@ -25,15 +32,15 @@ def version(number: int) -> ModelVersion:
     return ModelVersion(number, "/p", "/v", "now", "proofs")
 
 
-def test_first_pass_solves_are_counted_per_version() -> None:
+def test_first_stage_solves_are_counted_per_version() -> None:
     attempts = [
         attempt("a.1", version=1, proved=True, decision=Decision.SOLVED),
         attempt("a.2", version=1),
-        attempt("a.3", version=1, pass_index=1, proved=True, decision=Decision.SOLVED),
+        attempt("a.3", version=1, stage=1, proved=True, decision=Decision.SOLVED),
         attempt("a.4", version=2),
     ]
     (first, _) = version_metrics(attempts, [])
-    assert (first.first_pass_solved, first.first_pass_attempts, first.later_pass_solved) == (1, 2, 1)
+    assert (first.first_stage_solved, first.first_stage_attempts, first.later_stage_solved) == (1, 2, 1)
 
 
 def test_calibration_ranks_the_estimates_against_the_exact_steps() -> None:
@@ -44,8 +51,8 @@ def test_calibration_ranks_the_estimates_against_the_exact_steps() -> None:
 
 def test_run_totals_count_statements_once() -> None:
     attempts = [
-        attempt("a.1", decision=Decision.REQUEUED),
-        attempt("a.1", pass_index=1, proved=True, decision=Decision.SOLVED),
+        attempt("a.1", decision=Decision.ESCALATED),
+        attempt("a.1", stage=1, proved=True, decision=Decision.SOLVED),
         attempt("a.2"),
     ]
     totals = run_totals(attempts, datetime.datetime.fromisoformat("2026-10-12T10:30:00+00:00"))
@@ -54,7 +61,13 @@ def test_run_totals_count_statements_once() -> None:
 
 @pytest.mark.parametrize(
     ("published", "evaluated", "due"),
-    [([0, 1, 2], set(), None), ([0, 1, 2, 3], set(), 3), ([0, 1, 2, 3], {3}, None), ([0, 3, 4], set(), None)],
+    [
+        ([0], set(), 0),
+        ([0, 1, 2], set(), None),
+        ([0, 1, 2, 3], set(), 3),
+        ([0, 1, 2, 3], {3}, None),
+        ([0, 3, 4], set(), None),
+    ],
 )
 def test_the_current_version_is_evaluated_when_due(published: list[int], evaluated: set[int], due: int | None) -> None:
     chosen = due_version([version(number) for number in published], evaluated, EVALUATION)
@@ -73,3 +86,30 @@ def test_the_evaluation_config_requests_the_served_adapters_at_the_reduced_budge
         table["policy"]["adapter"],
         table["value"]["server_urls"],
     ) == (16, 32, "policy", ["http://a/v1"])
+
+
+def stage_records() -> list[AttemptRecord]:
+    first = attempt("a.1", decision=Decision.ESCALATED)
+    second = dataclasses.replace(
+        attempt("a.1", stage=1, proved=True, decision=Decision.SOLVED), generated_tokens=300, harvested_proofs=1
+    )
+    return [first, second]
+
+
+def test_gpu_time_goes_to_the_stages_by_generated_tokens() -> None:
+    metrics = stage_metrics(stage_records(), gpus=2, searched_seconds=3600.0)
+    assert [entry.gpu_seconds for entry in metrics] == [1800.0, 5400.0]
+
+
+def test_a_stage_yields_its_proofs_per_gpu_hour() -> None:
+    (_, second) = stage_metrics(stage_records(), gpus=2, searched_seconds=3600.0)
+    assert second.proofs_per_gpu_hour == pytest.approx(2 / 1.5)
+
+
+def test_search_time_leaves_out_the_training_phases() -> None:
+    records = [
+        dataclasses.replace(attempt("a.1"), started_at="2026-10-12T09:00:00+00:00"),
+        dataclasses.replace(attempt("a.2"), finished_at="2026-10-12T12:00:00+00:00"),
+    ]
+    phase = Interval("2026-10-12T10:00:00+00:00", "2026-10-12T10:30:00+00:00")
+    assert search_seconds(records, [phase]) == 2.5 * 3600

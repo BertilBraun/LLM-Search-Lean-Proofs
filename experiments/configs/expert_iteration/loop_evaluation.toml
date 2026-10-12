@@ -1,6 +1,6 @@
-# Template of the loop's periodic miniF2F-valid evaluation (experiments/phase6_evaluator.py): row 4's settings; the
-# evaluator fills in the served adapters, its reduced budget (32 expansions) and its concurrency (16 searches next to
-# the service's).
+# Template of the loop's periodic miniF2F-valid evaluation (experiments/phase6_evaluator.py): the loop's search
+# settings (loop_search.toml); the evaluator fills in the served adapters, its reduced budget (32 expansions) and its
+# concurrency (16 searches next to the service's). Version 0 is evaluated too, as the baseline at these settings.
 
 [lean]
 pool_size = 40
@@ -46,9 +46,10 @@ tactics = [
 timeout_seconds = 10.0
 max_wall_clock_timeouts_per_tactic = 1
 
+# Predicted remaining steps dominate: f = 4 h + depth, the order of h + 0.25 depth.
 [priority]
 kind = "a_star"
-value_weight = 0.5
+value_weight = 4.0
 
 [policy]
 model = "search-qwen3.5-2b"
@@ -58,7 +59,9 @@ adapter = "policy"
 sample_count = 16
 temperature = 0.8
 top_p = 1.0
-max_tokens = 256
+# Thinking mode: thinking = true with max_tokens up to 2048 (and the same thinking_instruction in loop_policy.toml);
+# the service then keeps each step's reasoning for training.
+max_tokens = 512
 thinking = false
 few_shot = false
 
