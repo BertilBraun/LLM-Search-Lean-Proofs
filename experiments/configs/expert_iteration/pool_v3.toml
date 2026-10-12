@@ -1,0 +1,53 @@
+# Pool v3 (experiments/phase6_pool_v3.py): statements with a known formal proof in the normalized (decontaminated)
+# proof corpora, without every statement whose proof was selected for tracing (all training data derives from those),
+# certified by compiling a known proof in our environment. Earlier corpora name a statement first.
+excluded_proofs = ["normalized/proofs/selected_for_tracing.jsonl"]
+proofs_per_statement = 3
+
+[[corpora]]
+name = "lean_workbook"
+path = "normalized/proofs/lean_workbook.jsonl"
+
+[[corpora]]
+name = "goedel_lean_workbook_proofs"
+path = "normalized/proofs/goedel_lean_workbook_proofs.jsonl"
+
+[[corpora]]
+name = "stp_lean_workbook"
+path = "normalized/proofs/stp_lean_workbook.jsonl"
+
+[[corpora]]
+name = "deepseek_prover_v1"
+path = "normalized/proofs/deepseek_prover_v1.jsonl"
+
+[[corpora]]
+name = "numinamath_lean_human"
+path = "normalized/proofs/numinamath_lean_human.jsonl"
+
+[[corpora]]
+name = "numinamath_lean_kimina"
+path = "normalized/proofs/numinamath_lean_kimina.jsonl"
+
+[[corpora]]
+name = "leanabell_sft"
+path = "normalized/proofs/leanabell_sft.jsonl"
+
+[[corpora]]
+name = "goedel_sft_v2"
+path = "normalized/proofs/goedel_sft_v2.jsonl"
+
+# Model-generated conjectures: provable, but not problems someone formalized; counted, not pooled.
+[[corpora]]
+name = "stp_conjectures"
+path = "normalized/proofs/stp_conjectures.jsonl"
+pooled = false
+
+[verification]
+concurrency = 16
+batch = 256
+lead = 20000
+check_seconds = 300.0
+command_timeout_seconds = 60.0
+automation_config = "experiments/configs/expert_iteration/loop_search.toml"
+automation_timeout_seconds = 5.0
+restart_fraction = 0.3

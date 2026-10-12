@@ -30,35 +30,29 @@ forbidden_steps = [
 [expander]
 kind = "automation_then_policy"
 
+# The 7-tactic sweep (unless the performance agent's per-tactic breakdown recommends another list); pool v3's
+# automation probe uses the same list.
 [automation]
-tactics = [
-    "decide",
-    "omega",
-    "intros",
-    "constructor",
-    "rfl",
-    "simp",
-    "field_simp",
-    "norm_num",
-    "linarith",
-    "ring_nf",
-    "simp_all",
-    "nlinarith",
-    "aesop",
-]
+tactics = ["omega", "constructor", "rfl", "field_simp", "ring_nf", "simp_all", "nlinarith"]
 timeout_seconds = 10.0
 max_wall_clock_timeouts_per_tactic = 1
 
-# Predicted remaining steps dominate: f = 4 h + depth, the order of h + 0.25 depth.
+# Predicted remaining steps dominate: f = h + 0.25 depth + 0.2 x (the path's mean negative step log-probability);
+# a miniF2F-valid sweep of policy_prior_weight (0 / 0.2 / 0.4) may change the last weight.
 [priority]
 kind = "a_star"
-value_weight = 4.0
+value_weight = 1.0
+depth_weight = 0.25
+policy_prior_weight = 0.2
+automation_log_probability = -1.0
 
 [policy]
 model = "search-qwen3.5-2b"
 tokenizer = "Qwen/Qwen3.5-2B"
 server_urls = ["http://127.0.0.1:8100/v1", "http://127.0.0.1:8101/v1"]
 adapter = "policy"
+# Samples per expansion: the budget-shape test (16 x 64 vs 8 x 128 vs 4 x 256 at equal generations) sets it; with
+# n = 4 the stage budgets (loop.toml, in expansions) should rise so that a stage generates about as much.
 sample_count = 16
 temperature = 0.8
 top_p = 1.0

@@ -1,6 +1,8 @@
 """Which statement the searches take next, and how far each statement's search escalates.
 
-Fresh statements come from the pool in its order, drawn across sources by weight. A search runs stage by stage on
+Fresh statements come from the curriculum (a difficulty band over verified known-proof statements, curriculum.py) and,
+for `open_share` of the fresh starts or once the curriculum has none, from the open pool in its order, drawn across
+sources by weight. The curriculum learns the outcome of every statement it fed. A search runs stage by stage on
 the same tree: after each stage, an unsolved statement continues into the next stage (a larger total budget) when the
 best open state of its tree is close enough to a proof by the value model; otherwise, or after the last stage, it is
 retired. The state is rebuilt from the attempt log, so the service resumes after a crash: a search cut off before it
@@ -16,6 +18,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from lean_search.corpora.records import StatementRecord
+from lean_search.expert_iteration.curriculum import Curriculum
 from lean_search.expert_iteration.loop_config import SchedulerConfig, SearchStage
 from lean_search.expert_iteration.pool import problem_name
 from lean_search.expert_iteration.shards import AttemptRecord, Decision
@@ -59,6 +62,7 @@ class SchedulerCounts:
     solved: int
     retired: int
     fresh_started: int
+    open_started: int
     restarts_started: int
 
 
@@ -95,8 +99,12 @@ def restart_priority(attempt: AttemptRecord) -> float:
 
 
 class Scheduler:
-    def __init__(self, config: SchedulerConfig) -> None:
+    def __init__(self, config: SchedulerConfig, curriculum: Curriculum | None = None, open_share: float = 0.0) -> None:
         self.config = config
+        self.curriculum = curriculum
+        self.open_share = open_share
+        self.open_started = 0
+        self.open_names: set[str] = set()
         self.weights = {source.name: source.weight for source in config.source_weights}
         self.entries: dict[str, _Entry] = {}
         self.fresh_by_source: dict[str, deque[str]] = {}
@@ -108,8 +116,8 @@ class Scheduler:
     def stage(self, index: int) -> SearchStage:
         return self.config.stages[index]
 
-    def add_statements(self, statements: Iterable[StatementRecord]) -> int:
-        """New statements become fresh; ones seen before (also in the attempt log) are skipped."""
+    def add_statements(self, statements: Iterable[StatementRecord], open_pool: bool = True) -> int:
+        """New statements become fresh, in order for the open pool; ones seen before (or logged) are kept."""
         added = 0
         for statement in statements:
             name = problem_name(statement)
@@ -120,7 +128,9 @@ class Scheduler:
                 entry.statement = entry.statement or statement
                 continue
             self.entries[name] = _Entry(statement, StatementStatus.FRESH)
-            self.fresh_by_source.setdefault(statement.source, deque()).append(name)
+            if open_pool:
+                self.open_names.add(name)
+                self.fresh_by_source.setdefault(statement.source, deque()).append(name)
             added += 1
         return added
 
@@ -131,7 +141,11 @@ class Scheduler:
             entry = self.entries.setdefault(attempt.problem_name, _Entry(None, StatementStatus.FRESH))
             if attempt.stage == 0 and entry.status == StatementStatus.FRESH:
                 self.fresh_started += 1
-                self.fresh_started_by_source[attempt.source] += 1
+                if attempt.problem_name in self.open_names:
+                    self.open_started += 1
+                    self.fresh_started_by_source[attempt.source] += 1
+            if self.curriculum is not None:
+                self.curriculum.mark_started([attempt.problem_name])
             if attempt.decision == Decision.ESCALATED:
                 entry.status = StatementStatus.QUEUED
                 entry.stage = attempt.stage + 1
@@ -148,12 +162,11 @@ class Scheduler:
             _, name = heapq.heappop(self.restarts)
             self.restarts_started += 1
         else:
-            fresh_source = self._fresh_source()
-            if fresh_source is None:
+            fresh = self._next_fresh()
+            if fresh is None:
                 return None
-            name = self.fresh_by_source[fresh_source].popleft()
+            name = fresh
             self.fresh_started += 1
-            self.fresh_started_by_source[fresh_source] += 1
         entry = self.entries[name]
         assert entry.statement is not None, name
         entry.status = StatementStatus.IN_FLIGHT
@@ -165,14 +178,17 @@ class Scheduler:
         if attempt.decision == Decision.ESCALATED:
             entry.stage = attempt.stage + 1
             entry.priority = restart_priority(attempt)
-        else:
-            self._finish(entry, attempt.decision)
+            return
+        self._finish(entry, attempt.decision)
+        if self.curriculum is not None and attempt.decision != Decision.RETIRED_LOAD_FAILURE:
+            self.curriculum.record_outcome(attempt.problem_name, attempt.decision == Decision.SOLVED)
 
     def release(self, job: Job) -> None:
         """A search that failed for infrastructure reasons starts again at the stage it had reached."""
         entry = self.entries[job.name]
-        if entry.stage == 0:
+        if entry.stage == 0 and job.name in self.open_names:
             self.fresh_started -= 1
+            self.open_started -= 1
             self.fresh_started_by_source[job.statement.source] -= 1
             entry.status = StatementStatus.FRESH
             self.fresh_by_source[job.statement.source].appendleft(job.name)
@@ -190,8 +206,27 @@ class Scheduler:
             solved=statuses[StatementStatus.SOLVED],
             retired=statuses[StatementStatus.RETIRED],
             fresh_started=self.fresh_started,
+            open_started=self.open_started,
             restarts_started=self.restarts_started,
         )
+
+    def _next_fresh(self) -> str | None:
+        """The curriculum's next statement, or the open pool's while it is below its share or the curriculum is out."""
+        open_source = self._fresh_source()
+        open_turn = self.open_started < self.open_share * (self.fresh_started + 1)
+        if open_source is not None and (self.curriculum is None or open_turn):
+            return self._take_open(open_source)
+        statement = None if self.curriculum is None else self.curriculum.next_statement()
+        if statement is not None:
+            name = problem_name(statement)
+            self.entries.setdefault(name, _Entry(statement, StatementStatus.FRESH))
+            return name
+        return None if open_source is None else self._take_open(open_source)
+
+    def _take_open(self, source: str) -> str:
+        self.open_started += 1
+        self.fresh_started_by_source[source] += 1
+        return self.fresh_by_source[source].popleft()
 
     def _finish(self, entry: _Entry, decision: Decision) -> None:
         entry.status = StatementStatus.SOLVED if decision == Decision.SOLVED else StatementStatus.RETIRED

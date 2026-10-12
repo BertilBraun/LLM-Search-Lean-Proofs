@@ -1,4 +1,5 @@
 import asyncio
+import json
 import shutil
 from collections.abc import AsyncIterator
 
@@ -7,7 +8,9 @@ import pytest_asyncio
 
 from lean_search.corpora.records import StatementRecord, write_jsonl
 from lean_search.expert_iteration.config import PreferenceConfig
+from lean_search.expert_iteration.curriculum import CurriculumConfig
 from lean_search.expert_iteration.digests import DigestConfig, digest_new_shards
+from lean_search.expert_iteration.known_proofs import VerifiedStatement
 from lean_search.expert_iteration.loop_config import (
     EvaluationLoopConfig,
     InitialModels,
@@ -60,7 +63,11 @@ def loop_config() -> LoopConfig:
         initial=InitialModels("/policy", "/value"),
         serving=ServingConfig("base", "served", "base", SERVERS),
         search=SearchServiceConfig(
-            "pool/candidates.jsonl", "unused", concurrency=2, heartbeat_seconds=1.0, scheduler=SCHEDULER
+            "unused",
+            curriculum=CurriculumConfig(verified="pool/verified.jsonl", reload_seconds=1.0),
+            concurrency=2,
+            heartbeat_seconds=1.0,
+            scheduler=SCHEDULER,
         ),
         training=TrainingConfig(),
         evaluation=EvaluationLoopConfig("unused"),
@@ -72,7 +79,11 @@ async def service_run(tmp_path_factory: pytest.TempPathFactory) -> AsyncIterator
     root = tmp_path_factory.mktemp("loop")
     config = loop_config()
     paths = LoopPaths(root / "runs", root / "data", config.name)
-    write_jsonl(paths.data_root / config.search.candidates, STATEMENTS)
+    verified = [
+        VerifiedStatement(statement, ("s",), True, "s", tactics, 10, (), False, False, (), 1.0)
+        for tactics, statement in enumerate(STATEMENTS, start=1)
+    ]
+    write_jsonl(paths.data_root / config.search.curriculum.verified, verified)
     record_published(paths, ModelVersion(0, "/policy", "/value", now(), "initial"))
     service = SearchService(config, parse_run_config(TEMPLATE), paths, None, print)
     stop = asyncio.Event()
@@ -127,3 +138,8 @@ async def test_the_automation_proof_gives_value_labels_but_no_policy_samples(ser
         sum(summary.policy_samples for summary in summaries),
         sum(summary.value_samples for summary in summaries) > 0,
     ) == (1, 0, True)
+
+
+async def test_the_curriculum_fed_every_statement(service_run: LoopPaths) -> None:
+    heartbeat = json.loads(service_run.heartbeat.read_text(encoding="utf-8"))
+    assert (heartbeat["curriculum"]["statements"], heartbeat["curriculum"]["available"]) == (3, 0)

@@ -6,7 +6,14 @@ import pytest_asyncio
 
 from lean_search.data import Problem, Split
 from lean_search.expert_iteration.loop_config import HarvestConfig
-from lean_search.expert_iteration.loop_search import LoopSearch, PauseGate, StageResult, never_continue
+from lean_search.expert_iteration.loop_search import (
+    LoopSearch,
+    PauseGate,
+    SearchControls,
+    StageResult,
+    ValueClock,
+    never_continue,
+)
 from lean_search.expert_iteration.proofs import found_proofs
 from lean_search.lean import LeanRepl, LeanReplConfig
 from lean_search.lean.repl import PROJECT_DIRECTORY, REPL_BINARY
@@ -66,6 +73,7 @@ async def searched(
     estimator: AdjustableEstimator,
     stage_expansions: tuple[int, ...] = (4,),
     continue_search: Callable[[StageResult], Awaitable[bool]] = never_continue,
+    controls: SearchControls | None = None,
 ) -> tuple[LoopSearch, CompletedSearch]:
     search = LoopSearch(
         PROBLEM,
@@ -75,7 +83,7 @@ async def searched(
         [SearchConfig(max_expansions=expansions) for expansions in stage_expansions],
         0,
         harvest,
-        PauseGate(),
+        controls or SearchControls(PauseGate(), ValueClock()),
         continue_search,
     )
     return search, await search.run()
@@ -148,3 +156,40 @@ async def test_a_stage_counts_only_its_own_expansions(repl: LeanRepl) -> None:
     harvest = HarvestConfig(max_expansions=0)
     search, _ = await searched(repl, harvest, AdjustableEstimator(1.0), (1, 4), always_continue)
     assert [result.expansions for result in search.stage_results] == [1, 1]
+
+
+def publishing_between_stages(
+    estimator: AdjustableEstimator, clock: ValueClock
+) -> Callable[[StageResult], Awaitable[bool]]:
+    """Continues after the first stage as if a new value model, which puts every state 4 steps away, was published."""
+
+    async def publish(result: StageResult) -> bool:
+        estimator.remaining_steps = 4.0
+        clock.version += 1
+        return True
+
+    return publish
+
+
+@pytest.mark.parametrize(("lazy_rescore_states", "rescored"), [(32, 2), (0, 0)])
+async def test_stale_frontier_states_are_rescored_when_they_reach_the_top(
+    repl: LeanRepl, lazy_rescore_states: int, rescored: int
+) -> None:
+    estimator, clock = AdjustableEstimator(1.0), ValueClock()
+    controls = SearchControls(PauseGate(), clock, lazy_rescore_states)
+    harvest = HarvestConfig(max_expansions=0)
+    continue_search = publishing_between_stages(estimator, clock)
+    search, _ = await searched(repl, harvest, estimator, (1, 4), continue_search, controls)
+    assert search.lazily_rescored == rescored
+
+
+async def test_a_lazily_rescored_state_carries_the_new_estimate(repl: LeanRepl) -> None:
+    estimator, clock = AdjustableEstimator(1.0), ValueClock()
+    controls = SearchControls(PauseGate(), clock, 32)
+    continue_search = publishing_between_stages(estimator, clock)
+    search, completed = await searched(
+        repl, HarvestConfig(max_expansions=0), estimator, (1, 4), continue_search, controls
+    )
+    assert completed.tree is not None
+    children = [completed.tree.node(child_id) for child_id in completed.tree.root.child_ids]
+    assert [child.value_estimate for child in children] == [4.0, 4.0]

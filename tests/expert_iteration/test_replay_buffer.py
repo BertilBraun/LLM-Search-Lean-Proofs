@@ -83,3 +83,15 @@ def test_a_buffer_reads_back_in_order(tmp_path: Path) -> None:
     buffer = FifoBuffer(10, [*dataset_samples(2), *search_samples(range(3))])
     write_buffer(tmp_path / "value.jsonl", buffer)
     assert list(read_buffer_items(tmp_path / "value.jsonl", ValueSample)) == buffer.items()
+
+
+def test_dataset_samples_stay_above_their_floor() -> None:
+    buffer = FifoBuffer(10, dataset_samples(10), minimum_dataset_share=0.2)
+    buffer.add(search_samples(range(10)))
+    assert (len(buffer.dataset), len(buffer.search)) == (2, 8)
+
+
+def test_a_larger_capacity_reports_the_dataset_shortfall() -> None:
+    buffer = FifoBuffer(10, dataset_samples(2), minimum_dataset_share=0.2)
+    buffer.capacity = 20
+    assert buffer.dataset_shortfall() == 2

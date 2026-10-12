@@ -3,6 +3,7 @@ from pathlib import Path
 from expert_trees import TreeBuilder
 
 from lean_search.corpora.records import StatementRecord
+from lean_search.expert_iteration.known_proofs import VerifiedStatement
 from lean_search.expert_iteration.shards import AttemptRecord, Decision, ShardWriter
 from lean_search.search import StopReason, TreeRecord
 
@@ -79,3 +80,10 @@ def write_shard(directory: Path, version: int, names: list[str], solved: set[str
         decision = Decision.SOLVED if is_solved else Decision.RETIRED_UNPROMISING
         writer.write(attempt(name, version=version, proved=is_solved, decision=decision), record)
     writer.close()
+
+
+def verified(number: int, tactics: int, automation_solved: bool = False, is_verified: bool = True) -> VerifiedStatement:
+    statement = StatementRecord("s", f"t{number}", "", f"theorem t{number} : True := by", "", "")
+    return VerifiedStatement(
+        statement, ("s",), is_verified, "s", tactics, 10 * tactics, (f"⊢ {number}",), automation_solved, False, (), 1.0
+    )

@@ -1,6 +1,7 @@
 # The continuous expert-iteration loop (experiments/phase6_loop.py commands prints how to start it). Many concurrent
-# searches over a pool of ~250k statements, each escalating its budget on the same tree (32, 128, 512 expansions)
-# while its open frontier stays close to a proof; after 400 new proofs (or 60 minutes) they pause in place, both GPUs
+# searches over a curriculum of verified known-proof statements (pool v3) whose difficulty band follows the solve
+# rate, each escalating its budget on the same tree (32, 128, 512 expansions) while its open frontier stays close to
+# a proof; after 400 new proofs (or 60 minutes) they pause in place, both GPUs
 # train the policy (DPO + NLL) and the value model from FIFO replay buffers, the next version is published and the
 # searches continue. Version 0 is the SFT v2 policy with value v0. Every 3rd version (and version 0) is evaluated on
 # miniF2F-valid at 32 expansions.
@@ -28,8 +29,12 @@ gpu = 1
 url = "http://127.0.0.1:8101/v1"
 
 [search]
-candidates = "expert_iteration/pool_v2/candidates.jsonl"
 search_config = "experiments/configs/expert_iteration/loop_search.toml"
+# The open pool without known proofs (pool v2), an optional later source: open_share of the fresh starts.
+open_candidates = ""
+open_share = 0.0
+# Stale frontier states (scored by an older value model) re-scored together when one reaches the top.
+lazy_rescore_states = 32
 # Concurrent searches (one REPL each); the performance agent's measurement sets the final value.
 concurrency = 128
 shard_attempts = 1000
@@ -39,6 +44,23 @@ heartbeat_seconds = 30.0
 [search.harvest]
 max_remaining_steps = 1.5
 max_expansions = 8
+
+# difficulty = 0.5 x (tactics of the verified known proof) + 0.5 x (the current value model's root h); the band
+# [low, low + width] starts at the easiest statement the automation does not close and moves by band_step after
+# `window` outcomes: up at a solve rate of at least 50%, down below 30%.
+[search.curriculum]
+verified = "expert_iteration/pool_v3/verified.jsonl"
+proof_steps_weight = 0.5
+root_value_weight = 0.5
+characters_weight = 0.0
+band_width = 1.0
+band_step = 0.5
+window = 100
+raise_solve_rate = 0.5
+lower_solve_rate = 0.3
+root_value_refresh = 4096
+reload_seconds = 300.0
+seed = "phase6-curriculum"
 
 [search.scheduler]
 promising_depth = 0
@@ -70,7 +92,8 @@ min_minutes = 20.0
 max_minutes = 60.0
 minimum_new_proofs = 20
 check_seconds = 30.0
-rescore_frontier = true
+# Lazy re-scoring (search.lazy_rescore_states) replaces re-scoring every frontier right after a phase.
+rescore_frontier = false
 rescore_max_seconds = 60.0
 seed = "phase6-loop"
 held_out_fraction = 0.02
@@ -78,6 +101,8 @@ max_labels_per_tree = 16
 chosen_only_steps = false
 traced_directory = "traced"
 value_dataset = "v0"
+# Thinking mode: shorten long reasoning traces before training (needs the reasoning module; off until it lands).
+compress_reasoning = false
 
 [training.policy]
 config = "experiments/configs/expert_iteration/loop_policy.toml"
@@ -93,12 +118,14 @@ initial_capacity = 10000
 minimum_capacity = 2000
 capacity_phases = 3.5
 reuse = 1.0
+minimum_dataset_share = 0.1
 
 [training.value_buffer]
 initial_capacity = 80000
 minimum_capacity = 16000
 capacity_phases = 3.5
 reuse = 1.0
+minimum_dataset_share = 0.1
 
 [training.preferences]
 max_dead_per_node = 2

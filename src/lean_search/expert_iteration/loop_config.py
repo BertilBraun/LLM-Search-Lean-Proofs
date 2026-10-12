@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from lean_search.expert_iteration.config import PreferenceConfig
+from lean_search.expert_iteration.curriculum import CurriculumConfig
 from lean_search.expert_iteration.preferences import ValueJumpConfig
 from lean_search.search.records import from_json_object
 from lean_search.training.sft_data import SourceWeight
@@ -60,7 +61,8 @@ class SchedulerConfig:
         SearchStage(128, 2400.0, 3.0),
         SearchStage(512, 9600.0, 2.0),
     )
-    # Fresh statements are drawn by these weights; sources not listed weigh 1, weight 0 leaves a source out.
+    # Statements of the open pool (no known proofs) are drawn by these weights; sources not listed weigh 1, weight 0
+    # leaves a source out.
     source_weights: tuple[SourceWeight, ...] = ()
     # Without a value model, an unsolved statement enters the next stage when its search got this deep (0 never).
     promising_depth: int = 0
@@ -68,11 +70,16 @@ class SchedulerConfig:
 
 @dataclass(frozen=True)
 class SearchServiceConfig:
-    # Statements under $LEAN_SEARCH_DATA (phase6_pool.py --step select): load failures and statements the automation
-    # sweep proves surface in the search itself.
-    candidates: str
     # A run config whose sections are the template for every search; budgets come from the scheduler's stages.
     search_config: str
+    # Fresh statements come from the curriculum over verified known-proof statements (pool v3)...
+    curriculum: CurriculumConfig = field(default_factory=CurriculumConfig)
+    # ...and, for `open_share` of the fresh starts (or once the curriculum has none), from an open pool without known
+    # proofs under $LEAN_SEARCH_DATA (pool v2: phase6_pool.py --step select); empty for none.
+    open_candidates: str = ""
+    open_share: float = 0.0
+    # Stale frontier states (scored by an older value model) re-scored together when one reaches the top; 0 never.
+    lazy_rescore_states: int = 32
     # Concurrent searches, each holding a REPL; REPLs mostly wait on the GPU, so this may exceed the core count.
     concurrency: int = 128
     shard_attempts: int = 1000
@@ -93,6 +100,8 @@ class BufferConfig:
     capacity_phases: float = 3.5
     # Samples trained per phase = reuse x samples added in it, so each sample is trained on about `reuse` times.
     reuse: float = 1.0
+    # Dataset samples keep at least this share of the capacity (against format and skill drift); 0 lets them fade out.
+    minimum_dataset_share: float = 0.1
 
 
 @dataclass(frozen=True)
@@ -112,9 +121,10 @@ class TrainingConfig:
     max_minutes: float = 60.0
     minimum_new_proofs: int = 20
     check_seconds: float = 30.0
-    # Re-score every open frontier node with the new value model after a phase (one prefill each), skipped when the
-    # last measured rate predicts more than `rescore_max_seconds`; re-scoring stops at that limit either way.
-    rescore_frontier: bool = True
+    # Re-score every open frontier node with the new value model right after a phase (one prefill each), skipped when
+    # the last measured rate predicts more than `rescore_max_seconds` and stopped at that limit; lazy re-scoring at pop
+    # time (search.lazy_rescore_states) replaces it by default.
+    rescore_frontier: bool = False
     rescore_max_seconds: float = 60.0
     seed: str = "loop"
     # Statements whose trees only validate (the value gate, validation sets), by hash.
@@ -136,6 +146,9 @@ class TrainingConfig:
     traced_directory: str = "traced"
     traced_sources: tuple[SourceWeight, ...] = ()
     value_dataset: str = "v0"
+    # Thinking mode: shorten long reasoning traces of the policy samples before training (the reasoning module's
+    # compression with its sufficiency check); the trainer refuses to run with it on until that module is wired in.
+    compress_reasoning: bool = False
 
 
 @dataclass(frozen=True)

@@ -1,37 +1,51 @@
 """The search service: many concurrent searches over pool statements, paused in place for training phases.
 
-Each of `concurrency` workers takes the scheduler's next job and runs a LoopSearch with the served policy and value
-model (opened once; the adapters keep their names across versions). A search escalates stage by stage on its own tree
+Each of `concurrency` workers takes the scheduler's next job (from the curriculum over verified known-proof
+statements, whose new verifications are read in as they arrive and whose roots near the band are scored by each new
+value model) and runs a LoopSearch with the served policy and value model (opened once; the adapters keep their names
+across versions). A search escalates stage by stage on its own tree
 and REPL while its open frontier stays close to a proof; every stage writes a record to the open shard, the last one
 with the tree (and, in thinking mode, the reasoning behind each step). A training phase pauses every policy and value
 request at the gate: searches keep their trees and REPL proof states, nothing in flight is lost, and they continue
-after the phase with the new weights, their open frontiers re-scored when that fits in the time limit. The service's
+after the phase with the new weights; stale frontier states are re-scored lazily when they reach the top. The service's
 state is rebuilt from the shards on start; searches cut off by a crash start again at the stage they had reached.
 """
 
 import asyncio
 import contextlib
 import dataclasses
+import json
 import time
 import traceback
 from collections import Counter
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Sequence
 from dataclasses import dataclass
 
 import httpx
 
 from lean_search.corpora.records import StatementRecord, read_statement_records
+from lean_search.expert_iteration.curriculum import Curriculum, CurriculumCounts, CurriculumState
+from lean_search.expert_iteration.known_proofs import read_verified
 from lean_search.expert_iteration.loop_config import LoopConfig, SearchStage
 from lean_search.expert_iteration.loop_search import (
     GatedExpander,
     GatedValueEstimator,
     LoopSearch,
     PauseGate,
+    SearchControls,
     StageResult,
+    ValueClock,
 )
 from lean_search.expert_iteration.pool import pool_problem
 from lean_search.expert_iteration.pool_search import PRELOADED_HEADER_SHARE, common_headers
-from lean_search.expert_iteration.scheduler import Job, Scheduler, SchedulerCounts, StageOutcome, decide
+from lean_search.expert_iteration.scheduler import (
+    Job,
+    Scheduler,
+    SchedulerCounts,
+    StageOutcome,
+    StatementStatus,
+    decide,
+)
 from lean_search.expert_iteration.serving import LoopPaths, read_current, write_json_atomically
 from lean_search.expert_iteration.shards import (
     AttemptRecord,
@@ -58,10 +72,18 @@ from lean_search.search import (
     build_priority_function,
     tree_record,
 )
-from lean_search.value.estimator import open_value_estimator
+from lean_search.search.records import from_json_object
+from lean_search.value.estimator import ValueModelEstimator, open_value_estimator
 
 IDLE_SECONDS = 30.0
 FAILURE_PAUSE_SECONDS = 5.0
+ROOT_VALUE_BATCH = 256
+ROOT_VALUE_SECONDS = 30.0
+
+
+async def sleep_unless_stopped(stop: asyncio.Event, seconds: float) -> None:
+    with contextlib.suppress(TimeoutError):
+        await asyncio.wait_for(stop.wait(), seconds)
 
 
 @dataclass(frozen=True)
@@ -72,6 +94,7 @@ class ServiceHeartbeat:
     live_searches: int
     # Searches in flight per stage.
     live_by_stage: tuple[int, ...]
+    curriculum: CurriculumCounts | None
     session_attempts: int
     session_proofs: int
     session_harvested_proofs: int
@@ -83,6 +106,23 @@ class ServiceHeartbeat:
 class Models:
     expander: Expander
     priority_function: PriorityFunction
+    root_values: "RootValueScorer | None"
+
+
+class RootValueScorer:
+    """The value model's h for root goals without a search tree, behind the pause gate."""
+
+    def __init__(self, estimator: ValueModelEstimator, gate: PauseGate) -> None:
+        self.estimator = estimator
+        self.gate = gate
+
+    async def remaining_steps(self, goals: Sequence[tuple[str, ...]]) -> list[float]:
+        await self.gate.enter()
+        try:
+            scored = await self.estimator.score_states(goals)
+        finally:
+            self.gate.leave()
+        return [self.estimator.config.readout.remaining_steps(probabilities) for probabilities in scored.states]
 
 
 @dataclass
@@ -200,12 +240,17 @@ class SearchService:
         self.paths = paths
         self.trainer = trainer
         self.log = log
-        self.scheduler = Scheduler(config.search.scheduler)
+        self.curriculum = Curriculum(config.search.curriculum, 0)
+        self.scheduler = Scheduler(config.search.scheduler, self.curriculum, config.search.open_share)
+        self.verified_offset = 0
         self.stage_configs = [
             stage_search_config(self.template.search, stage) for stage in self.scheduler.config.stages
         ]
         self.writer = ShardWriter(paths.shards, config.search.shard_attempts, config.search.shard_minutes * 60)
         self.gate = PauseGate()
+        self.value_clock = ValueClock()
+        self.value_adapter = ""
+        self.controls = SearchControls(self.gate, self.value_clock, config.search.lazy_rescore_states)
         self.reasoning_log = ReasoningLog()
         self.write_lock = asyncio.Lock()
         self.live: set[LoopSearch] = set()
@@ -221,11 +266,35 @@ class SearchService:
     def load_state(self) -> list[StatementRecord]:
         for summary in recover_open_shards(self.paths.shards):
             self.log(f"Closed shard {summary.name} left open: {summary.attempts} attempts")
-        statements = list(read_statement_records(self.paths.data_root / self.config.search.candidates))
-        self.scheduler.add_statements(statements)
+        search = self.config.search
+        open_statements = (
+            list(read_statement_records(self.paths.data_root / search.open_candidates))
+            if search.open_candidates
+            else []
+        )
+        self.scheduler.add_statements(open_statements)
+        curriculum_statements = self.read_new_verified(set())
         replayed = self.scheduler.replay(all_attempts(self.paths.shards))
-        self.version = read_current(self.paths).version
-        self.log(f"{len(statements):,} statements, {replayed:,} attempts replayed: {self.scheduler.counts()}")
+        if self.paths.curriculum.exists():
+            state = json.loads(self.paths.curriculum.read_text(encoding="utf-8"))
+            self.curriculum.restore(from_json_object(CurriculumState, state))
+        current = read_current(self.paths)
+        self.version = current.version
+        self.value_adapter = current.value_adapter
+        self.value_clock.version = self.curriculum.value_version = current.version
+        self.log(
+            f"{len(curriculum_statements):,} curriculum and {len(open_statements):,} open statements, {replayed:,} "
+            f"attempts replayed: {self.scheduler.counts()}; {self.curriculum.counts()}"
+        )
+        return [*curriculum_statements, *open_statements]
+
+    def read_new_verified(self, started: set[str]) -> list[StatementRecord]:
+        """Verified statements appended since the last read join the curriculum (and the scheduler)."""
+        records, self.verified_offset = read_verified(
+            self.paths.data_root / self.config.search.curriculum.verified, self.verified_offset
+        )
+        statements = self.curriculum.add(records, started)
+        self.scheduler.add_statements(statements, open_pool=False)
         return statements
 
     async def run(self, stop: asyncio.Event) -> None:
@@ -247,6 +316,9 @@ class SearchService:
             self.log(f"Pool of {concurrency} REPLs ready")
             coroutines = [self.work(pool, models, stop) for _ in range(concurrency)]
             coroutines.append(self.heartbeats(stop))
+            coroutines.append(self.reload_verified(stop))
+            if models.root_values is not None:
+                coroutines.append(self.refresh_root_values(models.root_values, stop))
             if self.trainer is not None:
                 coroutines.append(self.trainer.watch(self, stop))
             tasks = [asyncio.create_task(self.stopping_on_failure(coroutine, stop)) for coroutine in coroutines]
@@ -279,10 +351,35 @@ class SearchService:
             inner: Expander = ReasoningExpander(opened, self.reasoning_log) if config.policy.thinking else opened
             policy = GatedExpander(inner, self.gate)
         value_estimator = None
+        root_values = None
         if config.value.model:
             opened_value = await stack.enter_async_context(open_value_estimator(config.value))
             value_estimator = GatedValueEstimator(opened_value, self.gate)
-        return Models(build_expander(config, policy), build_priority_function(config.priority, value_estimator))
+            root_values = RootValueScorer(opened_value, self.gate)
+        priority_function = build_priority_function(config.priority, value_estimator)
+        return Models(build_expander(config, policy), priority_function, root_values)
+
+    async def reload_verified(self, stop: asyncio.Event) -> None:
+        while not stop.is_set():
+            await sleep_unless_stopped(stop, self.config.search.curriculum.reload_seconds)
+            started = {name for name, entry in self.scheduler.entries.items() if entry.status != StatementStatus.FRESH}
+            added = self.read_new_verified(started)
+            if added:
+                self.log(f"{len(added):,} newly verified statements joined the curriculum: {self.curriculum.counts()}")
+
+    async def refresh_root_values(self, scorer: RootValueScorer, stop: asyncio.Event) -> None:
+        """Scores the roots nearest the band with the current value model, after each publish and as the band moves."""
+        while not stop.is_set():
+            version = self.value_clock.version
+            roots = self.curriculum.roots_to_score(self.config.search.curriculum.root_value_refresh, ROOT_VALUE_BATCH)
+            if not roots:
+                await sleep_unless_stopped(stop, ROOT_VALUE_SECONDS)
+                continue
+            values = await scorer.remaining_steps([root.goals for root in roots])
+            if version == self.value_clock.version:
+                self.curriculum.set_root_values(
+                    {root.name: value for root, value in zip(roots, values, strict=True)}, version
+                )
 
     async def work(self, pool: LeanReplPool, models: Models, stop: asyncio.Event) -> None:
         while not stop.is_set():
@@ -324,7 +421,7 @@ class SearchService:
             self.stage_configs,
             job.stage,
             self.config.search.harvest,
-            self.gate,
+            self.controls,
             continue_search,
         )
         self.live.add(search)
@@ -350,6 +447,10 @@ class SearchService:
         async with self.write_lock:
             attempt = await asyncio.to_thread(self.writer.write, attempt, tree, reasoning)
         self.scheduler.record(attempt)
+        for message in self.curriculum.take_messages():
+            self.log(message)
+        if attempt.decision != Decision.ESCALATED:
+            write_json_atomically(self.paths.curriculum, self.curriculum.state())
         self.session_attempts += 1
         self.session_proofs += attempt.proved
         self.session_harvested_proofs += attempt.harvested_proofs
@@ -369,7 +470,12 @@ class SearchService:
         self.log(f"Paused with {len(self.live)} searches in flight")
 
     async def resume(self, rescore: bool) -> None:
-        self.version = read_current(self.paths).version
+        current = read_current(self.paths)
+        self.version = current.version
+        if current.value_adapter != self.value_adapter:
+            # Every state scored so far is now stale: searches re-score lazily, the curriculum its roots.
+            self.value_adapter = current.value_adapter
+            self.value_clock.version = self.curriculum.value_version = current.version
         self.gate.resume()
         self.log(f"Resumed on version {self.version} with {len(self.live)} searches")
         if rescore:
@@ -412,6 +518,7 @@ class SearchService:
                 paused=not self.gate.opened.is_set(),
                 live_searches=len(self.live),
                 live_by_stage=tuple(stages[index] for index in range(len(self.scheduler.config.stages))),
+                curriculum=self.curriculum.counts(),
                 session_attempts=self.session_attempts,
                 session_proofs=self.session_proofs,
                 session_harvested_proofs=self.session_harvested_proofs,

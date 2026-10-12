@@ -11,6 +11,7 @@ from lean_search.expert_iteration.config import (
     load_round_config,
     unserved_adapters,
 )
+from lean_search.expert_iteration.known_proofs import load_known_proof_pool_config
 from lean_search.expert_iteration.loop_config import load_loop_config
 from lean_search.search import load_run_config
 from lean_search.search.records import from_json_object
@@ -106,3 +107,8 @@ def test_the_loop_training_templates_parse_once_filled() -> None:
 
 def test_the_loop_pool_config_loads() -> None:
     assert load_pool_config(CONFIG_DIRECTORY / "pool_v2.toml").sources
+
+
+def test_the_known_proof_pool_config_loads() -> None:
+    config = load_known_proof_pool_config(CONFIG_DIRECTORY / "pool_v3.toml")
+    assert [corpus.name for corpus in config.corpora if not corpus.pooled] == ["stp_conjectures"]

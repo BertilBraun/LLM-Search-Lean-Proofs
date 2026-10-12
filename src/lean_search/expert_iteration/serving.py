@@ -69,6 +69,10 @@ class LoopPaths:
         return self.directory / "search" / "heartbeat.json"
 
     @property
+    def curriculum(self) -> Path:
+        return self.directory / "search" / "curriculum.json"
+
+    @property
     def digests(self) -> Path:
         return self.directory / "training" / "digests"
 

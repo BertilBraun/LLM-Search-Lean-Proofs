@@ -1,0 +1,133 @@
+import pytest
+from loop_fixtures import attempt, verified
+
+from lean_search.corpora.records import StatementRecord
+from lean_search.expert_iteration.curriculum import Curriculum, CurriculumConfig, CurriculumState
+from lean_search.expert_iteration.loop_config import SchedulerConfig
+from lean_search.expert_iteration.pool import problem_name
+from lean_search.expert_iteration.scheduler import Scheduler
+from lean_search.expert_iteration.shards import Decision
+
+CONFIG = CurriculumConfig(
+    proof_steps_weight=1.0,
+    root_value_weight=0.0,
+    band_width=1.0,
+    band_step=1.0,
+    window=5,
+    raise_solve_rate=0.5,
+    lower_solve_rate=0.3,
+)
+
+
+def curriculum_with(tactics: list[int], config: CurriculumConfig = CONFIG) -> Curriculum:
+    curriculum = Curriculum(config, value_version=0)
+    curriculum.add([verified(number, count) for number, count in enumerate(tactics)], started=set())
+    return curriculum
+
+
+def fed_tactics(curriculum: Curriculum, count: int) -> list[int]:
+    statements = [curriculum.next_statement() for _ in range(count)]
+    return [curriculum.statements[problem_name(statement)].proof_tactics for statement in statements if statement]
+
+
+def test_only_verified_statements_the_automation_misses_join() -> None:
+    curriculum = Curriculum(CONFIG, value_version=0)
+    added = curriculum.add(
+        [verified(0, 2), verified(1, 2, automation_solved=True), verified(2, 2, is_verified=False)], set()
+    )
+    assert [statement.identifier for statement in added] == ["t0"]
+
+
+def test_the_band_starts_at_the_easiest_statements() -> None:
+    curriculum = curriculum_with([5, 1, 2, 9, 1])
+    assert sorted(fed_tactics(curriculum, 3)) == [1, 1, 2]
+
+
+def test_an_empty_band_moves_to_the_nearest_statements() -> None:
+    curriculum = curriculum_with([1, 6, 7])
+    fed_tactics(curriculum, 1)
+    assert fed_tactics(curriculum, 1) == [6]
+
+
+def outcomes(curriculum: Curriculum, solved: list[bool]) -> None:
+    for outcome in solved:
+        statement = curriculum.next_statement()
+        assert statement is not None
+        curriculum.record_outcome(problem_name(statement), outcome)
+
+
+@pytest.mark.parametrize(
+    ("solved", "band_low"),
+    [
+        ([True, True, True, False, False], 2.0),
+        ([True, False, False, False, False], 1.0),
+        ([True, True, False, False, False], 1.0),
+    ],
+    ids=["raised", "floored", "kept"],
+)
+def test_the_band_follows_the_solve_rate(solved: list[bool], band_low: float) -> None:
+    curriculum = curriculum_with([1] * 4 + [2] * 8 + [3] * 8)
+    outcomes(curriculum, solved)
+    assert curriculum.band_low == band_low
+
+
+def test_a_low_solve_rate_lowers_the_band() -> None:
+    curriculum = curriculum_with([1] * 4 + [3] * 8)
+    curriculum.restore(CurriculumState(3.0, 1, ()))
+    outcomes(curriculum, [False] * 5)
+    assert curriculum.band_low == 2.0
+
+
+def test_outcomes_from_before_a_band_move_do_not_count() -> None:
+    curriculum = curriculum_with([1] * 8 + [2] * 8)
+    early = curriculum.next_statement()
+    assert early is not None
+    outcomes(curriculum, [True] * 5)
+    curriculum.record_outcome(problem_name(early), True)
+    assert curriculum.counts().outcomes == 0
+
+
+def test_root_values_shift_the_difficulty() -> None:
+    config = CurriculumConfig(proof_steps_weight=0.5, root_value_weight=0.5)
+    curriculum = curriculum_with([4], config)
+    before = curriculum.difficulty("s.t0")
+    curriculum.set_root_values({"s.t0": 1.0}, version=0)
+    assert (before, curriculum.difficulty("s.t0")) == (4.0, 2.5)
+
+
+def test_roots_nearest_the_band_are_scored_first() -> None:
+    curriculum = curriculum_with([1, 9, 2])
+    curriculum.next_statement()
+    assert [root.name for root in curriculum.roots_to_score(window=2, limit=2)] == ["s.t2", "s.t1"]
+
+
+def test_a_new_value_model_makes_every_root_stale_again() -> None:
+    curriculum = curriculum_with([1, 2])
+    curriculum.set_root_values({"s.t0": 1.0, "s.t1": 2.0}, version=0)
+    curriculum.value_version = 1
+    assert len(curriculum.roots_to_score(window=10, limit=10)) == 2
+
+
+def test_the_scheduler_feeds_the_curriculum_and_reports_outcomes() -> None:
+    curriculum = curriculum_with([1] * 4 + [2] * 4)
+    scheduler = Scheduler(SchedulerConfig(), curriculum)
+    for _ in range(5):
+        job = scheduler.next_job()
+        assert job is not None
+        scheduler.record(attempt(job.name, proved=True, decision=Decision.SOLVED))
+    assert curriculum.band_low == 2.0
+
+
+def test_the_open_pool_gets_its_share_of_fresh_starts() -> None:
+    curriculum = curriculum_with([1] * 10)
+    scheduler = Scheduler(SchedulerConfig(), curriculum, open_share=0.25)
+    scheduler.add_statements([StatementRecord("open", f"o{number}", "", "", "", "") for number in range(10)])
+    sources = [job.statement.source for job in (scheduler.next_job() for _ in range(8)) if job]
+    assert sources.count("open") == 2
+
+
+def test_replayed_attempts_leave_the_curriculum() -> None:
+    curriculum = curriculum_with([1, 1])
+    scheduler = Scheduler(SchedulerConfig(), curriculum)
+    scheduler.replay([attempt("s.t0", decision=Decision.RETIRED_UNPROMISING)])
+    assert [job.name for job in (scheduler.next_job(), scheduler.next_job()) if job] == ["s.t1"]

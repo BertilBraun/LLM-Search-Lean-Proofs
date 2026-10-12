@@ -3,10 +3,13 @@
 A buffer starts full of dataset samples (traced proof steps, the v0 value labels), a regularizer. Search samples push
 out dataset samples first, then the oldest search samples. A phase trains on reuse x (samples added since the last
 phase) samples drawn uniformly from the buffer, so a sample is trained on about `reuse` times on average whatever the
-capacity; the capacity sets the age window and the dataset share.
+capacity; the capacity sets the age window and the dataset share. Dataset samples never fall below
+`minimum_dataset_share` of the capacity (against format and skill drift): eviction stops taking them there, and the
+trainer tops them up when a larger capacity leaves too few.
 """
 
 import json
+import math
 import os
 import random
 from collections import deque
@@ -66,8 +69,9 @@ class BufferStatistics:
 
 
 class FifoBuffer[T: Buffered]:
-    def __init__(self, capacity: int, items: Iterable[T] = ()) -> None:
+    def __init__(self, capacity: int, items: Iterable[T] = (), minimum_dataset_share: float = 0.0) -> None:
         self.capacity = capacity
+        self.minimum_dataset_share = minimum_dataset_share
         self.dataset: deque[T] = deque()
         self.search: deque[T] = deque()
         self.add(list(items))
@@ -81,13 +85,19 @@ class FifoBuffer[T: Buffered]:
             (self.dataset if item.origin == SampleOrigin.DATASET else self.search).append(item)
         evicted_dataset = evicted_search = 0
         while len(self) > self.capacity:
-            if self.dataset:
+            if self.dataset and (len(self.dataset) > self.dataset_floor() or not self.search):
                 self.dataset.popleft()
                 evicted_dataset += 1
             else:
                 self.search.popleft()
                 evicted_search += 1
         return evicted_dataset, evicted_search
+
+    def dataset_floor(self) -> int:
+        return math.ceil(self.minimum_dataset_share * self.capacity)
+
+    def dataset_shortfall(self) -> int:
+        return max(0, self.dataset_floor() - len(self.dataset))
 
     def items(self) -> list[T]:
         return [*self.dataset, *self.search]

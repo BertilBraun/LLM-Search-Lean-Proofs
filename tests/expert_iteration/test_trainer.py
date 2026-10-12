@@ -2,6 +2,7 @@ import dataclasses
 import datetime
 import json
 import tomllib
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -30,6 +31,7 @@ from lean_search.expert_iteration.loop_config import (
     TrainingConfig,
 )
 from lean_search.expert_iteration.preferences import ValueJumpConfig
+from lean_search.expert_iteration.replay_buffer import FifoBuffer, PolicySample, SampleOrigin, ValueSample
 from lean_search.expert_iteration.serving import (
     LoopPaths,
     LoraAdapterPublisher,
@@ -56,7 +58,7 @@ from lean_search.expert_iteration.trainer import (
     value_gate,
 )
 from lean_search.search import StepSource
-from lean_search.training.dpo_data import read_pairs
+from lean_search.training.dpo_data import PreferencePair, read_pairs
 from lean_search.training.sft_data import SourceWeight
 from lean_search.value.labels import LabelKind, TreeLabelConfig, ValueExample, read_examples, write_examples
 
@@ -173,7 +175,7 @@ def test_automation_only_proofs_give_no_policy_samples(tmp_path: Path) -> None:
     assert (summary.proofs, summary.policy_proofs, summary.policy_samples) == (1, 0, 0)
 
 
-def loop_config() -> LoopConfig:
+def loop_config(compress_reasoning: bool = False) -> LoopConfig:
     servers = (
         ServerEndpoint("gpu0", 0, "http://127.0.0.1:8100/v1"),
         ServerEndpoint("gpu1", 1, "http://127.0.0.1:8101/v1"),
@@ -182,7 +184,7 @@ def loop_config() -> LoopConfig:
         name="loop",
         initial=InitialModels("/policy", "/value"),
         serving=ServingConfig("base", "served", "base", servers),
-        search=SearchServiceConfig("pool/candidates.jsonl", "search.toml"),
+        search=SearchServiceConfig("search.toml"),
         training=TrainingConfig(
             seed="test",
             held_out_fraction=0.0,
@@ -190,6 +192,7 @@ def loop_config() -> LoopConfig:
             value_buffer=BufferConfig(initial_capacity=50, minimum_capacity=10, capacity_phases=3.5, reuse=1.0),
             traced_sources=(SourceWeight("lean_workbook", 1.0),),
             value_jumps=JUMPS,
+            compress_reasoning=compress_reasoning,
         ),
         evaluation=EvaluationLoopConfig("evaluation.toml"),
     )
@@ -302,7 +305,7 @@ async def test_a_phase_pauses_frees_the_gpus_publishes_and_resumes(tmp_path: Pat
         "release gpu1",
         "restore gpu0 v1",
         "restore gpu1 v1",
-        "resume rescore=True",
+        "resume rescore=False",
     ]
 
 
@@ -317,3 +320,38 @@ async def test_an_interrupted_phase_continues_at_its_stage(tmp_path: Path) -> No
         1,
         PhaseStage.DONE,
     )
+
+
+class FirstSentence:
+    def shorten(self, pairs: Sequence[PreferencePair]) -> list[PreferencePair]:
+        return [
+            dataclasses.replace(pair, chosen_reasoning=(pair.chosen_reasoning or "").split(".")[0] + ".")
+            for pair in pairs
+        ]
+
+
+def compressing_trainer(tmp_path: Path, shortener: FirstSentence | None) -> PhaseTrainer:
+    config = loop_config(compress_reasoning=True)
+    paths = LoopPaths(tmp_path, tmp_path, config.name)
+    publisher = LoraAdapterPublisher(config.serving)
+    return PhaseTrainer(config, paths, publisher, StopStartRelease(publisher), tmp_path, print, True, shortener)
+
+
+def test_reasoning_compression_needs_the_reasoning_module(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="compress_reasoning"):
+        compressing_trainer(tmp_path, None)
+
+
+def test_only_thinking_pairs_are_shortened(tmp_path: Path) -> None:
+    trainer = compressing_trainer(tmp_path, FirstSentence())
+    thinking = PreferencePair("s", "v1/a", 0, ("⊢ p",), "simp", None, "none", "Short. Then a long detour.")
+    plain = PreferencePair("s", "v1/b", 0, ("⊢ q",), "ring", None, "none")
+    samples = [PolicySample(SampleOrigin.SEARCH, 1, pair) for pair in (thinking, plain)]
+    assert [pair.chosen_reasoning for pair in trainer.training_pairs(samples)] == [None, "Short."]
+
+
+def test_the_value_dataset_is_topped_up_to_its_floor(tmp_path: Path) -> None:
+    _, trainer = phase_trainer(tmp_path)
+    buffer: FifoBuffer[ValueSample] = FifoBuffer(50, [], minimum_dataset_share=0.1)
+    trainer.top_up_value_dataset(buffer, 1)
+    assert len(buffer.dataset) == 5

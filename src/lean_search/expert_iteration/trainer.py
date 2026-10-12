@@ -162,6 +162,12 @@ class PausableSearches(Protocol):
     async def resume(self, rescore: bool) -> None: ...
 
 
+class ReasoningShortener(Protocol):
+    """Shortens the reasoning of thinking-mode pairs while it still suffices for the chosen step."""
+
+    def shorten(self, pairs: Sequence[PreferencePair]) -> list[PreferencePair]: ...
+
+
 def phase_trigger(progress: Progress, config: TrainingConfig) -> str | None:
     if progress.new_proofs >= config.new_proofs and progress.minutes_since_phase >= config.min_minutes:
         return "proofs"
@@ -295,8 +301,12 @@ class PhaseTrainer:
         checkpoints: Path,
         log: Callable[[str], None],
         value_continues: bool,
+        reasoning_shortener: ReasoningShortener | None = None,
     ) -> None:
+        if config.training.compress_reasoning and reasoning_shortener is None:
+            raise ValueError("training.compress_reasoning needs a reasoning shortener (the reasoning module).")
         self.config = config
+        self.reasoning_shortener = reasoning_shortener
         self.paths = paths
         self.publisher = publisher
         self.gpu_release = gpu_release
@@ -408,6 +418,8 @@ class PhaseTrainer:
         )
         policy_inflow = updated_inflow(inflows.policy, len(new_policy))
         policy_buffer.capacity = adapted_capacity(training.policy_buffer, policy_inflow)
+        policy_buffer.minimum_dataset_share = training.policy_buffer.minimum_dataset_share
+        self.top_up_policy_dataset(policy_buffer, phase)
         policy_evicted = policy_buffer.add(new_policy)
         policy_trained = policy_buffer.sample(
             trained_count(len(new_policy), training.policy_buffer.reuse), random.Random(f"{training.seed}/{phase}")
@@ -419,6 +431,8 @@ class PhaseTrainer:
         )
         value_inflow = updated_inflow(inflows.value, len(new_value))
         value_buffer.capacity = adapted_capacity(training.value_buffer, value_inflow)
+        value_buffer.minimum_dataset_share = training.value_buffer.minimum_dataset_share
+        self.top_up_value_dataset(value_buffer, phase)
         value_evicted = value_buffer.add(new_value)
         value_trained = value_buffer.sample(
             trained_count(len(new_value), training.value_buffer.reuse), random.Random(f"{training.seed}/{phase}")
@@ -428,7 +442,7 @@ class PhaseTrainer:
         held_out_pairs = [
             pair.pair for pair in new_pairs if self.held_out(identifier_problem(pair.pair.proof_identifier))
         ]
-        write_pairs(directory / "policy" / "train.jsonl", (sample.pair for sample in policy_trained))
+        write_pairs(directory / "policy" / "train.jsonl", self.training_pairs(policy_trained))
         write_pairs(directory / "policy" / "validation.jsonl", held_out_pairs[:VALIDATION_SAMPLES])
         write_examples(directory / "value" / "train.jsonl", (sample.example for sample in value_trained))
         write_examples(directory / "value" / "validation.jsonl", self.value_validation(new_values))
@@ -451,10 +465,44 @@ class PhaseTrainer:
         (directory / "data.json").write_text(to_json(data), encoding="utf-8")
         return data
 
+    def training_pairs(self, samples: Sequence[PolicySample]) -> list[PreferencePair]:
+        """The phase's policy pairs; with compress_reasoning, pairs with reasoning have it shortened first."""
+        pairs = [sample.pair for sample in samples]
+        if self.reasoning_shortener is None or not self.config.training.compress_reasoning:
+            return pairs
+        thinking = [pair for pair in pairs if pair.chosen_reasoning is not None]
+        plain = [pair for pair in pairs if pair.chosen_reasoning is None]
+        return [*plain, *self.reasoning_shortener.shorten(thinking)]
+
     def value_validation(self, new_values: Sequence[VersionedValueExample]) -> list[ValueExample]:
         dataset = self.paths.data_root / "value" / self.config.training.value_dataset / "validation.jsonl"
         tree = merge_duplicates(value.example for value in new_values if self.held_out(value.example.identifier))
         return [*tree[:VALIDATION_SAMPLES], *list(read_examples(dataset))[:VALIDATION_SAMPLES]]
+
+    def top_up_policy_dataset(self, buffer: FifoBuffer[PolicySample], phase: int) -> None:
+        """Fresh dataset samples (not in the buffer) when the dataset share would fall below its floor."""
+        shortfall = buffer.dataset_shortfall()
+        if not shortfall:
+            return
+        training = self.config.training
+        present = {pair_key(sample.pair) for sample in buffer.dataset}
+        drawn = dataset_policy_samples(
+            self.paths.data_root / training.traced_directory,
+            [source.name for source in training.traced_sources],
+            shortfall + len(present),
+            f"{training.seed}/{phase}",
+        )
+        buffer.add([sample for sample in drawn if pair_key(sample.pair) not in present][:shortfall])
+
+    def top_up_value_dataset(self, buffer: FifoBuffer[ValueSample], phase: int) -> None:
+        shortfall = buffer.dataset_shortfall()
+        if not shortfall:
+            return
+        training = self.config.training
+        present = {sample.example for sample in buffer.dataset}
+        dataset = self.paths.data_root / "value" / training.value_dataset / "train.jsonl"
+        drawn = dataset_value_samples(dataset, shortfall + len(present), f"{training.seed}/{phase}")
+        buffer.add([sample for sample in drawn if sample.example not in present][:shortfall])
 
     def load_policy_buffer(self) -> FifoBuffer[PolicySample]:
         training = self.config.training

@@ -129,6 +129,15 @@ def print_status(paths: LoopPaths) -> None:
             f"{heartbeat.session_attempts:,} stages, {heartbeat.session_proofs:,} proofs (+"
             f"{heartbeat.session_harvested_proofs:,} harvested), {heartbeat.session_failures} server errors"
         )
+        curriculum = heartbeat.curriculum
+        if curriculum is not None:
+            rate = "–" if curriculum.solve_rate is None else f"{curriculum.solve_rate:.0%}"
+            lines.append(
+                f"Curriculum: {curriculum.statements:,} verified statements, {curriculum.available:,} not started; "
+                f"band {curriculum.band_low} – {curriculum.band_high} ({curriculum.band_available:,} statements, "
+                f"move {curriculum.generation}), solve rate {rate} over {curriculum.outcomes} outcomes; "
+                f"{curriculum.roots_scored_by_current_model:,} roots scored by the current value model"
+            )
     else:
         lines.append("Search service: no heartbeat yet")
     state = read_phase_state(paths)
