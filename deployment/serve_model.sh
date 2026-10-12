@@ -9,8 +9,10 @@
 # model's generation_config.json, so every request states its own parameters. Later arguments override earlier
 # ones, e.g. --no-enable-lora for a merged model.
 # Log: $LEAN_SEARCH_RUNS/servers/<name>.log, process group id: <name>.pid. Stop with stop_model.sh <name>.
-# Overrides: MAX_MODEL_LEN (8192), GPU_MEMORY_UTILIZATION (0.90), MAX_NUM_SEQS (vLLM default), MAX_LORA_RANK (64),
-# MAX_LORAS (4), SERVER_START_TIMEOUT seconds (900).
+# Overrides: MAX_MODEL_LEN (8192), GPU_MEMORY_UTILIZATION (0.90), MAX_NUM_SEQS and MAX_NUM_BATCHED_TOKENS (vLLM
+# defaults), MAX_LORA_RANK (64), MAX_LORAS (4), SLEEP_MODE=1 (--enable-sleep-mode, for /sleep and /wake_up),
+# SERVER_START_TIMEOUT seconds (900). Dev-mode endpoints (/pause, /collective_rpc, /reset_prefix_cache, ...) are on
+# for in-place weight swaps (experiments/publish_weights.py); the server only listens on 127.0.0.1.
 
 set -euo pipefail
 
@@ -54,6 +56,12 @@ arguments=(
 if [[ -n "${MAX_NUM_SEQS:-}" ]]; then
     arguments+=(--max-num-seqs "${MAX_NUM_SEQS}")
 fi
+if [[ -n "${MAX_NUM_BATCHED_TOKENS:-}" ]]; then
+    arguments+=(--max-num-batched-tokens "${MAX_NUM_BATCHED_TOKENS}")
+fi
+if [[ "${SLEEP_MODE:-0}" == 1 ]]; then
+    arguments+=(--enable-sleep-mode)
+fi
 # Qwen3.5 checkpoints are vision-language models; the vision tower would otherwise reserve memory.
 has_vision_tower="$(python -c 'import sys, transformers
 print(hasattr(transformers.AutoConfig.from_pretrained(sys.argv[1]), "vision_config"))' "${model}")"
@@ -62,7 +70,7 @@ if [[ "${has_vision_tower}" == True ]]; then
 fi
 
 # Persisting Triton autotuning results removes about a minute of warmup from later starts.
-CUDA_VISIBLE_DEVICES="${gpu}" VLLM_ALLOW_RUNTIME_LORA_UPDATING=True TRITON_CACHE_AUTOTUNING=1 \
+CUDA_VISIBLE_DEVICES="${gpu}" VLLM_ALLOW_RUNTIME_LORA_UPDATING=True VLLM_SERVER_DEV_MODE=1 TRITON_CACHE_AUTOTUNING=1 \
     setsid nohup vllm "${arguments[@]}" "$@" > "${log_file}" 2>&1 < /dev/null &
 echo $! > "${pid_file}"
 echo "Starting ${name} (${model}) on GPU ${gpu}, port ${port}, pid $(cat "${pid_file}"), log ${log_file}"
