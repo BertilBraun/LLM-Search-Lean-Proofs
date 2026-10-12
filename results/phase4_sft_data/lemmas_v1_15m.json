@@ -1,0 +1,269 @@
+{
+ "name": "lemmas_v1_15m",
+ "config": {
+  "sources": [
+   "goedel_lean_workbook_proofs",
+   "stp_lean_workbook",
+   "deepseek_prover_v1",
+   "lean_workbook",
+   "goedel_sft_v2",
+   "numinamath_lean_kimina",
+   "numinamath_lean_human",
+   "leanabell_sft"
+  ],
+  "token_budget": 30000000,
+  "validation_examples": 2000,
+  "lemma_counts": [
+   0,
+   4,
+   8,
+   16,
+   32
+  ],
+  "candidate_count": 32,
+  "step_premise_injection": 0.5,
+  "estimated_tokens_per_lemma": 27,
+  "max_prompt_tokens": 4096,
+  "max_completion_tokens": 256,
+  "max_signature_characters": 256,
+  "reference_tokenizer": "Qwen/Qwen3.5-2B",
+  "seed": "phase4-lemmas"
+ },
+ "applicability": {
+  "tactics": [
+   "exact {name}",
+   "apply {name}",
+   "rw [{name}]"
+  ],
+  "heartbeats": 10000,
+  "timeout_seconds": 5.0
+ },
+ "selected_steps": {},
+ "replay_failures": {},
+ "splits": [
+  {
+   "split": "train",
+   "annotated": 47845,
+   "over_length": 0,
+   "examples": 23425,
+   "prompt_tokens_mean": 610.9064674493063,
+   "prompt_tokens_p90": 1285,
+   "prompt_tokens_max": 3937,
+   "completion_tokens_mean": 29.494983991462114,
+   "total_tokens": 15001404,
+   "by_lemma_count": [
+    {
+     "group": "00",
+     "examples": 4671,
+     "naming_premises": 1553,
+     "step_premise_shown": 0,
+     "injected": 0,
+     "shown_closing_mean": 0.0
+    },
+    {
+     "group": "04",
+     "examples": 4668,
+     "naming_premises": 1529,
+     "step_premise_shown": 544,
+     "injected": 599,
+     "shown_closing_mean": 0.04284490145672665
+    },
+    {
+     "group": "08",
+     "examples": 4755,
+     "naming_premises": 1567,
+     "step_premise_shown": 711,
+     "injected": 602,
+     "shown_closing_mean": 0.04143007360672976
+    },
+    {
+     "group": "16",
+     "examples": 4705,
+     "naming_premises": 1548,
+     "step_premise_shown": 897,
+     "injected": 596,
+     "shown_closing_mean": 0.03783209351753454
+    },
+    {
+     "group": "32",
+     "examples": 4626,
+     "naming_premises": 1544,
+     "step_premise_shown": 1098,
+     "injected": 591,
+     "shown_closing_mean": 0.04431474275832253
+    }
+   ],
+   "by_source": [
+    {
+     "group": "deepseek_prover_v1",
+     "examples": 4388,
+     "naming_premises": 660,
+     "step_premise_shown": 246,
+     "injected": 217,
+     "shown_closing_mean": 0.032816773017319965
+    },
+    {
+     "group": "goedel_lean_workbook_proofs",
+     "examples": 4128,
+     "naming_premises": 1908,
+     "step_premise_shown": 835,
+     "injected": 491,
+     "shown_closing_mean": 0.038517441860465115
+    },
+    {
+     "group": "goedel_sft_v2",
+     "examples": 2190,
+     "naming_premises": 746,
+     "step_premise_shown": 301,
+     "injected": 274,
+     "shown_closing_mean": 0.0182648401826484
+    },
+    {
+     "group": "lean_workbook",
+     "examples": 1059,
+     "naming_premises": 468,
+     "step_premise_shown": 214,
+     "injected": 128,
+     "shown_closing_mean": 0.07837582625118036
+    },
+    {
+     "group": "leanabell_sft",
+     "examples": 4327,
+     "naming_premises": 1125,
+     "step_premise_shown": 470,
+     "injected": 380,
+     "shown_closing_mean": 0.04807025652877282
+    },
+    {
+     "group": "numinamath_lean_kimina",
+     "examples": 3406,
+     "naming_premises": 1124,
+     "step_premise_shown": 468,
+     "injected": 386,
+     "shown_closing_mean": 0.020258367586611863
+    },
+    {
+     "group": "stp_lean_workbook",
+     "examples": 3927,
+     "naming_premises": 1710,
+     "step_premise_shown": 716,
+     "injected": 512,
+     "shown_closing_mean": 0.0196078431372549
+    }
+   ]
+  },
+  {
+   "split": "validation",
+   "annotated": 1967,
+   "over_length": 0,
+   "examples": 1967,
+   "prompt_tokens_mean": 635.5226232841891,
+   "prompt_tokens_p90": 1350,
+   "prompt_tokens_max": 3745,
+   "completion_tokens_mean": 27.825114387391967,
+   "total_tokens": 1304805,
+   "by_lemma_count": [
+    {
+     "group": "00",
+     "examples": 396,
+     "naming_premises": 161,
+     "step_premise_shown": 0,
+     "injected": 0,
+     "shown_closing_mean": 0.0
+    },
+    {
+     "group": "04",
+     "examples": 384,
+     "naming_premises": 138,
+     "step_premise_shown": 37,
+     "injected": 43,
+     "shown_closing_mean": 0.03125
+    },
+    {
+     "group": "08",
+     "examples": 362,
+     "naming_premises": 135,
+     "step_premise_shown": 55,
+     "injected": 57,
+     "shown_closing_mean": 0.03038674033149171
+    },
+    {
+     "group": "16",
+     "examples": 405,
+     "naming_premises": 159,
+     "step_premise_shown": 100,
+     "injected": 58,
+     "shown_closing_mean": 0.06172839506172839
+    },
+    {
+     "group": "32",
+     "examples": 420,
+     "naming_premises": 162,
+     "step_premise_shown": 117,
+     "injected": 61,
+     "shown_closing_mean": 0.03571428571428571
+    }
+   ],
+   "by_source": [
+    {
+     "group": "deepseek_prover_v1",
+     "examples": 280,
+     "naming_premises": 53,
+     "step_premise_shown": 26,
+     "injected": 23,
+     "shown_closing_mean": 0.03571428571428571
+    },
+    {
+     "group": "goedel_lean_workbook_proofs",
+     "examples": 373,
+     "naming_premises": 160,
+     "step_premise_shown": 69,
+     "injected": 39,
+     "shown_closing_mean": 0.04825737265415549
+    },
+    {
+     "group": "goedel_sft_v2",
+     "examples": 58,
+     "naming_premises": 18,
+     "step_premise_shown": 5,
+     "injected": 7,
+     "shown_closing_mean": 0.0
+    },
+    {
+     "group": "lean_workbook",
+     "examples": 10,
+     "naming_premises": 6,
+     "step_premise_shown": 3,
+     "injected": 1,
+     "shown_closing_mean": 0.1
+    },
+    {
+     "group": "leanabell_sft",
+     "examples": 236,
+     "naming_premises": 58,
+     "step_premise_shown": 24,
+     "injected": 18,
+     "shown_closing_mean": 0.00847457627118644
+    },
+    {
+     "group": "numinamath_lean_kimina",
+     "examples": 26,
+     "naming_premises": 2,
+     "step_premise_shown": 1,
+     "injected": 1,
+     "shown_closing_mean": 0.0
+    },
+    {
+     "group": "stp_lean_workbook",
+     "examples": 984,
+     "naming_premises": 458,
+     "step_premise_shown": 181,
+     "injected": 130,
+     "shown_closing_mean": 0.032520325203252036
+    }
+   ]
+  }
+ ],
+ "subsample_of": "lemmas_v1",
+ "subsample_token_budget": 15000000
+}
