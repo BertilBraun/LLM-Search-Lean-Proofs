@@ -149,7 +149,10 @@ allows.
     Goedel SFT v2 and Numina are being traced separately for later training rounds.
   - [x] SFT v1 (development policy, `results/phase2_sft_v1/`): 16.8M tokens × 2 epochs on the first snapshot;
     probe valid 71.4%, any-close@8 37.6% (few-shot: 18.0% / 19.8%).
-  - [ ] SFT v2 (final): ~60M tokens, equal source shares, both GPUs.
+  - [x] SFT v2 (final policy, `results/phase2_sft_v2/`): 60M tokens, equal source shares, one epoch on both
+    GPUs (143 min). Probe equal to v1 within noise (valid 71.9%, any-close@8 36.3%), slightly lower validation
+    loss: more traced data of the same kind has stopped paying off. Deferred tracing (Goedel SFT v2, Numina)
+    stopped after ~33k proofs.
   - [ ] Row 2 on miniF2F-valid.
 - [ ] **Phase 3** — Value v0/v1, A* search, λ/D sweep (row 4).
   - [x] Value v0 on traced human proofs (`results/phase3_value_v0/`): validation bin accuracy 53%, MAE 1.26
