@@ -307,7 +307,8 @@ def print_commands(config_path: Path, paths: LoopPaths) -> None:
                 f"{config} >> {log}/service.log 2>&1 < /dev/null &",
                 f"BACKGROUND_CPUS=40 setsid nohup deployment/background.sh python experiments/phase6_evaluator.py "
                 f"{config} >> {log}/evaluator.log 2>&1 < /dev/null &",
-                "# pool v3 verification ahead of the curriculum (shares the 40 background CPUs)",
+                "# pool v3 verification ahead of the curriculum (shares the 40 background CPUs; 6 Lean processes, more "
+                "with --concurrency N before launch: the service waits for search.curriculum.minimum_statements)",
                 "BACKGROUND_CPUS=40 setsid nohup deployment/background.sh python experiments/phase6_pool_v3.py "
                 "--config experiments/configs/expert_iteration/pool_v3.toml --step verify "
                 f"--loop-config {config_path.as_posix()} >> {log}/verify.log 2>&1 < /dev/null &",

@@ -64,7 +64,7 @@ def loop_config() -> LoopConfig:
         serving=ServingConfig("base", "base", SERVERS[:1], SERVERS[1:]),
         search=SearchServiceConfig(
             "unused",
-            curriculum=CurriculumConfig(verified="pool/verified.jsonl", reload_seconds=1.0),
+            curriculum=CurriculumConfig(verified="pool/verified.jsonl", minimum_statements=3, reload_seconds=1.0),
             concurrency=2,
             heartbeat_seconds=1.0,
             scheduler=SCHEDULER,

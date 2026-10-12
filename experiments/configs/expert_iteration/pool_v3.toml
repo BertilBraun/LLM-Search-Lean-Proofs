@@ -43,9 +43,10 @@ path = "normalized/proofs/stp_conjectures.jsonl"
 pooled = false
 
 [verification]
-concurrency = 16
+# Next to the running loop; before launch, --concurrency (e.g. 16) gets to the curriculum's minimum faster.
+concurrency = 6
 batch = 256
-lead = 20000
+lead = 10000
 check_seconds = 300.0
 command_timeout_seconds = 60.0
 automation_config = "experiments/configs/expert_iteration/loop_search.toml"

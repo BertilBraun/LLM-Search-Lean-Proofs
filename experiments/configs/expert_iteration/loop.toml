@@ -66,6 +66,7 @@ max_expansions = 8
 # `window` outcomes: up at a solve rate of at least 50%, down below 30%.
 [search.curriculum]
 verified = "expert_iteration/pool_v3/verified.jsonl"
+minimum_statements = 3000
 proof_steps_weight = 0.5
 root_value_weight = 0.5
 characters_weight = 0.0

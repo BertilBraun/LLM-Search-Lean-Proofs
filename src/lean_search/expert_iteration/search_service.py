@@ -293,6 +293,17 @@ class SearchService:
         )
         return [*curriculum_statements, *open_statements]
 
+    async def wait_for_curriculum(self, stop: asyncio.Event) -> list[StatementRecord]:
+        """Until the curriculum holds its minimum of usable statements, reads new verifications as they come."""
+        settings = self.config.search.curriculum
+        added: list[StatementRecord] = []
+        while len(self.curriculum.statements) < settings.minimum_statements and not stop.is_set():
+            verified = len(self.curriculum.statements)
+            self.log(f"Waiting for verified statements: {verified:,} of {settings.minimum_statements:,}")
+            await sleep_unless_stopped(stop, settings.reload_seconds)
+            added += self.read_new_verified(set())
+        return added
+
     def read_new_verified(self, started: set[str]) -> list[StatementRecord]:
         """Verified statements appended since the last read join the curriculum (and the scheduler)."""
         records, self.verified_offset = read_verified(
@@ -304,6 +315,7 @@ class SearchService:
 
     async def run(self, stop: asyncio.Event) -> None:
         statements = self.load_state()
+        statements += await self.wait_for_curriculum(stop)
         state = read_phase_state(self.paths)
         if self.trainer is not None and state is not None and state.stage != PhaseStage.DONE:
             # A phase a crash interrupted: the servers may be down, so it finishes before any search starts.

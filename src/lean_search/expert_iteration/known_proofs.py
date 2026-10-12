@@ -234,10 +234,11 @@ class ProofCorpus:
 
 @dataclass(frozen=True)
 class VerificationConfig:
-    concurrency: int = 16
+    # Lean processes; a modest count next to the running loop (--concurrency raises it, e.g. before launch).
+    concurrency: int = 6
     batch: int = 256
     # Verified, usable (not automation-solved) statements the loop has not started, kept ahead of its need.
-    lead: int = 20000
+    lead: int = 10000
     check_seconds: float = 300.0
     command_timeout_seconds: float = 60.0
     # The automation probe: the loop search template's automation tactics, each with this time limit.

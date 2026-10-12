@@ -136,6 +136,8 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--limit", type=int, help="verify N candidates and stop")
     parser.add_argument("--sample", type=int, help="verify a seeded random sample of N candidates instead")
     parser.add_argument("--loop-config", type=Path, help="keep the lead ahead of this loop's started statements")
+    parser.add_argument("--concurrency", type=int, help="Lean processes, overriding verification.concurrency")
+    parser.add_argument("--lead", type=int, help="usable statements kept ahead, overriding verification.lead")
     return parser.parse_args()
 
 
@@ -498,6 +500,12 @@ def report() -> None:
 def main() -> None:
     arguments = parse_arguments()
     config = load_known_proof_pool_config(arguments.config)
+    overrides = {
+        name: value
+        for name, value in (("concurrency", arguments.concurrency), ("lead", arguments.lead))
+        if value is not None
+    }
+    config = dataclasses.replace(config, verification=dataclasses.replace(config.verification, **overrides))
     match arguments.step:
         case Step.SELECT:
             select(config)

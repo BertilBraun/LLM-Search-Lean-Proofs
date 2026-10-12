@@ -26,6 +26,8 @@ CHARACTERS_UNIT = 100
 class CurriculumConfig:
     # Under $LEAN_SEARCH_DATA: phase6_pool_v3.py --step verify appends to it while the loop runs.
     verified: str = "expert_iteration/pool_v3/verified.jsonl"
+    # The searches start once this many usable statements are verified (the verifier keeps adding during the loop).
+    minimum_statements: int = 3000
     proof_steps_weight: float = 0.5
     root_value_weight: float = 0.5
     characters_weight: float = 0.0
