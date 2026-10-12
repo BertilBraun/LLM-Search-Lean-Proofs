@@ -1,0 +1,354 @@
+{
+ "run_name": "phase5_compare_base_nothinking",
+ "git_revision": "93e1ba42ea0974976decfd2628b290122af57b85",
+ "config": {
+  "policy": {
+   "model": "search-qwen3.5-2b",
+   "tokenizer": "Qwen/Qwen3.5-2B",
+   "server_urls": [
+    "http://127.0.0.1:8100/v1",
+    "http://127.0.0.1:8101/v1"
+   ],
+   "adapter": null,
+   "sample_count": 8,
+   "temperature": 0.8,
+   "top_p": 1.0,
+   "max_tokens": 512,
+   "thinking": false,
+   "thinking_instruction": "",
+   "few_shot": false,
+   "request_timeout_seconds": 1800.0,
+   "retrieval": {
+    "lemma_count": 0,
+    "candidate_count": 32,
+    "retriever": "kaiyuy/leandojo-lean4-retriever-byt5-small",
+    "data_directory": "",
+    "device": "cpu",
+    "cpu_threads": 8,
+    "max_batch_goals": 8,
+    "max_signature_characters": 256,
+    "applicability": {
+     "tactics": [
+      "exact {name}",
+      "apply {name}",
+      "rw [{name}]"
+     ],
+     "heartbeats": 10000,
+     "timeout_seconds": 5.0,
+     "automation": "",
+     "automation_heartbeats": 20000
+    }
+   }
+  },
+  "states": {
+   "count": 512,
+   "states_per_proof": 2,
+   "max_goal_characters": 3000,
+   "seed": "reasoning",
+   "seen_sft_data": [
+    "v2"
+   ],
+   "excluded_runs": []
+  },
+  "execution": {
+   "pool_size": 16,
+   "tactic_timeout_seconds": 10.0,
+   "tactic_heartbeats": null,
+   "foreign_header_batch_size": 16
+  },
+  "pipeline": {
+   "chunk_states": 128,
+   "requests_in_flight": 128
+  },
+  "reward": {
+   "accept_later_reference_states": true,
+   "value_progress": false,
+   "value_progress_margin": 1.0
+  },
+  "selection": {
+   "max_per_state": 2,
+   "min_reasoning_tokens": 16,
+   "max_reasoning_tokens": 0
+  },
+  "value": {
+   "model": "",
+   "tokenizer": "",
+   "server_urls": [
+    "http://127.0.0.1:8000/v1"
+   ],
+   "adapter": null,
+   "top_k": 20,
+   "readout": {
+    "eight_or_more_steps": 12.0,
+    "dead_steps": 16.0
+   },
+   "request_timeout_seconds": 300.0
+  }
+ },
+ "statistics": {
+  "states": 512,
+  "unusable_states": 1,
+  "overall": {
+   "label": "all",
+   "states": 511,
+   "samples": 4088,
+   "success_rate": 0.07191780821917808,
+   "fully_valid_rate": 0.12622309197651663,
+   "closed_rate": 0.06996086105675146,
+   "reference_rate": 0.0019569471624266144,
+   "any_success_rate": 0.3013698630136986,
+   "mean_generated_tokens": 109.2206457925636,
+   "mean_reasoning_tokens": 0.0
+  },
+  "outcomes": [
+   {
+    "outcome": "truncated",
+    "samples": 117,
+    "share": 0.028620352250489235
+   },
+   {
+    "outcome": "empty",
+    "samples": 4,
+    "share": 0.0009784735812133072
+   },
+   {
+    "outcome": "forbidden",
+    "samples": 416,
+    "share": 0.10176125244618395
+   },
+   {
+    "outcome": "error",
+    "samples": 2457,
+    "share": 0.601027397260274
+   },
+   {
+    "outcome": "timeout",
+    "samples": 40,
+    "share": 0.009784735812133072
+   },
+   {
+    "outcome": "partial",
+    "samples": 515,
+    "share": 0.1259784735812133
+   },
+   {
+    "outcome": "closed_early",
+    "samples": 23,
+    "share": 0.005626223091976516
+   },
+   {
+    "outcome": "no_progress",
+    "samples": 8,
+    "share": 0.0019569471624266144
+   },
+   {
+    "outcome": "progress",
+    "samples": 214,
+    "share": 0.052348336594911934
+   },
+   {
+    "outcome": "reference",
+    "samples": 8,
+    "share": 0.0019569471624266144
+   },
+   {
+    "outcome": "closed",
+    "samples": 286,
+    "share": 0.06996086105675146
+   }
+  ],
+  "reference_steps_advanced": [
+   7,
+   1
+  ],
+  "generated_tokens_per_success": 1518.687074829932,
+  "mean_prompt_tokens": 165.1839530332681,
+  "by_reasoning_length": [
+   {
+    "label": "0",
+    "states": 511,
+    "samples": 3971,
+    "success_rate": 0.07403676655754218,
+    "fully_valid_rate": 0.12994208008058425,
+    "closed_rate": 0.07202216066481995,
+    "reference_rate": 0.002014605892722236,
+    "any_success_rate": 0.3013698630136986,
+    "mean_generated_tokens": 97.35331150843616,
+    "mean_reasoning_tokens": 0.0
+   },
+   {
+    "label": "truncated",
+    "states": 81,
+    "samples": 117,
+    "success_rate": 0.0,
+    "fully_valid_rate": 0.0,
+    "closed_rate": 0.0,
+    "reference_rate": 0.0,
+    "any_success_rate": 0.0,
+    "mean_generated_tokens": 512.0,
+    "mean_reasoning_tokens": 0.0
+   }
+  ],
+  "by_source": [
+   {
+    "label": "deepseek_prover_v1",
+    "states": 74,
+    "samples": 592,
+    "success_rate": 0.08952702702702703,
+    "fully_valid_rate": 0.19256756756756757,
+    "closed_rate": 0.07939189189189189,
+    "reference_rate": 0.010135135135135136,
+    "any_success_rate": 0.40540540540540543,
+    "mean_generated_tokens": 65.95777027027027,
+    "mean_reasoning_tokens": 0.0
+   },
+   {
+    "label": "goedel_lean_workbook_proofs",
+    "states": 73,
+    "samples": 584,
+    "success_rate": 0.0976027397260274,
+    "fully_valid_rate": 0.1558219178082192,
+    "closed_rate": 0.0976027397260274,
+    "reference_rate": 0.0,
+    "any_success_rate": 0.3424657534246575,
+    "mean_generated_tokens": 113.26541095890411,
+    "mean_reasoning_tokens": 0.0
+   },
+   {
+    "label": "goedel_sft_v2",
+    "states": 72,
+    "samples": 576,
+    "success_rate": 0.04513888888888889,
+    "fully_valid_rate": 0.0920138888888889,
+    "closed_rate": 0.04513888888888889,
+    "reference_rate": 0.0,
+    "any_success_rate": 0.20833333333333334,
+    "mean_generated_tokens": 119.88888888888889,
+    "mean_reasoning_tokens": 0.0
+   },
+   {
+    "label": "lean_workbook",
+    "states": 73,
+    "samples": 584,
+    "success_rate": 0.14726027397260275,
+    "fully_valid_rate": 0.19863013698630136,
+    "closed_rate": 0.14726027397260275,
+    "reference_rate": 0.0,
+    "any_success_rate": 0.6301369863013698,
+    "mean_generated_tokens": 112.79623287671232,
+    "mean_reasoning_tokens": 0.0
+   },
+   {
+    "label": "leanabell_sft",
+    "states": 73,
+    "samples": 584,
+    "success_rate": 0.0547945205479452,
+    "fully_valid_rate": 0.11301369863013698,
+    "closed_rate": 0.053082191780821915,
+    "reference_rate": 0.0017123287671232876,
+    "any_success_rate": 0.2465753424657534,
+    "mean_generated_tokens": 93.51712328767124,
+    "mean_reasoning_tokens": 0.0
+   },
+   {
+    "label": "numinamath_lean_kimina",
+    "states": 73,
+    "samples": 584,
+    "success_rate": 0.02910958904109589,
+    "fully_valid_rate": 0.06678082191780822,
+    "closed_rate": 0.02910958904109589,
+    "reference_rate": 0.0,
+    "any_success_rate": 0.1506849315068493,
+    "mean_generated_tokens": 106.79280821917808,
+    "mean_reasoning_tokens": 0.0
+   },
+   {
+    "label": "stp_lean_workbook",
+    "states": 73,
+    "samples": 584,
+    "success_rate": 0.039383561643835614,
+    "fully_valid_rate": 0.06335616438356165,
+    "closed_rate": 0.03767123287671233,
+    "reference_rate": 0.0017123287671232876,
+    "any_success_rate": 0.1232876712328767,
+    "mean_generated_tokens": 153.06506849315068,
+    "mean_reasoning_tokens": 0.0
+   }
+  ],
+  "by_sft_exposure": [
+   {
+    "label": "unseen in SFT",
+    "states": 48,
+    "samples": 384,
+    "success_rate": 0.010416666666666666,
+    "fully_valid_rate": 0.044270833333333336,
+    "closed_rate": 0.0078125,
+    "reference_rate": 0.0026041666666666665,
+    "any_success_rate": 0.0625,
+    "mean_generated_tokens": 158.75260416666666,
+    "mean_reasoning_tokens": 0.0
+   },
+   {
+    "label": "seen in SFT",
+    "states": 463,
+    "samples": 3704,
+    "success_rate": 0.07829373650107992,
+    "fully_valid_rate": 0.13471922246220303,
+    "closed_rate": 0.07640388768898489,
+    "reference_rate": 0.0018898488120950325,
+    "any_success_rate": 0.326133909287257,
+    "mean_generated_tokens": 104.08558315334773,
+    "mean_reasoning_tokens": 0.0
+   }
+  ],
+  "recovered_format": {
+   "label": "recovered format",
+   "states": 0,
+   "samples": 0,
+   "success_rate": 0.0,
+   "fully_valid_rate": 0.0,
+   "closed_rate": 0.0,
+   "reference_rate": 0.0,
+   "any_success_rate": 0.0,
+   "mean_generated_tokens": 0.0,
+   "mean_reasoning_tokens": 0.0
+  },
+  "caps": [
+   {
+    "cap": 256,
+    "success_rate": 0.07142857142857142,
+    "any_success_rate": 0.299412915851272,
+    "tokens_per_sample": 94.91022504892368,
+    "tokens_per_success": 1328.7431506849316,
+    "finished_beyond_cap": 301,
+    "finished_beyond_cap_success_rate": 0.006644518272425249
+   },
+   {
+    "cap": 512,
+    "success_rate": 0.07191780821917808,
+    "any_success_rate": 0.3013698630136986,
+    "tokens_per_sample": 109.2206457925636,
+    "tokens_per_success": 1518.687074829932,
+    "finished_beyond_cap": 0,
+    "finished_beyond_cap_success_rate": 0.0
+   }
+  ],
+  "selection": {
+   "states_with_examples": 0,
+   "examples": 0,
+   "mean_reasoning_tokens": 0.0,
+   "median_reasoning_tokens": 0.0
+  }
+ },
+ "throughput": {
+  "chunks": 4,
+  "sampled_chunks": 4,
+  "samples": 4096,
+  "generated_tokens": 447801,
+  "sampling_seconds": 55.36881748796441,
+  "execution_seconds": 433.53730602690484,
+  "samples_per_second": 73.97665664234843,
+  "generated_tokens_per_second": 8087.602739526433,
+  "lean_seconds_per_state": 5.407904448961972
+ }
+}
