@@ -34,6 +34,7 @@ from lean_search.value.labels import LABEL_GROUPS, LabelKind, TreeLabelConfig, l
 from lean_search.value.metrics import roc_auc, spearman_correlation
 
 RUNS_DIRECTORY = Path(os.environ["LEAN_SEARCH_RUNS"])
+GENERATION_BUDGETS = (16.0, 32.0, 64.0, 128.0, 256.0, 512.0, 1024.0)
 TOKEN_BUDGETS = (500.0, 1000.0, 2000.0, 5000.0, 10000.0, 20000.0, 50000.0, 100000.0, 200000.0)
 
 
@@ -43,6 +44,10 @@ class RunSettings:
     priority: str
     value_weight: float | None
     dead_steps: float | None
+    depth_weight: float | None
+    policy_prior_weight: float | None
+    # Policy samples per expansion; 0 without a policy.
+    samples: int
 
 
 @dataclass(frozen=True)
@@ -140,6 +145,9 @@ def run_settings(run: str) -> RunSettings:
         priority=str(config.priority.kind),
         value_weight=config.priority.value_weight if is_a_star else None,
         dead_steps=config.value.readout.dead_steps if is_a_star and config.value.model else None,
+        depth_weight=config.priority.depth_weight if is_a_star else None,
+        policy_prior_weight=config.priority.policy_prior_weight if is_a_star else None,
+        samples=config.policy.sample_count if config.expander.kind.uses_policy else 0,
     )
 
 
@@ -169,6 +177,17 @@ def curve(metric: CostMetric, budgets: Sequence[float], runs: Sequence[Sequence[
         tuple(budgets),
         tuple(tuple(point.solved for point in anytime_curve(results, metric, budgets).points) for results in runs),
     )
+
+
+def generations_curve(
+    budgets: Sequence[float], runs: Sequence[Sequence[SearchResult]], settings: Sequence[RunSettings]
+) -> Curve:
+    """Policy samples spent when the proof was found: expansions times samples per expansion."""
+    solved = []
+    for results, run_setting in zip(runs, settings, strict=True):
+        costs = [result.solved_at.expansions * run_setting.samples for result in results if result.solved_at]
+        solved.append(tuple(sum(cost <= budget for cost in costs) for budget in budgets))
+    return Curve("policy_generations", tuple(budgets), tuple(solved))
 
 
 def changes(run: str, reference: str, results: Sequence[SearchResult], baseline: Sequence[SearchResult]) -> Changes:
@@ -258,6 +277,7 @@ def build_report(runs: Sequence[str], references: Sequence[str]) -> SearchReport
         runs=tuple(outcome(settings[run], ordered[run], categories) for run in runs),
         curves=(
             curve(CostMetric.EXPANSIONS, expansion_budgets(max_expansions), runs_in_order),
+            generations_curve(GENERATION_BUDGETS, runs_in_order, [settings[run] for run in runs]),
             curve(CostMetric.GENERATED_TOKENS, token_budgets, runs_in_order),
             curve(CostMetric.WALL_SECONDS, seconds_budgets(max_seconds), runs_in_order),
         ),
@@ -280,7 +300,10 @@ def render(report: SearchReport) -> str:
         [
             run.settings.run,
             run.settings.priority,
+            run.settings.samples,
             optional(run.settings.value_weight, "g"),
+            optional(run.settings.depth_weight, "g"),
+            optional(run.settings.policy_prior_weight, "g"),
             optional(run.settings.dead_steps, "g"),
             f"{run.solved}/{report.problems} ({run.solve_rate:.1%})",
             f"{run.mean_expansions:.1f}",
@@ -294,13 +317,17 @@ def render(report: SearchReport) -> str:
     ]
     sections = [
         "# Search comparison",
-        f"{report.problems} miniF2F-valid problems shared by every run. λ is A*'s value weight, D the dead-end "
-        "readout; costs are means per theorem. Value prompt tokens are the value model's prefill-only requests.",
+        f"{report.problems} miniF2F-valid problems shared by every run. n is the policy's samples per expansion, λ "
+        "A*'s value weight, w_p its policy-prior weight, D the dead-end readout; costs are means per theorem. Value "
+        "prompt tokens are the value model's prefill-only requests; policy generations are expansions × n.",
         markdown_table(
             [
                 "Run",
                 "Priority",
+                "n",
                 "λ",
+                "Depth weight",
+                "w_p",
                 "D",
                 "Solved",
                 "Expansions",
