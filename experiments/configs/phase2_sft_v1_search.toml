@@ -50,8 +50,8 @@ max_wall_clock_timeouts_per_tactic = 1
 [priority]
 kind = "cumulative_log_probability"
 length_exponent = 1.0
-# Median log-probability of the probe samples that made progress at temperature 0.8 (results/phase1_probe).
-automation_log_probability = -12.0
+# Median log-probability of the SFT v1 probe samples that made progress (-2.39; row 1 used the same rule).
+automation_log_probability = -2.4
 
 [policy]
 model = "search-qwen3.5-2b"
