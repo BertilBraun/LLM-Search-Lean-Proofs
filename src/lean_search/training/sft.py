@@ -30,6 +30,8 @@ from lean_search.training.packing import (
 from lean_search.training.sft_data import IGNORE_INDEX, TokenizedExample
 
 VISION_PARAMETER = re.compile(r"\bvisual\b")
+# Element-wise chains (norms, SiLU gating, LoRA scaling and sums) that torch.compile fuses; matmuls stay cuBLAS.
+COMPILED_MODULE = re.compile(r"\.layers\.\d+\.(mlp|input_layernorm|post_attention_layernorm|linear_attn\.norm)$")
 LOSS_CHUNK_POSITIONS = 1024
 
 
@@ -64,6 +66,7 @@ class OptimizationConfig:
     gradient_checkpointing: bool = True
     # Concatenate shuffled examples into one row per micro-batch, without padding (Qwen3.5 only).
     packing: bool = False
+    compile_layers: bool = False
     seed: int = 0
 
 
@@ -337,23 +340,28 @@ def load_trainable_model(
         model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
     match optimization.method:
         case FineTuningMethod.LORA if initial_adapter:
-            peft_model = peft.PeftModel.from_pretrained(model, initial_adapter, is_trainable=True)
-            peft_model.train()
-            return peft_model, peft_model.get_base_model()
+            saved: torch.nn.Module = peft.PeftModel.from_pretrained(model, initial_adapter, is_trainable=True)
+            saved.train()
+            causal_model = saved.get_base_model()
         case FineTuningMethod.LORA:
             lora_config = peft.LoraConfig(
                 r=lora.rank, lora_alpha=lora.alpha, lora_dropout=lora.dropout, target_modules=LORA_TARGET_PATTERN
             )
-            peft_model = peft.get_peft_model(model, lora_config)
-            peft_model.train()
-            return peft_model, peft_model.get_base_model()
+            saved = peft.get_peft_model(model, lora_config)
+            saved.train()
+            causal_model = saved.get_base_model()
         case FineTuningMethod.FULL:
             # fp32 master weights; bf16 compute comes from autocast.
             model.to(torch.float32)
             for name, parameter in model.named_parameters():
                 parameter.requires_grad_(VISION_PARAMETER.search(name) is None)
             model.train()
-            return model, model
+            saved = causal_model = model
+    if optimization.compile_layers:
+        for name, module in causal_model.named_modules():
+            if COMPILED_MODULE.search(name):
+                module.compile(dynamic=True)
+    return saved, causal_model
 
 
 def trainable_parameters(module: torch.nn.Module) -> list[torch.nn.Parameter]:

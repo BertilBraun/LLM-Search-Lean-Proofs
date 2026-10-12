@@ -48,6 +48,7 @@ class BenchmarkResult:
     micro_batch_tokens: int
     micro_batches_per_step: int
     gradient_checkpointing: bool
+    compile_layers: bool
     measured_steps: int
     tokens: int
     padded_tokens: int
@@ -83,6 +84,7 @@ def parse_arguments() -> argparse.Namespace:
     benchmark.add_argument("--micro-batch-tokens", type=int)
     benchmark.add_argument("--micro-batches-per-step", type=int)
     benchmark.add_argument("--gradient-checkpointing", action=argparse.BooleanOptionalAction)
+    benchmark.add_argument("--compile-layers", action=argparse.BooleanOptionalAction)
     benchmark.add_argument("--profile", action="store_true")
     check = commands.add_parser("check-packing")
     check.add_argument("--config", type=Path, required=True)
@@ -110,6 +112,7 @@ def benchmark(arguments: argparse.Namespace) -> None:
         "micro_batch_tokens": arguments.micro_batch_tokens,
         "micro_batches_per_step": arguments.micro_batches_per_step,
         "gradient_checkpointing": arguments.gradient_checkpointing,
+        "compile_layers": arguments.compile_layers,
     }
     optimization = dataclasses.replace(
         config.optimization, **{name: value for name, value in overrides.items() if value is not None}
@@ -165,6 +168,7 @@ def benchmark(arguments: argparse.Namespace) -> None:
         micro_batch_tokens=optimization.micro_batch_tokens,
         micro_batches_per_step=optimization.micro_batches_per_step,
         gradient_checkpointing=optimization.gradient_checkpointing,
+        compile_layers=optimization.compile_layers,
         measured_steps=len(measured),
         tokens=tokens,
         padded_tokens=padded_tokens,
