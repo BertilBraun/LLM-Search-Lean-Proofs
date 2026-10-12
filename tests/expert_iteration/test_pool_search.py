@@ -2,11 +2,13 @@ from pathlib import Path
 
 from lean_search.data import Problem, Split
 from lean_search.expert_iteration.pool_search import (
+    Invocation,
     SourceSolveRate,
     common_headers,
     model_throughput,
     read_completed_results,
     source_solve_rates,
+    statements_per_hour,
 )
 from lean_search.policy.expander import PolicyStatistics
 from lean_search.search import Accounting, SearchResult, StopReason
@@ -56,3 +58,8 @@ def problem(name: str, header: str) -> Problem:
 def test_only_common_headers_are_preloaded() -> None:
     problems = [problem(f"a{index}", "import Mathlib") for index in range(99)] + [problem("b", "import Mathlib\ndef f")]
     assert common_headers(problems, minimum_share=0.05) == ["import Mathlib"]
+
+
+def test_statements_per_hour_count_only_finished_invocations() -> None:
+    invocations = [Invocation(0, "", "", False, 100, 100, 1800.0), Invocation(1, "", "", False, 50, 50, 1800.0)]
+    assert statements_per_hour(invocations) == 150.0

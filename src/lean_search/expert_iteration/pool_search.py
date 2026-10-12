@@ -144,6 +144,13 @@ def append_invocation(path: Path, invocation: Invocation) -> None:
         handle.write(to_json(invocation) + "\n")
 
 
+def statements_per_hour(invocations: Sequence[Invocation]) -> float:
+    """Over finished invocations only: a running one has results but no recorded wall time yet."""
+    seconds = sum(invocation.wall_seconds for invocation in invocations)
+    completed = sum(invocation.completed_problems for invocation in invocations)
+    return completed / seconds * 3600 if seconds else 0.0
+
+
 def model_throughput(policy_paths: Sequence[Path], value_paths: Sequence[Path]) -> ModelThroughput:
     """Totals over the per-invocation statistics files of a run."""
     policy = [from_json_object(PolicyStatistics, json.loads(path.read_text(encoding="utf-8"))) for path in policy_paths]

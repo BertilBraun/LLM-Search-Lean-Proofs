@@ -59,6 +59,7 @@ from lean_search.expert_iteration.pool_search import (
     read_completed_results,
     read_invocations,
     search_pool,
+    statements_per_hour,
 )
 from lean_search.search import RunConfig, SearchResult, load_run_config
 from lean_search.search.records import from_json_object
@@ -322,7 +323,7 @@ def finalize(config: PoolConfig, output_directory: Path, paths: PoolRunPaths) ->
         sources=tuple(
             source_statistics(quota.name, candidates, processed_results, outcomes, failures) for quota in config.sources
         ),
-        cost=prefilter_cost(processed_results, read_invocations(paths.invocations), len(results)),
+        cost=prefilter_cost(processed_results, read_invocations(paths.invocations)),
         selection=from_json_object(SelectionSummary, selection),
     )
     write_json(output_directory / "summary.json", summary)
@@ -375,9 +376,7 @@ def source_statistics(
     )
 
 
-def prefilter_cost(
-    processed_results: Sequence[SearchResult], invocations: Sequence[Invocation], completed: int
-) -> PrefilterCost:
+def prefilter_cost(processed_results: Sequence[SearchResult], invocations: Sequence[Invocation]) -> PrefilterCost:
     walls = [result.accounting.wall_seconds for result in processed_results] or [0.0]
     invocation_seconds = sum(invocation.wall_seconds for invocation in invocations)
     return PrefilterCost(
@@ -388,7 +387,7 @@ def prefilter_cost(
         mean_expansions=sum(result.accounting.expansions for result in processed_results)
         / max(1, len(processed_results)),
         invocation_wall_seconds=invocation_seconds,
-        statements_per_hour=completed / invocation_seconds * 3600 if invocation_seconds else 0.0,
+        statements_per_hour=statements_per_hour(invocations),
     )
 
 
@@ -455,7 +454,7 @@ def render_markdown(summary: PoolSummary) -> str:
         f"Cost: {cost.mean_wall_seconds:.1f} s wall per statement (p90 {cost.p90_wall_seconds:.1f} s), "
         f"{cost.mean_lean_seconds:.1f} Lean s, {cost.mean_expansions:.1f} expansions; "
         f"{cost.statements_per_hour:,.0f} statements per hour over {cost.invocation_wall_seconds / 3600:.2f} h of "
-        "pre-filter runs (alongside the tracing job).",
+        "finished pre-filter runs (alongside the tracing job).",
         "## Load failures by first error line",
         markdown_table(["Source", "Category", "Statements"], failure_rows),
     ]

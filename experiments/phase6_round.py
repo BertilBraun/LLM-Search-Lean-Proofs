@@ -42,6 +42,7 @@ from lean_search.expert_iteration.pool_search import (
     read_invocations,
     search_pool,
     source_solve_rates,
+    statements_per_hour,
 )
 from lean_search.search import RunConfig, load_run_config
 from lean_search.search.summary import RunMetadata, RunSummary, markdown_table, summarize
@@ -158,7 +159,7 @@ def summarize_round(config: RoundConfig, config_path: Path, search_config: RunCo
         throughput=RoundThroughput(
             statements=len(results),
             invocation_hours=hours,
-            statements_per_hour=len(results) / hours if hours else 0.0,
+            statements_per_hour=statements_per_hour(invocations),
             models=model_throughput(*statistics_files),
         ),
         invocations=tuple(invocations),
