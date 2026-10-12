@@ -30,6 +30,8 @@ from lean_search.search.records import from_json_object, to_json
 from lean_search.value.estimator import ValueModelEstimator, ValueStatistics, open_value_estimator
 
 STATISTICS_INTERVAL = 50
+# Pool statements bring over a thousand distinct headers, some with definitions that do not elaborate here.
+PRELOADED_HEADER_SHARE = 0.01
 
 
 class TreeSelection(StrEnum):
@@ -182,6 +184,12 @@ def source_solve_rates(results: Sequence[SearchResult]) -> tuple[SourceSolveRate
     )
 
 
+def common_headers(problems: Sequence[Problem], minimum_share: float) -> list[str]:
+    """Headers worth importing into every process up front; the rest load on first use, a broken one fails its start."""
+    counts = Counter(problem.header for problem in problems)
+    return sorted(header for header, count in counts.items() if count >= minimum_share * len(problems))
+
+
 def pending_problems(problems: Sequence[Problem], completed: Sequence[SearchResult]) -> list[Problem]:
     done = {result.problem_name for result in completed}
     return [problem for problem in problems if problem.name not in done]
@@ -241,7 +249,7 @@ async def search_pool(
         try:
             async with LeanReplPool(config.lean.pool_size, LeanReplConfig(), config.lean.restart_fraction) as pool:
                 started = time.monotonic()
-                await pool.start(sorted({problem.header for problem in problems}))
+                await pool.start(common_headers(problems, PRELOADED_HEADER_SHARE))
                 log(f"Pool of {config.lean.pool_size} ready in {time.monotonic() - started:.1f}s")
                 await search_problems(
                     problems, pool, expander, priority_function, config.search, config.lean.concurrency, on_completed

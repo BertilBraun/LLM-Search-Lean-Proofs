@@ -1,7 +1,9 @@
 from pathlib import Path
 
+from lean_search.data import Problem, Split
 from lean_search.expert_iteration.pool_search import (
     SourceSolveRate,
+    common_headers,
     model_throughput,
     read_completed_results,
     source_solve_rates,
@@ -45,3 +47,12 @@ def test_solve_rates_by_source_exclude_load_failures() -> None:
         result("lean_workbook.3", StopReason.START_FAILED),
     ]
     assert source_solve_rates(results) == (SourceSolveRate("lean_workbook", 3, 1, 1, 0.5),)
+
+
+def problem(name: str, header: str) -> Problem:
+    return Problem(name, Split.VALID, header, "theorem t : True := by", "", "")
+
+
+def test_only_common_headers_are_preloaded() -> None:
+    problems = [problem(f"a{index}", "import Mathlib") for index in range(99)] + [problem("b", "import Mathlib\ndef f")]
+    assert common_headers(problems, minimum_share=0.05) == ["import Mathlib"]
