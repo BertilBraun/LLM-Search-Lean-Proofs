@@ -16,6 +16,7 @@ SYSTEM_PROMPT = (
 ASSISTANT_PREFILL = "```lean\n"
 FENCE = "```"
 END_OF_TURN = "<|im_end|>"
+THINK_START = "<think>"
 THINK_END = "</think>"
 LENGTH_FINISH_REASON = "length"
 
@@ -102,6 +103,12 @@ def render_prompt(
 
 def render_completion(tactic_block: str) -> str:
     return f"{tactic_block}\n{FENCE}{END_OF_TURN}"
+
+
+def render_thinking_completion(reasoning: str, tactic_block: str) -> str:
+    """SFT target after a thinking prompt (which ends in the opened think block): reasoning, block, end of turn."""
+    # Qwen3.5's chat template trims an assistant turn's reasoning the same way.
+    return f"{reasoning.strip()}\n{THINK_END}\n\n{assistant_message(tactic_block)}{END_OF_TURN}"
 
 
 def stop_sequences(thinking: bool) -> tuple[str, ...]:

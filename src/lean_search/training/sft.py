@@ -76,6 +76,8 @@ class SftConfig:
     optimization: OptimizationConfig = field(default_factory=OptimizationConfig)
     evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
     merge: bool = True
+    # A LoRA adapter to continue training (its own rank and alpha replace `lora`); empty starts a new one.
+    initial_adapter: str = ""
 
 
 @dataclass(frozen=True)
@@ -277,7 +279,11 @@ class CompletionLoss(torch.nn.Module):
 
 
 def load_trainable_model(
-    model_name: str, optimization: OptimizationConfig, lora: LoraSettings, device: torch.device
+    model_name: str,
+    optimization: OptimizationConfig,
+    lora: LoraSettings,
+    device: torch.device,
+    initial_adapter: str = "",
 ) -> tuple[torch.nn.Module, transformers.PreTrainedModel]:
     """The module to save (a PEFT model or the full model) and the causal model it trains."""
     torch.manual_seed(optimization.seed)
@@ -286,6 +292,10 @@ def load_trainable_model(
     if optimization.gradient_checkpointing:
         model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
     match optimization.method:
+        case FineTuningMethod.LORA if initial_adapter:
+            peft_model = peft.PeftModel.from_pretrained(model, initial_adapter, is_trainable=True)
+            peft_model.train()
+            return peft_model, peft_model.get_base_model()
         case FineTuningMethod.LORA:
             lora_config = peft.LoraConfig(
                 r=lora.rank, lora_alpha=lora.alpha, lora_dropout=lora.dropout, target_modules=LORA_TARGET_PATTERN
@@ -411,7 +421,9 @@ def train(
     on_evaluation: Callable[[EvaluationRecord], None],
 ) -> TrainingResult:
     optimization = config.optimization
-    saved_module, causal_model = load_trainable_model(config.model, optimization, config.lora, context.device)
+    saved_module, causal_model = load_trainable_model(
+        config.model, optimization, config.lora, context.device, config.initial_adapter
+    )
     loss_module = CompletionLoss(causal_model)
     distributed_module: torch.nn.Module = loss_module
     if context.world_size > 1:

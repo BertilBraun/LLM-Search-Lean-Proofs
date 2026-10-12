@@ -1,0 +1,38 @@
+# Phase 5 round 1: continue the SFT v2 policy adapter on the round-1 reasoning data (thinking examples plus as many
+# non-thinking replay examples), half SFT's learning rate, two epochs, both GPUs:
+#   torchrun --nproc-per-node 2 experiments/phase5_reasoning_sft.py \
+#       --config experiments/configs/reasoning/phase5_sft_r1.toml --run-name phase5_sft_r1
+model = "Qwen/Qwen3.5-2B"
+data = "r1"
+merge = false
+initial_adapter = "/workspace/checkpoints/phase2_sft_v2/adapter"
+
+# Unused with initial_adapter (the adapter keeps SFT v2's rank 64, alpha 64).
+[lora]
+rank = 64
+alpha = 64
+dropout = 0.0
+
+[optimization]
+method = "lora"
+learning_rate = 1e-4
+warmup_fraction = 0.03
+minimum_learning_rate_ratio = 0.1
+weight_decay = 0.0
+max_gradient_norm = 1.0
+epochs = 2
+micro_batch_tokens = 32768
+micro_batches_per_step = 1
+length_group_examples = 4096
+gradient_checkpointing = true
+seed = 0
+
+# Validation lists 500 replay examples first (greedy exact match on them tracks the non-thinking mode), then the
+# held-out reasoning examples; the loss covers all of them.
+[evaluation]
+interval_steps = 50
+validation_examples = 2000
+micro_batch_tokens = 16384
+generation_examples = 256
+generation_batch_size = 64
+max_new_tokens = 256
