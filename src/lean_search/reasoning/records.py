@@ -120,6 +120,9 @@ class RunDirectory:
     def chunk_records(self, chunk: int) -> Path:
         return self.path / "chunks" / f"{chunk:05d}.records.jsonl"
 
+    def chunk_shortened(self, chunk: int, name: str) -> Path:
+        return self.path / "chunks" / f"{chunk:05d}.shortened-{name}.jsonl"
+
     def completed_chunks(self) -> list[int]:
         return sorted(int(path.name.split(".")[0]) for path in (self.path / "chunks").glob("*.records.jsonl"))
 

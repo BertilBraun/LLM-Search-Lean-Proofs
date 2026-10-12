@@ -33,7 +33,7 @@ from lean_search.reasoning.records import (
     write_records,
 )
 from lean_search.reasoning.reward import StepOutcome, classify_block, parse_failure_outcome
-from lean_search.reasoning.states import ReasoningState
+from lean_search.reasoning.states import GoalKey, ReasoningState
 from lean_search.reasoning.thinking import parse_thinking_sample
 from lean_search.search.search import DEFAULT_FORBIDDEN_STEPS
 from lean_search.value.estimator import ValueModelEstimator
@@ -162,8 +162,31 @@ def distinct_blocks(sampled: StateSamples) -> list[str]:
     return list(dict.fromkeys(sample.tactic_block for sample in sampled.samples if sample.tactic_block is not None))
 
 
+@dataclass(frozen=True)
+class LeanTask:
+    """Blocks to run on one proof state, classified against the states of a reference proof."""
+
+    proof_state: ProofState
+    reference_goal_keys: tuple[GoalKey, ...]
+    blocks: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class LeanTaskResult:
+    # Why the proof state could not be rebuilt (or Lean failed around it); the blocks then have no executions.
+    start_failure: str
+    executions: tuple[BlockExecution, ...]
+
+
+def state_task(sampled: StateSamples) -> LeanTask:
+    # Session 0 is never live, so the first block replays the reference proof's earlier steps once.
+    return LeanTask(
+        state_before(sampled.state.step), sampled.state.reference_goal_keys, tuple(distinct_blocks(sampled))
+    )
+
+
 async def execute_block(
-    repl: LeanRepl, state: ProofState, reasoning_state: ReasoningState, block: str, config: ExecutionConfig
+    repl: LeanRepl, state: ProofState, reference_goal_keys: Sequence[GoalKey], block: str, config: ExecutionConfig
 ) -> BlockExecution:
     result = await repl.apply_block(state, block, config.tactic_heartbeats, config.tactic_timeout_seconds)
     classification = classify_block(
@@ -172,7 +195,7 @@ async def execute_block(
         result.total_tactics,
         state.goal_key,
         result.state.goal_key,
-        reasoning_state.reference_goal_keys,
+        reference_goal_keys,
     )
     return BlockExecution(
         tactic_block=block,
@@ -186,27 +209,25 @@ async def execute_block(
     )
 
 
-async def execute_state(repl: LeanRepl, sampled: StateSamples, config: ExecutionConfig) -> StateRecord:
-    # Session 0 is never live, so the first block replays the reference proof's earlier steps once.
-    state = state_before(sampled.state.step)
+async def execute_task(repl: LeanRepl, task: LeanTask, config: ExecutionConfig) -> LeanTaskResult:
     executions: list[BlockExecution] = []
-    for block in distinct_blocks(sampled):
-        execution = await execute_block(repl, state, sampled.state, block, config)
+    for block in task.blocks:
+        execution = await execute_block(repl, task.proof_state, task.reference_goal_keys, block, config)
         if execution.outcome == StepOutcome.INFRASTRUCTURE:
-            return StateRecord(sampled, execution.message, ())
+            return LeanTaskResult(execution.message, ())
         executions.append(execution)
-    return StateRecord(sampled, "", tuple(executions))
+    return LeanTaskResult("", tuple(executions))
 
 
 def preloaded_header(states: Sequence[ReasoningState]) -> str:
     return Counter(state.step.header for state in states).most_common(1)[0][0]
 
 
-def execution_batches(sampled_states: Sequence[StateSamples], header: str, foreign_batch_size: int) -> list[list[int]]:
-    """Positions of the states, one per batch for the preloaded header and grouped by header otherwise."""
+def execution_batches(tasks: Sequence[LeanTask], header: str, foreign_batch_size: int) -> list[list[int]]:
+    """Positions of the tasks, one per batch for the preloaded header and grouped by header otherwise."""
     by_header: dict[str, list[int]] = defaultdict(list)
-    for position, sampled in enumerate(sampled_states):
-        by_header[sampled.state.step.header].append(position)
+    for position, task in enumerate(tasks):
+        by_header[task.proof_state.header].append(position)
     batches = []
     for batch_header, positions in by_header.items():
         size = 1 if batch_header == header else foreign_batch_size
@@ -221,30 +242,36 @@ class LeanExecutor:
         self.header = header
         self.config = config
 
-    async def execute(self, sampled_states: Sequence[StateSamples]) -> list[StateRecord]:
-        records: dict[int, StateRecord] = {}
+    async def run(self, tasks: Sequence[LeanTask]) -> list[LeanTaskResult]:
+        results: dict[int, LeanTaskResult] = {}
 
         async def run_batch(positions: Sequence[int]) -> None:
             async with self.pool.acquire() as repl:
-                foreign = sampled_states[positions[0]].state.step.header != self.header
+                foreign = tasks[positions[0]].proof_state.header != self.header
                 if foreign:
                     # A second header re-imports Mathlib onto the heap, so a process holds one header at a time.
                     await repl.restart()
                 for position in positions:
-                    sampled = sampled_states[position]
                     try:
-                        records[position] = await execute_state(repl, sampled, self.config)
+                        results[position] = await execute_task(repl, tasks[position], self.config)
                     except Exception as error:
                         # The wrapper asserts on environments it cannot build (some headers): not the sample's fault.
-                        logger.exception("Executing state %s failed", sampled.state.identifier)
-                        records[position] = StateRecord(sampled, repr(error)[:MESSAGE_CHARACTERS], ())
+                        logger.exception("Executing a task on %s failed", tasks[position].proof_state.statement[:80])
+                        results[position] = LeanTaskResult(repr(error)[:MESSAGE_CHARACTERS], ())
                 if foreign:
                     await repl.restart()
                     await repl.load_header(self.header)
 
-        batches = execution_batches(sampled_states, self.header, self.config.foreign_header_batch_size)
+        batches = execution_batches(tasks, self.header, self.config.foreign_header_batch_size)
         await asyncio.gather(*(run_batch(batch) for batch in batches))
-        return [records[position] for position in range(len(sampled_states))]
+        return [results[position] for position in range(len(tasks))]
+
+    async def execute(self, sampled_states: Sequence[StateSamples]) -> list[StateRecord]:
+        results = await self.run([state_task(sampled) for sampled in sampled_states])
+        return [
+            StateRecord(sampled, result.start_failure, result.executions)
+            for sampled, result in zip(sampled_states, results, strict=True)
+        ]
 
 
 @contextlib.asynccontextmanager

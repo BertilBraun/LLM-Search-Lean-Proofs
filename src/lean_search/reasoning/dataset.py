@@ -4,6 +4,7 @@ import dataclasses
 import json
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 
 from lean_search.corpora.tracing import stable_fraction
@@ -36,8 +37,20 @@ class ReasoningDataConfig:
     # Fraction of the proofs whose selected samples are held out for validation.
     validation_fraction: float = 0.03
     validation_replay_examples: int = 500
+    # Above 0, successful reasoning longer than this enters only through a sufficient compression (and states
+    # without a thinking success through rationalized steps), from the runs' `shorten` records of this name.
+    max_kept_reasoning_tokens: int = 0
+    shortening: str = ""
     tokenizer: str = "Qwen/Qwen3.5-2B"
     seed: str = "reasoning-data"
+
+
+class ReasoningOrigin(StrEnum):
+    SAMPLED = "sampled"
+    COMPRESSED = "compressed"
+    RATIONALIZED = "rationalized"
+    # A non-thinking SFT example.
+    REPLAY = "replay"
 
 
 @dataclass(frozen=True)
@@ -51,6 +64,7 @@ class ReasoningExample:
     reasoning: str | None
     # The thinking-mode system prompt addition the reasoning was sampled with.
     thinking_instruction: str
+    origin: ReasoningOrigin
 
 
 def trainable_successes(record: StateRecord, reward: RewardConfig, selection: SelectionConfig) -> list[SampleRecord]:
@@ -64,8 +78,8 @@ def trainable_successes(record: StateRecord, reward: RewardConfig, selection: Se
     ]
 
 
-def select_samples(record: StateRecord, reward: RewardConfig, selection: SelectionConfig) -> list[SampleRecord]:
-    """At most `max_per_state` successes, shortest reasoning first, distinct blocks before repeated ones."""
+def ordered_successes(record: StateRecord, reward: RewardConfig, selection: SelectionConfig) -> list[SampleRecord]:
+    """Trainable successes, shortest reasoning first, distinct blocks before repeated ones."""
     successes = sorted(
         trainable_successes(record, reward, selection), key=lambda sample: (sample.reasoning_tokens, sample.index)
     )
@@ -76,7 +90,11 @@ def select_samples(record: StateRecord, reward: RewardConfig, selection: Selecti
         assert sample.tactic_block is not None
         (repeated if sample.tactic_block in seen_blocks else distinct).append(sample)
         seen_blocks.add(sample.tactic_block)
-    return (distinct + repeated)[: selection.max_per_state]
+    return distinct + repeated
+
+
+def select_samples(record: StateRecord, reward: RewardConfig, selection: SelectionConfig) -> list[SampleRecord]:
+    return ordered_successes(record, reward, selection)[: selection.max_per_state]
 
 
 def reasoning_example(sampled: StateSamples, sample: SampleRecord) -> ReasoningExample:
@@ -90,12 +108,20 @@ def reasoning_example(sampled: StateSamples, sample: SampleRecord) -> ReasoningE
         sample.tactic_block,
         sample.reasoning,
         sampled.thinking_instruction,
+        ReasoningOrigin.SAMPLED,
     )
 
 
 def replay_example(example: SftExample) -> ReasoningExample:
     return ReasoningExample(
-        example.source, example.proof_identifier, example.step_index, example.goals, example.tactic_block, None, ""
+        example.source,
+        example.proof_identifier,
+        example.step_index,
+        example.goals,
+        example.tactic_block,
+        None,
+        "",
+        ReasoningOrigin.REPLAY,
     )
 
 
@@ -150,4 +176,5 @@ def read_examples(path: Path) -> Iterator[ReasoningExample]:
         for line in handle:
             fields = json.loads(line)
             fields["goals"] = tuple(fields["goals"])
+            fields["origin"] = ReasoningOrigin(fields["origin"])
             yield ReasoningExample(**fields)

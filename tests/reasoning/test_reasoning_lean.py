@@ -7,10 +7,10 @@ import pytest_asyncio
 from reasoning_records import HEADER, STATEMENT, sample_record
 
 from lean_search.corpora.records import ProofRecord, TraceStatus
-from lean_search.corpora.tracing import TracingLimits, trace_proof
+from lean_search.corpora.tracing import TracingLimits, state_before, trace_proof
 from lean_search.lean import LeanRepl
 from lean_search.lean.repl import PROJECT_DIRECTORY, REPL_BINARY
-from lean_search.reasoning.pipeline import ExecutionConfig, LeanExecutor, open_executor
+from lean_search.reasoning.pipeline import ExecutionConfig, LeanExecutor, LeanTask, open_executor
 from lean_search.reasoning.records import StateRecord, StateSamples
 from lean_search.reasoning.reward import Classification, StepOutcome
 from lean_search.reasoning.states import ReasoningState, proof_states
@@ -89,3 +89,9 @@ async def test_a_state_that_cannot_be_replayed_is_a_start_failure(records: list[
 
 async def test_records_keep_the_input_order(records: list[StateRecord], states: list[ReasoningState]) -> None:
     assert [record.sampled.state.identifier for record in records[:2]] == [states[0].identifier, states[1].identifier]
+
+
+async def test_a_task_runs_its_blocks_on_its_proof_state(states: list[ReasoningState], executor: LeanExecutor) -> None:
+    task = LeanTask(state_before(states[0].step), states[0].reference_goal_keys, ("omega", "exact h₁"))
+    (result,) = await executor.run([task])
+    assert [execution.outcome for execution in result.executions] == [StepOutcome.CLOSED, StepOutcome.ERROR]

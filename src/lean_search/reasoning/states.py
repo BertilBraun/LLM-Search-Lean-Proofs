@@ -4,6 +4,7 @@ import hashlib
 from collections import defaultdict
 from collections.abc import Collection, Iterable, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 
 from lean_search.corpora.records import DataSplit, TracedStep
 from lean_search.corpora.tracing import stable_fraction
@@ -35,6 +36,13 @@ class ReasoningState:
         return tuple(goal_key(goals) for goals in (self.step.goals_after, *self.later_goals))
 
 
+class TracedSource(StrEnum):
+    # The merged snapshot (steps_<split>.jsonl) the SFT data was built from.
+    SNAPSHOT = "snapshot"
+    # Every finished tracing shard, including those traced after the snapshot.
+    SHARDS = "shards"
+
+
 @dataclass(frozen=True)
 class StateSelectionConfig:
     count: int = 16_000
@@ -46,6 +54,12 @@ class StateSelectionConfig:
     seen_sft_data: tuple[str, ...] = ()
     # Earlier reasoning runs whose states are skipped, so a later round prompts on fresh states.
     excluded_runs: tuple[str, ...] = ()
+    split: DataSplit = DataSplit.TRAIN
+    traced: TracedSource = TracedSource.SNAPSHOT
+    # Empty takes every source.
+    sources: tuple[str, ...] = ()
+    # Only states whose goals are not prompts of `seen_sft_data`.
+    unseen_only: bool = False
 
 
 def goal_key(goals: Sequence[str]) -> GoalKey:
@@ -85,10 +99,10 @@ def select_states(
     seen_goals: Collection[bytes] = frozenset(),
     excluded_identifiers: Collection[str] = frozenset(),
 ) -> list[ReasoningState]:
-    """At most `states_per_proof` states per train-split proof, sources interleaved, in a fixed pseudo-random order."""
+    """At most `states_per_proof` states per proof of the split, sources interleaved, in a fixed pseudo-random order."""
     steps_by_proof: dict[str, list[TracedStep]] = defaultdict(list)
     for step in steps:
-        if step.split == DataSplit.TRAIN:
+        if step.split == config.split and (not config.sources or step.source in config.sources):
             steps_by_proof[step.proof_identifier].append(step)
     states_by_source: dict[str, list[ReasoningState]] = defaultdict(list)
     for proof_steps in steps_by_proof.values():
@@ -97,6 +111,7 @@ def select_states(
             for state in proof_states(proof_steps, seen_goals)
             if len("\n\n".join(state.goals)) <= config.max_goal_characters
             and state.identifier not in excluded_identifiers
+            and not (config.unseen_only and state.seen_in_sft)
         ]
         candidates.sort(key=lambda state: stable_fraction(state.identifier, config.seed))
         states_by_source[proof_steps[0].source].extend(candidates[: config.states_per_proof])

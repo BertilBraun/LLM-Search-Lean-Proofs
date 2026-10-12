@@ -72,3 +72,21 @@ def test_selection_is_deterministic(seed: str) -> None:
     config = StateSelectionConfig(count=6, seed=seed)
     steps = many_proofs("a", 10)
     assert select_states(steps, config) == select_states(list(reversed(steps)), config)
+
+
+def test_the_validation_split_can_be_selected() -> None:
+    steps = many_proofs("a", 3) + many_proofs("b", 3, DataSplit.VALIDATION)
+    config = StateSelectionConfig(count=100, split=DataSplit.VALIDATION)
+    assert {state.source for state in select_states(steps, config)} == {"b"}
+
+
+def test_sources_can_be_restricted() -> None:
+    steps = many_proofs("a", 3) + many_proofs("b", 3) + many_proofs("c", 3)
+    config = StateSelectionConfig(count=100, sources=("a", "c"))
+    assert {state.source for state in select_states(steps, config)} == {"a", "c"}
+
+
+def test_unseen_only_skips_states_seen_in_sft() -> None:
+    seen = frozenset({goals_digest(GOALS[0])})
+    states = select_states(many_proofs("a", 4), StateSelectionConfig(count=100, unseen_only=True), seen)
+    assert {state.step.step_index for state in states} <= {1, 2}

@@ -8,6 +8,7 @@ from lean_search.policy.config import PolicyConfig
 from lean_search.reasoning.dataset import SelectionConfig
 from lean_search.reasoning.pipeline import ExecutionConfig, PipelineConfig
 from lean_search.reasoning.reward import RewardConfig
+from lean_search.reasoning.shortening import ShorteningConfig
 from lean_search.reasoning.states import StateSelectionConfig
 from lean_search.search.records import from_json_object
 from lean_search.value.config import ValueConfig
@@ -24,6 +25,8 @@ class ReasoningRunConfig:
     selection: SelectionConfig = field(default_factory=SelectionConfig)
     # The served value adapter, needed only with reward.value_progress.
     value: ValueConfig = field(default_factory=ValueConfig)
+    # Compressing long successful reasoning (and rationalizing steps) for short-reasoning data.
+    shortening: ShorteningConfig = field(default_factory=ShorteningConfig)
 
 
 def parse_reasoning_run_config(text: str) -> ReasoningRunConfig:

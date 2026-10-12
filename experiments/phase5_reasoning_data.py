@@ -29,7 +29,7 @@ import os
 import subprocess
 import time
 import tomllib
-from collections import Counter
+from collections import Counter, defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,10 +37,13 @@ from pathlib import Path
 import transformers
 
 from lean_search.corpora.records import read_traced_steps
+from lean_search.corpora.tracing import stable_fraction
+from lean_search.reasoning.compression import RewriteMode, open_rewriter, open_sufficiency_checker
 from lean_search.reasoning.config import ReasoningRunConfig, load_reasoning_run_config
 from lean_search.reasoning.dataset import (
     ReasoningDataConfig,
     ReasoningExample,
+    ReasoningOrigin,
     interleaved,
     is_validation_proof,
     reasoning_example,
@@ -59,11 +62,20 @@ from lean_search.reasoning.pipeline import (
     with_value_drops,
 )
 from lean_search.reasoning.records import RunDirectory, StateRecord, StateSamples, read_records, write_records
-from lean_search.reasoning.states import ReasoningState, goals_digest, select_states
+from lean_search.reasoning.shortening import (
+    ShortenedReasoning,
+    ShorteningConfig,
+    ShorteningStatistics,
+    short_reasoning_examples,
+    shorten,
+    shortening_statistics,
+    shortening_targets,
+)
+from lean_search.reasoning.states import ReasoningState, TracedSource, goals_digest, select_states
 from lean_search.reasoning.statistics import RunStatistics, SampleGroup, run_statistics
 from lean_search.search.records import from_json_object, to_json
 from lean_search.search.summary import markdown_table
-from lean_search.training.sft_data import LengthStatistics, length_statistics, read_examples
+from lean_search.training.sft_data import LengthStatistics, length_statistics, read_examples, shard_step_files
 from lean_search.value.estimator import open_value_estimator
 
 REPOSITORY_DIRECTORY = Path(__file__).resolve().parents[1]
@@ -108,6 +120,12 @@ class SourceCount:
 
 
 @dataclass(frozen=True)
+class OriginCount:
+    origin: ReasoningOrigin
+    examples: int
+
+
+@dataclass(frozen=True)
 class DataSummary:
     name: str
     built: str
@@ -122,6 +140,7 @@ class DataSummary:
     validation_reasoning: ExampleStatistics
     validation_replay: ExampleStatistics
     train_reasoning_by_source: tuple[SourceCount, ...]
+    train_reasoning_by_origin: tuple[OriginCount, ...]
 
 
 def git_revision() -> str:
@@ -162,7 +181,12 @@ def command_states(arguments: argparse.Namespace, config: ReasoningRunConfig, di
         for run in config.states.excluded_runs
         for state in read_records(run_directory(run).states, ReasoningState)
     )
-    steps = read_traced_steps(arguments.traced_directory / "steps_train.jsonl")
+    match config.states.traced:
+        case TracedSource.SNAPSHOT:
+            step_files = [arguments.traced_directory / f"steps_{config.states.split}.jsonl"]
+        case TracedSource.SHARDS:
+            step_files = shard_step_files(arguments.traced_directory)
+    steps = (step for path in step_files for step in read_traced_steps(path))
     states = select_states(steps, config.states, seen_goals, excluded)
     write_records(directory.states, states)
     by_source = Counter(state.source for state in states)
@@ -446,7 +470,14 @@ def render_data_summary(summary: DataSummary) -> str:
         f"{summary.usable_states:,} usable of {summary.states:,} states, {summary.states_with_examples:,} with "
         f"selected examples. Per state at most {config.selection.max_per_state} successful samples with at least "
         f"{config.selection.min_reasoning_tokens} reasoning tokens, shortest reasoning first, distinct blocks before "
-        f"repeated ones. Reasoning examples: the thinking prompt, completion = reasoning, `</think>`, block, end of "
+        f"repeated ones"
+        + (
+            f"; reasoning over {config.max_kept_reasoning_tokens} tokens only through a sufficient compression "
+            f"(shortening `{config.shortening}`), states without a thinking success through rationalized steps"
+            if config.max_kept_reasoning_tokens
+            else ""
+        )
+        + f". Reasoning examples: the thinking prompt, completion = reasoning, `</think>`, block, end of "
         f"turn (loss on all of it). Replay: {config.replay_ratio:g} non-thinking examples of SFT data "
         f"`{config.replay_data}` per reasoning example. {config.validation_fraction:.0%} of the proofs are held out "
         f"({summary.validation_states_with_examples:,} states); validation lists the replay examples first, so the "
@@ -458,8 +489,224 @@ def render_data_summary(summary: DataSummary) -> str:
             ["source", "train reasoning examples"],
             [[entry.source, entry.examples] for entry in summary.train_reasoning_by_source],
         ),
+        markdown_table(
+            ["reasoning origin", "train reasoning examples"],
+            [[entry.origin.value, entry.examples] for entry in summary.train_reasoning_by_origin],
+        ),
     ]
     return "\n\n".join(sections) + "\n"
+
+
+def origin_counts(examples: Sequence[ReasoningExample]) -> tuple[OriginCount, ...]:
+    counts = Counter(example.origin for example in examples)
+    return tuple(OriginCount(origin, counts[origin]) for origin in ReasoningOrigin if counts[origin])
+
+
+def shortened_records(runs: Sequence[str], name: str) -> dict[str, list[ShortenedReasoning]]:
+    by_state: dict[str, list[ShortenedReasoning]] = defaultdict(list)
+    for run in runs:
+        directory = run_directory(run)
+        for chunk in directory.completed_chunks():
+            path = directory.chunk_shortened(chunk, name)
+            if path.exists():
+                for entry in read_records(path, ShortenedReasoning):
+                    by_state[entry.state_identifier].append(entry)
+    return by_state
+
+
+async def shorten_run(
+    config: ReasoningRunConfig,
+    shortening: ShorteningConfig,
+    directory: RunDirectory,
+    name: str,
+    chunk_limit: int | None,
+) -> None:
+    others = {
+        record.sampled.state.identifier: record
+        for run in shortening.rationalize_runs
+        for record in run_directory(run).read_all_records()
+    }
+    pending = [
+        chunk
+        for chunk in directory.completed_chunks()[:chunk_limit]
+        if not directory.chunk_shortened(chunk, name).exists()
+    ]
+    states = read_records(directory.states, ReasoningState)
+    async with contextlib.AsyncExitStack() as stack:
+        executor = await stack.enter_async_context(open_executor(preloaded_header(states), config.execution))
+        rewriter = await stack.enter_async_context(open_rewriter(shortening.rewrite))
+        checker = await stack.enter_async_context(
+            open_sufficiency_checker(
+                config.policy,
+                shortening.sufficiency,
+                config.reward,
+                executor,
+                config.pipeline.requests_in_flight,
+            )
+        )
+        for chunk in pending:
+            records = read_records(directory.chunk_records(chunk), StateRecord)
+            targets = shortening_targets(records, others, config.reward, config.selection, shortening)
+            started = time.monotonic()
+            shortened = await shorten(targets, rewriter, checker)
+            write_records(directory.chunk_shortened(chunk, name), shortened)
+            passing = sum(entry.shortest_sufficient() is not None for entry in shortened)
+            print(
+                f"chunk {chunk}: {len(targets)} targets, {passing} with a sufficient rewrite "
+                f"({time.monotonic() - started:.0f} s)",
+                flush=True,
+            )
+
+
+@dataclass(frozen=True)
+class RewriteExample:
+    mode: RewriteMode
+    tactic_block: str
+    original_reasoning: str
+    rewrite: str
+    sufficient: bool
+
+
+@dataclass(frozen=True)
+class ShorteningSummary:
+    run_name: str
+    name: str
+    git_revision: str
+    config: ShorteningConfig
+    modes: tuple[ShorteningStatistics, ...]
+    states: int
+    states_with_examples: int
+    examples_by_origin: tuple[OriginCount, ...]
+    rewrite_examples: tuple[RewriteExample, ...]
+
+
+EXAMPLE_CHARACTERS = 600
+
+
+def rewrite_examples(entries: Sequence[ShortenedReasoning], count: int) -> tuple[RewriteExample, ...]:
+    """A fixed spread of checked rewrites, half sufficient, for reading their quality."""
+    checked = [
+        RewriteExample(
+            entry.mode, entry.tactic_block, entry.original_reasoning, checked.rewrite.text, checked.sufficient
+        )
+        for entry in sorted(entries, key=lambda entry: stable_fraction(entry.state_identifier, "rewrite examples"))
+        for checked in entry.rewrites
+        if checked.check is not None
+    ]
+    sufficient = [example for example in checked if example.sufficient][: count // 2]
+    insufficient = [example for example in checked if not example.sufficient][: count - len(sufficient)]
+    return (*sufficient, *insufficient)
+
+
+def render_rewrite_example(example: RewriteExample) -> str:
+    original = example.original_reasoning[:EXAMPLE_CHARACTERS] + (
+        " …" if len(example.original_reasoning) > EXAMPLE_CHARACTERS else ""
+    )
+    lines = [
+        f"### {example.mode.value}, {'sufficient' if example.sufficient else 'insufficient'}",
+        f"Step: `{example.tactic_block}`",
+    ]
+    if original:
+        lines.append(f"Original: {original}")
+    lines.append(f"Rewrite: {example.rewrite}")
+    return "\n\n".join(lines)
+
+
+def render_shortening_summary(summary: ShorteningSummary) -> str:
+    config = summary.config
+    rewrite = config.rewrite
+    rows = [
+        [
+            entry.mode.value,
+            entry.targets,
+            entry.rewrites,
+            ", ".join(f"{count.defect.value} {count.rewrites}" for count in entry.defects) or "none",
+            entry.checked_rewrites,
+            entry.sufficient_rewrites,
+            percent(entry.pass_rate),
+            percent(entry.check_success_rate),
+            f"{entry.mean_original_tokens:.0f}",
+            f"{entry.mean_shortened_tokens:.0f}",
+            f"{entry.median_compression_ratio:.2f}",
+        ]
+        for entry in summary.modes
+    ]
+    sections = [
+        f"# Short reasoning of run `{summary.run_name}` (`{summary.name}`)",
+        f"Successful samples with more than {config.max_kept_reasoning_tokens} reasoning tokens (among the first "
+        f"{config.candidates_per_state} successes of a state in selection order) are rewritten by `{rewrite.model}` "
+        f"(adapter `{rewrite.adapter}`, no thinking, {rewrite.candidates} candidates at temperature "
+        f"{rewrite.temperature:g}, asked for at most {rewrite.target_tokens} tokens, accepted up to "
+        f"{rewrite.max_accepted_tokens}). Each well-formed rewrite is prefilled as the policy's thoughts, the policy "
+        f"samples {config.sufficiency.sample_count} steps at temperature {config.sufficiency.temperature:g}, and the "
+        "rewrite is sufficient if one of them succeeds in Lean. Rationalized: successful steps of "
+        f"{', '.join(config.rationalize_runs) or 'no run'} for states without a thinking success, given a reasoning "
+        f"the same way. Git {summary.git_revision[:10]}.",
+        markdown_table(
+            [
+                "mode",
+                "targets",
+                "rewrites",
+                "defects",
+                "checked",
+                "sufficient",
+                "targets passing",
+                "check samples succeeding",
+                "original tokens",
+                "shortest sufficient tokens",
+                "median ratio",
+            ],
+            rows,
+        ),
+        f"Examples the data selection would take: {summary.states_with_examples:,} of {summary.states:,} states; "
+        + (", ".join(f"{entry.origin.value} {entry.examples:,}" for entry in summary.examples_by_origin) or "none")
+        + ".",
+        "## Example rewrites",
+        *(render_rewrite_example(example) for example in summary.rewrite_examples),
+    ]
+    return "\n\n".join(sections) + "\n"
+
+
+def command_shorten(arguments: argparse.Namespace, config: ReasoningRunConfig, directory: RunDirectory) -> None:
+    shortening = config.shortening
+    if arguments.shortening_config:
+        text = arguments.shortening_config.read_text(encoding="utf-8")
+        shortening = from_json_object(ShorteningConfig, tomllib.loads(text))
+    started = time.monotonic()
+    asyncio.run(shorten_run(config, shortening, directory, arguments.name, arguments.chunks))
+    print(f"Shortening finished in {time.monotonic() - started:.0f} s", flush=True)
+    shortened = shortened_records([arguments.run_name], arguments.name)
+    entries = [entry for state_entries in shortened.values() for entry in state_entries]
+    records = [record for record in directory.read_all_records() if record.usable]
+    examples_by_state = [
+        short_reasoning_examples(
+            record,
+            shortened.get(record.sampled.state.identifier, ()),
+            config.reward,
+            config.selection,
+            shortening.max_kept_reasoning_tokens,
+        )
+        for record in records
+        if record.sampled.state.identifier in shortened or not arguments.chunks
+    ]
+    summary = ShorteningSummary(
+        run_name=arguments.run_name,
+        name=arguments.name,
+        git_revision=git_revision(),
+        config=shortening,
+        modes=tuple(shortening_statistics(entries, mode, shortening.sufficiency.sample_count) for mode in RewriteMode),
+        states=len(records),
+        states_with_examples=sum(bool(examples) for examples in examples_by_state),
+        examples_by_origin=origin_counts([example for examples in examples_by_state for example in examples]),
+        rewrite_examples=rewrite_examples(entries, 12),
+    )
+    directory.summary.mkdir(parents=True, exist_ok=True)
+    (directory.summary / f"shortening_{arguments.name}.json").write_text(
+        json.dumps(dataclasses.asdict(summary), indent=1, ensure_ascii=False), encoding="utf-8"
+    )
+    markdown = render_shortening_summary(summary)
+    (directory.summary / f"shortening_{arguments.name}.md").write_text(markdown, encoding="utf-8")
+    print(markdown, flush=True)
 
 
 def command_select(arguments: argparse.Namespace) -> None:
@@ -469,16 +716,26 @@ def command_select(arguments: argparse.Namespace) -> None:
         raise ValueError(f"{output} exists; data sets are built once.")
     records = [record for run in config.runs for record in run_directory(run).read_all_records()]
     usable = [record for record in records if record.usable]
+    shortened_by_state = shortened_records(config.runs, config.shortening) if config.max_kept_reasoning_tokens else {}
     train_reasoning: list[ReasoningExample] = []
     validation_reasoning: list[ReasoningExample] = []
     validation_states = 0
     states_with_examples = 0
     for record in usable:
         state = record.sampled.state
-        examples = [
-            reasoning_example(record.sampled, sample)
-            for sample in select_samples(record, config.reward, config.selection)
-        ]
+        if config.max_kept_reasoning_tokens:
+            examples = short_reasoning_examples(
+                record,
+                shortened_by_state.get(state.identifier, ()),
+                config.reward,
+                config.selection,
+                config.max_kept_reasoning_tokens,
+            )
+        else:
+            examples = [
+                reasoning_example(record.sampled, sample)
+                for sample in select_samples(record, config.reward, config.selection)
+            ]
         states_with_examples += bool(examples)
         if is_validation_proof(state.step.proof_identifier, config.validation_fraction, config.seed):
             validation_reasoning += examples
@@ -513,6 +770,7 @@ def command_select(arguments: argparse.Namespace) -> None:
             SourceCount(source, count)
             for source, count in sorted(Counter(example.source for example in train_reasoning).items())
         ),
+        train_reasoning_by_origin=origin_counts(train_reasoning),
     )
     summary_directory = run_directory(arguments.run_name or f"phase5_data_{arguments.name}").summary
     summary_directory.mkdir(parents=True, exist_ok=True)
@@ -544,6 +802,15 @@ def parse_arguments() -> argparse.Namespace:
     statistics.add_argument("--config", type=Path, required=True)
     statistics.add_argument("--run-name", required=True)
 
+    shorten_command = commands.add_parser("shorten", help="compress long successful reasoning, check it (resumable)")
+    shorten_command.add_argument("--config", type=Path, required=True)
+    shorten_command.add_argument("--run-name", required=True)
+    shorten_command.add_argument("--name", default="default", help="names this shortening's records and summary")
+    shorten_command.add_argument(
+        "--shortening-config", type=Path, help="a ShorteningConfig TOML instead of the run config's [shortening]"
+    )
+    shorten_command.add_argument("--chunks", type=int, help="only the first N chunks (a quality pilot)")
+
     select = commands.add_parser("select", help="build a rejection-sampled SFT data set (config: ReasoningDataConfig)")
     select.add_argument("--config", type=Path, required=True)
     select.add_argument("--name", required=True)
@@ -565,6 +832,8 @@ def main() -> None:
             command_run(arguments, config, directory)
         case "statistics":
             command_statistics(arguments, config, directory)
+        case "shorten":
+            command_shorten(arguments, config, directory)
 
 
 if __name__ == "__main__":

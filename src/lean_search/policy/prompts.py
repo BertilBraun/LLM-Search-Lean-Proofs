@@ -116,10 +116,15 @@ def render_completion(tactic_block: str) -> str:
     return f"{tactic_block}\n{FENCE}{END_OF_TURN}"
 
 
+def thinking_prefill(reasoning: str) -> str:
+    """Given thoughts after a thinking prompt, up to the opened block: the model continues with the tactics."""
+    # Qwen3.5's chat template trims an assistant turn's reasoning the same way.
+    return f"{reasoning.strip()}\n{THINK_END}\n\n{ASSISTANT_PREFILL}"
+
+
 def render_thinking_completion(reasoning: str, tactic_block: str) -> str:
     """SFT target after a thinking prompt (which ends in the opened think block): reasoning, block, end of turn."""
-    # Qwen3.5's chat template trims an assistant turn's reasoning the same way.
-    return f"{reasoning.strip()}\n{THINK_END}\n\n{assistant_message(tactic_block)}{END_OF_TURN}"
+    return f"{thinking_prefill(reasoning)}{tactic_block}\n{FENCE}{END_OF_TURN}"
 
 
 def stop_sequences(thinking: bool) -> tuple[str, ...]:

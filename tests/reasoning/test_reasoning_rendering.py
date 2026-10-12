@@ -11,7 +11,12 @@ from lean_search.policy.prompts import (
     render_prompt,
     render_thinking_completion,
 )
-from lean_search.reasoning.dataset import ReasoningExample, reasoning_example, tokenize_reasoning_example
+from lean_search.reasoning.dataset import (
+    ReasoningExample,
+    ReasoningOrigin,
+    reasoning_example,
+    tokenize_reasoning_example,
+)
 from lean_search.reasoning.pipeline import sample_record
 from lean_search.reasoning.records import StateSamples
 from lean_search.training.sft_data import IGNORE_INDEX, SftExample, tokenize_example
@@ -49,7 +54,7 @@ INSTRUCTIONS = ("", BRIEF_THINKING_INSTRUCTION)
 
 
 def thinking_example(reasoning: str = REASONINGS[0], instruction: str = "") -> ReasoningExample:
-    return ReasoningExample("test", "test/0", 0, GOALS, BLOCK, reasoning, instruction)
+    return ReasoningExample("test", "test/0", 0, GOALS, BLOCK, reasoning, instruction, ReasoningOrigin.SAMPLED)
 
 
 def test_thinking_completion_is_reasoning_closing_tag_and_block() -> None:
@@ -72,7 +77,7 @@ def test_loss_covers_reasoning_and_block_but_not_the_prompt() -> None:
 
 def test_replay_examples_use_the_non_thinking_format() -> None:
     tokenizer = CharacterTokenizer()
-    replay = ReasoningExample("test", "test/0", 0, GOALS, BLOCK, None, "")
+    replay = ReasoningExample("test", "test/0", 0, GOALS, BLOCK, None, "", ReasoningOrigin.REPLAY)
     assert tokenize_reasoning_example(tokenizer, replay).input_ids == (
         tokenize_example(tokenizer, SftExample("test", "test/0", 0, GOALS, BLOCK)).input_ids
     )

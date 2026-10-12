@@ -2,8 +2,8 @@
 # Row 4's A* search (value adapter, value weight and dead-step cost as in the current best row-4 config, here
 # experiments/configs/phase3_astar_v0.toml) at an equal generated-token budget per theorem for both arms. Compare the
 # arms with experiments/phase3_astar_report.py (anytime curves against generated tokens and wall time). Both servers
-# serve the base with the adapters policy-v2 (SFT v2), reasoning-r1 (phase5_sft_r1) and value-v0. Keep [priority],
-# [value] and [automation] equal to the row-4 config the comparison is made against.
+# serve the base with the adapters policy-v2 (SFT v2), reasoning-r1 (phase5_sft_bootstrap_r1) and value-v0. Keep
+# [priority], [value] and [automation] equal to the row-4 config the comparison is made against.
 
 [lean]
 pool_size = 40

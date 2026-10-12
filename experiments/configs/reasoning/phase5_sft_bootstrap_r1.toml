@@ -1,9 +1,9 @@
-# Phase 5 round 1: continue the SFT v2 policy adapter on the round-1 reasoning data (thinking examples plus as many
-# non-thinking replay examples), half SFT's learning rate, two epochs, both GPUs:
+# Phase 5 short-reasoning bootstrap: continue the SFT v2 policy adapter on 50% short-reasoning and 50% non-thinking
+# replay examples (data bootstrap_r1), half SFT's learning rate, two epochs, both GPUs:
 #   torchrun --nproc-per-node 2 experiments/phase5_reasoning_sft.py \
-#       --config experiments/configs/reasoning/phase5_sft_r1.toml --run-name phase5_sft_r1
+#       --config experiments/configs/reasoning/phase5_sft_bootstrap_r1.toml --run-name phase5_sft_bootstrap_r1
 model = "Qwen/Qwen3.5-2B"
-data = "r1"
+data = "bootstrap_r1"
 merge = false
 initial_adapter = "/workspace/checkpoints/phase2_sft_v2/adapter"
 
@@ -25,6 +25,9 @@ micro_batch_tokens = 32768
 micro_batches_per_step = 1
 length_group_examples = 4096
 gradient_checkpointing = true
+# The SFT throughput work's settings: packed rows without padding, compiled element-wise layers.
+packing = true
+compile_layers = true
 seed = 0
 
 # Validation lists 500 replay examples first (greedy exact match on them tracks the non-thinking mode), then the

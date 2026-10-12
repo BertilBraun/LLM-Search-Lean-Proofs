@@ -1,9 +1,9 @@
-# Ablation-ladder row 5 (development), thinking arm: the reasoning-trained adapter (phase5_sft_r1).
+# Ablation-ladder row 5 (development), thinking arm: the bootstrap adapter (phase5_sft_bootstrap_r1).
 # Row 4's A* search (value adapter, value weight and dead-step cost as in the current best row-4 config, here
 # experiments/configs/phase3_astar_v0.toml) at an equal generated-token budget per theorem for both arms. Compare the
 # arms with experiments/phase3_astar_report.py (anytime curves against generated tokens and wall time). Both servers
-# serve the base with the adapters policy-v2 (SFT v2), reasoning-r1 (phase5_sft_r1) and value-v0. Keep [priority],
-# [value] and [automation] equal to the row-4 config the comparison is made against.
+# serve the base with the adapters policy-v2 (SFT v2), reasoning-r1 (phase5_sft_bootstrap_r1) and value-v0. Keep
+# [priority], [value] and [automation] equal to the row-4 config the comparison is made against.
 
 [lean]
 pool_size = 40
@@ -61,14 +61,14 @@ model = "search-qwen3.5-2b"
 tokenizer = "Qwen/Qwen3.5-2B"
 server_urls = ["http://127.0.0.1:8100/v1", "http://127.0.0.1:8101/v1"]
 adapter = "reasoning-r1"
-# A thinking sample costs ~10x the tokens, so fewer per expansion.
+# Narrow and deep: a thinking sample costs many times the tokens, so fewer per expansion.
 sample_count = 8
 temperature = 0.8
 top_p = 1.0
-# The reasoning cap of the training samples.
-max_tokens = 2048
+# The evaluation's thinking cap.
+max_tokens = 512
 thinking = true
-# The prompt variant the reasoning adapter was trained with (round 1's choice from the pilot).
+# The prompt the bootstrap adapter was trained with (plain).
 thinking_instruction = ""
 few_shot = false
 
