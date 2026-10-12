@@ -3,7 +3,7 @@
 import dataclasses
 import json
 import re
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Collection, Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -14,7 +14,10 @@ _ALL_OPENING = "([{⦃⟨"
 _ALL_CLOSING = ")]}⦄⟩"
 _SORT_BINDER = re.compile(r"^[{⦃][^:]*:\s*(?:Type|Sort)\b[^:]*[}⦄]$")
 _WHITESPACE = re.compile(r"\s+")
+_IDENTIFIER = re.compile(r"(?<![\w.'])[^\W\d][\w'!?.]*")
 ELLIPSIS = " …"
+# The namespaces miniF2F headers open, in which a short name may resolve.
+MINIF2F_OPEN_NAMESPACES = ("BigOperators", "Real", "Nat", "Topology", "Rat")
 
 
 @dataclass(frozen=True)
@@ -52,6 +55,18 @@ def strip_leandojo_goal_count(state: str) -> str:
     # ReProver's `format_state`: LeanDojo prefixes states with several goals by "N goals".
     match = re.match(r"\d+ goals", state)
     return state[match.end() :].strip() if match else state
+
+
+def step_premises(step: str, known_names: Collection[str], open_namespaces: Sequence[str]) -> tuple[str, ...]:
+    """Known premise names a tactic step mentions, in order of first mention; short names may be in open namespaces."""
+    found: dict[str, None] = {}
+    for identifier in _IDENTIFIER.findall(step):
+        identifier = identifier.rstrip(".").removeprefix("_root_.")
+        candidates = [identifier, *(f"{namespace}.{identifier}" for namespace in open_namespaces)]
+        name = next((candidate for candidate in candidates if candidate in known_names), None)
+        if name is not None:
+            found[name] = None
+    return tuple(found)
 
 
 def one_line(text: str) -> str:

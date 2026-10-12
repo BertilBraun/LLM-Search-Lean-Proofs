@@ -5,6 +5,7 @@ from lean_search.retrieval.premises import (
     compact_signature,
     serialize_premise,
     split_signature,
+    step_premises,
     strip_leandojo_goal_count,
     strip_universe_parameters,
 )
@@ -85,3 +86,20 @@ def test_signature_dump_is_parsed() -> None:
         NameCheck("gone", False, ""),
         NameCheck("broken", True, ""),
     ]
+
+
+KNOWN = {"sq_nonneg", "mul_pos", "Real.sqrt_nonneg", "Nat.succ_le_iff", "add_comm"}
+
+
+@pytest.mark.parametrize(
+    ("step", "premises"),
+    [
+        ("nlinarith [sq_nonneg (a - b), sq_nonneg (a + b), mul_pos ha hb]", ("sq_nonneg", "mul_pos")),
+        ("rw [Nat.succ_le_iff] at h", ("Nat.succ_le_iff",)),
+        ("exact sqrt_nonneg x", ("Real.sqrt_nonneg",)),
+        ("simp [_root_.add_comm, h.trans]", ("add_comm",)),
+        ("exact h₀.le", ()),
+    ],
+)
+def test_step_premises_are_found_by_name(step: str, premises: tuple[str, ...]) -> None:
+    assert step_premises(step, KNOWN, ("Real", "Nat")) == premises
