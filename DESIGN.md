@@ -167,6 +167,9 @@ Results of each phase are committed under `results/` as small JSON summaries plu
 per-theorem logs, datasets and checkpoints stay on the node.
 
 ## Known issues (backlog)
+- Search token accounting is per executed candidate: requests whose samples all fail to parse, and candidates
+  left unexecuted after a proof is found, are not charged. Must become batch-level before any equal-token
+  comparison (thinking vs non-thinking, final ladder).
 
 - Statement pools: some Lean Workbook statements lack the colon before the goal; `π` is ambiguous under
   `open … Nat Real` in the pinned Mathlib.
