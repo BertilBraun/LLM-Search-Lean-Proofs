@@ -5,9 +5,9 @@
     python experiments/phase5_reasoning_data.py run --config ... --run-name phase5_cpu_estimate --state-limit 8 \
         --pool-size 4
 
-Writes the first chunk's samples ($LEAN_SEARCH_RUNS/<run>/chunks/00000.samples.jsonl) for the first N states of the
-run's states.jsonl with the config's prompt, k, temperature, top-p and max_tokens, so `run` only executes them in
-Lean. Log-probabilities are not computed (0.0). Without --adapter-path the base model samples.
+Writes (after every batch) the first chunk's samples ($LEAN_SEARCH_RUNS/<run>/chunks/00000.samples.jsonl) for the
+first N states of the run's states.jsonl with the config's prompt, k, temperature, top-p and max_tokens, so `run`
+only executes them in Lean. Log-probabilities are not computed (0.0). Without --adapter-path the base model samples.
 """
 
 import argparse
@@ -106,9 +106,9 @@ def main() -> None:
                 StateSamples(state, policy.thinking, prompt_tokens, 0, policy.max_tokens, seconds / len(batch), samples)
             )
         generated = sum(sample.generated_tokens for result in results[-len(batch) :] for sample in result.samples)
+        # Written after every batch, so an interrupted estimate keeps the states sampled so far.
+        write_records(directory.chunk_samples(0), results)
         print(f"{start + len(batch)}/{len(states)} states: {generated} tokens in {seconds:.0f} s", flush=True)
-    write_records(directory.chunk_samples(0), results)
-    print(f"Wrote {len(results)} states to {directory.chunk_samples(0)}", flush=True)
 
 
 if __name__ == "__main__":
