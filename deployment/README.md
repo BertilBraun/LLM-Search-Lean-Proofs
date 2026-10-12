@@ -15,6 +15,7 @@ node's checkout.
 | `setup_python.sh` | node | Create the virtual environment from `uv.lock`. |
 | `serve_model.sh` | node | Start a detached vLLM server for one model on one GPU (prefix caching, runtime LoRA). |
 | `stop_model.sh` | node | Stop servers started by `serve_model.sh` (by name or `--all`). |
+| `background.sh` | node | Run a CPU-heavy job pinned to the last `BACKGROUND_CPUS` (32) CPUs at nice 19 (CPU budget). |
 | `setup_lean.sh` | node | Install elan, the pinned Lean toolchain, Mathlib (from cache) and the REPL. |
 
 ## First-time setup
@@ -106,6 +107,85 @@ vLLM facts for these models:
 - A start takes 1.5–2.5 minutes with warm caches (Qwen3.5-4B cold: 4.6 minutes): torch.compile and Triton
   autotuning results are cached under `~/.cache/vllm` and `~/.triton` (not persistent), and CUDA graphs are
   captured twice (memory profiling, then serving).
+
+## CPU budget
+
+The container sees all 192 host CPUs but its cgroup is capped at 46 cores (`cpu.max`). Busy processes each get a CPU of
+their own, so `nice` changes nothing until the quota is used up; then the kernel stops the whole cgroup, GPU feeders
+included, for the rest of each 100 ms period. Measured (`results/gpu_utilization/`): 60 busy processes throttle the
+cgroup in 100% of periods whether they run at nice 0 or nice 19; pinned to 32 CPUs they throttle it in 0.3%.
+
+What throttling costs depends on the GPU feeder:
+
+- Training keeps its GPU busy through throttling: its launch queue is full (the CPU runs ahead of the GPU), so DDP SFT
+  ran at 10.9k tokens/s and 98–99.9% utilization with or without 60 busy processes.
+- vLLM is latency-bound: the engine schedules every decoding step on the CPU. With 120 unpinned searches (Lean at 46
+  cores, 90% of periods throttled) both GPUs fell to 70–72% utilization; with the same searches pinned to 40 CPUs (0%
+  throttled) they stayed at 76–80%.
+
+Rule:
+
+- GPU feeders (vLLM servers, training ranks, the search orchestrator) run unpinned at nice 0.
+- Everything CPU-heavy runs through `deployment/background.sh`: tracing, pre-filters, Lean stages of probes, data
+  building, and the search processes themselves (their Lean REPLs are the CPU load), e.g.
+  `BACKGROUND_CPUS=40 deployment/background.sh python experiments/run_search.py ...`. The wrapper pins to the last
+  `BACKGROUND_CPUS` logical CPUs (default 32) and nices to 19; all background jobs share those CPUs, so together they
+  can never exceed that many cores.
+- Leave at least 6 cores of the quota to the feeders: 4 vLLM processes take about 3, two DDP ranks about 4. With a
+  search running, give it 40 CPUs and nothing else; while training next to a search, 36.
+- Give a Lean job at most `BACKGROUND_CPUS` processes doing work at once, or its tactics hit wall-clock limits they
+  would not hit unpinned. Searches are an exception: most of their REPLs wait on the GPU at any moment.
+
+## Serving the search and publishing new weights
+
+Recommended layout (`results/gpu_utilization/`): per GPU, the merged policy and the merged value model as two vLLM
+instances without LoRA, 120 searches pinned to 40 CPUs, `overlap` and `score_children_early` on. Measured 151.6
+samples/s and 95–96% utilization at 340 W on both GPUs, against 138 samples/s and 76–80% for the adapters on the
+raw base. The alternative, the merged policy plus the value as a rank-128 difference adapter
+(`lean_search.policy.adapters.difference_adapter`: B_v A_v − B_p A_p, so it applies the value update exactly on
+top of the merged policy weights; served h differs from the adapter-on-base h by 0.03 steps on average), reached 144.6
+samples/s at 79–80%. The search is limited by Lean CPU, not by the GPUs: one GPU alone saturates at 91 samples/s.
+
+```bash
+C=$LEAN_SEARCH_CHECKPOINTS
+python experiments/publish_weights.py merge --adapter $C/phase2_sft_v2/adapter --output $C/phase2_sft_v2/merged
+for gpu in 0 1; do
+  GPU_MEMORY_UTILIZATION=0.58 deployment/serve_model.sh policy-gpu$gpu $C/phase2_sft_v2/merged $gpu 810$gpu \
+      --served-model-name policy-merged --no-enable-lora
+  GPU_MEMORY_UTILIZATION=0.30 deployment/serve_model.sh value-gpu$gpu $C/phase3_value_v0/merged $gpu 820$gpu \
+      --served-model-name value-merged --no-enable-lora
+done
+```
+
+with `[policy] model = "policy-merged"` (no adapter) on ports 8100/8101 and `[value] model = "value-merged"` on
+8200/8201. A second instance on a GPU sees the first one's memory: if it fails with "Free memory ... is less than
+desired", lower its `GPU_MEMORY_UTILIZATION` (0.25) and `MAX_NUM_SEQS` (96 is plenty for prefill-only value requests).
+
+Publishing a new policy or value version without a restart (`serve_model.sh` turns on vLLM's dev-mode endpoints,
+listening on 127.0.0.1 only; `lean_search.policy.server_control`):
+
+| Step | Command | Seconds |
+|---|---|---|
+| Merge the adapter (CPU, 8 threads; on a GPU 22 s) | `publish_weights.py merge --adapter A --output M` | 17 |
+| Swap a running server's weights in place: pause (in-flight requests finish), `reload_weights` via `/collective_rpc`, reset the prefix cache, resume | `publish_weights.py publish --weights M --server-url URL ...` | 1.9 |
+| Free a server's GPU (sleep level 2; servers started with `SLEEP_MODE=1`); new requests queue | `publish_weights.py release --server-url URL ...` | 0.4 (796 MiB left in use) |
+| Bring it back with new weights | `publish_weights.py restore --weights M --server-url URL ...` | 2.0 |
+| Restart instead (warm compile caches) | `stop_model.sh`, `serve_model.sh` | 56–61 (cold: 155–206) |
+
+So a publish costs about 20 s (merge plus reload), and the train-on-both-GPUs loop is: `release` all servers, train
+with DDP, merge, `restore` with the new directory, and the searches' queued requests continue (a request sent during
+a 35 s release completed right after the restore). Search clients must allow requests that long
+(`request_timeout_seconds`), and searches in flight keep their wall-clock budgets running while paused. A weight
+reload drops the workers' LoRA adapters: re-register them (`publish_weights.py difference ... --name value-v0`
+re-creates and reloads a difference adapter).
+
+Re-scoring a frontier after a new value version: all 14,879 open states of the 244 row-4 trees take 105 s on both
+GPUs' merged value instances (141 states/s, ~17k prompt tokens/s per GPU, compute-bound; the value prompts share no
+cacheable prefix because hybrid-model prefix caching works in 544-token blocks). The value estimator sends 32 states
+per request: one request per state cost the client ~10 ms of CPU each. A larger prefill chunk
+per step (`MAX_NUM_BATCHED_TOKENS=16384`) did not change the rate. At 120 searches the open frontiers hold
+an estimated 5k states (half the trees' final frontiers, 61 on average), about 35 s; re-score larger frontiers
+best-first or lazily.
 
 ## Node layout
 

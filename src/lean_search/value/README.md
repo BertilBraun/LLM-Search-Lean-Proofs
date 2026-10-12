@@ -84,8 +84,9 @@ does.
 
 ## Serving (`estimator.py`)
 
-`ValueModelEstimator.estimate(nodes)` sends one `score_next_token` request per node concurrently (round-robin over
-servers, `adapter` as the model), renormalizes the returned logprobs over the nine bin tokens (a bin outside the
+`ValueModelEstimator.estimate(nodes)` scores the nodes 32 to a request (`score_next_tokens` with a list of prompts;
+one request per node cost the client ~10 ms of CPU each), the requests concurrently and round-robin over servers
+(`adapter` as the model, or a merged value model with no adapter), renormalizes the returned logprobs over the nine bin tokens (a bin outside the
 top-k gets the smallest returned logprob, an upper bound on its own) and returns `BinnedValueEstimates`:
 `remaining_steps` (h) and `prompt_tokens` as A* expects, plus the per-node `distributions`. A prompt that does not
 fit the server's context reads out as dead. Serve the adapter with `--lora-modules <name>=<directory>` and enable it
@@ -107,7 +108,8 @@ eight_or_more_steps = 12.0
 dead_steps = 16.0
 ```
 
-`run_search.py` then writes `ValueStatistics` (requests, prompt tokens, missing bin tokens, prompts too long) to
+`run_search.py` then writes `ValueStatistics` (scored states as `requests`, `http_requests`, prompt tokens, missing
+bin tokens, prompts too long) to
 `value.json`.
 
 ## API
