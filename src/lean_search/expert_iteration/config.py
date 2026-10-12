@@ -84,8 +84,9 @@ class RoundDataConfig:
 @dataclass(frozen=True)
 class RoundConfig:
     index: int
-    # A prepared pool under $LEAN_SEARCH_DATA (phase6_pool.py) and the slice of each source this round searches.
+    # A prepared pool under $LEAN_SEARCH_DATA (phase6_pool.py), its config, and the slice of each source to search.
     pool: str
+    pool_config: str
     statements: tuple[SourceSlice, ...]
     base_model: str
     # The adapters that serve this round's search, and the run config of that search.

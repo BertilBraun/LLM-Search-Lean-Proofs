@@ -5,9 +5,9 @@
 
 Printed commands run inside the node's checkout (deployment/on_node.sh '<command>'); `fetch` runs locally. Long steps
 start detached and log to $LEAN_SEARCH_RUNS/<run>/log.txt. Every step can be repeated: the search resumes where it
-stopped, the data build is deterministic, and training restarts from its initial adapter. Order: serve_search ->
-search -> stop_servers -> data -> policy_sft and value (one GPU each, in parallel) -> policy_dpo -> serve_evaluation
--> evaluate -> stop_servers -> fetch.
+stopped, the data build is deterministic, and training restarts from its initial adapter. Order: finalize_pool ->
+serve_search -> search -> stop_servers -> data -> policy_sft and value (one GPU each, in parallel) -> policy_dpo ->
+serve_evaluation -> evaluate -> stop_servers -> fetch.
 """
 
 import argparse
@@ -33,6 +33,7 @@ SERVER_NAME_PREFIX = "search-gpu"
 
 
 class Step(StrEnum):
+    FINALIZE_POOL = "finalize_pool"
     SERVE_SEARCH = "serve_search"
     SEARCH = "search"
     STOP_SERVERS = "stop_servers"
@@ -97,7 +98,16 @@ def round_commands(config: RoundConfig, config_path: Path) -> list[Command]:
     dpo_run = config.stage_run_name("policy_dpo")
     value_run = config.stage_run_name("value")
     evaluation_run = config.stage_run_name("evaluation")
+    pool_name = Path(config.pool).name
     commands = [
+        Command(
+            Step.FINALIZE_POOL,
+            # Anchored, so the pattern matches the pre-filter itself and never a shell or ssh command that names it.
+            "pkill -TERM -f '^python experiments/phase6_pool.py'; sleep 30; python experiments/phase6_pool.py "
+            f"--config {config.pool_config} --name {pool_name} --step finalize",
+            "stops the CPU pre-filter (it resumes later with --step prefilter) and writes prepared.jsonl from the "
+            "statements done so far; the round fails early if a source has too few",
+        ),
         *(
             Command(Step.SERVE_SEARCH, command, f"GPU server with {config.policy.name} and {config.value.name}")
             for command in serve_commands(config, search_config, (config.policy, config.value))
