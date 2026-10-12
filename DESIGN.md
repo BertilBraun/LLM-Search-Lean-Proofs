@@ -160,6 +160,10 @@ allows.
     stopped after ~33k proofs.
   - [x] Row 2 with SFT v2 on miniF2F-valid: **148/244 (60.7%)**, same set size as SFT v1 (5 new, 5 lost)
     (`results/phase2_sft_v2_search/`).
+- [x] **Throughput** (`results/gpu_utilization/`): packed + compiled LoRA training 10.8k tokens/s on both GPUs
+  (+48%, 98–100% utilization); search 120 concurrent, pinned to 40 CPUs, merged policy + merged value instance per
+  GPU, 7-tactic sweep: ~1,240 miniF2F-valid theorems/hour (was 603) at equal solve rate; in-place weight publish
+  ~20 s. Search remains Lean/CPU-bound (~48 Lean cores would saturate both GPUs).
 - [ ] **Phase 3** — Value v0/v1, A* search, λ/D sweep (row 4).
   - [x] Value v0 on traced human proofs (`results/phase3_value_v0/`): validation bin accuracy 53%, MAE 1.26
     steps, Spearman 0.80 (zero-shot: 27%, 2.35, −0.03).
