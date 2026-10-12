@@ -1,0 +1,150 @@
+{
+ "selection": {
+  "finished_at": "2026-10-12T14:40:50+00:00",
+  "candidates": 929739,
+  "duplicate_names_dropped": 0,
+  "corpora": [
+   {
+    "name": "lean_workbook",
+    "pooled": true,
+    "proofs": 0,
+    "excluded_proofs": 25131,
+    "statements": 0,
+    "excluded_statements": 8898,
+    "new_statements": 0
+   },
+   {
+    "name": "goedel_lean_workbook_proofs",
+    "pooled": true,
+    "proofs": 0,
+    "excluded_proofs": 27249,
+    "statements": 0,
+    "excluded_statements": 20219,
+    "new_statements": 0
+   },
+   {
+    "name": "stp_lean_workbook",
+    "pooled": true,
+    "proofs": 0,
+    "excluded_proofs": 71076,
+    "statements": 0,
+    "excluded_statements": 23951,
+    "new_statements": 0
+   },
+   {
+    "name": "deepseek_prover_v1",
+    "pooled": true,
+    "proofs": 1,
+    "excluded_proofs": 27189,
+    "statements": 1,
+    "excluded_statements": 27189,
+    "new_statements": 1
+   },
+   {
+    "name": "numinamath_lean_human",
+    "pooled": true,
+    "proofs": 39,
+    "excluded_proofs": 9075,
+    "statements": 37,
+    "excluded_statements": 9023,
+    "new_statements": 37
+   },
+   {
+    "name": "numinamath_lean_kimina",
+    "pooled": true,
+    "proofs": 227,
+    "excluded_proofs": 30592,
+    "statements": 176,
+    "excluded_statements": 29397,
+    "new_statements": 147
+   },
+   {
+    "name": "leanabell_sft",
+    "pooled": true,
+    "proofs": 143879,
+    "excluded_proofs": 61800,
+    "statements": 140405,
+    "excluded_statements": 38804,
+    "new_statements": 140321
+   },
+   {
+    "name": "goedel_sft_v2",
+    "pooled": true,
+    "proofs": 1109550,
+    "excluded_proofs": 159446,
+    "statements": 790367,
+    "excluded_statements": 112007,
+    "new_statements": 789233
+   },
+   {
+    "name": "stp_conjectures",
+    "pooled": false,
+    "proofs": 1455157,
+    "excluded_proofs": 184399,
+    "statements": 598180,
+    "excluded_statements": 75747,
+    "new_statements": 326213
+   }
+  ],
+  "sources": [
+   {
+    "source": "deepseek_prover_v1",
+    "candidates": 1,
+    "median_shortest_tactics": 2
+   },
+   {
+    "source": "goedel_sft_v2",
+    "candidates": 789622,
+    "median_shortest_tactics": 3.0
+   },
+   {
+    "source": "leanabell_sft",
+    "candidates": 140051,
+    "median_shortest_tactics": 3
+   },
+   {
+    "source": "numinamath_lean_human",
+    "candidates": 13,
+    "median_shortest_tactics": 1
+   },
+   {
+    "source": "numinamath_lean_kimina",
+    "candidates": 52,
+    "median_shortest_tactics": 1.0
+   }
+  ]
+ },
+ "sample": [
+  {
+   "source": "goedel_sft_v2",
+   "attempted": 1326,
+   "verified": 1209,
+   "automation_solved": 74,
+   "load_failed": 0,
+   "usable": 1135,
+   "median_tactics": 3,
+   "mean_seconds": 16.470103006652447
+  },
+  {
+   "source": "leanabell_sft",
+   "attempted": 272,
+   "verified": 266,
+   "automation_solved": 95,
+   "load_failed": 0,
+   "usable": 171,
+   "median_tactics": 3,
+   "mean_seconds": 5.637720633098712
+  },
+  {
+   "source": "numinamath_lean_kimina",
+   "attempted": 2,
+   "verified": 2,
+   "automation_solved": 1,
+   "load_failed": 0,
+   "usable": 1,
+   "median_tactics": 1,
+   "mean_seconds": 10.151966978504788
+  }
+ ],
+ "verified": []
+}
