@@ -105,8 +105,8 @@ def round_commands(config: RoundConfig, config_path: Path) -> list[Command]:
         Command(
             Step.SEARCH,
             detached(config.run_name, f"python experiments/phase6_round.py --config {round_config}"),
-            f"{config.count:,} statements; resumable. The tracing job pauses only for run_search.py, so pause it "
-            "(or accept slower Lean) while this runs.",
+            f"{config.statement_count:,} statements; resumable. The tracing job pauses only for run_search.py, "
+            "so pause it (or accept slower Lean) while this runs.",
         ),
         Command(Step.STOP_SERVERS, stop_command(search_config), "frees both GPUs for training"),
         Command(

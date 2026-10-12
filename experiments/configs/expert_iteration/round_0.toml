@@ -1,17 +1,38 @@
-# Expert-iteration round 0 (experiments/phase6_orchestrate.py prints the steps): search the first 4,000 prepared pool
-# statements with the SFT v2 policy and value v0 (A*, λ = 0.5), build SFT, DPO and value-v1 data from the trees, train
-# the next policy (SFT from the SFT v2 adapter, then DPO) and value v1, and evaluate both on miniF2F-valid with row 4's
+# Expert-iteration round 0 (experiments/phase6_orchestrate.py prints the steps): search 4,000 prepared pool statements
+# with the SFT v2 policy and value v0 (A*, λ = 0.5), build SFT, DPO and value-v1 data from the trees, train the next
+# policy (SFT from the SFT v2 adapter, then DPO) and value v1, and evaluate both on miniF2F-valid with row 4's
 # settings. 4,000 statements is an estimated 5-6 h of search on both GPUs (row 4: ~3.7 policy requests/s).
 index = 0
 pool = "expert_iteration/pool_v1"
-offset = 0
-count = 4000
 base_model = "Qwen/Qwen3.5-2B"
 search_config = "experiments/configs/expert_iteration/round_0_search.toml"
 policy_sft_config = "experiments/configs/expert_iteration/round_0_policy_sft.toml"
 policy_dpo_config = "experiments/configs/expert_iteration/round_0_policy_dpo.toml"
 value_config = "experiments/configs/expert_iteration/round_0_value.toml"
 evaluation_config = "experiments/configs/expert_iteration/round_0_evaluation.toml"
+
+# Half Goedel-Pset: the pool's Lean Workbook and NuminaMath statements are those no prover in our corpora proved (the
+# proved ones were traced for SFT and are left out), and automation solved none of the first 550 of them. Later rounds
+# continue each source at offset = the counts used so far.
+[[statements]]
+source = "goedel_pset_v1"
+offset = 0
+count = 2000
+
+[[statements]]
+source = "lean_workbook"
+offset = 0
+count = 800
+
+[[statements]]
+source = "numinamath_lean"
+offset = 0
+count = 800
+
+[[statements]]
+source = "kimina_prover_promptset"
+offset = 0
+count = 400
 
 [policy]
 name = "policy-v2"

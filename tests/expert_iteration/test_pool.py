@@ -5,6 +5,7 @@ from lean_search.expert_iteration.pool import (
     CANONICAL_IMPORTS,
     PrefilterOutcome,
     SourceQuota,
+    SourceSlice,
     canonical_header,
     completed_prefix,
     first_per_name,
@@ -15,6 +16,7 @@ from lean_search.expert_iteration.pool import (
     problem_name,
     problem_source,
     select_by_source,
+    sliced_statements,
 )
 from lean_search.search import Accounting, SearchResult, StopReason
 
@@ -121,3 +123,14 @@ def test_only_the_first_statement_of_a_name_is_kept() -> None:
 )
 def test_problem_source(name: str, source: str) -> None:
     assert problem_source(name) == source
+
+
+def test_slices_take_each_source_in_pool_order() -> None:
+    prepared = interleave([statements("a", 6), statements("b", 6)])
+    sliced = sliced_statements(prepared, [SourceSlice("a", 2, 2), SourceSlice("b", 0, 2)])
+    assert sorted(record.identifier for record in sliced) == ["a_2", "a_3", "b_0", "b_1"]
+
+
+def test_a_slice_beyond_the_prepared_statements_is_refused() -> None:
+    with pytest.raises(ValueError):
+        sliced_statements(statements("a", 3), [SourceSlice("a", 2, 2)])

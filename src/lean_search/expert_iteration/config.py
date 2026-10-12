@@ -4,7 +4,7 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from lean_search.expert_iteration.pool import SourceQuota
+from lean_search.expert_iteration.pool import SourceQuota, SourceSlice
 from lean_search.search.config import RunConfig
 from lean_search.search.records import from_json_object
 from lean_search.training.sft_data import SourceWeight
@@ -84,10 +84,9 @@ class RoundDataConfig:
 @dataclass(frozen=True)
 class RoundConfig:
     index: int
-    # A prepared pool under $LEAN_SEARCH_DATA (phase6_pool.py) and the slice of it this round searches.
+    # A prepared pool under $LEAN_SEARCH_DATA (phase6_pool.py) and the slice of each source this round searches.
     pool: str
-    offset: int
-    count: int
+    statements: tuple[SourceSlice, ...]
     base_model: str
     # The adapters that serve this round's search, and the run config of that search.
     policy: AdapterReference
@@ -102,6 +101,10 @@ class RoundConfig:
     next_policy: AdapterReference
     next_value: AdapterReference
     evaluation_config: str
+
+    @property
+    def statement_count(self) -> int:
+        return sum(piece.count for piece in self.statements)
 
     @property
     def run_name(self) -> str:
@@ -121,8 +124,8 @@ def load_pool_config(path: Path) -> PoolConfig:
 
 def load_round_config(path: Path) -> RoundConfig:
     config = from_json_object(RoundConfig, tomllib.loads(path.read_text(encoding="utf-8")))
-    if config.offset < 0 or config.count < 1:
-        raise ValueError("A round needs offset >= 0 and count >= 1.")
+    if not config.statements or any(piece.offset < 0 or piece.count < 1 for piece in config.statements):
+        raise ValueError("A round needs source slices with offset >= 0 and count >= 1.")
     if not 0 <= config.data.policy.replay_fraction < 1 or not 0 <= config.data.value.replay_fraction < 1:
         raise ValueError("Replay fractions must lie in [0, 1).")
     return config

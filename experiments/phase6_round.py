@@ -3,8 +3,9 @@
     python experiments/phase6_round.py --config experiments/configs/expert_iteration/round_0.toml [--limit N]
     python experiments/phase6_round.py --config ... --summarize-only
 
-Reads prepared[offset : offset + count] of $LEAN_SEARCH_DATA/<pool>/prepared.jsonl (experiments/phase6_pool.py) and
-searches it with the round's run config, whose policy and value adapters must be served. Writes the standard run
+Takes the round's slice of each source's prepared statements in $LEAN_SEARCH_DATA/<pool>/prepared.jsonl
+(experiments/phase6_pool.py), interleaved in proportion, and searches them with the round's run config, whose policy
+and value adapters must be served. Writes the standard run
 layout to $LEAN_SEARCH_RUNS/phase6_round_<index>/: config.toml, round.toml, results.jsonl, trees/<problem>.json.gz
 for every statement, statistics/{policy,value}_<invocation>.json, invocations.jsonl. Re-running resumes: finished
 statements are skipped, so the run can be stopped (kill) and restarted at any time; --limit searches only the first N
@@ -27,7 +28,7 @@ from pathlib import Path
 
 from lean_search.corpora.records import StatementRecord, read_statement_records
 from lean_search.expert_iteration.config import RoundConfig, adapter_mismatches, load_round_config
-from lean_search.expert_iteration.pool import pool_problem
+from lean_search.expert_iteration.pool import SourceSlice, pool_problem, sliced_statements
 from lean_search.expert_iteration.pool_search import (
     Invocation,
     ModelThroughput,
@@ -62,8 +63,7 @@ class RoundThroughput:
 class RoundSearchSummary:
     round_index: int
     pool: str
-    offset: int
-    count: int
+    statements: tuple[SourceSlice, ...]
     policy_adapter: str
     value_adapter: str
     sources: tuple[SourceSolveRate, ...]
@@ -98,13 +98,8 @@ def log(message: str) -> None:
 
 
 def round_statements(config: RoundConfig) -> list[StatementRecord]:
-    prepared = list(read_statement_records(DATA_DIRECTORY / config.pool / "prepared.jsonl"))
-    if len(prepared) < config.offset + config.count:
-        raise ValueError(
-            f"{config.pool} has {len(prepared):,} prepared statements, the round needs "
-            f"{config.offset + config.count:,}: run phase6_pool.py --step prefilter further, then finalize."
-        )
-    return prepared[config.offset : config.offset + config.count]
+    prepared = read_statement_records(DATA_DIRECTORY / config.pool / "prepared.jsonl")
+    return sliced_statements(list(prepared), config.statements)
 
 
 def write_run_files(paths: PoolRunPaths, config_path: Path, search_config_path: Path) -> None:
@@ -143,7 +138,7 @@ def summarize_round(config: RoundConfig, config_path: Path, search_config: RunCo
     hours = sum(invocation.wall_seconds for invocation in invocations) / 3600
     metadata = RunMetadata(
         run_name=config.run_name,
-        split=f"{config.pool}[{config.offset}:{config.offset + config.count}]",
+        split=f"{config.pool} ({config.statement_count:,} statements)",
         git_revision=invocations[0].git_revision if invocations else revision,
         git_dirty=dirty,
         config_file=config.search_config,
@@ -156,8 +151,7 @@ def summarize_round(config: RoundConfig, config_path: Path, search_config: RunCo
     summary = RoundSearchSummary(
         round_index=config.index,
         pool=config.pool,
-        offset=config.offset,
-        count=config.count,
+        statements=config.statements,
         policy_adapter=f"{config.policy.name} ({config.policy.path})",
         value_adapter=f"{config.value.name} ({config.value.path})",
         sources=source_solve_rates(results),
@@ -202,8 +196,9 @@ def render_markdown(summary: RoundSearchSummary) -> str:
     (expansion_curve, *_) = search.curves
     sections = [
         f"# Expert-iteration round {summary.round_index}: pool search",
-        f"Statements {summary.offset:,}–{summary.offset + summary.count:,} of `{summary.pool}/prepared.jsonl` "
-        f"(loaded, not solved by the automation pre-filter). Policy {summary.policy_adapter}, value "
+        f"Statements of `{summary.pool}/prepared.jsonl` (loaded, not solved by the automation pre-filter): "
+        + ", ".join(f"{piece.source} {piece.offset:,}–{piece.offset + piece.count:,}" for piece in summary.statements)
+        + f". Policy {summary.policy_adapter}, value "
         f"{summary.value_adapter}; run config `{search.metadata.config_file}` (copied as `config.toml`), git "
         f"`{search.metadata.git_revision[:10]}`.",
         f"**Solved {search.solved:,}/{search.problems:,} ({search.solve_rate:.1%}; "

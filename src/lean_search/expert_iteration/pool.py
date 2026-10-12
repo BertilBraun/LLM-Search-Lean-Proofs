@@ -25,6 +25,15 @@ class SourceQuota:
     candidates: int
 
 
+@dataclass(frozen=True)
+class SourceSlice:
+    """Prepared statements [offset, offset + count) of one source, in the pool's order."""
+
+    source: str
+    offset: int
+    count: int
+
+
 @dataclass
 class SourceSelection:
     """The `capacity` statements with the smallest ordering keys seen so far, and what was seen."""
@@ -136,6 +145,23 @@ def first_per_name(statements: Iterable[StatementRecord]) -> tuple[list[Statemen
         seen.add(name)
         kept.append(statement)
     return kept, dropped
+
+
+def sliced_statements(prepared: Sequence[StatementRecord], slices: Sequence[SourceSlice]) -> list[StatementRecord]:
+    """Each slice of its source's prepared statements, interleaved so that every prefix keeps the proportions."""
+    by_source: dict[str, list[StatementRecord]] = {}
+    for statement in prepared:
+        by_source.setdefault(statement.source, []).append(statement)
+    lists = []
+    for piece in slices:
+        available = by_source.get(piece.source, [])
+        if len(available) < piece.offset + piece.count:
+            raise ValueError(
+                f"{piece.source} has {len(available):,} prepared statements, the slice needs "
+                f"{piece.offset + piece.count:,}: pre-filter further, then finalize."
+            )
+        lists.append(available[piece.offset : piece.offset + piece.count])
+    return interleave(lists)
 
 
 def prefilter_outcome(result: SearchResult) -> PrefilterOutcome:
