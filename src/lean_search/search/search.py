@@ -293,11 +293,15 @@ class _TheoremSearch:
                 and self.accounting.generated_tokens >= self.config.max_generated_tokens
             ):
                 return StopReason.TOKEN_BUDGET, None
-            expansion = await self._expand(self.tree.node(self.frontier.pop()))
+            expansion = await self._expand(await self._next_node())
             if expansion.proved is not None:
                 return StopReason.PROVED, expansion.proved
             if expansion.out_of_time:
                 return StopReason.WALL_CLOCK_BUDGET, None
+
+    async def _next_node(self) -> Node:
+        """The frontier's best node; a subclass may refresh stale priorities first."""
+        return self.tree.node(self.frontier.pop())
 
     async def _expand(self, node: Node) -> _Expansion:
         expansion = _Expansion(node)

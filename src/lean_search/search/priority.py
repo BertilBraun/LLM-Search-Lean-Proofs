@@ -66,20 +66,35 @@ class CumulativeLogProbability:
 
 
 class AStar:
-    """f = g + value_weight * h with g = depth and h from a batch value estimator."""
+    """f = depth_weight * depth + value_weight * h + policy_prior_weight * (-mean step log-probability on the path)."""
 
-    def __init__(self, value_estimator: ValueEstimator, value_weight: float) -> None:
+    def __init__(
+        self,
+        value_estimator: ValueEstimator,
+        value_weight: float,
+        depth_weight: float = 1.0,
+        policy_prior_weight: float = 0.0,
+        automation_log_probability: float = -1.0,
+    ) -> None:
         self.value_estimator = value_estimator
         self.value_weight = value_weight
+        self.depth_weight = depth_weight
+        self.policy_prior_weight = policy_prior_weight
+        self.policy_prior = CumulativeLogProbability(1.0, automation_log_probability)
 
     async def score(self, nodes: Sequence[Node], tree: SearchTree) -> Scores:
         estimates = await self.value_estimator.estimate(nodes)
         assert len(estimates.remaining_steps) == len(nodes)
         priorities = tuple(
-            node.depth + self.value_weight * remaining
+            self.depth_weight * node.depth + self.value_weight * remaining + self.prior(node, tree)
             for node, remaining in zip(nodes, estimates.remaining_steps, strict=True)
         )
         return Scores(priorities, estimates.remaining_steps, estimates.prompt_tokens)
+
+    def prior(self, node: Node, tree: SearchTree) -> float:
+        if not self.policy_prior_weight:
+            return 0.0
+        return self.policy_prior_weight * self.policy_prior.priority(node, tree)
 
 
 class GoalCountEstimator:
@@ -103,6 +118,10 @@ class PriorityConfig:
     length_exponent: float = 1.0
     automation_log_probability: float = -1.0
     value_weight: float = 1.0
+    # A*'s weight on the depth, and on the path's mean negative step log-probability (automation steps count as
+    # automation_log_probability); 0 leaves the policy prior out.
+    depth_weight: float = 1.0
+    policy_prior_weight: float = 0.0
     value_estimator: ValueEstimatorKind = ValueEstimatorKind.GOAL_COUNT
 
 
@@ -120,4 +139,10 @@ def build_priority_function(config: PriorityConfig, value_estimator: ValueEstima
             return CumulativeLogProbability(config.length_exponent, config.automation_log_probability)
         case PriorityKind.A_STAR:
             estimator = value_estimator or build_value_estimator(config.value_estimator)
-            return AStar(estimator, config.value_weight)
+            return AStar(
+                estimator,
+                config.value_weight,
+                config.depth_weight,
+                config.policy_prior_weight,
+                config.automation_log_probability,
+            )
