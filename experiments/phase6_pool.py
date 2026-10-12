@@ -165,6 +165,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--name", required=True)
     parser.add_argument("--step", type=Step, choices=list(Step), required=True)
     parser.add_argument("--limit", type=int, help="prefilter only the first N candidates")
+    parser.add_argument("--concurrency", type=int, help="REPLs and searches, overriding the pre-filter config")
     return parser.parse_args()
 
 
@@ -260,8 +261,14 @@ def prefilter_run_config(config: PoolConfig) -> RunConfig:
     return run_config
 
 
-def prefilter(config: PoolConfig, output_directory: Path, paths: PoolRunPaths, limit: int | None) -> None:
+def prefilter(
+    config: PoolConfig, output_directory: Path, paths: PoolRunPaths, limit: int | None, concurrency: int | None
+) -> None:
     run_config = prefilter_run_config(config)
+    if concurrency is not None:
+        run_config = dataclasses.replace(
+            run_config, lean=dataclasses.replace(run_config.lean, pool_size=concurrency, concurrency=concurrency)
+        )
     candidates = list(read_statement_records(output_directory / "candidates.jsonl"))[:limit]
     paths.directory.mkdir(parents=True, exist_ok=True)
     config_text = (REPOSITORY_DIRECTORY / config.prefilter_search).read_text(encoding="utf-8")
@@ -470,7 +477,7 @@ def main() -> None:
         case Step.SELECT:
             select(config, output_directory)
         case Step.PREFILTER:
-            prefilter(config, output_directory, paths, arguments.limit)
+            prefilter(config, output_directory, paths, arguments.limit, arguments.concurrency)
         case Step.FINALIZE:
             finalize(config, output_directory, paths)
 

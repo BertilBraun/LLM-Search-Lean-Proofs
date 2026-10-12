@@ -117,7 +117,8 @@ name = "leanabell_sft"
 weight = 1.0
 
 [data.preferences]
-max_pairs_per_node = 4
+max_dead_per_node = 2
+max_failed_per_node = 1
 policy_steps_only = true
 dead_subtrees = true
 

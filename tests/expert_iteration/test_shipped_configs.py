@@ -1,3 +1,4 @@
+import dataclasses
 import re
 import tomllib
 from pathlib import Path
@@ -10,6 +11,7 @@ from lean_search.expert_iteration.config import (
     load_round_config,
     unserved_adapters,
 )
+from lean_search.expert_iteration.loop_config import load_loop_config
 from lean_search.search import load_run_config
 from lean_search.search.records import from_json_object
 
@@ -70,3 +72,37 @@ def test_the_round_training_configs_parse(path: Path) -> None:
         )
     ]
     assert [type(training) for training in loaded] == [SftConfig, DpoConfig, ValueTrainingConfig]
+
+
+def test_the_loop_config_loads() -> None:
+    assert load_loop_config(CONFIG_DIRECTORY / "loop.toml").search.scheduler.budgets
+
+
+def test_the_loop_search_and_evaluation_templates_load() -> None:
+    config = load_loop_config(CONFIG_DIRECTORY / "loop.toml")
+    paths = (config.search.search_config, config.evaluation.config)
+    templates = [load_run_config(REPOSITORY_DIRECTORY / path) for path in paths]
+    assert all(template.value.model for template in templates)
+
+
+def test_the_loop_training_templates_parse_once_filled() -> None:
+    pytest.importorskip("torch")
+    from lean_search.training.dpo import DpoConfig
+    from lean_search.value.training import ValueTrainingConfig
+
+    training = load_loop_config(CONFIG_DIRECTORY / "loop.toml").training
+    value_continues = "initial_adapter" in {field.name for field in dataclasses.fields(ValueTrainingConfig)}
+    filled = []
+    for target, stage, takes_adapter in (
+        (DpoConfig, training.policy, True),
+        (ValueTrainingConfig, training.value, value_continues),
+    ):
+        table = tomllib.loads((REPOSITORY_DIRECTORY / stage.config).read_text(encoding="utf-8")) | {"data": "d"}
+        if takes_adapter:
+            table["initial_adapter"] = "/adapter"
+        filled.append(from_json_object(target, table))
+    assert [type(config) for config in filled] == [DpoConfig, ValueTrainingConfig]
+
+
+def test_the_loop_pool_config_loads() -> None:
+    assert load_pool_config(CONFIG_DIRECTORY / "pool_v2.toml").sources

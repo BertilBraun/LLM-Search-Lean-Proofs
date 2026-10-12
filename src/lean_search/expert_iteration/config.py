@@ -48,11 +48,17 @@ class PolicyDataConfig:
 
 @dataclass(frozen=True)
 class PreferenceConfig:
-    max_pairs_per_node: int = 4
+    # Rejected siblings per proof node, by priority: those leading into a dead subtree, then Lean errors and
+    # timeouts (which mostly teach syntax).
+    max_dead_per_node: int = 2
+    max_failed_per_node: int = 1
     # Chosen and rejected steps both from the policy: the policy never needs to rank the sweep's tactics.
     policy_steps_only: bool = True
-    # Rejected candidates also include siblings whose subtree was expanded completely without a proof.
     dead_subtrees: bool = True
+
+    @property
+    def max_pairs_per_node(self) -> int:
+        return self.max_dead_per_node + self.max_failed_per_node
 
 
 @dataclass(frozen=True)

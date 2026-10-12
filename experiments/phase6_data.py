@@ -26,7 +26,6 @@ import argparse
 import dataclasses
 import datetime
 import json
-import math
 import os
 import subprocess
 import time
@@ -38,11 +37,11 @@ from pathlib import Path
 import transformers
 
 from lean_search.expert_iteration.config import RoundConfig, RoundDataConfig, load_round_config
-from lean_search.expert_iteration.mixing import is_held_out, replay_amount
+from lean_search.expert_iteration.mixing import is_held_out
+from lean_search.expert_iteration.policy_mixture import policy_mixture
 from lean_search.expert_iteration.pool import problem_source
 from lean_search.expert_iteration.preferences import NodePairs, node_pairs
 from lean_search.expert_iteration.proofs import (
-    EXPERT_ITERATION_SOURCE,
     FoundProof,
     found_proof,
     policy_sft_examples,
@@ -60,17 +59,10 @@ from lean_search.training.dpo_data import PreferencePair, deduplicate_pairs, fit
 from lean_search.training.sft_data import (
     LengthStatistics,
     SourceStatistics,
-    SourceStream,
-    TokenizedExample,
-    deduplicate,
     length_capped_tokenizer,
     length_statistics,
-    ordering_key,
     read_traced_examples,
-    select_mixture,
-    select_validation,
     snapshot_step_files,
-    source_statistics,
 )
 from lean_search.training.sft_data import write_examples as write_sft_examples
 from lean_search.value.bins import STEP_BIN_COUNT
@@ -280,11 +272,6 @@ def harvest(runs: Sequence[str], config: RoundDataConfig) -> Harvest:
     return gathered
 
 
-def tokenized_all(stream: SourceStream) -> list[TokenizedExample]:
-    stream.extend_to(math.inf)
-    return stream.accepted
-
-
 def build_policy_data(
     gathered: Harvest,
     config: RoundDataConfig,
@@ -295,27 +282,23 @@ def build_policy_data(
     tokenize = length_capped_tokenizer(tokenizer, policy.max_prompt_tokens, policy.max_completion_tokens)
     proofs = shortest_proofs(gathered.proofs)
     examples = policy_sft_examples(proofs, policy.policy_steps_only)
-    new_pool = deduplicate({EXPERT_ITERATION_SOURCE: examples}, config.seed)
-    new_stream = SourceStream(new_pool.examples_by_source[EXPERT_ITERATION_SOURCE], tokenize)
-    new_examples = tokenized_all(new_stream)
     weights = {source.name: source.weight for source in policy.replay_sources}
     traced = read_traced_examples(snapshot_step_files(DATA_DIRECTORY / "traced"), weights)
-    replay_pool = deduplicate(traced.train, config.seed, excluded_keys=new_pool.keys)
-    streams = {source: SourceStream(replay_pool.examples_by_source[source], tokenize) for source in weights}
-    budget = replay_amount(new_stream.tokens, policy.replay_fraction)
-    if budget:
-        select_mixture(streams, weights, budget)
-    replay = [example for stream in streams.values() for example in stream.accepted]
-    validation_pool = deduplicate(traced.validation, config.seed, excluded_keys=new_pool.keys | replay_pool.keys)
-    validation = select_validation(
-        validation_pool.examples_by_source, policy.validation_examples, policy.validation_seed, tokenize
+    mixture = policy_mixture(
+        examples,
+        traced,
+        weights,
+        policy.replay_fraction,
+        policy.validation_examples,
+        policy.validation_seed,
+        config.seed,
+        tokenize,
     )
     held_out = policy_sft_examples(shortest_proofs(gathered.held_out_proofs), policy.policy_steps_only)
     if output_directory is not None:
-        train = sorted([*new_examples, *replay], key=lambda example: ordering_key(example.example, config.seed))
         directory = output_directory / "policy_sft"
-        write_sft_examples(directory / "train.jsonl", (example.example for example in train))
-        write_sft_examples(directory / "validation.jsonl", (example.example for example in validation))
+        write_sft_examples(directory / "train.jsonl", (example.example for example in mixture.train))
+        write_sft_examples(directory / "validation.jsonl", (example.example for example in mixture.validation))
         write_sft_examples(directory / "validation_expert_iteration.jsonl", held_out)
     proof_steps = [step for proof in proofs for step in proof.steps]
     return PolicyDataSummary(
@@ -328,18 +311,18 @@ def build_policy_data(
         automation_steps=sum(step.source == StepSource.AUTOMATION for step in proof_steps),
         policy_steps_only=policy.policy_steps_only,
         examples=len(examples),
-        duplicates=new_pool.duplicates_by_source[EXPERT_ITERATION_SOURCE],
-        over_length=new_stream.over_length,
-        new_examples=len(new_examples),
-        new_tokens=new_stream.tokens,
-        prompt_tokens=length_statistics([example.prompt_token_count for example in new_examples]),
-        completion_tokens=length_statistics([example.completion_token_count for example in new_examples]),
+        duplicates=mixture.duplicates,
+        over_length=mixture.over_length,
+        new_examples=len(mixture.new),
+        new_tokens=mixture.new_tokens,
+        prompt_tokens=length_statistics([example.prompt_token_count for example in mixture.new]),
+        completion_tokens=length_statistics([example.completion_token_count for example in mixture.new]),
         replay_fraction=policy.replay_fraction,
-        replay_token_budget=budget,
-        replay=tuple(source_statistics(source, traced, replay_pool, streams[source]) for source in weights),
-        replay_examples=len(replay),
-        replay_tokens=sum(stream.tokens for stream in streams.values()),
-        validation_examples=len(validation),
+        replay_token_budget=mixture.replay_token_budget,
+        replay=mixture.replay_sources,
+        replay_examples=len(mixture.replay),
+        replay_tokens=mixture.replay_tokens,
+        validation_examples=len(mixture.validation),
         held_out_examples=len(held_out),
     )
 

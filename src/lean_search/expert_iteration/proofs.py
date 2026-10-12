@@ -32,19 +32,23 @@ class FoundProof:
         return f"{self.run}/{self.problem_name}"
 
 
-def proof_path(record: TreeRecord) -> list[NodeRecord]:
-    """Root to the verified proof; mark_proof_path labels exactly these nodes proved, failed verifications fail."""
-    (proved,) = (node for node in record.nodes if node.status == NodeStatus.PROVED and not node.goals)
-    path = [proved]
-    while path[-1].parent_id is not None:
-        path.append(record.nodes[path[-1].parent_id])
-    return path[::-1]
+def identifier_problem(identifier: str) -> str:
+    """The problem name in a FoundProof identifier (run/problem)."""
+    return identifier.split("/", 1)[1]
 
 
-def found_proof(run: str, record: TreeRecord) -> FoundProof | None:
-    if not record.result.proved:
-        return None
-    path = proof_path(record)
+def proof_paths(record: TreeRecord) -> list[list[NodeRecord]]:
+    """Root to each verified proof, the search's first proof first; failed verifications are not proved."""
+    paths = []
+    for proved in (node for node in record.nodes if node.status == NodeStatus.PROVED and not node.goals):
+        path = [proved]
+        while path[-1].parent_id is not None:
+            path.append(record.nodes[path[-1].parent_id])
+        paths.append(path[::-1])
+    return paths
+
+
+def path_proof(run: str, record: TreeRecord, path: list[NodeRecord]) -> FoundProof:
     steps = []
     for parent, child in itertools.pairwise(path):
         assert child.step is not None and child.source is not None, (record.problem_name, child.node_id)
@@ -52,6 +56,26 @@ def found_proof(run: str, record: TreeRecord) -> FoundProof | None:
             ProofStep(parent.goals, child.step, child.source, child.log_probability, parent.node_id, child.node_id)
         )
     return FoundProof(run, record.problem_name, tuple(steps))
+
+
+def found_proofs(run: str, record: TreeRecord) -> list[FoundProof]:
+    """Every verified proof in the tree (the first and harvested ones), each step sequence once."""
+    proofs: dict[tuple[str, ...], FoundProof] = {}
+    for path in proof_paths(record):
+        proof = path_proof(run, record, path)
+        proofs.setdefault(tuple(step.step for step in proof.steps), proof)
+    return list(proofs.values())
+
+
+def found_proof(run: str, record: TreeRecord) -> FoundProof | None:
+    """The search's first proof."""
+    proofs = found_proofs(run, record)
+    return proofs[0] if proofs else None
+
+
+def uses_policy(proof: FoundProof) -> bool:
+    """Automation-only proofs teach the policy nothing: the sweep finds them anyway."""
+    return any(step.source == StepSource.POLICY for step in proof.steps)
 
 
 def shortest_proofs(proofs: Iterable[FoundProof]) -> list[FoundProof]:

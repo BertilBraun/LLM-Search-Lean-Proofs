@@ -1,11 +1,20 @@
+import pytest
 from expert_trees import TreeBuilder
 
 from lean_search.expert_iteration.config import PreferenceConfig
-from lean_search.expert_iteration.preferences import NodePairs, RejectionKind, dead_node_ids, node_pairs
+from lean_search.expert_iteration.preferences import (
+    NodePairs,
+    RejectionKind,
+    ValueJumpConfig,
+    dead_node_ids,
+    node_pairs,
+    value_jump_pairs,
+)
 from lean_search.expert_iteration.proofs import found_proof
 from lean_search.search import FailureKind, Node, StepSource, TreeRecord
 
-CONFIG = PreferenceConfig(max_pairs_per_node=4, policy_steps_only=True, dead_subtrees=True)
+CONFIG = PreferenceConfig(max_dead_per_node=2, max_failed_per_node=1, policy_steps_only=True, dead_subtrees=True)
+JUMPS = ValueJumpConfig(chosen_max_value=1.5, margin=3.0, max_per_node=2)
 
 
 def pairs_at_root(builder: TreeBuilder, on_path: Node, config: PreferenceConfig = CONFIG) -> NodePairs:
@@ -61,7 +70,7 @@ def test_dead_subtrees_can_be_left_out() -> None:
     dead = builder.child(builder.root, "⊢ false", step="exfalso")
     builder.failure(dead, "simp")
     on_path = builder.child(builder.root, "⊢ s", step="intro x")
-    config = PreferenceConfig(max_pairs_per_node=4, policy_steps_only=True, dead_subtrees=False)
+    config = PreferenceConfig(policy_steps_only=True, dead_subtrees=False)
     assert pairs_at_root(builder, on_path, config).pairs == ()
 
 
@@ -70,7 +79,7 @@ def test_the_cap_keeps_the_most_likely_rejections() -> None:
     for index, log_probability in enumerate((-5.0, -1.0, -3.0, -0.5)):
         builder.failure(builder.root, f"bad {index}", log_probability=log_probability)
     on_path = builder.child(builder.root, "⊢ s", step="intro x")
-    config = PreferenceConfig(max_pairs_per_node=2, policy_steps_only=True, dead_subtrees=True)
+    config = PreferenceConfig(max_dead_per_node=2, max_failed_per_node=2, policy_steps_only=True)
     assert [pair.rejected for pair in pairs_at_root(builder, on_path, config).pairs] == ["bad 3", "bad 1"]
 
 
@@ -118,3 +127,51 @@ def dead_and_alive_tree() -> TreeRecord:
 
 def test_dead_nodes_are_the_fully_expanded_ones_without_a_way_out() -> None:
     assert dead_node_ids(dead_and_alive_tree()) == frozenset({1})
+
+
+def test_dead_siblings_come_first_and_each_kind_has_its_cap() -> None:
+    builder = TreeBuilder("⊢ r")
+    for index in range(3):
+        dead = builder.child(builder.root, f"⊢ false {index}", step=f"dead {index}")
+        builder.failure(dead, "simp")
+    builder.failure(builder.root, "bad 0")
+    builder.failure(builder.root, "bad 1")
+    on_path = builder.child(builder.root, "⊢ s", step="intro x")
+    kinds = [pair.rejection for pair in pairs_at_root(builder, on_path).pairs]
+    assert kinds == [RejectionKind.DEAD, RejectionKind.DEAD, RejectionKind.ERROR]
+
+
+def jump_tree(chosen_value: float, sibling_value: float, dead_sibling: bool = False) -> TreeRecord:
+    builder = TreeBuilder("⊢ r")
+    chosen = builder.child(builder.root, "⊢ near", step="near step")
+    sibling = builder.child(builder.root, "⊢ far", step="far step")
+    chosen.value_estimate, sibling.value_estimate = chosen_value, sibling_value
+    if dead_sibling:
+        builder.failure(sibling, "simp")
+    return builder.record()
+
+
+def test_a_far_alive_sibling_is_a_value_jump_rejection() -> None:
+    pairs = value_jump_pairs(jump_tree(1.0, 5.0), "v1", JUMPS)
+    assert [(pair.chosen, pair.rejected, pair.rejection) for pair in pairs] == [
+        ("near step", "far step", RejectionKind.VALUE_JUMP)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("chosen_value", "sibling_value", "dead_sibling"), [(1.0, 3.5, False), (2.0, 9.0, False), (1.0, 9.0, True)]
+)
+def test_value_jumps_need_a_near_chosen_child_and_a_far_alive_sibling(
+    chosen_value: float, sibling_value: float, dead_sibling: bool
+) -> None:
+    assert value_jump_pairs(jump_tree(chosen_value, sibling_value, dead_sibling), "v1", JUMPS) == []
+
+
+def test_a_proof_path_child_counts_as_done_for_value_jumps() -> None:
+    builder = TreeBuilder("⊢ r")
+    on_path = builder.child(builder.root, "⊢ s", step="intro x")
+    sibling = builder.child(builder.root, "⊢ far", step="far step")
+    sibling.value_estimate = 3.0
+    proved = builder.child(on_path, step="linarith")
+    pairs = value_jump_pairs(builder.record(proved), "v1", JUMPS)
+    assert [(pair.chosen, pair.rejected) for pair in pairs] == [("intro x", "far step")]

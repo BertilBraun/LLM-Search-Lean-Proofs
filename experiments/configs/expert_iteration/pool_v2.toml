@@ -1,0 +1,24 @@
+# The loop's statement pool (experiments/phase6_pool.py --step select only; the searches' automation sweep replaces
+# the pre-filter): ~250k statements, per source the first ones of a seeded hash order of the merged decontaminated pool,
+# without statements whose proofs were traced for SFT, interleaved so that every prefix is stratified.
+statements = "normalized/statements/merged.jsonl"
+excluded_proofs = ["normalized/proofs/selected_for_tracing.jsonl"]
+seed = "expert-iteration-pool-v2"
+prefilter_search = "experiments/configs/expert_iteration/prefilter_search.toml"
+
+[[sources]]
+name = "lean_workbook"
+candidates = 70000
+
+[[sources]]
+name = "numinamath_lean"
+candidates = 40000
+
+# The whole set after deduplication is 5,640 statements.
+[[sources]]
+name = "kimina_prover_promptset"
+candidates = 6000
+
+[[sources]]
+name = "goedel_pset_v1"
+candidates = 140000

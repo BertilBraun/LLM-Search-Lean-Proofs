@@ -1,0 +1,39 @@
+# Template of a phase's value training (experiments/phase3_value.py, one GPU): the bin cross-entropy with exact, dead
+# and censored labels (sigma 0.5 as for v0) on the phase's sample of the value buffer, from the published value
+# adapter; 32k padded tokens per step are about 128 prompts. The phase fills in data and initial_adapter (the latter
+# needs ValueTrainingConfig.initial_adapter; without it the value model stays as published).
+model = "Qwen/Qwen3.5-2B"
+max_prompt_tokens = 2048
+
+[lora]
+rank = 64
+alpha = 64
+dropout = 0.0
+
+[optimization]
+method = "lora"
+learning_rate = 5e-5
+warmup_fraction = 0.05
+minimum_learning_rate_ratio = 1.0
+weight_decay = 0.0
+max_gradient_norm = 1.0
+epochs = 1
+micro_batch_tokens = 32768
+micro_batches_per_step = 1
+length_group_examples = 4096
+gradient_checkpointing = true
+seed = 0
+
+[loss]
+smoothing_sigma = 0.5
+bin_mass_weight = 1.0
+
+[readout]
+eight_or_more_steps = 12.0
+dead_steps = 16.0
+
+[evaluation]
+interval_steps = 1000
+validation_examples = 2000
+micro_batch_tokens = 32768
+served_top_k = 20

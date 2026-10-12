@@ -1,0 +1,26 @@
+# Template of a phase's policy training (experiments/phase6_dpo.py, one GPU): DPO on the phase's sample of the policy
+# buffer plus the NLL of every chosen step, from the published policy adapter, which is also the frozen reference.
+# Batches of 64 items, 10 warmup steps, then a constant learning rate. The phase fills in data and initial_adapter.
+model = "Qwen/Qwen3.5-2B"
+beta = 0.1
+chosen_nll_weight = 0.5
+batch_items = 64
+warmup_steps = 10
+max_prompt_tokens = 2048
+max_completion_tokens = 256
+
+[optimization]
+method = "lora"
+learning_rate = 1e-5
+minimum_learning_rate_ratio = 1.0
+weight_decay = 0.0
+max_gradient_norm = 1.0
+epochs = 1
+micro_batch_tokens = 16384
+gradient_checkpointing = true
+seed = 0
+
+[evaluation]
+interval_steps = 1000
+validation_pairs = 500
+micro_batch_tokens = 16384
