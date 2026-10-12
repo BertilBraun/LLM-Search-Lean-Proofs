@@ -1,0 +1,222 @@
+{
+ "name": "pool_v1",
+ "finalized": "2026-10-12T05:37:26+00:00",
+ "git_revision": "821b0c7d850a2298fa175f91469f07efe16a571a",
+ "prefilter_config": "experiments/configs/expert_iteration/prefilter_search.toml",
+ "max_expansions": 8,
+ "max_wall_seconds": 60.0,
+ "concurrency": 24,
+ "candidates": 59998,
+ "processed": 5679,
+ "prepared": 4741,
+ "automation_solved": 836,
+ "load_failed": 102,
+ "sources": [
+  {
+   "source": "lean_workbook",
+   "candidates": 16000,
+   "processed": 1514,
+   "load_failed": 60,
+   "automation_solved": 0,
+   "prepared": 1454,
+   "load_failure_rate": 0.03963011889035667,
+   "automation_solve_rate": 0.0,
+   "failure_categories": [
+    {
+     "category": "ambiguous, possible interpretations ",
+     "statements": 55
+    },
+    {
+     "category": "unexpected token '…'; expected '…'",
+     "statements": 3
+    },
+    {
+     "category": "unexpected token '…'; expected '…' or identifier",
+     "statements": 2
+    }
+   ]
+  },
+  {
+   "source": "numinamath_lean",
+   "candidates": 15998,
+   "processed": 1514,
+   "load_failed": 5,
+   "automation_solved": 3,
+   "prepared": 1506,
+   "load_failure_rate": 0.0033025099075297227,
+   "automation_solve_rate": 0.0019880715705765406,
+   "failure_categories": [
+    {
+     "category": "invalid field notation, function '…' does not have argument with type (Multiset ",
+     "statements": 2
+    },
+    {
+     "category": "invalid field notation, function '…' does not have argument with type (MvPolynom",
+     "statements": 1
+    },
+    {
+     "category": "Expected exactly one sorry in the statement, found 2.",
+     "statements": 1
+    },
+    {
+     "category": "failed to synthesize",
+     "statements": 1
+    }
+   ]
+  },
+  {
+   "source": "kimina_prover_promptset",
+   "candidates": 4000,
+   "processed": 379,
+   "load_failed": 1,
+   "automation_solved": 51,
+   "prepared": 327,
+   "load_failure_rate": 0.002638522427440633,
+   "automation_solve_rate": 0.1349206349206349,
+   "failure_categories": [
+    {
+     "category": "failed to synthesize",
+     "statements": 1
+    }
+   ]
+  },
+  {
+   "source": "goedel_pset_v1",
+   "candidates": 24000,
+   "processed": 2272,
+   "load_failed": 36,
+   "automation_solved": 782,
+   "prepared": 1454,
+   "load_failure_rate": 0.01584507042253521,
+   "automation_solve_rate": 0.34973166368515207,
+   "failure_categories": [
+    {
+     "category": "The header does not elaborate: ('…', '…', '…')",
+     "statements": 4
+    },
+    {
+     "category": "The header does not elaborate: (\"tactic '…' failed, did not find instance of the",
+     "statements": 4
+    },
+    {
+     "category": "The header does not elaborate: (\"unknown identifier '…'\", \"tactic '…' failed, eq",
+     "statements": 3
+    },
+    {
+     "category": "The header does not elaborate: ('…',)",
+     "statements": 3
+    },
+    {
+     "category": "The header does not elaborate: ('…', '…')",
+     "statements": 3
+    },
+    {
+     "category": "The header does not elaborate: ('…', '…', '…', '…', '…')",
+     "statements": 2
+    },
+    {
+     "category": "The header does not elaborate: (\"unknown constant '…'\", \"unknown constant '…'\", ",
+     "statements": 2
+    },
+    {
+     "category": "The header does not elaborate: (\"unknown identifier '…'\", \"unknown identifier '…",
+     "statements": 2
+    },
+    {
+     "category": "The header does not elaborate: ('…', '…', \"tactic '…' failed\\ncase «0»\\nn : ℕ\\nh",
+     "statements": 1
+    },
+    {
+     "category": "The header does not elaborate: ('…', '…', '…', '…', '…', '…', \"'…' tactic failed",
+     "statements": 1
+    },
+    {
+     "category": "The header does not elaborate: ('…', \"unknown constant '…'\", \"unknown constant '",
+     "statements": 1
+    },
+    {
+     "category": "The header does not elaborate: (\"expected '…' or indented tactic sequence\", '…',",
+     "statements": 1
+    }
+   ]
+  }
+ ],
+ "cost": {
+  "mean_wall_seconds": 17.76209571119113,
+  "p90_wall_seconds": 50.88796003407333,
+  "mean_lean_seconds": 17.522624190105663,
+  "mean_expansions": 5.103539355520338,
+  "invocation_wall_seconds": 1622.1840889930027,
+  "statements_per_hour": 2700.8032132282237
+ },
+ "selection": {
+  "name": "pool_v1",
+  "built": "2026-10-12T04:10:08+00:00",
+  "git_revision": "edbc3ae828ea93f47ab7264efe901e2d2d3622d5",
+  "config": {
+   "statements": "normalized/statements/merged.jsonl",
+   "excluded_proofs": [
+    "normalized/proofs/selected_for_tracing.jsonl"
+   ],
+   "seed": "expert-iteration-pool-v1",
+   "sources": [
+    {
+     "name": "lean_workbook",
+     "candidates": 16000
+    },
+    {
+     "name": "numinamath_lean",
+     "candidates": 16000
+    },
+    {
+     "name": "kimina_prover_promptset",
+     "candidates": 4000
+    },
+    {
+     "name": "goedel_pset_v1",
+     "candidates": 24000
+    }
+   ],
+   "prefilter_search": "experiments/configs/expert_iteration/prefilter_search.toml"
+  },
+  "excluded_statement_keys": 246606,
+  "headers_rewritten": 19912,
+  "duplicate_names_dropped": 2,
+  "candidates": 59998,
+  "sources": [
+   {
+    "source": "lean_workbook",
+    "quota": 16000,
+    "available": 98207,
+    "checked": 70194,
+    "excluded": 20733,
+    "selected": 16000
+   },
+   {
+    "source": "numinamath_lean",
+    "quota": 16000,
+    "available": 95394,
+    "checked": 76806,
+    "excluded": 29594,
+    "selected": 16000
+   },
+   {
+    "source": "kimina_prover_promptset",
+    "quota": 4000,
+    "available": 5640,
+    "checked": 5640,
+    "excluded": 9,
+    "selected": 4000
+   },
+   {
+    "source": "goedel_pset_v1",
+    "quota": 24000,
+    "available": 1622993,
+    "checked": 171019,
+    "excluded": 2040,
+    "selected": 24000
+   }
+  ],
+  "seconds": 42.78073226590641
+ }
+}
