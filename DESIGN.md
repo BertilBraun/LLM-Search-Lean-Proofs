@@ -166,7 +166,14 @@ allows.
     (`results/phase3_astar_v0_sft_v2/`).
   - [ ] Value v1 from statement-pool search trees (dead and censored labels).
 - [ ] **Phase 4** — Retriever, applicability annotation, list-length ablation (row 3).
+  - [x] ReProver retriever over 199,810 premises (LeanDojo corpus plus 25,556 `to_additive`/alias theorems it
+    misses). Recall@8 0.54 on LeanDojo novel_premises (upper bound) but **0.16 on held-out competition steps
+    (Hit@8 22%)**; only 39% of competition steps use a library theorem (`results/phase4_recall/`).
+  - [ ] Reduced ablation: lemma-aware SFT (~15M tokens), lists of 0/8/32 on 64 hard miniF2F-valid problems.
 - [ ] **Phase 5** — Single-step on-policy reasoning (row 5).
+  - [x] Pilot (`results/phase5_pilot/`): SFT v2 with thinking succeeds on 12.5% of samples vs 48.2% without,
+    at ~80× the tokens per success; a brevity instruction does not shorten thoughts; the base model is worse.
+  - [ ] One round of rejection-sampling training (8k states); stop if tokens per success stay > 10× non-thinking.
 - [ ] **Phase 6** — Expert iteration rounds (row 6).
 - [ ] **Phase 7** — Final ladder on miniF2F-test, write-up in `results/README.md`.
 
