@@ -1,0 +1,529 @@
+{
+ "run_name": "phase2_sft_v1",
+ "started": "2026-10-11T22:37:47+00:00",
+ "git_revision": "5b8ef73f97f7c7b2e8b67d5e2bfa911978d4aabc",
+ "config": {
+  "model": "Qwen/Qwen3.5-2B",
+  "data": "v1",
+  "lora": {
+   "rank": 64,
+   "alpha": 64,
+   "dropout": 0.0
+  },
+  "optimization": {
+   "method": "lora",
+   "learning_rate": 0.0002,
+   "warmup_fraction": 0.03,
+   "minimum_learning_rate_ratio": 0.1,
+   "weight_decay": 0.0,
+   "max_gradient_norm": 1.0,
+   "epochs": 2,
+   "max_steps": 0,
+   "micro_batch_tokens": 32768,
+   "micro_batches_per_step": 1,
+   "length_group_examples": 4096,
+   "gradient_checkpointing": true,
+   "seed": 0
+  },
+  "evaluation": {
+   "interval_steps": 200,
+   "validation_examples": 2000,
+   "micro_batch_tokens": 16384,
+   "generation_examples": 256,
+   "generation_batch_size": 64,
+   "max_new_tokens": 256
+  },
+  "merge": false
+ },
+ "world_size": 1,
+ "flash_linear_attention": true,
+ "train_examples": 77209,
+ "train_tokens": 16756384,
+ "validation_examples": 1509,
+ "tokenization_seconds": 44.516441761981696,
+ "result": {
+  "steps": 1097,
+  "examples": 154418,
+  "tokens": 33512768,
+  "padded_tokens": 35133711,
+  "completion_tokens": 5031812,
+  "training_seconds": 9189.292681020335,
+  "tokens_per_second": 3646.936621054375,
+  "peak_memory_gib": 14.536560535430908,
+  "trainable_parameters": 67276800,
+  "evaluations": [
+   {
+    "step": 0,
+    "validation_loss": 0.6176362443512082,
+    "validation_examples": 1509,
+    "teacher_forced_exact_match": 0.0,
+    "generation_exact_match": 0.0,
+    "generation_examples": 256,
+    "evaluation_seconds": 121.52308006503154,
+    "mismatches": [
+     {
+      "goals": [
+       "⊢ 44 ≤ √2021 ∧ √2021 < 44 + 1"
+      ],
+      "target": "constructor",
+      "generated": "norm_num [Real.sqrt_lt, Real.sqrt_eq_iff_sq_eq, sq, Nat.cast_le, Nat.cast_add, Nat.cast_one]\n<;> linarith"
+     },
+     {
+      "goals": [
+       "x y : ℝ\nhx : 0 < x\nhy : 0 < y\nhxy : x > y\nz t : ℝ\nhz : z = (x + y) / 2\nht : t = √(x * y)\nh : x - y = 3 * (z - t)\n⊢ x / y = 25"
+      ],
+      "target": "rw [hz, ht] at h",
+      "generated": "have h₁ : x / y = 25 := by\n  have h₂ : x = 25 * y := by\n    nlinarith [h, hx, hy, hxy]\n  field_simp [h₂]\n  <;> ring_nf\n  <;> norm_num\n  <;> linarith"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\n⊢ ((a * (b + c) + b * (a + b)) * (c + a) + c * ((a + b) * (b + c))) * (3 * (6 * (a * b + b * c + a * c))) ≤\n    (4 * (6 * (a * b + b * c + a * c)) + (a ^ 2 + b ^ 2 + c ^ 2) * 3) * ((a + b) * (b + c) * (c + a))"
+      ],
+      "target": "nlinarith [sq_nonneg (a - b), sq_nonneg (b - c), sq_nonneg (c - a), mul_nonneg ha.le hb.le, mul_nonneg hb.le hc.le, mul_nonneg ha.le hc.le,\n  mul_nonneg (sq_nonneg (a - b)) hc.le, mul_nonneg (sq_nonneg (b - c)) ha.le, mul_nonneg (sq_nonneg (c - a)) hb.le,\n  mul_nonneg (sq_nonneg (a - b)) ha.le, mul_nonneg (sq_nonneg (b - c)) hb.le, mul_nonneg (sq_nonneg (c - a)) hc.le,\n  mul_nonneg (sq_nonneg (a + b - 2 * c)) hc.le, mul_nonneg (sq_nonneg (b + c - 2 * a)) ha.le, mul_nonneg (sq_nonneg (c + a - 2 * b)) hb.le]\n<;> linarith",
+      "generated": "have h₁ : 0 < a * b := by positivity\nhave h₂ : 0 < b * c := by positivity\nhave h₃ : 0 < a * c := by positivity\nhave h₄ : 0 < a + b := by linarith\nhave h₅ : 0 < b + c := by linarith\nhave h₆ : 0 < c + a := by linarith\nhave h₇ : 0 < a * b + b * c + a * c := by positivity\nhave h₈ : 0 < 6 * (a * b + b * c + a * c) := by positivity\nhave h₉ : 0 < 4 * (6 * (a * b + b * c + a * c)) := by positivity\nhave h₁₀ : 0 < (a ^ 2 + b ^ 2 + c ^ 2) * 3 := by positivity\nhave h₁₁ : 0 < (a + b) * (b + c) * (c + a) := by positivity\nnlinarith [sq_nonneg (a"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 ≤ a\nhb : 0 ≤ b\nhc : 0 ≤ c\nhab : a + b + c = 3\nh₀ : √(a ^ 2 + a) ≥ a\nh₁ : √(b ^ 2 + b) ≥ b\nh₂ : √(c ^ 2 + c) ≥ c\n⊢ √(a ^ 2 + a) + √(b ^ 2 + b) + √(c ^ 2 + c) ≥ 2 * √3"
+      ],
+      "target": "nlinarith [sq_sqrt (show (0 : ℝ) ≤ 3 by norm_num), sq_sqrt (show (0 : ℝ) ≤ a^2 + a by nlinarith),\n  sq_sqrt (show (0 : ℝ) ≤ b^2 + b by nlinarith), sq_sqrt (show (0 : ℝ) ≤ c^2 + c by nlinarith)]",
+      "generated": "have h₃ : √(a ^ 2 + a) ≥ a := h₀\nhave h₄ : √(b ^ 2 + b) ≥ b := h₁\nhave h₅ : √(c ^ 2 + c) ≥ c := h₂\ncalc\n  _ ≥ a + b + c := by linarith\n  _ = 3 := by rw [hab]\n  _ ≥ 2 * √3 := by\n    have h₆ : a + b + c = 3 := hab\n    have h₇ : √3 ≥ 1 := by\n      apply Real.le_sqrt_of_sq_le\n      norm_num\n    have h₈ : 2 * √3 ≥ 2 := by\n      nlinarith [Real.sqrt_nonneg 3, Real.sq_sqrt (show 0 ≤ 3 by norm_num)]\n    nlinarith [Real.sqrt_nonneg 3, Real.sq_sqrt (show 0 ≤ 3 by norm_num)]"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\nh₀ : 0 < a ^ 2\nh₁ : 0 < b * c\nh₂ : 0 < a ^ 2 + b * c\n⊢ 4 / (a ^ 2 + b * c) ≤ 1 / a ^ 2 + 1 / (b * c)"
+      ],
+      "target": "have h₃ : 0 < a ^ 2 * b * c := by nlinarith",
+      "generated": "have h₃ : 0 < a ^ 2 + b * c := by linarith\nhave h₄ : 0 < a ^ 2 := by linarith\nhave h₅ : 0 < b * c := by linarith\nhave h₆ : 0 < a ^ 2 * (b * c) := by positivity\nhave h₇ : 0 < a ^ 2 + b * c := by linarith\nhave h₈ : 0 < a ^ 2 * (b * c) := by positivity\nhave h₉ : 0 < a ^ 2 + b * c := by linarith\nhave h₁₀ : 0 < a ^ 2 * (b * c) := by positivity\nhave h₁₁ : 0 < a ^ 2 + b * c := by linarith\nhave h₁₂ : 0 < a ^ 2 * (b * c) := by positivity\nhave h₁₃ : 0 < a ^ 2 + b * c := by linarith\nhave h₁₄ : 0 < a ^ 2 * (b * c) := by positivity\nhave h₁₅ :"
+     },
+     {
+      "goals": [
+       "a b : ℝ\nha : 0 ≤ a\nhb : 0 ≤ b\nh₀ : 0 ≤ a * b\nh₁ : 0 ≤ a * b * 2\nh₂ : 0 ≤ a * b * 3\nh₃ : 0 ≤ a * b * 4\nh₄ : 0 ≤ a * b * 5\nh₅ : 0 ≤ a * b * 6\n⊢ (a + b + 2) / (a + 1) / (b + 1) + a * b / 18 ≥ 8 / 9"
+      ],
+      "target": "have h₆ : 0 ≤ a * b * 7 := by nlinarith",
+      "generated": "have h₆ : 0 ≤ a * b * 7 := by norm_num\nhave h₇ : 0 ≤ a * b * 8 := by norm_num\nhave h₈ : 0 ≤ a * b * 9 := by norm_num\nhave h₉ : 0 ≤ a * b * 10 := by norm_num\nhave h₁₀ : 0 ≤ a * b * 11 := by norm_num\nhave h₁₁ : 0 ≤ a * b * 12 := by norm_num\nhave h₁₂ : 0 ≤ a * b * 13 := by norm_num\nhave h₁₃ : 0 ≤ a * b * 14 := by norm_num\nhave h₁₄ : 0 ≤ a * b * 15 := by norm_num\nhave h₁₅ : 0 ≤ a * b * 16 := by norm_num\nhave h₁₆ : 0 ≤ a * b * 17 := by norm_num\nhave h₁₇ : 0 ≤ a * b * 18 := by norm_num\nhave h₁₈ : 0 ≤ a * b *"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\n⊢ 0 ≤\n    a * b * c * a⁻¹ * b⁻¹ * c⁻¹ * 3 + a * b ^ 2 * a⁻¹ * b⁻¹ * c⁻¹ + a * c ^ 2 * a⁻¹ * b⁻¹ * c⁻¹ +\n              a ^ 2 * b * a⁻¹ * b⁻¹ * c⁻¹ +\n            a ^ 2 * c * a⁻¹ * b⁻¹ * c⁻¹ +\n          b * c ^ 2 * a⁻¹ * b⁻¹ * c⁻¹ +\n        b ^ 2 * c * a⁻¹ * b⁻¹ * c⁻¹ -\n      (a * b * (a * b * 4 + a * c * 4 + a ^ 2 * 2 + b * c * 4 + b ^ 2 * 2 + c ^ 2 * 2)⁻¹ * 6 +\n                a * c * (a * b * 4 + a * c * 4 + a ^ 2 * 2 + b * c * 4 + b ^ 2 * 2 + c ^ 2 * 2)⁻¹ * 6 +\n              a ^ 2 * (a * b * 4 + a * c * 4 + a ^ 2 * 2 + b * c * 4 + b ^ 2 * 2 + c ^ 2 * 2)⁻¹ * 12 +\n            b * c * (a * b * 4 + a * c * 4 + a ^ 2 * 2 + b * c * 4 + b ^ 2 * 2 + c ^ 2 * 2)⁻¹ * 6 +\n          b ^ 2 * (a * b * 4 + a * c * 4 + a ^ 2 * 2 + b * c * 4 + b ^ 2 * 2 + c ^ 2 * 2)⁻¹ * 12 +\n        c ^ 2 * (a * b * 4 + a * c * 4 + a ^ 2 * 2 + b * c * 4 + b ^ 2 * 2 + c ^ 2 * 2)⁻¹ * 12)"
+      ],
+      "target": "field_simp [ha.ne', hb.ne', hc.ne', add_assoc]",
+      "generated": "have h₁ : 0 < a * b * c := by positivity\nhave h₂ : 0 < a * b := by positivity\nhave h₃ : 0 < a * c := by positivity\nhave h₄ : 0 < b * c := by positivity\nhave h₅ : 0 < a * b * c * a⁻¹ * b⁻¹ * c⁻¹ := by positivity\nhave h₆ : 0 < a * b * (a * b * 4 + a * c * 4 + a ^ 2 * 2 + b * c * 4 + b ^ 2 * 2 + c ^ 2 * 2) := by positivity\nhave h₇ : 0 < a * c * (a * b * 4 + a * c * 4 + a ^ 2 * 2 + b * c * 4 + b ^ 2 * 2 + c ^ 2 * 2) := by positivity\nhave h₈ : 0 < a ^ 2 * (a * b * 4 + a * c * 4 + a ^"
+     },
+     {
+      "goals": [
+       "b : ℤ\n⊢ 7 ∣ 11 * b → 7 ∣ b"
+      ],
+      "target": "intro h",
+      "generated": "b : ℤ\n⊢ 7 ∣ 11 * b → 7 ∣ b"
+     }
+    ]
+   },
+   {
+    "step": 200,
+    "validation_loss": 0.2611083066311908,
+    "validation_examples": 1509,
+    "teacher_forced_exact_match": 0.18886679920477137,
+    "generation_exact_match": 0.18359375,
+    "generation_examples": 256,
+    "evaluation_seconds": 103.08308981300797,
+    "mismatches": [
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\n⊢ ((a * (b + c) + b * (a + b)) * (c + a) + c * ((a + b) * (b + c))) * (3 * (6 * (a * b + b * c + a * c))) ≤\n    (4 * (6 * (a * b + b * c + a * c)) + (a ^ 2 + b ^ 2 + c ^ 2) * 3) * ((a + b) * (b + c) * (c + a))"
+      ],
+      "target": "nlinarith [sq_nonneg (a - b), sq_nonneg (b - c), sq_nonneg (c - a), mul_nonneg ha.le hb.le, mul_nonneg hb.le hc.le, mul_nonneg ha.le hc.le,\n  mul_nonneg (sq_nonneg (a - b)) hc.le, mul_nonneg (sq_nonneg (b - c)) ha.le, mul_nonneg (sq_nonneg (c - a)) hb.le,\n  mul_nonneg (sq_nonneg (a - b)) ha.le, mul_nonneg (sq_nonneg (b - c)) hb.le, mul_nonneg (sq_nonneg (c - a)) hc.le,\n  mul_nonneg (sq_nonneg (a + b - 2 * c)) hc.le, mul_nonneg (sq_nonneg (b + c - 2 * a)) ha.le, mul_nonneg (sq_nonneg (c + a - 2 * b)) hb.le]\n<;> linarith",
+      "generated": "ring_nf"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 ≤ a\nhb : 0 ≤ b\nhc : 0 ≤ c\nhab : a + b + c = 3\nh₀ : √(a ^ 2 + a) ≥ a\nh₁ : √(b ^ 2 + b) ≥ b\nh₂ : √(c ^ 2 + c) ≥ c\n⊢ √(a ^ 2 + a) + √(b ^ 2 + b) + √(c ^ 2 + c) ≥ 2 * √3"
+      ],
+      "target": "nlinarith [sq_sqrt (show (0 : ℝ) ≤ 3 by norm_num), sq_sqrt (show (0 : ℝ) ≤ a^2 + a by nlinarith),\n  sq_sqrt (show (0 : ℝ) ≤ b^2 + b by nlinarith), sq_sqrt (show (0 : ℝ) ≤ c^2 + c by nlinarith)]",
+      "generated": "nlinarith [Real.sqrt_nonneg 3, Real.sq_sqrt (show 0 ≤ 3 by norm_num),\n  Real.sqrt_nonneg (a ^ 2 + a), Real.sqrt_nonneg (b ^ 2 + b), Real.sqrt_nonneg (c ^ 2 + c)]"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\nh₀ : 0 < a ^ 2\nh₁ : 0 < b * c\nh₂ : 0 < a ^ 2 + b * c\n⊢ 4 / (a ^ 2 + b * c) ≤ 1 / a ^ 2 + 1 / (b * c)"
+      ],
+      "target": "have h₃ : 0 < a ^ 2 * b * c := by nlinarith",
+      "generated": "field_simp [h₀, h₁, h₂]"
+     },
+     {
+      "goals": [
+       "a b : ℝ\nha : 0 ≤ a\nhb : 0 ≤ b\nh₀ : 0 ≤ a * b\nh₁ : 0 ≤ a * b * 2\nh₂ : 0 ≤ a * b * 3\nh₃ : 0 ≤ a * b * 4\nh₄ : 0 ≤ a * b * 5\nh₅ : 0 ≤ a * b * 6\n⊢ (a + b + 2) / (a + 1) / (b + 1) + a * b / 18 ≥ 8 / 9"
+      ],
+      "target": "have h₆ : 0 ≤ a * b * 7 := by nlinarith",
+      "generated": "have h₆ : 0 ≤ a * b * 7 := by positivity"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\n⊢ 0 ≤\n    a * b * c * a⁻¹ * b⁻¹ * c⁻¹ * 3 + a * b ^ 2 * a⁻¹ * b⁻¹ * c⁻¹ + a * c ^ 2 * a⁻¹ * b⁻¹ * c⁻¹ +\n              a ^ 2 * b * a⁻¹ * b⁻¹ * c⁻¹ +\n            a ^ 2 * c * a⁻¹ * b⁻¹ * c⁻¹ +\n          b * c ^ 2 * a⁻¹ * b⁻¹ * c⁻¹ +\n        b ^ 2 * c * a⁻¹ * b⁻¹ * c⁻¹ -\n      (a * b * (a * b * 4 + a * c * 4 + a ^ 2 * 2 + b * c * 4 + b ^ 2 * 2 + c ^ 2 * 2)⁻¹ * 6 +\n                a * c * (a * b * 4 + a * c * 4 + a ^ 2 * 2 + b * c * 4 + b ^ 2 * 2 + c ^ 2 * 2)⁻¹ * 6 +\n              a ^ 2 * (a * b * 4 + a * c * 4 + a ^ 2 * 2 + b * c * 4 + b ^ 2 * 2 + c ^ 2 * 2)⁻¹ * 12 +\n            b * c * (a * b * 4 + a * c * 4 + a ^ 2 * 2 + b * c * 4 + b ^ 2 * 2 + c ^ 2 * 2)⁻¹ * 6 +\n          b ^ 2 * (a * b * 4 + a * c * 4 + a ^ 2 * 2 + b * c * 4 + b ^ 2 * 2 + c ^ 2 * 2)⁻¹ * 12 +\n        c ^ 2 * (a * b * 4 + a * c * 4 + a ^ 2 * 2 + b * c * 4 + b ^ 2 * 2 + c ^ 2 * 2)⁻¹ * 12)"
+      ],
+      "target": "field_simp [ha.ne', hb.ne', hc.ne', add_assoc]",
+      "generated": "field_simp [ha.ne', hb.ne', hc.ne']"
+     },
+     {
+      "goals": [
+       "x : ℝ\n⊢ 5 * (x ^ 16 + x ^ 8 + 1) ^ (1 / 5) = x ^ 8 + x ^ 2 + 5 ↔ x = 0"
+      ],
+      "target": "constructor",
+      "generated": "simp [pow_succ, mul_add, mul_one, mul_comm, mul_left_comm, mul_assoc]"
+     },
+     {
+      "goals": [
+       "case h\nn k : ℕ\nh₁ : 0 < n ∧ 0 < k\nm : ℕ\nhm : n = k ^ 2 * m\n⊢ n = n * 1 + 1 * 0 + 0 * n"
+      ],
+      "target": "linarith",
+      "generated": "rw [hm]"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\nhab : a + b + c = 1\nh₀ : √(a + b * c) ≤ 1 - (b + c) / 2\nh₁ : √(b + c * a) ≤ 1 - (c + a) / 2\nh₂ : √(c + a * b) ≤ 1 - (a + b) / 2\nh₃ : √(b * c) ≤ (b + c) / 2\n⊢ (√(a + b * c) + √(b * c)) * (√(b + c * a) + √(c * a)) * (√(c + a * b) + √(a * b)) ≤ 1"
+      ],
+      "target": "have h₄ : Real.sqrt (c * a) ≤ (c + a) / 2 := by\n  rw [Real.sqrt_le_iff]\n  constructor <;> norm_num <;>\n  nlinarith [sq_nonneg (c - a)]",
+      "generated": "have h₄ : Real.sqrt (c * a) ≤ (c + a) / 2 := by\n  nlinarith [Real.sqrt_nonneg (c * a), Real.sq_sqrt (by positivity : 0 ≤ c * a),\n    sq_nonneg (c - a)]"
+     }
+    ]
+   },
+   {
+    "step": 400,
+    "validation_loss": 0.2421327627794749,
+    "validation_examples": 1509,
+    "teacher_forced_exact_match": 0.2591119946984758,
+    "generation_exact_match": 0.234375,
+    "generation_examples": 256,
+    "evaluation_seconds": 94.89965493802447,
+    "mismatches": [
+     {
+      "goals": [
+       "x y : ℝ\nhx : 0 < x\nhy : 0 < y\nhxy : x > y\nz t : ℝ\nhz : z = (x + y) / 2\nht : t = √(x * y)\nh : x - y = 3 * (z - t)\n⊢ x / y = 25"
+      ],
+      "target": "rw [hz, ht] at h",
+      "generated": "have h1 : x = 25 * y := by\n  nlinarith [sq_sqrt (mul_nonneg hx.le hy.le), sq_nonneg (x - y), sq_nonneg (x + y)]"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\n⊢ ((a * (b + c) + b * (a + b)) * (c + a) + c * ((a + b) * (b + c))) * (3 * (6 * (a * b + b * c + a * c))) ≤\n    (4 * (6 * (a * b + b * c + a * c)) + (a ^ 2 + b ^ 2 + c ^ 2) * 3) * ((a + b) * (b + c) * (c + a))"
+      ],
+      "target": "nlinarith [sq_nonneg (a - b), sq_nonneg (b - c), sq_nonneg (c - a), mul_nonneg ha.le hb.le, mul_nonneg hb.le hc.le, mul_nonneg ha.le hc.le,\n  mul_nonneg (sq_nonneg (a - b)) hc.le, mul_nonneg (sq_nonneg (b - c)) ha.le, mul_nonneg (sq_nonneg (c - a)) hb.le,\n  mul_nonneg (sq_nonneg (a - b)) ha.le, mul_nonneg (sq_nonneg (b - c)) hb.le, mul_nonneg (sq_nonneg (c - a)) hc.le,\n  mul_nonneg (sq_nonneg (a + b - 2 * c)) hc.le, mul_nonneg (sq_nonneg (b + c - 2 * a)) ha.le, mul_nonneg (sq_nonneg (c + a - 2 * b)) hb.le]\n<;> linarith",
+      "generated": "ring_nf"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 ≤ a\nhb : 0 ≤ b\nhc : 0 ≤ c\nhab : a + b + c = 3\nh₀ : √(a ^ 2 + a) ≥ a\nh₁ : √(b ^ 2 + b) ≥ b\nh₂ : √(c ^ 2 + c) ≥ c\n⊢ √(a ^ 2 + a) + √(b ^ 2 + b) + √(c ^ 2 + c) ≥ 2 * √3"
+      ],
+      "target": "nlinarith [sq_sqrt (show (0 : ℝ) ≤ 3 by norm_num), sq_sqrt (show (0 : ℝ) ≤ a^2 + a by nlinarith),\n  sq_sqrt (show (0 : ℝ) ≤ b^2 + b by nlinarith), sq_sqrt (show (0 : ℝ) ≤ c^2 + c by nlinarith)]",
+      "generated": "nlinarith [sq_sqrt (show 0 ≤ a^2 + a by nlinarith), sq_sqrt (show 0 ≤ b^2 + b by nlinarith), sq_sqrt (show 0 ≤ c^2 + c by nlinarith),\n  sq_nonneg (Real.sqrt (a^2 + a) - a), sq_nonneg (Real.sqrt (b^2 + b) - b), sq_nonneg (Real.sqrt (c^2 + c) - c)]"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\nh₀ : 0 < a ^ 2\nh₁ : 0 < b * c\nh₂ : 0 < a ^ 2 + b * c\n⊢ 4 / (a ^ 2 + b * c) ≤ 1 / a ^ 2 + 1 / (b * c)"
+      ],
+      "target": "have h₃ : 0 < a ^ 2 * b * c := by nlinarith",
+      "generated": "field_simp"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\n⊢ 0 ≤\n    a * b * c * a⁻¹ * b⁻¹ * c⁻¹ * 3 + a * b ^ 2 * a⁻¹ * b⁻¹ * c⁻¹ + a * c ^ 2 * a⁻¹ * b⁻¹ * c⁻¹ +\n              a ^ 2 * b * a⁻¹ * b⁻¹ * c⁻¹ +\n            a ^ 2 * c * a⁻¹ * b⁻¹ * c⁻¹ +\n          b * c ^ 2 * a⁻¹ * b⁻¹ * c⁻¹ +\n        b ^ 2 * c * a⁻¹ * b⁻¹ * c⁻¹ -\n      (a * b * (a * b * 4 + a * c * 4 + a ^ 2 * 2 + b * c * 4 + b ^ 2 * 2 + c ^ 2 * 2)⁻¹ * 6 +\n                a * c * (a * b * 4 + a * c * 4 + a ^ 2 * 2 + b * c * 4 + b ^ 2 * 2 + c ^ 2 * 2)⁻¹ * 6 +\n              a ^ 2 * (a * b * 4 + a * c * 4 + a ^ 2 * 2 + b * c * 4 + b ^ 2 * 2 + c ^ 2 * 2)⁻¹ * 12 +\n            b * c * (a * b * 4 + a * c * 4 + a ^ 2 * 2 + b * c * 4 + b ^ 2 * 2 + c ^ 2 * 2)⁻¹ * 6 +\n          b ^ 2 * (a * b * 4 + a * c * 4 + a ^ 2 * 2 + b * c * 4 + b ^ 2 * 2 + c ^ 2 * 2)⁻¹ * 12 +\n        c ^ 2 * (a * b * 4 + a * c * 4 + a ^ 2 * 2 + b * c * 4 + b ^ 2 * 2 + c ^ 2 * 2)⁻¹ * 12)"
+      ],
+      "target": "field_simp [ha.ne', hb.ne', hc.ne', add_assoc]",
+      "generated": "positivity"
+     },
+     {
+      "goals": [
+       "x : ℝ\n⊢ 5 * (x ^ 16 + x ^ 8 + 1) ^ (1 / 5) = x ^ 8 + x ^ 2 + 5 ↔ x = 0"
+      ],
+      "target": "constructor",
+      "generated": "simp [add_assoc, add_left_comm, add_right_comm]"
+     },
+     {
+      "goals": [
+       "case h\nn k : ℕ\nh₁ : 0 < n ∧ 0 < k\nm : ℕ\nhm : n = k ^ 2 * m\n⊢ n = n * 1 + 1 * 0 + 0 * n"
+      ],
+      "target": "linarith",
+      "generated": "simp [hm]"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\nhab : a + b + c = 1\nh₀ : √(a + b * c) ≤ 1 - (b + c) / 2\nh₁ : √(b + c * a) ≤ 1 - (c + a) / 2\nh₂ : √(c + a * b) ≤ 1 - (a + b) / 2\nh₃ : √(b * c) ≤ (b + c) / 2\n⊢ (√(a + b * c) + √(b * c)) * (√(b + c * a) + √(c * a)) * (√(c + a * b) + √(a * b)) ≤ 1"
+      ],
+      "target": "have h₄ : Real.sqrt (c * a) ≤ (c + a) / 2 := by\n  rw [Real.sqrt_le_iff]\n  constructor <;> norm_num <;>\n  nlinarith [sq_nonneg (c - a)]",
+      "generated": "nlinarith [sq_nonneg (a - b), sq_nonneg (b - c), sq_nonneg (c - a)]"
+     }
+    ]
+   },
+   {
+    "step": 600,
+    "validation_loss": 0.22820189450522038,
+    "validation_examples": 1509,
+    "teacher_forced_exact_match": 0.2584493041749503,
+    "generation_exact_match": 0.25390625,
+    "generation_examples": 256,
+    "evaluation_seconds": 101.46595922799315,
+    "mismatches": [
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\n⊢ ((a * (b + c) + b * (a + b)) * (c + a) + c * ((a + b) * (b + c))) * (3 * (6 * (a * b + b * c + a * c))) ≤\n    (4 * (6 * (a * b + b * c + a * c)) + (a ^ 2 + b ^ 2 + c ^ 2) * 3) * ((a + b) * (b + c) * (c + a))"
+      ],
+      "target": "nlinarith [sq_nonneg (a - b), sq_nonneg (b - c), sq_nonneg (c - a), mul_nonneg ha.le hb.le, mul_nonneg hb.le hc.le, mul_nonneg ha.le hc.le,\n  mul_nonneg (sq_nonneg (a - b)) hc.le, mul_nonneg (sq_nonneg (b - c)) ha.le, mul_nonneg (sq_nonneg (c - a)) hb.le,\n  mul_nonneg (sq_nonneg (a - b)) ha.le, mul_nonneg (sq_nonneg (b - c)) hb.le, mul_nonneg (sq_nonneg (c - a)) hc.le,\n  mul_nonneg (sq_nonneg (a + b - 2 * c)) hc.le, mul_nonneg (sq_nonneg (b + c - 2 * a)) ha.le, mul_nonneg (sq_nonneg (c + a - 2 * b)) hb.le]\n<;> linarith",
+      "generated": "nlinarith [sq_nonneg (a - b), sq_nonneg (b - c), sq_nonneg (c - a), mul_nonneg ha.le hb.le, mul_nonneg hb.le hc.le, mul_nonneg hc.le ha.le,\n  mul_nonneg (sq_nonneg (a - b)) ha.le, mul_nonneg (sq_nonneg (b - c)) hb.le, mul_nonneg (sq_nonneg (c - a)) hc.le,\n  mul_nonneg (sq_nonneg (a - b)) hb.le, mul_nonneg (sq_nonneg (b - c)) hc.le, mul_nonneg (sq_nonneg (c - a)) ha.le]"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 ≤ a\nhb : 0 ≤ b\nhc : 0 ≤ c\nhab : a + b + c = 3\nh₀ : √(a ^ 2 + a) ≥ a\nh₁ : √(b ^ 2 + b) ≥ b\nh₂ : √(c ^ 2 + c) ≥ c\n⊢ √(a ^ 2 + a) + √(b ^ 2 + b) + √(c ^ 2 + c) ≥ 2 * √3"
+      ],
+      "target": "nlinarith [sq_sqrt (show (0 : ℝ) ≤ 3 by norm_num), sq_sqrt (show (0 : ℝ) ≤ a^2 + a by nlinarith),\n  sq_sqrt (show (0 : ℝ) ≤ b^2 + b by nlinarith), sq_sqrt (show (0 : ℝ) ≤ c^2 + c by nlinarith)]",
+      "generated": "nlinarith [sq_sqrt (show 0 ≤ 3 by norm_num),\n  sq_sqrt (show 0 ≤ a ^ 2 + a by nlinarith),\n  sq_sqrt (show 0 ≤ b ^ 2 + b by nlinarith),\n  sq_sqrt (show 0 ≤ c ^ 2 + c by nlinarith)]"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\nh₀ : 0 < a ^ 2\nh₁ : 0 < b * c\nh₂ : 0 < a ^ 2 + b * c\n⊢ 4 / (a ^ 2 + b * c) ≤ 1 / a ^ 2 + 1 / (b * c)"
+      ],
+      "target": "have h₃ : 0 < a ^ 2 * b * c := by nlinarith",
+      "generated": "field_simp"
+     },
+     {
+      "goals": [
+       "a b : ℝ\nha : 0 ≤ a\nhb : 0 ≤ b\nh₀ : 0 ≤ a * b\nh₁ : 0 ≤ a * b * 2\nh₂ : 0 ≤ a * b * 3\nh₃ : 0 ≤ a * b * 4\nh₄ : 0 ≤ a * b * 5\nh₅ : 0 ≤ a * b * 6\n⊢ (a + b + 2) / (a + 1) / (b + 1) + a * b / 18 ≥ 8 / 9"
+      ],
+      "target": "have h₆ : 0 ≤ a * b * 7 := by nlinarith",
+      "generated": "have h₆ : 0 ≤ a * b * 7 := by positivity"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\n⊢ 0 ≤\n    a * b * c * a⁻¹ * b⁻¹ * c⁻¹ * 3 + a * b ^ 2 * a⁻¹ * b⁻¹ * c⁻¹ + a * c ^ 2 * a⁻¹ * b⁻¹ * c⁻¹ +\n              a ^ 2 * b * a⁻¹ * b⁻¹ * c⁻¹ +\n            a ^ 2 * c * a⁻¹ * b⁻¹ * c⁻¹ +\n          b * c ^ 2 * a⁻¹ * b⁻¹ * c⁻¹ +\n        b ^ 2 * c * a⁻¹ * b⁻¹ * c⁻¹ -\n      (a * b * (a * b * 4 + a * c * 4 + a ^ 2 * 2 + b * c * 4 + b ^ 2 * 2 + c ^ 2 * 2)⁻¹ * 6 +\n                a * c * (a * b * 4 + a * c * 4 + a ^ 2 * 2 + b * c * 4 + b ^ 2 * 2 + c ^ 2 * 2)⁻¹ * 6 +\n              a ^ 2 * (a * b * 4 + a * c * 4 + a ^ 2 * 2 + b * c * 4 + b ^ 2 * 2 + c ^ 2 * 2)⁻¹ * 12 +\n            b * c * (a * b * 4 + a * c * 4 + a ^ 2 * 2 + b * c * 4 + b ^ 2 * 2 + c ^ 2 * 2)⁻¹ * 6 +\n          b ^ 2 * (a * b * 4 + a * c * 4 + a ^ 2 * 2 + b * c * 4 + b ^ 2 * 2 + c ^ 2 * 2)⁻¹ * 12 +\n        c ^ 2 * (a * b * 4 + a * c * 4 + a ^ 2 * 2 + b * c * 4 + b ^ 2 * 2 + c ^ 2 * 2)⁻¹ * 12)"
+      ],
+      "target": "field_simp [ha.ne', hb.ne', hc.ne', add_assoc]",
+      "generated": "field_simp [ha.ne', hb.ne', hc.ne']"
+     },
+     {
+      "goals": [
+       "x : ℝ\n⊢ 5 * (x ^ 16 + x ^ 8 + 1) ^ (1 / 5) = x ^ 8 + x ^ 2 + 5 ↔ x = 0"
+      ],
+      "target": "constructor",
+      "generated": "ring_nf"
+     },
+     {
+      "goals": [
+       "case h\nn k : ℕ\nh₁ : 0 < n ∧ 0 < k\nm : ℕ\nhm : n = k ^ 2 * m\n⊢ n = n * 1 + 1 * 0 + 0 * n"
+      ],
+      "target": "linarith",
+      "generated": "simp [hm]"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\nhab : a + b + c = 1\nh₀ : √(a + b * c) ≤ 1 - (b + c) / 2\nh₁ : √(b + c * a) ≤ 1 - (c + a) / 2\nh₂ : √(c + a * b) ≤ 1 - (a + b) / 2\nh₃ : √(b * c) ≤ (b + c) / 2\n⊢ (√(a + b * c) + √(b * c)) * (√(b + c * a) + √(c * a)) * (√(c + a * b) + √(a * b)) ≤ 1"
+      ],
+      "target": "have h₄ : Real.sqrt (c * a) ≤ (c + a) / 2 := by\n  rw [Real.sqrt_le_iff]\n  constructor <;> norm_num <;>\n  nlinarith [sq_nonneg (c - a)]",
+      "generated": "nlinarith [sq_sqrt (show 0 ≤ a + b * c by nlinarith),\n  sq_sqrt (show 0 ≤ b + c * a by nlinarith),\n  sq_sqrt (show 0 ≤ c + a * b by nlinarith),\n  sq_sqrt (show 0 ≤ b * c by nlinarith)]"
+     }
+    ]
+   },
+   {
+    "step": 800,
+    "validation_loss": 0.22044580024049404,
+    "validation_examples": 1509,
+    "teacher_forced_exact_match": 0.2975480450629556,
+    "generation_exact_match": 0.31640625,
+    "generation_examples": 256,
+    "evaluation_seconds": 95.79619812499732,
+    "mismatches": [
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\n⊢ ((a * (b + c) + b * (a + b)) * (c + a) + c * ((a + b) * (b + c))) * (3 * (6 * (a * b + b * c + a * c))) ≤\n    (4 * (6 * (a * b + b * c + a * c)) + (a ^ 2 + b ^ 2 + c ^ 2) * 3) * ((a + b) * (b + c) * (c + a))"
+      ],
+      "target": "nlinarith [sq_nonneg (a - b), sq_nonneg (b - c), sq_nonneg (c - a), mul_nonneg ha.le hb.le, mul_nonneg hb.le hc.le, mul_nonneg ha.le hc.le,\n  mul_nonneg (sq_nonneg (a - b)) hc.le, mul_nonneg (sq_nonneg (b - c)) ha.le, mul_nonneg (sq_nonneg (c - a)) hb.le,\n  mul_nonneg (sq_nonneg (a - b)) ha.le, mul_nonneg (sq_nonneg (b - c)) hb.le, mul_nonneg (sq_nonneg (c - a)) hc.le,\n  mul_nonneg (sq_nonneg (a + b - 2 * c)) hc.le, mul_nonneg (sq_nonneg (b + c - 2 * a)) ha.le, mul_nonneg (sq_nonneg (c + a - 2 * b)) hb.le]\n<;> linarith",
+      "generated": "ring_nf"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 ≤ a\nhb : 0 ≤ b\nhc : 0 ≤ c\nhab : a + b + c = 3\nh₀ : √(a ^ 2 + a) ≥ a\nh₁ : √(b ^ 2 + b) ≥ b\nh₂ : √(c ^ 2 + c) ≥ c\n⊢ √(a ^ 2 + a) + √(b ^ 2 + b) + √(c ^ 2 + c) ≥ 2 * √3"
+      ],
+      "target": "nlinarith [sq_sqrt (show (0 : ℝ) ≤ 3 by norm_num), sq_sqrt (show (0 : ℝ) ≤ a^2 + a by nlinarith),\n  sq_sqrt (show (0 : ℝ) ≤ b^2 + b by nlinarith), sq_sqrt (show (0 : ℝ) ≤ c^2 + c by nlinarith)]",
+      "generated": "nlinarith [sq_sqrt (show 0 ≤ 3 by norm_num),\n  sq_sqrt (show 0 ≤ a ^ 2 + a by nlinarith),\n  sq_sqrt (show 0 ≤ b ^ 2 + b by nlinarith),\n  sq_sqrt (show 0 ≤ c ^ 2 + c by nlinarith),\n  sq_nonneg (Real.sqrt (a ^ 2 + a) - Real.sqrt (b ^ 2 + b)),\n  sq_nonneg (Real.sqrt (b ^ 2 + b) - Real.sqrt (c ^ 2 + c)),\n  sq_nonneg (Real.sqrt (c ^ 2 + c) - Real.sqrt (a ^ 2 + a))]"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\nh₀ : 0 < a ^ 2\nh₁ : 0 < b * c\nh₂ : 0 < a ^ 2 + b * c\n⊢ 4 / (a ^ 2 + b * c) ≤ 1 / a ^ 2 + 1 / (b * c)"
+      ],
+      "target": "have h₃ : 0 < a ^ 2 * b * c := by nlinarith",
+      "generated": "field_simp"
+     },
+     {
+      "goals": [
+       "a b : ℝ\nha : 0 ≤ a\nhb : 0 ≤ b\nh₀ : 0 ≤ a * b\nh₁ : 0 ≤ a * b * 2\nh₂ : 0 ≤ a * b * 3\nh₃ : 0 ≤ a * b * 4\nh₄ : 0 ≤ a * b * 5\nh₅ : 0 ≤ a * b * 6\n⊢ (a + b + 2) / (a + 1) / (b + 1) + a * b / 18 ≥ 8 / 9"
+      ],
+      "target": "have h₆ : 0 ≤ a * b * 7 := by nlinarith",
+      "generated": "have h₆ : 0 ≤ a * b * 7 := by positivity"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\n⊢ 0 ≤\n    a * b * c * a⁻¹ * b⁻¹ * c⁻¹ * 3 + a * b ^ 2 * a⁻¹ * b⁻¹ * c⁻¹ + a * c ^ 2 * a⁻¹ * b⁻¹ * c⁻¹ +\n              a ^ 2 * b * a⁻¹ * b⁻¹ * c⁻¹ +\n            a ^ 2 * c * a⁻¹ * b⁻¹ * c⁻¹ +\n          b * c ^ 2 * a⁻¹ * b⁻¹ * c⁻¹ +\n        b ^ 2 * c * a⁻¹ * b⁻¹ * c⁻¹ -\n      (a * b * (a * b * 4 + a * c * 4 + a ^ 2 * 2 + b * c * 4 + b ^ 2 * 2 + c ^ 2 * 2)⁻¹ * 6 +\n                a * c * (a * b * 4 + a * c * 4 + a ^ 2 * 2 + b * c * 4 + b ^ 2 * 2 + c ^ 2 * 2)⁻¹ * 6 +\n              a ^ 2 * (a * b * 4 + a * c * 4 + a ^ 2 * 2 + b * c * 4 + b ^ 2 * 2 + c ^ 2 * 2)⁻¹ * 12 +\n            b * c * (a * b * 4 + a * c * 4 + a ^ 2 * 2 + b * c * 4 + b ^ 2 * 2 + c ^ 2 * 2)⁻¹ * 6 +\n          b ^ 2 * (a * b * 4 + a * c * 4 + a ^ 2 * 2 + b * c * 4 + b ^ 2 * 2 + c ^ 2 * 2)⁻¹ * 12 +\n        c ^ 2 * (a * b * 4 + a * c * 4 + a ^ 2 * 2 + b * c * 4 + b ^ 2 * 2 + c ^ 2 * 2)⁻¹ * 12)"
+      ],
+      "target": "field_simp [ha.ne', hb.ne', hc.ne', add_assoc]",
+      "generated": "field_simp [ha.ne', hb.ne', hc.ne']"
+     },
+     {
+      "goals": [
+       "case h\nn k : ℕ\nh₁ : 0 < n ∧ 0 < k\nm : ℕ\nhm : n = k ^ 2 * m\n⊢ n = n * 1 + 1 * 0 + 0 * n"
+      ],
+      "target": "linarith",
+      "generated": "simp [hm]"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\nhab : a + b + c = 1\nh₀ : √(a + b * c) ≤ 1 - (b + c) / 2\nh₁ : √(b + c * a) ≤ 1 - (c + a) / 2\nh₂ : √(c + a * b) ≤ 1 - (a + b) / 2\nh₃ : √(b * c) ≤ (b + c) / 2\n⊢ (√(a + b * c) + √(b * c)) * (√(b + c * a) + √(c * a)) * (√(c + a * b) + √(a * b)) ≤ 1"
+      ],
+      "target": "have h₄ : Real.sqrt (c * a) ≤ (c + a) / 2 := by\n  rw [Real.sqrt_le_iff]\n  constructor <;> norm_num <;>\n  nlinarith [sq_nonneg (c - a)]",
+      "generated": "nlinarith [sq_nonneg (a - b), sq_nonneg (b - c), sq_nonneg (c - a)]"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\nhab : a + b + c = 1\nh₀ : √(a + b * c) ≤ 1 - (b + c) / 2\n⊢ (√(a + b * c) + √(b * c)) * (√(b + c * a) + √(c * a)) * (√(c + a * b) + √(a * b)) ≤ 1"
+      ],
+      "target": "have h₁ : Real.sqrt (b + c * a) ≤ 1 - (c + a) / 2 := by\n  rw [Real.sqrt_le_iff]\n  constructor <;> norm_num <;>\n  nlinarith [sq_nonneg (c - a)]",
+      "generated": "have h₁ : Real.sqrt (b * c) ≤ (b + c) / 2 := by\n  nlinarith [sq_sqrt (mul_nonneg hb.le hc.le), sq_nonneg (b - c)]"
+     }
+    ]
+   },
+   {
+    "step": 1000,
+    "validation_loss": 0.21404136276206928,
+    "validation_examples": 1509,
+    "teacher_forced_exact_match": 0.28893306825712395,
+    "generation_exact_match": 0.29296875,
+    "generation_examples": 256,
+    "evaluation_seconds": 97.88387911603786,
+    "mismatches": [
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\n⊢ ((a * (b + c) + b * (a + b)) * (c + a) + c * ((a + b) * (b + c))) * (3 * (6 * (a * b + b * c + a * c))) ≤\n    (4 * (6 * (a * b + b * c + a * c)) + (a ^ 2 + b ^ 2 + c ^ 2) * 3) * ((a + b) * (b + c) * (c + a))"
+      ],
+      "target": "nlinarith [sq_nonneg (a - b), sq_nonneg (b - c), sq_nonneg (c - a), mul_nonneg ha.le hb.le, mul_nonneg hb.le hc.le, mul_nonneg ha.le hc.le,\n  mul_nonneg (sq_nonneg (a - b)) hc.le, mul_nonneg (sq_nonneg (b - c)) ha.le, mul_nonneg (sq_nonneg (c - a)) hb.le,\n  mul_nonneg (sq_nonneg (a - b)) ha.le, mul_nonneg (sq_nonneg (b - c)) hb.le, mul_nonneg (sq_nonneg (c - a)) hc.le,\n  mul_nonneg (sq_nonneg (a + b - 2 * c)) hc.le, mul_nonneg (sq_nonneg (b + c - 2 * a)) ha.le, mul_nonneg (sq_nonneg (c + a - 2 * b)) hb.le]\n<;> linarith",
+      "generated": "nlinarith [sq_nonneg (a - b), sq_nonneg (b - c), sq_nonneg (c - a), mul_nonneg ha.le hb.le, mul_nonneg hb.le hc.le, mul_nonneg hc.le ha.le,\n  mul_nonneg (sq_nonneg (a - b)) hc.le, mul_nonneg (sq_nonneg (b - c)) ha.le, mul_nonneg (sq_nonneg (c - a)) hb.le,\n  mul_nonneg (sq_nonneg (a - b)) hb.le, mul_nonneg (sq_nonneg (b - c)) hc.le, mul_nonneg (sq_nonneg (c - a)) ha.le]"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 ≤ a\nhb : 0 ≤ b\nhc : 0 ≤ c\nhab : a + b + c = 3\nh₀ : √(a ^ 2 + a) ≥ a\nh₁ : √(b ^ 2 + b) ≥ b\nh₂ : √(c ^ 2 + c) ≥ c\n⊢ √(a ^ 2 + a) + √(b ^ 2 + b) + √(c ^ 2 + c) ≥ 2 * √3"
+      ],
+      "target": "nlinarith [sq_sqrt (show (0 : ℝ) ≤ 3 by norm_num), sq_sqrt (show (0 : ℝ) ≤ a^2 + a by nlinarith),\n  sq_sqrt (show (0 : ℝ) ≤ b^2 + b by nlinarith), sq_sqrt (show (0 : ℝ) ≤ c^2 + c by nlinarith)]",
+      "generated": "nlinarith [sq_sqrt (show 0 ≤ 3 by norm_num),\n  sq_sqrt (show 0 ≤ a ^ 2 + a by nlinarith),\n  sq_sqrt (show 0 ≤ b ^ 2 + b by nlinarith),\n  sq_sqrt (show 0 ≤ c ^ 2 + c by nlinarith)]"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\nh₀ : 0 < a ^ 2\nh₁ : 0 < b * c\nh₂ : 0 < a ^ 2 + b * c\n⊢ 4 / (a ^ 2 + b * c) ≤ 1 / a ^ 2 + 1 / (b * c)"
+      ],
+      "target": "have h₃ : 0 < a ^ 2 * b * c := by nlinarith",
+      "generated": "field_simp"
+     },
+     {
+      "goals": [
+       "a b : ℝ\nha : 0 ≤ a\nhb : 0 ≤ b\nh₀ : 0 ≤ a * b\nh₁ : 0 ≤ a * b * 2\nh₂ : 0 ≤ a * b * 3\nh₃ : 0 ≤ a * b * 4\nh₄ : 0 ≤ a * b * 5\nh₅ : 0 ≤ a * b * 6\n⊢ (a + b + 2) / (a + 1) / (b + 1) + a * b / 18 ≥ 8 / 9"
+      ],
+      "target": "have h₆ : 0 ≤ a * b * 7 := by nlinarith",
+      "generated": "have h₆ : 0 ≤ a * b * 7 := by positivity"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\n⊢ 0 ≤\n    a * b * c * a⁻¹ * b⁻¹ * c⁻¹ * 3 + a * b ^ 2 * a⁻¹ * b⁻¹ * c⁻¹ + a * c ^ 2 * a⁻¹ * b⁻¹ * c⁻¹ +\n              a ^ 2 * b * a⁻¹ * b⁻¹ * c⁻¹ +\n            a ^ 2 * c * a⁻¹ * b⁻¹ * c⁻¹ +\n          b * c ^ 2 * a⁻¹ * b⁻¹ * c⁻¹ +\n        b ^ 2 * c * a⁻¹ * b⁻¹ * c⁻¹ -\n      (a * b * (a * b * 4 + a * c * 4 + a ^ 2 * 2 + b * c * 4 + b ^ 2 * 2 + c ^ 2 * 2)⁻¹ * 6 +\n                a * c * (a * b * 4 + a * c * 4 + a ^ 2 * 2 + b * c * 4 + b ^ 2 * 2 + c ^ 2 * 2)⁻¹ * 6 +\n              a ^ 2 * (a * b * 4 + a * c * 4 + a ^ 2 * 2 + b * c * 4 + b ^ 2 * 2 + c ^ 2 * 2)⁻¹ * 12 +\n            b * c * (a * b * 4 + a * c * 4 + a ^ 2 * 2 + b * c * 4 + b ^ 2 * 2 + c ^ 2 * 2)⁻¹ * 6 +\n          b ^ 2 * (a * b * 4 + a * c * 4 + a ^ 2 * 2 + b * c * 4 + b ^ 2 * 2 + c ^ 2 * 2)⁻¹ * 12 +\n        c ^ 2 * (a * b * 4 + a * c * 4 + a ^ 2 * 2 + b * c * 4 + b ^ 2 * 2 + c ^ 2 * 2)⁻¹ * 12)"
+      ],
+      "target": "field_simp [ha.ne', hb.ne', hc.ne', add_assoc]",
+      "generated": "field_simp [ha.ne', hb.ne', hc.ne']"
+     },
+     {
+      "goals": [
+       "case h\nn k : ℕ\nh₁ : 0 < n ∧ 0 < k\nm : ℕ\nhm : n = k ^ 2 * m\n⊢ n = n * 1 + 1 * 0 + 0 * n"
+      ],
+      "target": "linarith",
+      "generated": "simp [hm]"
+     },
+     {
+      "goals": [
+       "f : ℝ → ℝ\nx : ℝ\nhf : f x = 1 / x\nhx : 0 < x\n⊢ f x = 1 / x"
+      ],
+      "target": "rw [hf]",
+      "generated": "exact hf"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\nhab : a + b + c = 1\nh₀ : √(a + b * c) ≤ 1 - (b + c) / 2\nh₁ : √(b + c * a) ≤ 1 - (c + a) / 2\nh₂ : √(c + a * b) ≤ 1 - (a + b) / 2\nh₃ : √(b * c) ≤ (b + c) / 2\n⊢ (√(a + b * c) + √(b * c)) * (√(b + c * a) + √(c * a)) * (√(c + a * b) + √(a * b)) ≤ 1"
+      ],
+      "target": "have h₄ : Real.sqrt (c * a) ≤ (c + a) / 2 := by\n  rw [Real.sqrt_le_iff]\n  constructor <;> norm_num <;>\n  nlinarith [sq_nonneg (c - a)]",
+      "generated": "have h₄ : Real.sqrt (a * c) ≤ (a + c) / 2 := by\n  nlinarith [sq_sqrt (mul_nonneg ha.le hc.le), sq_nonneg (a - c)]"
+     }
+    ]
+   },
+   {
+    "step": 1097,
+    "validation_loss": 0.2116650865581351,
+    "validation_examples": 1509,
+    "teacher_forced_exact_match": 0.2962226640159046,
+    "generation_exact_match": 0.29296875,
+    "generation_examples": 256,
+    "evaluation_seconds": 92.6783618980553,
+    "mismatches": [
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\n⊢ ((a * (b + c) + b * (a + b)) * (c + a) + c * ((a + b) * (b + c))) * (3 * (6 * (a * b + b * c + a * c))) ≤\n    (4 * (6 * (a * b + b * c + a * c)) + (a ^ 2 + b ^ 2 + c ^ 2) * 3) * ((a + b) * (b + c) * (c + a))"
+      ],
+      "target": "nlinarith [sq_nonneg (a - b), sq_nonneg (b - c), sq_nonneg (c - a), mul_nonneg ha.le hb.le, mul_nonneg hb.le hc.le, mul_nonneg ha.le hc.le,\n  mul_nonneg (sq_nonneg (a - b)) hc.le, mul_nonneg (sq_nonneg (b - c)) ha.le, mul_nonneg (sq_nonneg (c - a)) hb.le,\n  mul_nonneg (sq_nonneg (a - b)) ha.le, mul_nonneg (sq_nonneg (b - c)) hb.le, mul_nonneg (sq_nonneg (c - a)) hc.le,\n  mul_nonneg (sq_nonneg (a + b - 2 * c)) hc.le, mul_nonneg (sq_nonneg (b + c - 2 * a)) ha.le, mul_nonneg (sq_nonneg (c + a - 2 * b)) hb.le]\n<;> linarith",
+      "generated": "nlinarith [sq_nonneg (a - b), sq_nonneg (b - c), sq_nonneg (c - a), mul_nonneg ha.le hb.le, mul_nonneg hb.le hc.le, mul_nonneg hc.le ha.le,\n  mul_nonneg (sq_nonneg (a - b)) hc.le, mul_nonneg (sq_nonneg (b - c)) ha.le, mul_nonneg (sq_nonneg (c - a)) hb.le,\n  mul_nonneg (sq_nonneg (a - b)) hb.le, mul_nonneg (sq_nonneg (b - c)) hc.le, mul_nonneg (sq_nonneg (c - a)) ha.le]"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 ≤ a\nhb : 0 ≤ b\nhc : 0 ≤ c\nhab : a + b + c = 3\nh₀ : √(a ^ 2 + a) ≥ a\nh₁ : √(b ^ 2 + b) ≥ b\nh₂ : √(c ^ 2 + c) ≥ c\n⊢ √(a ^ 2 + a) + √(b ^ 2 + b) + √(c ^ 2 + c) ≥ 2 * √3"
+      ],
+      "target": "nlinarith [sq_sqrt (show (0 : ℝ) ≤ 3 by norm_num), sq_sqrt (show (0 : ℝ) ≤ a^2 + a by nlinarith),\n  sq_sqrt (show (0 : ℝ) ≤ b^2 + b by nlinarith), sq_sqrt (show (0 : ℝ) ≤ c^2 + c by nlinarith)]",
+      "generated": "nlinarith [sq_sqrt (show 0 ≤ 3 by norm_num),\n  sq_sqrt (show 0 ≤ a ^ 2 + a by nlinarith),\n  sq_sqrt (show 0 ≤ b ^ 2 + b by nlinarith),\n  sq_sqrt (show 0 ≤ c ^ 2 + c by nlinarith)]"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\nh₀ : 0 < a ^ 2\nh₁ : 0 < b * c\nh₂ : 0 < a ^ 2 + b * c\n⊢ 4 / (a ^ 2 + b * c) ≤ 1 / a ^ 2 + 1 / (b * c)"
+      ],
+      "target": "have h₃ : 0 < a ^ 2 * b * c := by nlinarith",
+      "generated": "field_simp"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\n⊢ 0 ≤\n    a * b * c * a⁻¹ * b⁻¹ * c⁻¹ * 3 + a * b ^ 2 * a⁻¹ * b⁻¹ * c⁻¹ + a * c ^ 2 * a⁻¹ * b⁻¹ * c⁻¹ +\n              a ^ 2 * b * a⁻¹ * b⁻¹ * c⁻¹ +\n            a ^ 2 * c * a⁻¹ * b⁻¹ * c⁻¹ +\n          b * c ^ 2 * a⁻¹ * b⁻¹ * c⁻¹ +\n        b ^ 2 * c * a⁻¹ * b⁻¹ * c⁻¹ -\n      (a * b * (a * b * 4 + a * c * 4 + a ^ 2 * 2 + b * c * 4 + b ^ 2 * 2 + c ^ 2 * 2)⁻¹ * 6 +\n                a * c * (a * b * 4 + a * c * 4 + a ^ 2 * 2 + b * c * 4 + b ^ 2 * 2 + c ^ 2 * 2)⁻¹ * 6 +\n              a ^ 2 * (a * b * 4 + a * c * 4 + a ^ 2 * 2 + b * c * 4 + b ^ 2 * 2 + c ^ 2 * 2)⁻¹ * 12 +\n            b * c * (a * b * 4 + a * c * 4 + a ^ 2 * 2 + b * c * 4 + b ^ 2 * 2 + c ^ 2 * 2)⁻¹ * 6 +\n          b ^ 2 * (a * b * 4 + a * c * 4 + a ^ 2 * 2 + b * c * 4 + b ^ 2 * 2 + c ^ 2 * 2)⁻¹ * 12 +\n        c ^ 2 * (a * b * 4 + a * c * 4 + a ^ 2 * 2 + b * c * 4 + b ^ 2 * 2 + c ^ 2 * 2)⁻¹ * 12)"
+      ],
+      "target": "field_simp [ha.ne', hb.ne', hc.ne', add_assoc]",
+      "generated": "field_simp [ha.ne', hb.ne', hc.ne']"
+     },
+     {
+      "goals": [
+       "x : ℝ\n⊢ 5 * (x ^ 16 + x ^ 8 + 1) ^ (1 / 5) = x ^ 8 + x ^ 2 + 5 ↔ x = 0"
+      ],
+      "target": "constructor",
+      "generated": "ring_nf"
+     },
+     {
+      "goals": [
+       "case h\nn k : ℕ\nh₁ : 0 < n ∧ 0 < k\nm : ℕ\nhm : n = k ^ 2 * m\n⊢ n = n * 1 + 1 * 0 + 0 * n"
+      ],
+      "target": "linarith",
+      "generated": "simp [hm]"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\nhab : a + b + c = 1\nh₀ : √(a + b * c) ≤ 1 - (b + c) / 2\nh₁ : √(b + c * a) ≤ 1 - (c + a) / 2\nh₂ : √(c + a * b) ≤ 1 - (a + b) / 2\nh₃ : √(b * c) ≤ (b + c) / 2\n⊢ (√(a + b * c) + √(b * c)) * (√(b + c * a) + √(c * a)) * (√(c + a * b) + √(a * b)) ≤ 1"
+      ],
+      "target": "have h₄ : Real.sqrt (c * a) ≤ (c + a) / 2 := by\n  rw [Real.sqrt_le_iff]\n  constructor <;> norm_num <;>\n  nlinarith [sq_nonneg (c - a)]",
+      "generated": "nlinarith [sq_nonneg (a - b), sq_nonneg (b - c), sq_nonneg (c - a)]"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\nhab : a + b + c = 1\nh₀ : √(a + b * c) ≤ 1 - (b + c) / 2\n⊢ (√(a + b * c) + √(b * c)) * (√(b + c * a) + √(c * a)) * (√(c + a * b) + √(a * b)) ≤ 1"
+      ],
+      "target": "have h₁ : Real.sqrt (b + c * a) ≤ 1 - (c + a) / 2 := by\n  rw [Real.sqrt_le_iff]\n  constructor <;> norm_num <;>\n  nlinarith [sq_nonneg (c - a)]",
+      "generated": "have h₁ : Real.sqrt (b * c) ≤ (b + c) / 2 := by\n  nlinarith [sq_sqrt (mul_nonneg hb.le hc.le), sq_nonneg (b - c)]"
+     }
+    ]
+   }
+  ]
+ },
+ "trained_model_directory": "/workspace/checkpoints/phase2_sft_v1/adapter",
+ "merged_directory": "",
+ "merge_seconds": 0.0
+}
