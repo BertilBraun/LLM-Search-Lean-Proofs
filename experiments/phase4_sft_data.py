@@ -297,7 +297,7 @@ async def annotate_split(
         if step.proof_identifier not in done:
             by_proof[step.proof_identifier].append(step)
     candidates = read_candidates(directory, split)
-    applicability = RetrievalConfig().applicability
+    applicability = config.applicability
     queue: asyncio.Queue[list[TracedStep]] = asyncio.Queue()
     for steps in by_proof.values():
         queue.put_nowait(steps)
@@ -421,7 +421,7 @@ def finish(config: LemmaDataConfig, directory: Path, name: str, replay_failures:
         DataSummary(
             name=name,
             config=config,
-            applicability=RetrievalConfig().applicability,
+            applicability=config.applicability,
             selected_steps={split: len(read_selection(directory, split)) for split in SPLITS},
             replay_failures=replay_failures,
             splits=tuple(split_summaries),
@@ -449,7 +449,7 @@ def subsample(config: LemmaDataConfig, source_name: str, name: str, token_budget
         DataSummary(
             name=name,
             config=config,
-            applicability=RetrievalConfig().applicability,
+            applicability=config.applicability,
             selected_steps={},
             replay_failures={},
             splits=tuple(split_summaries),

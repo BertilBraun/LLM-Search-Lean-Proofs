@@ -11,11 +11,18 @@ from lean_search.retrieval.premises import RetrievedPremise, compact_signature
 
 class Applicability(StrEnum):
     CLOSES = "closes"
+    CLOSES_WITH_AUTOMATION = "closes_with_automation"
     LEAVES_GOALS = "leaves_goals"
     NO_MATCH = "no_match"
 
 
-APPLICABILITY_ORDER = {Applicability.CLOSES: 0, Applicability.LEAVES_GOALS: 1, Applicability.NO_MATCH: 2}
+APPLICABILITY_ORDER = {
+    Applicability.CLOSES: 0,
+    Applicability.CLOSES_WITH_AUTOMATION: 1,
+    Applicability.LEAVES_GOALS: 2,
+    Applicability.NO_MATCH: 3,
+}
+AUTOMATION_SUFFIX = "+automation"
 
 
 @dataclass(frozen=True)
@@ -112,6 +119,8 @@ def annotation_comment(check: LemmaCheck) -> str:
     match check.applicability:
         case Applicability.CLOSES:
             return f"  -- {check.tactic}: closes the goal"
+        case Applicability.CLOSES_WITH_AUTOMATION:
+            return f"  -- {check.tactic}, then automation: closes the goal"
         case Applicability.LEAVES_GOALS:
             plural = "" if check.new_goals == 1 else "s"
             return f"  -- {check.tactic}: leaves {check.new_goals} goal{plural}"
@@ -133,17 +142,34 @@ async def check_premise(
     repl: LeanRepl, state: ProofState, premise: RetrievedPremise, config: ApplicabilityConfig
 ) -> AnnotatedLemma:
     tries: list[TacticTry] = []
+    left_goals: list[str] = []
     for template in config.tactics:
+        tactic = template.format(name=premise.full_name)
         result = await repl.apply_tactic(
-            state,
-            template.format(name=premise.full_name),
-            heartbeats=config.heartbeats,
-            timeout_seconds=config.timeout_seconds,
+            state, tactic, heartbeats=config.heartbeats, timeout_seconds=config.timeout_seconds
         )
         check = tactic_check(template, len(state.goals), result.outcome)
         tries.append(TacticTry(tactic_keyword(template), try_outcome(result.outcome), check, result.elapsed_seconds))
         if check.applicability == Applicability.CLOSES:
-            break
+            return AnnotatedLemma(premise, check, tuple(tries))
+        if check.applicability == Applicability.LEAVES_GOALS:
+            left_goals.append(tactic)
+    for tactic in left_goals if config.automation else ():
+        result = await repl.apply_tactic(
+            state,
+            f"{tactic} <;> ({config.automation})",
+            heartbeats=config.automation_heartbeats,
+            timeout_seconds=config.timeout_seconds,
+        )
+        closed = tactic_check(tactic, len(state.goals), result.outcome).applicability == Applicability.CLOSES
+        check = LemmaCheck(Applicability.CLOSES_WITH_AUTOMATION, tactic_keyword(tactic)) if closed else NO_MATCH
+        tries.append(
+            TacticTry(
+                tactic_keyword(tactic) + AUTOMATION_SUFFIX, try_outcome(result.outcome), check, result.elapsed_seconds
+            )
+        )
+        if closed:
+            return AnnotatedLemma(premise, check, tuple(tries))
     return AnnotatedLemma(premise, best_check([attempt.check for attempt in tries]), tuple(tries))
 
 

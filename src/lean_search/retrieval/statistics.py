@@ -18,9 +18,11 @@ class LemmaStatistics:
     annotation_lean_seconds: float = 0.0
     annotation_tactic_calls: int = 0
     candidates_closing: int = 0
+    candidates_closing_with_automation: int = 0
     candidates_leaving_goals: int = 0
     candidates_without_match: int = 0
     shown_lemmas: int = 0
     shown_closing: int = 0
+    shown_closing_with_automation: int = 0
     shown_leaving_goals: int = 0
     encoder: BatchStatistics = field(default_factory=BatchStatistics)

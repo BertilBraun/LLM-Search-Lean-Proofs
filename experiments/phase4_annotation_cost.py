@@ -24,8 +24,8 @@ from pathlib import Path
 from lean_search.corpora.records import TracedStep, read_traced_steps
 from lean_search.corpora.tracing import state_before
 from lean_search.data import Split, load_minif2f
-from lean_search.lean import LeanReplConfig, LeanReplPool, ProofState
-from lean_search.retrieval.annotation import Annotation, Applicability, annotate
+from lean_search.lean import LeanRepl, LeanReplConfig, LeanReplPool, ProofState
+from lean_search.retrieval.annotation import AUTOMATION_SUFFIX, Annotation, Applicability, annotate
 from lean_search.retrieval.config import DEFAULT_RETRIEVER, ApplicabilityConfig, RetrievalConfig
 from lean_search.retrieval.premises import (
     MINIF2F_OPEN_NAMESPACES,
@@ -66,8 +66,12 @@ class StateRecord:
     tactic_calls: int
     lean_seconds: float
     closing: int
+    closing_with_automation: int
     leaving_goals: int
     without_match: int
+    # Lean seconds of the automation follow-ups alone.
+    automation_seconds: float
+    automation_alone_closes: bool
 
 
 @dataclass(frozen=True)
@@ -97,9 +101,16 @@ class CostSummary:
     lean_seconds_per_state_max: float
     tactic_calls_per_state: float
     candidates_closing: float
+    candidates_closing_with_automation: float
     candidates_leaving_goals: float
     candidates_without_match: float
     states_with_a_closing_candidate: float
+    states_with_a_candidate_closing_with_automation: float
+    automation_seconds_per_state: float
+    # The same over the states the automation alone does not close (in the search, the sweep runs first).
+    states_automation_alone_closes: int
+    candidates_closing_with_automation_where_automation_alone_fails: float
+    states_with_a_candidate_closing_with_automation_where_automation_alone_fails: float
     process_restarts: int
     tries: tuple[TryStatistics, ...]
     frequent_premises: tuple[str, ...]
@@ -114,6 +125,8 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--traced-states", type=int, default=256)
     parser.add_argument("--heartbeats", type=int, default=ApplicabilityConfig.heartbeats)
     parser.add_argument("--timeout-seconds", type=float, default=ApplicabilityConfig.timeout_seconds)
+    parser.add_argument("--automation", default="", help="follow-up run with `<;>` after a tactic that left goals")
+    parser.add_argument("--automation-heartbeats", type=int, default=ApplicabilityConfig.automation_heartbeats)
     return parser.parse_args()
 
 
@@ -160,9 +173,24 @@ def retrieved_candidates(
     return retriever.retrieve([task.goals for task in tasks], count)
 
 
+@dataclass(frozen=True)
+class TaskResult:
+    task: AnnotationTask
+    annotation: Annotation
+    # The automation follow-up alone closes every goal (False without a follow-up).
+    automation_alone_closes: bool
+
+
+async def automation_alone_closes(repl: LeanRepl, state: ProofState, config: ApplicabilityConfig) -> bool:
+    if not config.automation:
+        return False
+    result = await repl.apply_tactic(state, f"({config.automation})", heartbeats=config.automation_heartbeats)
+    return isinstance(result.outcome, ProofState) and result.outcome.is_proved
+
+
 async def annotate_task(
     pool: LeanReplPool, task: AnnotationTask, premises: Sequence[RetrievedPremise], config: ApplicabilityConfig
-) -> Annotation | None:
+) -> TaskResult | None:
     async with pool.acquire() as repl:
         if task.traced_step is None:
             outcome = (await repl.start_proof(task.statement, task.header)).outcome
@@ -171,7 +199,8 @@ async def annotate_task(
             outcome = (await repl.apply_tactic(state_before(task.traced_step), "skip")).outcome
         match outcome:
             case ProofState():
-                return await annotate(repl, outcome, premises, config)
+                annotation = await annotate(repl, outcome, premises, config)
+                return TaskResult(task, annotation, await automation_alone_closes(repl, outcome, config))
             case _:
                 return None
 
@@ -181,8 +210,8 @@ async def run_tasks(
     candidates: Sequence[tuple[RetrievedPremise, ...]],
     config: ApplicabilityConfig,
     processes: int,
-) -> tuple[list[tuple[AnnotationTask, Annotation]], int, int, float]:
-    results: list[tuple[AnnotationTask, Annotation]] = []
+) -> tuple[list[TaskResult], int, int, float]:
+    results: list[TaskResult] = []
     failed = 0
     queue: asyncio.Queue[int] = asyncio.Queue()
     for index in range(len(tasks)):
@@ -196,12 +225,13 @@ async def run_tasks(
             nonlocal failed
             while not queue.empty():
                 index = queue.get_nowait()
-                annotation = await annotate_task(pool, tasks[index], candidates[index], config)
-                if annotation is None:
+                result = await annotate_task(pool, tasks[index], candidates[index], config)
+                if result is None:
                     failed += 1
                     continue
-                results.append((tasks[index], annotation))
-                print(f"[{len(results)}/{len(tasks)}] {tasks[index].name}: {annotation.lean_seconds:.2f}s", flush=True)
+                results.append(result)
+                seconds = result.annotation.lean_seconds
+                print(f"[{len(results)}/{len(tasks)}] {tasks[index].name}: {seconds:.2f}s", flush=True)
 
         await asyncio.gather(*(worker() for _ in range(processes)))
         wall_seconds = time.monotonic() - started
@@ -213,10 +243,10 @@ def quantile(ordered: Sequence[float], fraction: float) -> float:
     return ordered[min(len(ordered) - 1, int(fraction * len(ordered)))]
 
 
-def try_statistics(results: Sequence[tuple[AnnotationTask, Annotation]]) -> tuple[TryStatistics, ...]:
+def try_statistics(results: Sequence[TaskResult]) -> tuple[TryStatistics, ...]:
     seconds: dict[tuple[str, str], list[float]] = collections.defaultdict(list)
-    for _, annotation in results:
-        for lemma in annotation.lemmas:
+    for result in results:
+        for lemma in result.annotation.lemmas:
             for attempt in lemma.tries:
                 seconds[(attempt.tactic, attempt.outcome.value)].append(attempt.seconds)
     rows = []
@@ -237,7 +267,13 @@ def try_statistics(results: Sequence[tuple[AnnotationTask, Annotation]]) -> tupl
     return tuple(rows)
 
 
-def state_record(task: AnnotationTask, annotation: Annotation) -> StateRecord:
+def mean_or_zero(values: Sequence[float]) -> float:
+    return statistics.fmean(values) if values else 0.0
+
+
+def state_record(result: TaskResult) -> StateRecord:
+    task = result.task
+    annotation = result.annotation
     applicabilities = collections.Counter(lemma.check.applicability for lemma in annotation.lemmas)
     return StateRecord(
         task.kind,
@@ -247,8 +283,16 @@ def state_record(task: AnnotationTask, annotation: Annotation) -> StateRecord:
         annotation.tactic_calls,
         annotation.lean_seconds,
         applicabilities[Applicability.CLOSES],
+        applicabilities[Applicability.CLOSES_WITH_AUTOMATION],
         applicabilities[Applicability.LEAVES_GOALS],
         applicabilities[Applicability.NO_MATCH],
+        sum(
+            attempt.seconds
+            for lemma in annotation.lemmas
+            for attempt in lemma.tries
+            if attempt.tactic.endswith(AUTOMATION_SUFFIX)
+        ),
+        result.automation_alone_closes,
     )
 
 
@@ -281,7 +325,13 @@ def render_markdown(summary: CostSummary) -> str:
                 f"validation-split competition states. Candidates: {summary.candidate_count} per state, {source}. "
                 f"Tactics {', '.join(f'`{tactic}`' for tactic in config.tactics)} in order until one closes the goal, "
                 f"{config.heartbeats:,} heartbeats, {config.timeout_seconds:g} s wall-clock backstop; "
-                f"{summary.processes} REPL processes, {summary.wall_seconds:.0f} s wall.",
+                f"{summary.processes} REPL processes, {summary.wall_seconds:.0f} s wall. "
+                + (
+                    f"After a tactic that leaves goals, `<tactic> <;> ({config.automation})` runs with "
+                    f"{config.automation_heartbeats:,} heartbeats."
+                    if config.automation
+                    else "No automation follow-up."
+                ),
                 markdown_table(
                     ["Quantity", "Value"],
                     [
@@ -293,9 +343,27 @@ def render_markdown(summary: CostSummary) -> str:
                         ],
                         ["Tactic calls per state", f"{summary.tactic_calls_per_state:.1f}"],
                         ["Candidates closing the goal, per state", f"{summary.candidates_closing:.2f}"],
+                        [
+                            "Candidates closing with automation, per state",
+                            f"{summary.candidates_closing_with_automation:.2f}",
+                        ],
                         ["Candidates leaving goals, per state", f"{summary.candidates_leaving_goals:.2f}"],
                         ["Candidates without a match, per state", f"{summary.candidates_without_match:.2f}"],
                         ["States with a closing candidate", f"{summary.states_with_a_closing_candidate:.1%}"],
+                        [
+                            "States with a candidate closing with automation",
+                            f"{summary.states_with_a_candidate_closing_with_automation:.1%}",
+                        ],
+                        ["Automation follow-up Lean seconds per state", f"{summary.automation_seconds_per_state:.2f}"],
+                        ["States the automation alone closes", str(summary.states_automation_alone_closes)],
+                        [
+                            "Where it does not: candidates closing with automation, per state",
+                            f"{summary.candidates_closing_with_automation_where_automation_alone_fails:.2f}",
+                        ],
+                        [
+                            "Where it does not: states with a candidate closing with automation",
+                            f"{summary.states_with_a_candidate_closing_with_automation_where_automation_alone_fails:.1%}",
+                        ],
                         ["Process restarts", str(summary.process_restarts)],
                     ],
                 ),
@@ -309,7 +377,12 @@ def render_markdown(summary: CostSummary) -> str:
 
 def main() -> None:
     arguments = parse_arguments()
-    config = ApplicabilityConfig(heartbeats=arguments.heartbeats, timeout_seconds=arguments.timeout_seconds)
+    config = ApplicabilityConfig(
+        heartbeats=arguments.heartbeats,
+        timeout_seconds=arguments.timeout_seconds,
+        automation=arguments.automation,
+        automation_heartbeats=arguments.automation_heartbeats,
+    )
     tasks = minif2f_tasks() + traced_tasks(arguments.traced_states)
     frequent: list[str] = []
     match arguments.candidates:
@@ -325,7 +398,7 @@ def main() -> None:
             candidates = retrieved_candidates(tasks, arguments.candidate_count, arguments.retriever)
     print(f"{len(tasks)} states, candidates ready", flush=True)
     results, failed, restarts, wall_seconds = asyncio.run(run_tasks(tasks, candidates, config, arguments.processes))
-    records = [state_record(task, annotation) for task, annotation in results]
+    records = [state_record(result) for result in results]
     seconds = sorted(record.lean_seconds for record in records)
     summary = CostSummary(
         candidates=arguments.candidates,
@@ -341,16 +414,30 @@ def main() -> None:
         lean_seconds_per_state_max=seconds[-1],
         tactic_calls_per_state=statistics.fmean(record.tactic_calls for record in records),
         candidates_closing=statistics.fmean(record.closing for record in records),
+        candidates_closing_with_automation=statistics.fmean(record.closing_with_automation for record in records),
         candidates_leaving_goals=statistics.fmean(record.leaving_goals for record in records),
         candidates_without_match=statistics.fmean(record.without_match for record in records),
         states_with_a_closing_candidate=statistics.fmean(record.closing > 0 for record in records),
+        states_with_a_candidate_closing_with_automation=statistics.fmean(
+            record.closing_with_automation > 0 for record in records
+        ),
+        automation_seconds_per_state=statistics.fmean(record.automation_seconds for record in records),
+        states_automation_alone_closes=sum(record.automation_alone_closes for record in records),
+        candidates_closing_with_automation_where_automation_alone_fails=mean_or_zero(
+            [record.closing_with_automation for record in records if not record.automation_alone_closes]
+        ),
+        states_with_a_candidate_closing_with_automation_where_automation_alone_fails=mean_or_zero(
+            [record.closing_with_automation > 0 for record in records if not record.automation_alone_closes]
+        ),
         process_restarts=restarts,
         tries=try_statistics(results),
         frequent_premises=tuple(frequent),
     )
     directory = RUN_DIRECTORY / "summary"
     directory.mkdir(parents=True, exist_ok=True)
-    name = f"{arguments.candidates}_{arguments.heartbeats}"
+    name = f"{arguments.candidates}_{arguments.candidate_count}_{arguments.heartbeats}" + (
+        "_automation" if arguments.automation else ""
+    )
     (directory / f"{name}.json").write_text(
         json.dumps(dataclasses.asdict(summary), indent=1, ensure_ascii=False), encoding="utf-8"
     )

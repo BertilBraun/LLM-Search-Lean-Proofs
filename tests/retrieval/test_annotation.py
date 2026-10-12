@@ -17,6 +17,7 @@ from lean_search.retrieval.annotation import (
 from lean_search.retrieval.premises import RetrievedPremise
 
 CLOSES = LemmaCheck(Applicability.CLOSES, "exact", 0)
+CLOSES_WITH_AUTOMATION = LemmaCheck(Applicability.CLOSES_WITH_AUTOMATION, "apply", 0)
 APPLY_TWO = LemmaCheck(Applicability.LEAVES_GOALS, "apply", 2)
 REWRITE_ONE = LemmaCheck(Applicability.LEAVES_GOALS, "rw", 1)
 NO_MATCH = LemmaCheck(Applicability.NO_MATCH)
@@ -72,6 +73,8 @@ def test_try_outcomes_are_classified(outcome: ProofState | LeanError | LeanTimeo
         ([NO_MATCH, APPLY_TWO, CLOSES], CLOSES),
         ([APPLY_TWO, REWRITE_ONE], REWRITE_ONE),
         ([REWRITE_ONE, LemmaCheck(Applicability.LEAVES_GOALS, "apply", 1)], REWRITE_ONE),
+        ([APPLY_TWO, CLOSES_WITH_AUTOMATION], CLOSES_WITH_AUTOMATION),
+        ([CLOSES_WITH_AUTOMATION, CLOSES], CLOSES),
         ([NO_MATCH, NO_MATCH], NO_MATCH),
         ([], NO_MATCH),
     ],
@@ -89,9 +92,11 @@ def test_lemmas_are_ordered_by_applicability_then_retrieval_score() -> None:
         lemma("closes_low", 0.1, CLOSES),
         lemma("rewrite_high", 0.5, REWRITE_ONE),
         lemma("unmatched_low", 0.3, NO_MATCH),
+        lemma("automation_low", 0.05, CLOSES_WITH_AUTOMATION),
     ]
     assert [lemma.premise.full_name for lemma in order_lemmas(lemmas)] == [
         "closes_low",
+        "automation_low",
         "rewrite_high",
         "apply_low",
         "unmatched_best_score",
@@ -103,6 +108,7 @@ def test_lemmas_are_ordered_by_applicability_then_retrieval_score() -> None:
     ("check", "comment"),
     [
         (CLOSES, "  -- exact: closes the goal"),
+        (CLOSES_WITH_AUTOMATION, "  -- apply, then automation: closes the goal"),
         (APPLY_TWO, "  -- apply: leaves 2 goals"),
         (REWRITE_ONE, "  -- rw: leaves 1 goal"),
         (NO_MATCH, ""),

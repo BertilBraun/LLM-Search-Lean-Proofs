@@ -40,12 +40,17 @@ class LemmaProvider:
             match lemma.check.applicability:
                 case Applicability.CLOSES:
                     statistics.candidates_closing += 1
+                case Applicability.CLOSES_WITH_AUTOMATION:
+                    statistics.candidates_closing_with_automation += 1
                 case Applicability.LEAVES_GOALS:
                     statistics.candidates_leaving_goals += 1
                 case Applicability.NO_MATCH:
                     statistics.candidates_without_match += 1
         statistics.shown_lemmas += len(shown)
         statistics.shown_closing += sum(lemma.check.applicability == Applicability.CLOSES for lemma in shown)
+        statistics.shown_closing_with_automation += sum(
+            lemma.check.applicability == Applicability.CLOSES_WITH_AUTOMATION for lemma in shown
+        )
         statistics.shown_leaving_goals += sum(
             lemma.check.applicability == Applicability.LEAVES_GOALS for lemma in shown
         )

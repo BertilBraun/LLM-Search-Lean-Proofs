@@ -2,6 +2,8 @@ from dataclasses import dataclass, field
 
 DEFAULT_RETRIEVER = "kaiyuy/leandojo-lean4-retriever-byt5-small"
 DEFAULT_CHECK_TACTICS = ("exact {name}", "apply {name}", "rw [{name}]")
+# Closers for the goals a lemma leaves, cheapest first.
+FOLLOW_UP_AUTOMATION = "first | assumption | norm_num | linarith | positivity | simp"
 
 
 @dataclass(frozen=True)
@@ -12,6 +14,10 @@ class ApplicabilityConfig:
     heartbeats: int = 10_000
     # A wall-clock kill restarts the process, so this backstop stays well above what the heartbeats allow.
     timeout_seconds: float = 5.0
+    # Run with `<;>` after a tactic that left goals; if it closes them, the lemma closes the goal with automation.
+    # Empty disables the follow-up.
+    automation: str = ""
+    automation_heartbeats: int = 20_000
 
 
 @dataclass(frozen=True)

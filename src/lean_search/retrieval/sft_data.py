@@ -6,12 +6,12 @@ import json
 import math
 from collections import Counter
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from lean_search.corpora.records import TracedStep
 from lean_search.policy.prompts import render_completion, render_prompt
-from lean_search.retrieval.config import DEFAULT_RETRIEVER
+from lean_search.retrieval.config import DEFAULT_RETRIEVER, ApplicabilityConfig
 from lean_search.retrieval.premises import RetrievedPremise
 from lean_search.training.sft_data import SftExample, TokenizedExample, Tokenizer
 
@@ -58,6 +58,8 @@ class LemmaDataConfig:
     seed: str = "phase4-lemmas"
     # Hugging Face name or fine-tuned encoder directory whose premise embeddings exist.
     retriever: str = DEFAULT_RETRIEVER
+    # The check the search runs; the data must use the same one.
+    applicability: ApplicabilityConfig = field(default_factory=ApplicabilityConfig)
 
 
 def stable_fraction(seed: str, purpose: str, key: str) -> float:

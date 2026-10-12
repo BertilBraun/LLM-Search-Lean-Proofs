@@ -7,7 +7,7 @@ import pytest_asyncio
 from lean_search.lean import LeanRepl, LeanReplConfig, ProofState
 from lean_search.lean.repl import PROJECT_DIRECTORY, REPL_BINARY
 from lean_search.retrieval.annotation import Applicability, LemmaCheck, annotate, check_premise
-from lean_search.retrieval.config import ApplicabilityConfig
+from lean_search.retrieval.config import FOLLOW_UP_AUTOMATION, ApplicabilityConfig
 from lean_search.retrieval.premises import RetrievedPremise
 
 HEADER = "import Mathlib\nimport Aesop\n\nset_option maxHeartbeats 0\n\nopen BigOperators Real Nat Topology Rat\n\n"
@@ -79,3 +79,27 @@ async def test_annotation_leaves_the_proof_state_usable(repl: LeanRepl) -> None:
     await annotate(repl, state, [premise("mul_comm"), premise("mul_pos")], ApplicabilityConfig())
     result = await repl.apply_tactic(state, "positivity")
     assert isinstance(result.outcome, ProofState) and result.outcome.is_proved
+
+
+AUTOMATION = ApplicabilityConfig(automation=FOLLOW_UP_AUTOMATION)
+
+
+@pytest.mark.parametrize(
+    ("statement", "name", "check"),
+    [
+        (PRODUCT, "mul_pos", LemmaCheck(Applicability.CLOSES_WITH_AUTOMATION, "apply")),
+        (PI, "Real.pi_pos", LemmaCheck(Applicability.CLOSES, "exact", 0)),
+        (PRODUCT, "Nat.succ_ne_zero", LemmaCheck(Applicability.NO_MATCH)),
+    ],
+)
+async def test_automation_follow_up_closes_the_goals_a_lemma_leaves(
+    repl: LeanRepl, statement: str, name: str, check: LemmaCheck
+) -> None:
+    state = await start(repl, statement)
+    assert (await check_premise(repl, state, premise(name), AUTOMATION)).check == check
+
+
+async def test_automation_follows_only_tactics_that_applied(repl: LeanRepl) -> None:
+    state = await start(repl, PRODUCT)
+    lemma = await check_premise(repl, state, premise("Nat.succ_ne_zero"), AUTOMATION)
+    assert [attempt.tactic for attempt in lemma.tries] == ["exact", "apply", "rw"]
