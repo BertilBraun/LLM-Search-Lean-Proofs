@@ -136,8 +136,6 @@ class TrainingConfig:
     traced_directory: str = "traced"
     traced_sources: tuple[SourceWeight, ...] = ()
     value_dataset: str = "v0"
-    max_prompt_tokens: int = 2048
-    max_completion_tokens: int = 256
 
 
 @dataclass(frozen=True)

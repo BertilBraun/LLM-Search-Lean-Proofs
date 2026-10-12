@@ -78,8 +78,6 @@ max_labels_per_tree = 16
 chosen_only_steps = false
 traced_directory = "traced"
 value_dataset = "v0"
-max_prompt_tokens = 2048
-max_completion_tokens = 512
 
 [training.policy]
 config = "experiments/configs/expert_iteration/loop_policy.toml"
