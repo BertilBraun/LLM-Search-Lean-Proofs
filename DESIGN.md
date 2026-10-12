@@ -153,13 +153,17 @@ allows.
     GPUs (143 min). Probe equal to v1 within noise (valid 71.9%, any-close@8 36.3%), slightly lower validation
     loss: more traced data of the same kind has stopped paying off. Deferred tracing (Goedel SFT v2, Numina)
     stopped after ~33k proofs.
-  - [ ] Row 2 on miniF2F-valid.
+  - [x] Row 2 with SFT v2 on miniF2F-valid: **148/244 (60.7%)**, same set size as SFT v1 (5 new, 5 lost)
+    (`results/phase2_sft_v2_search/`).
 - [ ] **Phase 3** — Value v0/v1, A* search, λ/D sweep (row 4).
   - [x] Value v0 on traced human proofs (`results/phase3_value_v0/`): validation bin accuracy 53%, MAE 1.26
     steps, Spearman 0.80 (zero-shot: 27%, 2.35, −0.03).
   - [x] Development pair on miniF2F-valid with SFT v1: **row 2 148/244 (60.7%)**, **A* with v0 (λ = 0.5)
     155/244 (63.5%)**, ahead at every expansion and token budget (12 new, 5 lost; not yet significant)
     (`results/phase2_sft_v1_search/`, `results/phase3_astar_v0/`). v0 cannot see dead ends (no dead labels).
+  - [x] A* with v0 on the SFT v2 policy: **157/244 (64.3%)** vs 148 for row 2 (12 new, 3 lost, sign test
+    p ≈ 0.035), ahead at every expansion and wall-clock budget, 21% less Lean time
+    (`results/phase3_astar_v0_sft_v2/`).
   - [ ] Value v1 from statement-pool search trees (dead and censored labels).
 - [ ] **Phase 4** — Retriever, applicability annotation, list-length ablation (row 3).
 - [ ] **Phase 5** — Single-step on-policy reasoning (row 5).
