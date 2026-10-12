@@ -6,7 +6,7 @@ import copy
 import dataclasses
 import re
 import time
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import NamedTuple
@@ -14,9 +14,9 @@ from typing import NamedTuple
 from lean_search.data import Problem
 from lean_search.lean import LeanError, LeanRepl, LeanReplPool, LeanTimeout, ProofState, ReplFailure
 from lean_search.lean.text import join_tactics
-from lean_search.search.expanders import Candidate, Expander, SearchContext
+from lean_search.search.expanders import Candidate, CandidateBatch, Expander, SearchContext
 from lean_search.search.frontier import Frontier
-from lean_search.search.priority import PriorityFunction
+from lean_search.search.priority import PriorityFunction, Scores
 from lean_search.search.tree import (
     Edge,
     EdgeOutcome,
@@ -53,6 +53,8 @@ class SearchConfig:
     tactic_heartbeats: int | None = None
     tactic_timeout_seconds: float = 10.0
     forbidden_steps: tuple[str, ...] = DEFAULT_FORBIDDEN_STEPS
+    # Score each child (the value request) as soon as it exists, while the expansion's other candidates run.
+    score_children_early: bool = False
 
 
 class StopReason(StrEnum):
@@ -169,6 +171,11 @@ async def search_problems(
         await asyncio.gather(*searches, return_exceptions=True)
 
 
+def node_scores(scores: Scores) -> list[tuple[float, float | None]]:
+    value_estimates = scores.value_estimates or (None,) * len(scores.priorities)
+    return list(zip(scores.priorities, value_estimates, strict=True))
+
+
 def step_statistics(tree: SearchTree) -> tuple[StepStatistics, ...]:
     by_step: dict[str, StepStatistics] = {}
     for edge in tree.edges:
@@ -217,6 +224,11 @@ class _Expansion:
     edge_id_by_text: dict[str, int] = field(default_factory=dict)
     proved: Node | None = None
     out_of_time: bool = False
+    early_scores: dict[int, asyncio.Task[Scores]] = field(default_factory=dict)
+
+    @property
+    def stopped(self) -> bool:
+        return self.proved is not None or self.out_of_time
 
 
 class _TheoremSearch:
@@ -261,7 +273,7 @@ class _TheoremSearch:
         self.tree = tree
         self.context = SearchContext(self.problem, tree, self.repl)
         self.accounting.nodes = 1
-        await self._enqueue([tree.root])
+        await self._enqueue([tree.root], {})
         stop_reason, proved = await self._search()
         if proved is not None:
             tree.mark_proof_path(proved)
@@ -293,13 +305,12 @@ class _TheoremSearch:
         node.expanded_seconds = self.wall_seconds()
         self.accounting.expansions += 1
         before = copy.copy(self.accounting)
-        async with contextlib.aclosing(self.expander.expand(node, self.context)) as batches:
-            async for batch in batches:
-                self.accounting.prompt_tokens += batch.prompt_tokens
-                self.accounting.generated_tokens += batch.generated_tokens
-                await self._run_batch(expansion, batch.candidates)
-                if expansion.proved is not None or expansion.out_of_time:
-                    break
+        try:
+            await self._run_batches(expansion)
+        except BaseException:
+            for early_score in expansion.early_scores.values():
+                early_score.cancel()
+            raise
         node.expansion_wall_seconds = self.wall_seconds() - node.expanded_seconds
         node.expansion_lean_seconds = self.accounting.lean_seconds - before.lean_seconds
         node.expansion_prompt_tokens = self.accounting.prompt_tokens - before.prompt_tokens
@@ -314,9 +325,38 @@ class _TheoremSearch:
                 child
                 for child in self.tree.children(node)
                 if child.status == NodeStatus.OPEN and child.depth < self.config.max_depth
-            ]
+            ],
+            expansion.early_scores,
         )
         return expansion
+
+    async def _run_batches(self, expansion: _Expansion) -> None:
+        async with contextlib.aclosing(self.expander.expand(expansion.node, self.context)) as batches:
+            async for batch in batches:
+                self._charge(expansion, batch)
+                await self._run_batch(expansion, batch.candidates)
+                if expansion.stopped:
+                    break
+        for batch in self.context.abandoned_batches:
+            self._charge(expansion, batch)
+        self.context.abandoned_batches.clear()
+        if expansion.stopped:
+            # Children scored before the expansion stopped are never enqueued, but their requests were sent.
+            for scores in await asyncio.gather(*expansion.early_scores.values()):
+                for ledger in self._ledgers(expansion):
+                    ledger.value_prompt_tokens += scores.prompt_tokens
+
+    def _charge(self, expansion: _Expansion, batch: CandidateBatch) -> None:
+        for ledger in self._ledgers(expansion):
+            ledger.prompt_tokens += batch.prompt_tokens
+            ledger.generated_tokens += batch.generated_tokens
+
+    def _ledgers(self, expansion: _Expansion) -> list[Accounting]:
+        if expansion.proved is None:
+            return [self.accounting]
+        # Costs settled after the proving step were incurred before it, so the solve paid for them too.
+        assert self.solved_at is not None
+        return [self.accounting, self.solved_at]
 
     async def _run_batch(self, expansion: _Expansion, batch: Sequence[Candidate]) -> None:
         for candidate in batch:
@@ -345,6 +385,15 @@ class _TheoremSearch:
         else:
             edge, child = await self._apply(node, candidate)
         expansion.edge_id_by_text[normalized_text] = edge.edge_id
+        if (
+            self.config.score_children_early
+            and child is not None
+            and not child.is_proved
+            and child.depth < self.config.max_depth
+        ):
+            expansion.early_scores[child.node_id] = asyncio.create_task(
+                self.priority_function.score([child], self.tree)
+            )
         return child
 
     async def _apply(self, node: Node, candidate: Candidate) -> tuple[Edge, Node | None]:
@@ -427,17 +476,18 @@ class _TheoremSearch:
         node.status = NodeStatus.FAILED
         return False
 
-    async def _enqueue(self, nodes: list[Node]) -> None:
-        if not nodes:
-            return
-        scores = await self.priority_function.score(nodes, self.tree)
-        assert len(scores.priorities) == len(nodes)
-        self.accounting.value_prompt_tokens += scores.prompt_tokens
-        value_estimates = scores.value_estimates or (None,) * len(nodes)
-        for node, priority, value_estimate in zip(nodes, scores.priorities, value_estimates, strict=True):
-            node.priority = priority
-            node.value_estimate = value_estimate
-            self.frontier.push(node.node_id, priority)
+    async def _enqueue(self, nodes: list[Node], early_scores: Mapping[int, asyncio.Task[Scores]]) -> None:
+        late_nodes = [node for node in nodes if node.node_id not in early_scores]
+        late_scores = await self.priority_function.score(late_nodes, self.tree) if late_nodes else Scores(())
+        early_results = dict(zip(early_scores, await asyncio.gather(*early_scores.values()), strict=True))
+        self.accounting.value_prompt_tokens += late_scores.prompt_tokens + sum(
+            scores.prompt_tokens for scores in early_results.values()
+        )
+        scored = dict(zip((node.node_id for node in late_nodes), node_scores(late_scores), strict=True))
+        scored.update((node_id, node_scores(scores)[0]) for node_id, scores in early_results.items())
+        for node in nodes:
+            node.priority, node.value_estimate = scored[node.node_id]
+            self.frontier.push(node.node_id, node.priority)
 
     def _result(self, stop_reason: StopReason, proved: Node | None, tree: SearchTree | None) -> SearchResult:
         accounting = self.snapshot()

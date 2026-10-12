@@ -1,8 +1,9 @@
 """Expanders propose candidate steps for a node; the search executes them batch by batch."""
 
+import asyncio
 import contextlib
 from collections.abc import AsyncGenerator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from lean_search.data import Problem
@@ -52,6 +53,8 @@ class SearchContext:
     problem: Problem
     tree: SearchTree
     repl: LeanRepl
+    # Batches an expander had already paid for when the search stopped early; the search charges and clears them.
+    abandoned_batches: list[CandidateBatch] = field(default_factory=list)
 
 
 type CandidateBatches = AsyncGenerator[CandidateBatch, None]
@@ -97,13 +100,51 @@ class AutomationExpander:
 
 
 class CompositeExpander:
-    """Runs its expanders in order, e.g. the automation sweep first so that a closing tactic saves the policy call."""
+    """Runs its expanders in order; with `overlap` the later ones start at once and their batches wait their turn."""
 
-    def __init__(self, expanders: Sequence[Expander]) -> None:
+    def __init__(self, expanders: Sequence[Expander], overlap: bool = False) -> None:
         self.expanders = tuple(expanders)
+        self.overlap = overlap
 
     async def expand(self, node: Node, context: SearchContext) -> CandidateBatches:
-        for expander in self.expanders:
-            async with contextlib.aclosing(expander.expand(node, context)) as batches:
+        if not self.overlap:
+            for expander in self.expanders:
+                async with contextlib.aclosing(expander.expand(node, context)) as batches:
+                    async for batch in batches:
+                        yield batch
+            return
+        first, *later = self.expanders
+        prefetches = [asyncio.create_task(collect_batches(expander.expand(node, context))) for expander in later]
+        unconsumed: list[CandidateBatch] = []
+        next_prefetch = 0
+        try:
+            async with contextlib.aclosing(first.expand(node, context)) as batches:
                 async for batch in batches:
                     yield batch
+            while next_prefetch < len(prefetches):
+                unconsumed = await prefetches[next_prefetch]
+                next_prefetch += 1
+                while unconsumed:
+                    yield unconsumed.pop(0)
+        except GeneratorExit:
+            if asyncio.current_task().cancelling():
+                cancel_all(prefetches[next_prefetch:])
+                raise
+            # The search stopped early (a proof): requests already sent are still paid for.
+            context.abandoned_batches.extend(unconsumed)
+            for prefetch in prefetches[next_prefetch:]:
+                context.abandoned_batches.extend(await prefetch)
+            raise
+        except BaseException:
+            cancel_all(prefetches[next_prefetch:])
+            raise
+
+
+async def collect_batches(batches: CandidateBatches) -> list[CandidateBatch]:
+    async with contextlib.aclosing(batches):
+        return [batch async for batch in batches]
+
+
+def cancel_all(tasks: Sequence[asyncio.Task[list[CandidateBatch]]]) -> None:
+    for task in tasks:
+        task.cancel()

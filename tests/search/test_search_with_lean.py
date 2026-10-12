@@ -22,8 +22,11 @@ from lean_search.search import (
     FailureKind,
     Node,
     NodeStatus,
+    PriorityFunction,
+    Scores,
     SearchConfig,
     SearchContext,
+    SearchTree,
     StepSource,
     StopReason,
     search_problems,
@@ -61,6 +64,17 @@ class FixedPolicy:
         yield CandidateBatch(candidates, self.prompt_tokens, self.generated_tokens)
 
 
+class ValueLikePriority:
+    """Depth plus open goals, charging `prompt_tokens` per scored node like a value model's requests."""
+
+    def __init__(self, prompt_tokens: int = 100) -> None:
+        self.prompt_tokens = prompt_tokens
+
+    async def score(self, nodes: Sequence[Node], tree: SearchTree) -> Scores:
+        priorities = tuple(float(node.depth + len(node.goals)) for node in nodes)
+        return Scores(priorities, priorities, self.prompt_tokens * len(nodes))
+
+
 @pytest_asyncio.fixture(scope="module", loop_scope="module")
 async def repl() -> AsyncIterator[LeanRepl]:
     async with LeanRepl(LeanReplConfig()) as lean_repl:
@@ -80,10 +94,16 @@ def automation(*tactics: str, heartbeats: int | None = None) -> AutomationExpand
 
 
 async def search(
-    repl: LeanRepl, statement: str, expander: Expander | None = None, **config_fields: object
+    repl: LeanRepl,
+    statement: str,
+    expander: Expander | None = None,
+    priority_function: PriorityFunction | None = None,
+    **config_fields: object,
 ) -> CompletedSearch:
     config = dataclasses.replace(SearchConfig(max_expansions=8, tactic_timeout_seconds=20.0), **config_fields)
-    return await search_theorem(problem(statement), repl, expander or automation(), DepthPlusGoals(), config)
+    return await search_theorem(
+        problem(statement), repl, expander or automation(), priority_function or DepthPlusGoals(), config
+    )
 
 
 async def test_automation_solves_a_trivial_theorem(repl: LeanRepl) -> None:
@@ -241,6 +261,53 @@ async def test_composite_runs_the_second_expander_after_automation(repl: LeanRep
     completed = await search(repl, NEEDS_INTRO, CompositeExpander([automation("rfl"), policy]), max_expansions=1)
     assert completed.tree is not None
     assert [edge.source for edge in completed.tree.edges] == [StepSource.AUTOMATION, StepSource.POLICY]
+
+
+async def test_overlapped_request_is_charged_when_automation_closes_the_goal(repl: LeanRepl) -> None:
+    policy = FixedPolicy(["norm_num"], generated_tokens=30, prompt_tokens=7)
+    completed = await search(repl, TRIVIAL, CompositeExpander([automation("decide"), policy], overlap=True))
+    accounting = completed.result.accounting
+    assert (completed.result.proof_steps, accounting.prompt_tokens, accounting.generated_tokens) == (("decide",), 7, 30)
+
+
+async def test_solve_pays_for_the_request_overlapping_its_proving_sweep(repl: LeanRepl) -> None:
+    policy = FixedPolicy(["norm_num"], generated_tokens=30)
+    completed = await search(repl, TRIVIAL, CompositeExpander([automation("decide"), policy], overlap=True))
+    assert completed.result.solved_at is not None and completed.result.solved_at.generated_tokens == 30
+
+
+async def test_overlap_keeps_automation_candidates_first(repl: LeanRepl) -> None:
+    expander = CompositeExpander([automation("rfl"), FixedPolicy(["intros"])], overlap=True)
+    completed = await search(repl, NEEDS_INTRO, expander, max_expansions=1)
+    assert completed.tree is not None
+    assert [edge.source for edge in completed.tree.edges] == [StepSource.AUTOMATION, StepSource.POLICY]
+
+
+def node_priorities(completed: CompletedSearch) -> list[tuple[int, float | None, float | None]]:
+    assert completed.tree is not None
+    return [(node.node_id, node.priority, node.value_estimate) for node in completed.tree.nodes]
+
+
+async def test_early_child_scores_equal_the_scores_after_the_expansion(repl: LeanRepl) -> None:
+    expander = automation(ALWAYS_PROGRESSES, "have : (2 : ℕ) = 2 := rfl")
+    late = await search(repl, ARITHMETIC, expander, ValueLikePriority(), max_expansions=3)
+    early = await search(repl, ARITHMETIC, expander, ValueLikePriority(), max_expansions=3, score_children_early=True)
+    assert node_priorities(early) == node_priorities(late)
+
+
+async def test_early_child_scoring_charges_the_same_value_tokens(repl: LeanRepl) -> None:
+    expander = automation(ALWAYS_PROGRESSES, "have : (2 : ℕ) = 2 := rfl")
+    late = await search(repl, ARITHMETIC, expander, ValueLikePriority(), max_expansions=3)
+    early = await search(repl, ARITHMETIC, expander, ValueLikePriority(), max_expansions=3, score_children_early=True)
+    assert early.result.accounting.value_prompt_tokens == late.result.accounting.value_prompt_tokens
+
+
+async def test_children_scored_before_a_proof_are_charged(repl: LeanRepl) -> None:
+    policy = FixedPolicy(["intros", "intro n\nsimp"])
+    completed = await search(
+        repl, NEEDS_INTRO, policy, ValueLikePriority(), max_expansions=1, score_children_early=True
+    )
+    assert completed.result.proved and completed.result.accounting.value_prompt_tokens == 200
 
 
 async def test_wall_clock_timeout_disables_the_tactic_for_the_rest_of_the_search() -> None:

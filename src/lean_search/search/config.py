@@ -26,6 +26,8 @@ class ExpanderKind(StrEnum):
 @dataclass(frozen=True)
 class ExpanderConfig:
     kind: ExpanderKind = ExpanderKind.AUTOMATION
+    # automation_then_policy: send the policy request when the expansion starts, while the sweep runs.
+    overlap: bool = False
 
 
 @dataclass(frozen=True)
@@ -79,4 +81,4 @@ def build_expander(config: RunConfig, policy: Expander | None = None) -> Expande
             return policy
         case ExpanderKind.AUTOMATION_THEN_POLICY:
             assert policy is not None
-            return CompositeExpander([AutomationExpander(config.automation), policy])
+            return CompositeExpander([AutomationExpander(config.automation), policy], config.expander.overlap)
