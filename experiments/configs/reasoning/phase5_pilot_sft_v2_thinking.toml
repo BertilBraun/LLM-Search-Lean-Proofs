@@ -1,6 +1,6 @@
 # Phase 5 pilot (before round 1): how long does the SFT v2 policy think, how often is a thinking step a success,
 # and how does success depend on reasoning length? 512 traced train states, the round-1 settings with a 1024-token
-# cap so the length distribution is visible past 512. Same servers as phase5_sample_r1.toml.
+# cap so the length distribution is visible past 512. One server on GPU 1 (port 8101).
 
 [states]
 count = 512
@@ -14,7 +14,7 @@ excluded_runs = []
 [policy]
 model = "search-qwen3.5-2b"
 tokenizer = "Qwen/Qwen3.5-2B"
-server_urls = ["http://127.0.0.1:8100/v1", "http://127.0.0.1:8101/v1"]
+server_urls = ["http://127.0.0.1:8101/v1"]
 adapter = "policy-v2"
 sample_count = 8
 # The search's sampling temperature, so the reasoning is learned on the distribution the search draws from.
@@ -27,7 +27,7 @@ few_shot = false
 request_timeout_seconds = 1800.0
 
 [execution]
-pool_size = 24
+pool_size = 16
 tactic_timeout_seconds = 10.0
 foreign_header_batch_size = 16
 

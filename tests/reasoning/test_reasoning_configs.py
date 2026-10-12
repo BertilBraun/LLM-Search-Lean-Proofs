@@ -41,4 +41,4 @@ def test_sft_configs_continue_an_adapter(path: Path) -> None:
 
 @pytest.mark.parametrize("path", sorted(CONFIG_DIRECTORY.glob("phase5_pilot_*_brief.toml")), ids=lambda path: path.stem)
 def test_brief_pilot_arms_use_the_shared_instruction(path: Path) -> None:
-    assert load_reasoning_run_config(path).thinking_instruction == BRIEF_THINKING_INSTRUCTION
+    assert load_reasoning_run_config(path).policy.thinking_instruction == BRIEF_THINKING_INSTRUCTION

@@ -202,9 +202,7 @@ async def run_pipeline(config: ReasoningRunConfig, directory: RunDirectory, stat
     async with contextlib.AsyncExitStack() as stack:
         sample_state = unavailable_sampler
         if needs_sampling:
-            sampler = await stack.enter_async_context(
-                open_sampler(config.policy, config.pipeline.requests_in_flight, config.thinking_instruction)
-            )
+            sampler = await stack.enter_async_context(open_sampler(config.policy, config.pipeline.requests_in_flight))
             sample_state = sampler.sample
         executor = await stack.enter_async_context(open_executor(preloaded_header(states), config.execution))
         remaining_steps = None
@@ -324,7 +322,7 @@ def render_run_summary(summary: RunSummary) -> str:
         f"# Reasoning run `{summary.run_name}`",
         f"{statistics.states} traced train-split states, k={policy.sample_count} samples each from `{policy.model}`"
         f" (adapter `{policy.adapter}`), thinking {'on' if policy.thinking else 'off'}"
-        + (f" with the system prompt addition “{config.thinking_instruction}”" if config.thinking_instruction else "")
+        + (f" with the system prompt addition “{policy.thinking_instruction}”" if policy.thinking_instruction else "")
         + ", temperature "
         f"{policy.temperature:g}, at most {policy.max_tokens} generated tokens (reasoning and block; truncation is a "
         f"failure). Every distinct block ran on its rebuilt state with `apply_block` "

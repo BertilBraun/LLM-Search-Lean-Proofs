@@ -71,10 +71,8 @@ class ReasoningSampler:
         clients: Sequence[PolicyClient],
         max_model_length: int,
         requests_in_flight: int,
-        thinking_instruction: str,
     ) -> None:
         self.config = config
-        self.thinking_instruction = thinking_instruction
         self.tokenizer = tokenizer
         self.max_model_length = max_model_length
         self._clients = itertools.cycle(clients)
@@ -86,13 +84,20 @@ class ReasoningSampler:
             state.goals,
             few_shot=self.config.few_shot,
             thinking=self.config.thinking,
-            thinking_instruction=self.thinking_instruction,
+            thinking_instruction=self.config.thinking_instruction,
         )
         prompt_tokens = len(self.tokenizer.encode(prompt, add_special_tokens=False))
         max_tokens = min(self.config.max_tokens, self.max_model_length - prompt_tokens)
         if max_tokens < MINIMUM_GENERATED_TOKENS:
             return StateSamples(
-                state, self.config.thinking, self.thinking_instruction, prompt_tokens, 0, max_tokens, 0.0, ()
+                state,
+                self.config.thinking,
+                self.config.thinking_instruction,
+                prompt_tokens,
+                0,
+                max_tokens,
+                0.0,
+                (),
             )
         async with self._semaphore:
             started = time.monotonic()
@@ -113,7 +118,7 @@ class ReasoningSampler:
         return StateSamples(
             state,
             self.config.thinking,
-            self.thinking_instruction,
+            self.config.thinking_instruction,
             generation.prompt_token_count,
             generation.cached_prompt_token_count,
             max_tokens,
@@ -139,9 +144,7 @@ def sample_record(index: int, sample: Sample, thinking: bool, tokenizer: PolicyT
 
 
 @contextlib.asynccontextmanager
-async def open_sampler(
-    config: PolicyConfig, requests_in_flight: int, thinking_instruction: str
-) -> AsyncIterator[ReasoningSampler]:
+async def open_sampler(config: PolicyConfig, requests_in_flight: int) -> AsyncIterator[ReasoningSampler]:
     tokenizer = load_tokenizer(config.tokenizer)
     max_model_length = min([await served_max_model_length(url, config.model) for url in config.server_urls])
     async with contextlib.AsyncExitStack() as stack:
@@ -151,7 +154,7 @@ async def open_sampler(
             )
             for url in config.server_urls
         ]
-        yield ReasoningSampler(config, tokenizer, clients, max_model_length, requests_in_flight, thinking_instruction)
+        yield ReasoningSampler(config, tokenizer, clients, max_model_length, requests_in_flight)
 
 
 def distinct_blocks(sampled: StateSamples) -> list[str]:

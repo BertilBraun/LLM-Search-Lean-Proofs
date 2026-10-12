@@ -90,7 +90,7 @@ def main() -> None:
         batch = states[start : start + arguments.states_per_batch]
         prompts = [
             render_prompt(
-                tokenizer, state.goals, thinking=policy.thinking, thinking_instruction=config.thinking_instruction
+                tokenizer, state.goals, thinking=policy.thinking, thinking_instruction=policy.thinking_instruction
             )
             for state in batch
         ]
@@ -111,7 +111,7 @@ def main() -> None:
                 StateSamples(
                     state,
                     policy.thinking,
-                    config.thinking_instruction,
+                    policy.thinking_instruction,
                     prompt_tokens,
                     0,
                     policy.max_tokens,

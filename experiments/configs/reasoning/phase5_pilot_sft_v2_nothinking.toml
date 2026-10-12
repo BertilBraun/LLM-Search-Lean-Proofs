@@ -13,7 +13,7 @@ excluded_runs = []
 [policy]
 model = "search-qwen3.5-2b"
 tokenizer = "Qwen/Qwen3.5-2B"
-server_urls = ["http://127.0.0.1:8100/v1", "http://127.0.0.1:8101/v1"]
+server_urls = ["http://127.0.0.1:8101/v1"]
 adapter = "policy-v2"
 sample_count = 8
 # The search's sampling temperature, so the reasoning is learned on the distribution the search draws from.
@@ -26,7 +26,7 @@ few_shot = false
 request_timeout_seconds = 1800.0
 
 [execution]
-pool_size = 24
+pool_size = 16
 tactic_timeout_seconds = 10.0
 foreign_header_batch_size = 16
 

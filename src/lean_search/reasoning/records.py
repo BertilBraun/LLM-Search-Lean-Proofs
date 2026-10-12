@@ -28,7 +28,7 @@ class SampleRecord:
 class StateSamples:
     state: ReasoningState
     thinking: bool
-    # The addition to the system prompt in thinking mode (`render_prompt`'s `thinking_instruction`).
+    # The policy's thinking_instruction the samples were drawn with (an addition to the thinking system prompt).
     thinking_instruction: str
     prompt_tokens: int
     cached_prompt_tokens: int

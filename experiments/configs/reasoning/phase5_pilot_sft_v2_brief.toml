@@ -1,8 +1,6 @@
-# Phase 5 pilot, arm (b): arm (a) (phase5_pilot_sft_v2_thinking.toml) with the brevity instruction added to the
-# thinking-mode system prompt (policy.prompts.BRIEF_THINKING_INSTRUCTION). Same states:
+# Phase 5 pilot, arm (b): arm (a) (phase5_pilot_sft_v2_thinking.toml) with policy.thinking_instruction set to the
+# brevity instruction (policy.prompts.BRIEF_THINKING_INSTRUCTION). Same states:
 # `states --states-from phase5_pilot_sft_v2_thinking`.
-
-thinking_instruction = "Think briefly (a few sentences) about which tactic to use; do not restate the goal."
 
 [states]
 count = 512
@@ -16,7 +14,7 @@ excluded_runs = []
 [policy]
 model = "search-qwen3.5-2b"
 tokenizer = "Qwen/Qwen3.5-2B"
-server_urls = ["http://127.0.0.1:8100/v1", "http://127.0.0.1:8101/v1"]
+server_urls = ["http://127.0.0.1:8101/v1"]
 adapter = "policy-v2"
 sample_count = 8
 # The search's sampling temperature, so the reasoning is learned on the distribution the search draws from.
@@ -25,11 +23,12 @@ top_p = 1.0
 # Reasoning and block together; truncated samples are failures, so the cap is the reasoning length the search pays.
 max_tokens = 1024
 thinking = true
+thinking_instruction = "Think briefly (a few sentences) about which tactic to use; do not restate the goal."
 few_shot = false
 request_timeout_seconds = 1800.0
 
 [execution]
-pool_size = 24
+pool_size = 16
 tactic_timeout_seconds = 10.0
 foreign_header_batch_size = 16
 

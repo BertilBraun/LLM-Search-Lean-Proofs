@@ -16,8 +16,6 @@ from lean_search.value.config import ValueConfig
 @dataclass(frozen=True)
 class ReasoningRunConfig:
     policy: PolicyConfig
-    # Added to the system prompt in thinking mode, e.g. prompts.BRIEF_THINKING_INSTRUCTION; empty keeps the plain one.
-    thinking_instruction: str = ""
     states: StateSelectionConfig = field(default_factory=StateSelectionConfig)
     execution: ExecutionConfig = field(default_factory=ExecutionConfig)
     pipeline: PipelineConfig = field(default_factory=PipelineConfig)
@@ -32,6 +30,8 @@ def parse_reasoning_run_config(text: str) -> ReasoningRunConfig:
     config = from_json_object(ReasoningRunConfig, tomllib.loads(text))
     if not (config.policy.model and config.policy.tokenizer):
         raise ValueError("A reasoning run needs policy.model and policy.tokenizer.")
+    if config.policy.thinking_instruction and not config.policy.thinking:
+        raise ValueError("policy.thinking_instruction is only used with policy.thinking = true.")
     if config.reward.value_progress and not (config.value.model and config.value.tokenizer):
         raise ValueError("reward.value_progress needs value.model and value.tokenizer.")
     return config
