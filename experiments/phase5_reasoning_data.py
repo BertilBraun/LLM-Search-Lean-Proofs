@@ -491,23 +491,26 @@ def command_select(arguments: argparse.Namespace) -> None:
 
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--config", type=Path, required=True)
     commands = parser.add_subparsers(dest="command", required=True)
 
     states = commands.add_parser("states", help="choose the fixed prompt states")
+    states.add_argument("--config", type=Path, required=True)
     states.add_argument("--run-name", required=True)
     states.add_argument("--traced-directory", type=Path, default=DATA_DIRECTORY / "traced")
-    states.add_argument("--states-from", help="reuse another run's states (its config's [states] then applies)")
+    states.add_argument("--states-from", help="reuse another run's states instead of choosing them from [states]")
 
     run = commands.add_parser("run", help="sample, execute and classify, chunk by chunk (resumable)")
+    run.add_argument("--config", type=Path, required=True)
     run.add_argument("--run-name", required=True)
     run.add_argument("--state-limit", type=int, help="only the first N states (pilots and smoke tests)")
     run.add_argument("--pool-size", type=int, help="overrides execution.pool_size")
 
     statistics = commands.add_parser("statistics", help="summarize the run's records")
+    statistics.add_argument("--config", type=Path, required=True)
     statistics.add_argument("--run-name", required=True)
 
     select = commands.add_parser("select", help="build a rejection-sampled SFT data set (config: ReasoningDataConfig)")
+    select.add_argument("--config", type=Path, required=True)
     select.add_argument("--name", required=True)
     select.add_argument("--run-name", help="where the summary goes (default: phase5_data_<name>)")
     return parser.parse_args()

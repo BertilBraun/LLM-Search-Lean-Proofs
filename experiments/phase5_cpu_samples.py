@@ -11,6 +11,7 @@ Lean. Log-probabilities are not computed (0.0). Without --adapter-path the base 
 """
 
 import argparse
+import dataclasses
 import os
 import time
 from pathlib import Path
@@ -39,6 +40,8 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--adapter-path")
     parser.add_argument("--threads", type=int, default=8)
     parser.add_argument("--states-per-batch", type=int, default=4)
+    parser.add_argument("--sample-count", type=int, help="overrides policy.sample_count")
+    parser.add_argument("--max-tokens", type=int, help="overrides policy.max_tokens")
     return parser.parse_args()
 
 
@@ -54,7 +57,11 @@ def main() -> None:
     arguments = parse_arguments()
     torch.set_num_threads(arguments.threads)
     config = load_reasoning_run_config(arguments.config)
-    policy = config.policy
+    policy = dataclasses.replace(
+        config.policy,
+        sample_count=arguments.sample_count or config.policy.sample_count,
+        max_tokens=arguments.max_tokens or config.policy.max_tokens,
+    )
     directory = RunDirectory(RUNS_DIRECTORY / arguments.run_name)
     states = read_records(directory.states, ReasoningState)[: arguments.states]
     tokenizer = transformers.AutoTokenizer.from_pretrained(policy.tokenizer)
