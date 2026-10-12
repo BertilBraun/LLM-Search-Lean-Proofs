@@ -42,6 +42,14 @@ class NextTokenDistribution:
     cached_prompt_token_count: int
 
 
+@dataclass(frozen=True)
+class NextTokenDistributions:
+    # One per prompt, in order; the server reports token counts for the request as a whole.
+    logprobs_by_token_id: tuple[dict[int, float], ...]
+    prompt_token_count: int
+    cached_prompt_token_count: int
+
+
 class PolicyClient:
     def __init__(self, base_url: str, model: str, timeout_seconds: float = 1800.0, max_connections: int = 512) -> None:
         self.model = model
@@ -127,20 +135,32 @@ class PolicyClient:
     async def score_next_token(
         self, prompt: str, *, top_k: int = 20, adapter: str | None = None
     ) -> NextTokenDistribution:
+        scored = await self.score_next_tokens([prompt], top_k=top_k, adapter=adapter)
+        return NextTokenDistribution(
+            scored.logprobs_by_token_id[0], scored.prompt_token_count, scored.cached_prompt_token_count
+        )
+
+    async def score_next_tokens(
+        self, prompts: Sequence[str], *, top_k: int = 20, adapter: str | None = None
+    ) -> NextTokenDistributions:
+        """Many prompts in one request, which saves the client's per-request overhead (~10 ms of CPU each)."""
         body = {
-            "prompt": prompt,
+            "prompt": list(prompts),
             "max_tokens": 1,
             "temperature": 0.0,
             "logprobs": top_k,
             "return_tokens_as_token_ids": True,
         }
         response = await self._post("/completions", body, adapter)
-        top_logprobs = response["choices"][0]["logprobs"]["top_logprobs"][0]
         usage = response["usage"]
-        return NextTokenDistribution(
-            logprob_by_token_id={
-                int(token.removeprefix(TOKEN_ID_PREFIX)): logprob for token, logprob in top_logprobs.items()
-            },
+        return NextTokenDistributions(
+            logprobs_by_token_id=tuple(
+                {
+                    int(token.removeprefix(TOKEN_ID_PREFIX)): logprob
+                    for token, logprob in choice["logprobs"]["top_logprobs"][0].items()
+                }
+                for choice in sorted(response["choices"], key=lambda choice: choice["index"])
+            ),
             prompt_token_count=usage["prompt_tokens"],
             cached_prompt_token_count=_cached_prompt_token_count(usage),
         )
