@@ -56,6 +56,7 @@ from lean_search.expert_iteration.known_proofs import (
     load_known_proof_pool_config,
     read_candidates,
     read_verified,
+    skipped_statement,
     verify_statement,
     write_records,
 )
@@ -138,6 +139,9 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--loop-config", type=Path, help="keep the lead ahead of this loop's started statements")
     parser.add_argument("--concurrency", type=int, help="Lean processes, overriding verification.concurrency")
     parser.add_argument("--lead", type=int, help="usable statements kept ahead, overriding verification.lead")
+    parser.add_argument(
+        "--min-proof-tactics", type=int, help="skip shorter known proofs, overriding verification.min_proof_tactics"
+    )
     return parser.parse_args()
 
 
@@ -367,6 +371,8 @@ async def verify(config: KnownProofPoolConfig, limit: int | None, sample: int | 
                 await asyncio.sleep(settings.check_seconds)
 
             async def one(candidate: KnownProofStatement) -> VerifiedStatement:
+                if candidate.proofs[0].top_level_tactics < settings.min_proof_tactics:
+                    return skipped_statement(candidate)
                 async with pool.acquire() as repl:
                     return await verify_statement(repl, candidate, automation, settings.automation_timeout_seconds)
 
@@ -377,8 +383,13 @@ async def verify(config: KnownProofPoolConfig, limit: int | None, sample: int | 
             if remaining is not None:
                 remaining -= len(batch)
             passed = sum(result.verified for result in results)
+            skipped = sum(result.skipped for result in results)
             usable = usable_unstarted(verified, set())
-            log(f"{len(verified):,} done: batch {passed}/{len(results)} verified, {usable:,} usable in all")
+            batch_usable = usable_unstarted(results, set())
+            log(
+                f"{len(verified):,} done: batch {passed}/{len(results)} verified, {skipped} skipped, {batch_usable} "
+                f"usable; {usable:,} usable in all"
+            )
 
 
 def verification_counts(records: Sequence[VerifiedStatement]) -> list[VerificationCounts]:
@@ -502,7 +513,11 @@ def main() -> None:
     config = load_known_proof_pool_config(arguments.config)
     overrides = {
         name: value
-        for name, value in (("concurrency", arguments.concurrency), ("lead", arguments.lead))
+        for name, value in (
+            ("concurrency", arguments.concurrency),
+            ("lead", arguments.lead),
+            ("min_proof_tactics", arguments.min_proof_tactics),
+        )
         if value is not None
     }
     config = dataclasses.replace(config, verification=dataclasses.replace(config.verification, **overrides))

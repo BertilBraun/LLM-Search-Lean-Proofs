@@ -11,6 +11,7 @@ from lean_search.expert_iteration.known_proofs import (
     is_negation,
     known_proof,
     read_verified,
+    skipped_statement,
 )
 from lean_search.search.records import to_json
 
@@ -69,3 +70,11 @@ def test_reading_verified_records_waits_for_a_line_being_written(tmp_path: Path)
 )
 def test_proved_negations_are_recognized_by_name(statement: str, negation: bool) -> None:
     assert is_negation(StatementRecord("s", "t", "", statement, "", "")) == negation
+
+
+def test_a_skipped_statement_is_recorded_but_not_usable() -> None:
+    groups: dict[str, StatementProofs] = {}
+    add_proof(groups, "key", proof("simp"), proofs_per_statement=2)
+    (candidate,) = easiest_first(groups)
+    record = skipped_statement(candidate)
+    assert (record.skipped, record.verified, record.proof_tactics) == (True, False, 1)

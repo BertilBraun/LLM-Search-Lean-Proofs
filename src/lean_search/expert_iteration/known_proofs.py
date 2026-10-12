@@ -67,6 +67,8 @@ class VerifiedStatement:
     load_failed: bool
     failures: tuple[str, ...]
     seconds: float
+    # Not checked: its shortest known proof is below verification.min_proof_tactics (almost always automation-trivial).
+    skipped: bool = False
 
     @property
     def name(self) -> str:
@@ -194,6 +196,14 @@ async def verify_statement(
     )
 
 
+def skipped_statement(candidate: KnownProofStatement) -> VerifiedStatement:
+    tactics = candidate.proofs[0].top_level_tactics
+    reason = f"skipped: shortest known proof has {tactics} top-level tactics"
+    return VerifiedStatement(
+        candidate.statement, candidate.proof_sources, False, None, tactics, 0, (), False, False, (reason,), 0.0, True
+    )
+
+
 def write_records(path: Path, records: Iterable[object]) -> int:
     path.parent.mkdir(parents=True, exist_ok=True)
     count = 0
@@ -239,6 +249,9 @@ class VerificationConfig:
     batch: int = 256
     # Verified, usable (not automation-solved) statements the loop has not started, kept ahead of its need.
     lead: int = 10000
+    # Statements whose shortest known proof has fewer top-level tactics are recorded as skipped, not checked: the
+    # automation sweep closes almost all one-tactic ones.
+    min_proof_tactics: int = 2
     check_seconds: float = 300.0
     command_timeout_seconds: float = 60.0
     # The automation probe: the loop search template's automation tactics, each with this time limit.

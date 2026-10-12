@@ -47,6 +47,8 @@ pooled = false
 concurrency = 6
 batch = 256
 lead = 10000
+# Shorter known proofs are recorded as skipped: almost all are automation-trivial.
+min_proof_tactics = 2
 check_seconds = 300.0
 command_timeout_seconds = 60.0
 automation_config = "experiments/configs/expert_iteration/loop_search.toml"
