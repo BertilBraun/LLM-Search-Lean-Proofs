@@ -44,6 +44,7 @@ class ServerCounters:
 @dataclass(frozen=True)
 class Sample:
     seconds: float
+    unix_time: float
     gpu_utilization: tuple[int, ...]
     gpu_power_watts: tuple[float, ...]
     cpu_usage_seconds: float
@@ -83,6 +84,7 @@ def parse_arguments() -> argparse.Namespace:
     summarize.add_argument("--input", type=Path, required=True)
     summarize.add_argument("--start", type=float, default=0.0)
     summarize.add_argument("--end", type=float, default=float("inf"))
+    summarize.add_argument("--unix-time", action="store_true", help="--start and --end are Unix times")
     summarize.add_argument("--samples-per-request", type=int, default=16)
     return parser.parse_args()
 
@@ -117,6 +119,7 @@ def record(arguments: argparse.Namespace) -> None:
             cpu_stat = read_cpu_stat()
             sample = Sample(
                 seconds=time.monotonic() - started,
+                unix_time=time.time(),
                 gpu_utilization=tuple(pynvml.nvmlDeviceGetUtilizationRates(handle).gpu for handle in handles),
                 gpu_power_watts=tuple(pynvml.nvmlDeviceGetPowerUsage(handle) / 1000 for handle in handles),
                 cpu_usage_seconds=cpu_stat["usage_usec"] / 1e6,
@@ -186,9 +189,10 @@ def main() -> None:
         case "record":
             record(arguments)
         case "summarize":
-            summary = summarize(
-                read_samples(arguments.input), arguments.start, arguments.end, arguments.samples_per_request
-            )
+            samples = read_samples(arguments.input)
+            if arguments.unix_time:
+                samples = [dataclasses.replace(sample, seconds=sample.unix_time) for sample in samples]
+            summary = summarize(samples, arguments.start, arguments.end, arguments.samples_per_request)
             print(json.dumps(dataclasses.asdict(summary), indent=1))
 
 

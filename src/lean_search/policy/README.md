@@ -76,3 +76,19 @@ theorem's `prompt_tokens` and `generated_tokens` therefore sum to the statistics
 logs the request's prompt tokens and the tokens of the samples that produced it (duplicates merged); these are not a
 cost, the node's `expansion_prompt_tokens` and `expansion_generated_tokens` are. `run_search.py` writes the statistics
 to `policy.json`.
+
+## Overlap and early value scoring
+
+Two search options change only timing, never which candidates run or how they are ordered:
+
+- `[expander] overlap = true` (with `automation_then_policy`): the policy request is sent when the expansion starts and
+  runs while the automation sweep executes on the REPL; its batch is still executed after the sweep's. If the sweep
+  proves the goal (or the wall-clock budget runs out), the search awaits the request and charges its tokens anyway,
+  to the final accounting and to `solved_at`, because they were spent before the proof was found
+  (`SearchContext.abandoned_batches`). A theorem proved by automation therefore costs at most one extra request.
+- `[search] score_children_early = true`: each new child's value request is sent as soon as Lean creates the child,
+  while the expansion's remaining candidates run; at the end of the expansion the children are pushed in creation
+  order with the same priorities as before. Children scored before a proof ends the expansion are never enqueued but
+  their value prompt tokens are charged (to `solved_at` too).
+
+Both default to off in the code, so older configs reproduce; the row and expert-iteration configs turn them on.

@@ -141,7 +141,7 @@ def benchmark(arguments: argparse.Namespace) -> None:
     def on_step(record: StepRecord) -> None:
         records.append(record)
         step_finished.append(time.perf_counter())
-        print(json.dumps(dataclasses.asdict(record)), flush=True)
+        print(json.dumps(dataclasses.asdict(record) | {"unix_time": time.time()}), flush=True)
         if profiler is not None:
             profiler.step()
 
