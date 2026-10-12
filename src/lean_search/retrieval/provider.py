@@ -55,7 +55,9 @@ class LemmaProvider:
 def load_goal_retriever(config: RetrievalConfig) -> GoalRetriever:
     if config.device == "cpu":
         torch.set_num_threads(config.cpu_threads)
-    encoder = TextEncoder(config.retriever, config.device)
+    # Beside a vLLM server only ~10% of the GPU is free: bfloat16 encoder and float16 index take about 1 GiB.
+    dtype = torch.float32 if config.device == "cpu" else torch.bfloat16
+    encoder = TextEncoder(config.retriever, config.device, dtype)
     index = load_premise_index(data_directory(config), config.retriever, config.device)
     return GoalRetriever(encoder, index)
 

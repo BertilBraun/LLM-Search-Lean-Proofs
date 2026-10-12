@@ -1,0 +1,36 @@
+# Lemma-aware policy adapter: continues the SFT v2 adapter for one epoch on the lemma data `lemmas_v1`
+# (~30M tokens, mostly prompt) at half the SFT learning rate. Served as the adapter `policy-lemmas` for every arm of
+# the list-length ablation. On both GPUs:
+#   torchrun --nproc-per-node 2 experiments/phase4_sft.py --config experiments/configs/retrieval/phase4_sft.toml \
+#       --run-name phase4_sft_lemmas
+model = "Qwen/Qwen3.5-2B"
+data = "lemmas_v1"
+merge = false
+initial_adapter = "/workspace/checkpoints/phase2_sft_v2/adapter"
+
+[lora]
+rank = 64
+alpha = 64
+dropout = 0.0
+
+[optimization]
+method = "lora"
+learning_rate = 1e-4
+warmup_fraction = 0.03
+minimum_learning_rate_ratio = 0.1
+weight_decay = 0.0
+max_gradient_norm = 1.0
+epochs = 1
+micro_batch_tokens = 32768
+micro_batches_per_step = 1
+length_group_examples = 4096
+gradient_checkpointing = true
+seed = 0
+
+[evaluation]
+interval_steps = 200
+validation_examples = 2000
+micro_batch_tokens = 16384
+generation_examples = 256
+generation_batch_size = 32
+max_new_tokens = 256

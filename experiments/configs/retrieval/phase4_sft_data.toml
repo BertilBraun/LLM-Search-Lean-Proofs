@@ -1,0 +1,25 @@
+# Lemma-aware SFT data (phase4_sft_data.py): the SFT v2 sources, whole traced proofs, ~30M estimated tokens with
+# equal source shares. List lengths 0/4/8/16/32 (one fifth each) so one adapter serves every ablation arm;
+# the top 32 retrieved candidates are checked as in the search, and premises the step names but retrieval missed
+# are injected into half the lists so that the policy learns to use a listed lemma.
+sources = [
+    "goedel_lean_workbook_proofs",
+    "stp_lean_workbook",
+    "deepseek_prover_v1",
+    "lean_workbook",
+    "goedel_sft_v2",
+    "numinamath_lean_kimina",
+    "numinamath_lean_human",
+    "leanabell_sft",
+]
+token_budget = 30_000_000
+validation_examples = 2000
+lemma_counts = [0, 4, 8, 16, 32]
+candidate_count = 32
+step_premise_injection = 0.5
+estimated_tokens_per_lemma = 45
+max_prompt_tokens = 4096
+max_completion_tokens = 256
+max_signature_characters = 256
+reference_tokenizer = "Qwen/Qwen3.5-2B"
+seed = "phase4-lemmas"
