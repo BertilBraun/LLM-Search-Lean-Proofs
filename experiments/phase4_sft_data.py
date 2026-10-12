@@ -371,13 +371,18 @@ def tokenized_examples(
 
 
 def split_summary(
-    split: str, annotated: int, kept: Sequence[LemmaSftExample], prompt_tokens: list[int], completion_tokens: list[int]
+    split: str,
+    annotated: int,
+    over_length: int,
+    kept: Sequence[LemmaSftExample],
+    prompt_tokens: list[int],
+    completion_tokens: list[int],
 ) -> SplitSummary:
     prompt = length_statistics(prompt_tokens)
     return SplitSummary(
         split=split,
         annotated=annotated,
-        over_length=annotated - len(kept),
+        over_length=over_length,
         examples=len(kept),
         prompt_tokens_mean=prompt.mean,
         prompt_tokens_p90=prompt.p90,
@@ -407,7 +412,9 @@ def finish(config: LemmaDataConfig, directory: Path, name: str, replay_failures:
         annotated = list(read_lemma_examples(directory / f"examples_{split}.jsonl"))
         kept, prompt_tokens, completion_tokens = tokenized_examples(tokenizer, annotated, config)
         write_lemma_examples(DATA_DIRECTORY / "sft" / name / f"{split}.jsonl", kept)
-        split_summaries.append(split_summary(split, len(annotated), kept, prompt_tokens, completion_tokens))
+        split_summaries.append(
+            split_summary(split, len(annotated), len(annotated) - len(kept), kept, prompt_tokens, completion_tokens)
+        )
     write_summary(
         DataSummary(
             name=name,
@@ -427,6 +434,7 @@ def subsample(config: LemmaDataConfig, source_name: str, name: str, token_budget
     for split in SPLITS:
         examples = list(read_lemma_examples(DATA_DIRECTORY / "sft" / source_name / f"{split}.jsonl"))
         kept, prompt_tokens, completion_tokens = tokenized_examples(tokenizer, examples, config)
+        over_length = len(examples) - len(kept)
         if split == "train":
             totals = [prompt + completion for prompt, completion in zip(prompt_tokens, completion_tokens, strict=True)]
             chosen = subsample_indices(kept, totals, token_budget, config.seed)
@@ -434,7 +442,7 @@ def subsample(config: LemmaDataConfig, source_name: str, name: str, token_budget
             prompt_tokens = [prompt_tokens[index] for index in chosen]
             completion_tokens = [completion_tokens[index] for index in chosen]
         write_lemma_examples(DATA_DIRECTORY / "sft" / name / f"{split}.jsonl", kept)
-        split_summaries.append(split_summary(split, len(examples), kept, prompt_tokens, completion_tokens))
+        split_summaries.append(split_summary(split, len(examples), over_length, kept, prompt_tokens, completion_tokens))
     write_summary(
         DataSummary(
             name=name,
