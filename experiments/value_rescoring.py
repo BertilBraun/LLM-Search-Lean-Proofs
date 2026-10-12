@@ -49,7 +49,7 @@ async def rescore(config_path: Path, goals: list[tuple[str, ...]]) -> RescoringR
     config = load_run_config(config_path)
     async with open_value_estimator(config.value) as estimator:
         started = time.monotonic()
-        await asyncio.gather(*(estimator.score(state) for state in goals))
+        await estimator.score_states(goals)
         seconds = time.monotonic() - started
         statistics = estimator.statistics
     return RescoringResult(
