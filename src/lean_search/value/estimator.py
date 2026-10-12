@@ -7,6 +7,8 @@ import time
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 
+import httpx
+
 from lean_search.policy.client import NextTokenDistribution, PolicyClient
 from lean_search.policy.expander import load_tokenizer, served_max_model_length
 from lean_search.search.priority import ValueEstimates
@@ -15,6 +17,7 @@ from lean_search.value.bins import BIN_COUNT, DEAD_BIN, BinDistribution, bin_dis
 from lean_search.value.config import ValueConfig
 from lean_search.value.prompts import ValueTokenizer, bin_token_ids, render_value_prompt
 
+TRANSPORT_ATTEMPTS = 3
 # A state too long for the server's context cannot be expanded by the policy either.
 TOO_LONG_DISTRIBUTION = tuple(float(index == DEAD_BIN) for index in range(BIN_COUNT))
 
@@ -39,6 +42,7 @@ class ValueStatistics:
     prompts_too_long: int = 0
     # Bin tokens outside the returned top-k logprobs, summed over requests.
     missing_bin_tokens: int = 0
+    transport_retries: int = 0
     request_seconds: float = 0.0
 
     def record(self, distribution: NextTokenDistribution, bins: BinDistribution, seconds: float) -> None:
@@ -74,12 +78,22 @@ class ValueModelEstimator:
             self.statistics.prompts_too_long += 1
             return StateScore(TOO_LONG_DISTRIBUTION, 0)
         started = time.monotonic()
-        distribution = await next(self._clients).score_next_token(
-            prompt, top_k=self.config.top_k, adapter=self.config.adapter
-        )
+        distribution = await self.next_token_distribution(prompt)
         bins = bin_distribution(distribution.logprob_by_token_id, self.bin_token_ids)
         self.statistics.record(distribution, bins, time.monotonic() - started)
         return StateScore(bins.probabilities, distribution.prompt_token_count)
+
+    async def next_token_distribution(self, prompt: str) -> NextTokenDistribution:
+        # Scoring is idempotent; under load the server sometimes closes a kept-alive connection mid-request.
+        for _ in range(TRANSPORT_ATTEMPTS - 1):
+            try:
+                return await self.request(prompt)
+            except httpx.TransportError:
+                self.statistics.transport_retries += 1
+        return await self.request(prompt)
+
+    async def request(self, prompt: str) -> NextTokenDistribution:
+        return await next(self._clients).score_next_token(prompt, top_k=self.config.top_k, adapter=self.config.adapter)
 
 
 @contextlib.asynccontextmanager
