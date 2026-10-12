@@ -169,10 +169,13 @@ def proof_units(
         + lemma_count_for(step_key(step), config.lemma_counts, config.seed) * config.estimated_tokens_per_lemma
         for step, length in zip(steps, lengths, strict=True)
     }
-    return [
-        ProofUnit(proof[0].source, identifier, tuple(proof), sum(estimate[step_key(step)] for step in proof))
-        for identifier, proof in steps_by_proof.items()
-    ]
+    units = []
+    for identifier, proof in steps_by_proof.items():
+        # Steps too long for the prompt cap would be dropped later; they must not take budget.
+        kept = tuple(step for step in proof if estimate[step_key(step)] <= config.max_prompt_tokens)
+        if kept:
+            units.append(ProofUnit(kept[0].source, identifier, kept, sum(estimate[step_key(step)] for step in kept)))
+    return units
 
 
 def select(config: LemmaDataConfig, directory: Path) -> None:
