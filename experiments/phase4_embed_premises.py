@@ -1,4 +1,4 @@
-"""Embed every LeanDojo premise with the ReProver retriever (ReProver's serialization), for retrieval and recall@k.
+"""Embed every premise (LeanDojo's and the added environment theorems) with the ReProver retriever and serialization.
 
     python experiments/phase4_embed_premises.py --device cuda:0 [--dtype bfloat16] [--limit N]
 
@@ -24,7 +24,10 @@ from lean_search.retrieval.index import embeddings_directory, write_embeddings
 from lean_search.retrieval.premises import serialize_premise
 
 DATA_DIRECTORY = Path(os.environ["LEAN_SEARCH_DATA"])
-PREMISES_PATH = DATA_DIRECTORY / "normalized" / "mathlib" / "premises.jsonl"
+PREMISE_PATHS = (
+    DATA_DIRECTORY / "normalized" / "mathlib" / "premises.jsonl",
+    DATA_DIRECTORY / "retrieval" / "environment_premises.jsonl",
+)
 RUN_DIRECTORY = Path(os.environ["LEAN_SEARCH_RUNS"]) / "phase4_embed_premises"
 DTYPES = {"float32": torch.float32, "bfloat16": torch.bfloat16}
 CHECK_SAMPLE = 1024
@@ -57,8 +60,9 @@ def parse_arguments() -> argparse.Namespace:
 def main() -> None:
     arguments = parse_arguments()
     premises: dict[str, str] = {}
-    for record in read_premise_records(PREMISES_PATH):
-        premises.setdefault(record.full_name, serialize_premise(record.full_name, record.code))
+    for path in PREMISE_PATHS:
+        for record in read_premise_records(path):
+            premises.setdefault(record.full_name, serialize_premise(record.full_name, record.code))
     names = list(premises)[: arguments.limit]
     texts = [premises[name] for name in names]
     encoder = TextEncoder(DEFAULT_RETRIEVER, arguments.device, DTYPES[arguments.dtype])

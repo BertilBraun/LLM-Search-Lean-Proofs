@@ -16,6 +16,8 @@ _SORT_BINDER = re.compile(r"^[{⦃][^:]*:\s*(?:Type|Sort)\b[^:]*[}⦄]$")
 _WHITESPACE = re.compile(r"\s+")
 _IDENTIFIER = re.compile(r"(?<![\w.'])[^\W\d][\w'!?.]*")
 ELLIPSIS = " …"
+# Premises from the pinned environment that LeanDojo's corpus lacks; their code is synthesized from the signature.
+ENVIRONMENT_SOURCE = "environment"
 # The namespaces miniF2F headers open, in which a short name may resolve.
 MINIF2F_OPEN_NAMESPACES = ("BigOperators", "Real", "Nat", "Topology", "Rat")
 
@@ -45,6 +47,10 @@ def serialize_premise(full_name: str, code: str) -> str:
         if marked != code:
             return marked
     return code
+
+
+def synthesized_code(signature: str) -> str:
+    return f"theorem {signature}"
 
 
 def serialize_goals(goals: Sequence[str]) -> str:

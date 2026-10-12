@@ -1,6 +1,13 @@
 import pytest
 
-from lean_search.retrieval.environment import NameCheck, parse_signature_dump
+from lean_search.retrieval.environment import (
+    EnvironmentConstant,
+    NameCheck,
+    is_handwritten_theorem,
+    missing_theorems,
+    parse_constant_dump,
+    parse_signature_dump,
+)
 from lean_search.retrieval.premises import (
     compact_signature,
     serialize_premise,
@@ -8,6 +15,7 @@ from lean_search.retrieval.premises import (
     step_premises,
     strip_leandojo_goal_count,
     strip_universe_parameters,
+    synthesized_code,
 )
 
 ADD_COMM = "add_comm {G : Type u_1} [AddCommMagma G] (a b : G) : a + b = b + a"
@@ -103,3 +111,43 @@ KNOWN = {"sq_nonneg", "mul_pos", "Real.sqrt_nonneg", "Nat.succ_le_iff", "add_com
 )
 def test_step_premises_are_found_by_name(step: str, premises: tuple[str, ...]) -> None:
     assert step_premises(step, KNOWN, ("Real", "Nat")) == premises
+
+
+@pytest.mark.parametrize(
+    ("full_name", "handwritten"),
+    [
+        ("add_comm", True),
+        ("Finset.sum_range_succ", True),
+        ("Nat.instCanonicallyOrderedCommSemiring.proof_1", False),
+        ("Units.instPreorder.eq_1", False),
+        ("List.nil.sizeOf_spec", False),
+        ("Lean.IR.Expr.pap.injEq", False),
+        ("Mathlib.Meta.NormNum.isNat_add", False),
+    ],
+)
+def test_handwritten_theorems_exclude_generated_companions_and_metaprogramming(
+    full_name: str, handwritten: bool
+) -> None:
+    assert is_handwritten_theorem(full_name) is handwritten
+
+
+def test_missing_theorems_are_theorems_outside_the_known_names() -> None:
+    constants = [
+        EnvironmentConstant("theorem", "add_comm"),
+        EnvironmentConstant("theorem", "mul_comm"),
+        EnvironmentConstant("def", "Real.sqrt"),
+        EnvironmentConstant("theorem", "foo.proof_1"),
+    ]
+    assert missing_theorems(constants, {"mul_comm"}) == ["add_comm"]
+
+
+def test_constant_dump_is_parsed() -> None:
+    assert list(parse_constant_dump(["theorem\tadd_comm\n", "\n", "def\tReal.sqrt\n"])) == [
+        EnvironmentConstant("theorem", "add_comm"),
+        EnvironmentConstant("def", "Real.sqrt"),
+    ]
+
+
+def test_added_theorem_code_is_serialized_with_its_name_marked() -> None:
+    code = synthesized_code("add_comm {G : Type u_1} [AddCommMagma G] (a b : G) : a + b = b + a")
+    assert serialize_premise("add_comm", code).startswith("theorem <a>add_comm</a> {G : Type u_1}")

@@ -3,9 +3,10 @@
     python experiments/phase4_recall.py --device cuda:0
 
 Modes: `all` ranks every LeanDojo premise; `accessible` only those the theorem can import or that precede it in its
-file (ReProver's protocol); `deployed` only premises that exist in the pinned environment (gold premises likewise),
-as in the search. `competition` uses traced validation-split competition steps whose text names an existing premise
-(the step's named premises are gold), ranked against the deployed index. Writes
+file (ReProver's protocol); `deployed` ranks the search's index (LeanDojo premises that exist in the pinned
+environment plus the added environment theorems; gold premises restricted to existing ones). `competition` uses
+traced validation-split competition steps whose text names an indexed premise (the step's named premises are gold),
+ranked against the deployed index. Writes
 $LEAN_SEARCH_RUNS/phase4_recall/summary/{summary.json,README.md}.
 """
 
@@ -175,18 +176,20 @@ def render_markdown(results: Sequence[ModeResult], query_counts: dict[str, int])
 
 def main() -> None:
     arguments = parse_arguments()
-    names, stored = read_embeddings(embeddings_directory(RETRIEVAL_DIRECTORY, DEFAULT_RETRIEVER))
-    embeddings = stored.to(device=arguments.device, dtype=torch.float16)
+    all_names, stored = read_embeddings(embeddings_directory(RETRIEVAL_DIRECTORY, DEFAULT_RETRIEVER))
+    all_embeddings = stored.to(device=arguments.device, dtype=torch.float16)
     premise_by_name: dict[str, PremiseRecord] = {}
     for record in read_premise_records(MATHLIB_DIRECTORY / "premises.jsonl"):
         premise_by_name.setdefault(record.full_name, record)
-    premises = [premise_by_name[name] for name in names]
+    leandojo_rows = [row for row, name in enumerate(all_names) if name in premise_by_name]
+    names = [all_names[row] for row in leandojo_rows]
+    embeddings = all_embeddings[leandojo_rows]
     existing = {signature.full_name for signature in read_signatures(RETRIEVAL_DIRECTORY / "signatures.jsonl")}
-    deployed_rows = [row for row, name in enumerate(names) if name in existing]
-    deployed_names = [names[row] for row in deployed_rows]
-    deployed_embeddings = embeddings[deployed_rows]
+    deployed_rows = [row for row, name in enumerate(all_names) if name in existing]
+    deployed_names = [all_names[row] for row in deployed_rows]
+    deployed_embeddings = all_embeddings[deployed_rows]
     encoder = TextEncoder(DEFAULT_RETRIEVER, arguments.device, torch.bfloat16)
-    accessible = accessible_mask_function(premises, arguments.device)
+    accessible = accessible_mask_function([premise_by_name[name] for name in names], arguments.device)
     corpus = set(names)
     results: list[ModeResult] = []
     query_counts: dict[str, int] = {}
