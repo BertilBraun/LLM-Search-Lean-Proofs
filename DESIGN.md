@@ -144,9 +144,13 @@ allows.
   - [ ] Proof tracing (`results/phase2_tracing/`): the selection minus `stp_conjectures` is replayed step by step
     (200k heartbeats, 60 s wall-clock backstop per step; 2% of canonical statements held out). Pilot, 15,516
     proofs: 83.9% replay completely, from 99.2% (DeepSeek-Prover-V1) to 52.2% (Numina human proofs: Mathlib 4.15
-    names, `native_decide`); 49,807 training steps; 238/238 sampled complete proofs re-verify. Full run in progress,
-    narrowed to Goedel workbook, STP workbook, DeepSeek-Prover-V1, Lean Workbook and Leanabell; Goedel SFT v2 and
-    Numina are deferred to a later invocation (`--sources`).
+    names, `native_decide`); 49,807 training steps; 238/238 sampled complete proofs re-verify. Narrowed full run
+    (Goedel workbook, STP workbook, DeepSeek-Prover-V1, Lean Workbook, Leanabell) finished: ~402k train steps.
+    Goedel SFT v2 and Numina are being traced separately for later training rounds.
+  - [x] SFT v1 (development policy, `results/phase2_sft_v1/`): 16.8M tokens × 2 epochs on the first snapshot;
+    probe valid 71.4%, any-close@8 37.6% (few-shot: 18.0% / 19.8%).
+  - [ ] SFT v2 (final): ~60M tokens, equal source shares, both GPUs.
+  - [ ] Row 2 on miniF2F-valid.
 - [ ] **Phase 3** — Value v0/v1, A* search, λ/D sweep (row 4).
 - [ ] **Phase 4** — Retriever, applicability annotation, list-length ablation (row 3).
 - [ ] **Phase 5** — Single-step on-policy reasoning (row 5).
