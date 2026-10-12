@@ -14,10 +14,14 @@ Qwen3.5 tokens (prompt + completion).
 | `pilot` | LoRA vs full fine-tuning A/B | all | 256 | 45,864 | 10,864,923 | 1,510,468 | 858 |
 | `model_choice` | model-choice runs | 7.5M | 256 | 33,107 | 7,500,857 | 1,030,501 | 858 |
 | `v1` | SFT v1 (development policy) | all | 256 | 77,209 | 16,756,384 | 2,515,906 | 1,509 |
+| `v2` | SFT v2 (final policy) | 60M | 256 | 285,178 | 60,000,472 | 7,646,772 | 2,000 |
 
 `partial4` was built while the pilot was still running and holds only the first four sources. `v1` is built from
 the merged tracing snapshot of 2026-10-11 20:39 UTC (`--snapshot`: 82,027 train steps, pilot plus the first main
-shards; 55% Goedel workbook, no Numina human proofs). Details per source
+shards; 55% Goedel workbook, no Numina human proofs). `v2` is built from the snapshot refreshed on 2026-10-12
+03:42 UTC after the narrowed full trace (130 shards, 408,774 train steps, again no Numina human proofs): with equal
+shares, DeepSeek-Prover-V1, Leanabell, the Goedel workbook and the small sources are used whole and STP fills the
+rest (18.2M of its ~40M tokens). Details per source
 (steps, duplicates, length drops, token shares, length quantiles) in `<name>.md`, machine-readable in `<name>.json`.
 
 Findings:
