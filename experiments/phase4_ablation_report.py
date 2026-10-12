@@ -1,7 +1,7 @@
 """Compare the list-length arms of the retrieval ablation (ladder row 3) on the same problems.
 
     python experiments/phase4_ablation_report.py --run-name phase4_ablation \
-        --runs phase4_lemmas_00 phase4_lemmas_08 phase4_lemmas_32
+        --runs phase4_lemmas_00 phase4_lemmas_16 phase4_lemmas_64
 
 Reads each run's config.toml, results.jsonl and policy.json under $LEAN_SEARCH_RUNS; writes
 $LEAN_SEARCH_RUNS/<run-name>/summary/{summary.json,README.md}. The first run is the reference for paired counts.

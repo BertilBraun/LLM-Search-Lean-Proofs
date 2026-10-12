@@ -49,7 +49,7 @@ def test_invalid_lemma_counts_are_rejected(lemma_count: int, candidate_count: in
 
 ABLATION_CONFIGS = {
     count: Path(__file__).parents[2] / "experiments" / "configs" / "retrieval" / f"phase4_lemmas_{count:02d}.toml"
-    for count in (0, 8, 32)
+    for count in (0, 16, 64)
 }
 
 

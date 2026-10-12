@@ -211,7 +211,9 @@ def read_selection(directory: Path, split: str) -> list[TracedStep]:
 
 def retrieve(config: LemmaDataConfig, directory: Path, device: str) -> None:
     retriever = load_goal_retriever(
-        RetrievalConfig(lemma_count=1, candidate_count=config.candidate_count, device=device)
+        RetrievalConfig(
+            lemma_count=1, candidate_count=config.candidate_count, retriever=config.retriever, device=device
+        )
     )
     for split in SPLITS:
         steps = [

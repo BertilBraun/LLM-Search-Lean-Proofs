@@ -32,6 +32,26 @@ def length_batches(lengths: Sequence[int], max_batch_tokens: int) -> list[list[i
     return batches
 
 
+def padded_batch(token_ids: Sequence[Sequence[int]], device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
+    """Right-padded input ids and attention mask."""
+    width = max(len(ids) for ids in token_ids)
+    input_ids = torch.full((len(token_ids), width), PAD_ID, dtype=torch.long)
+    attention_mask = torch.zeros((len(token_ids), width), dtype=torch.long)
+    for row, ids in enumerate(token_ids):
+        input_ids[row, : len(ids)] = torch.tensor(ids)
+        attention_mask[row, : len(ids)] = 1
+    return input_ids.to(device), attention_mask.to(device)
+
+
+def pooled_embeddings(
+    model: transformers.T5EncoderModel, input_ids: torch.Tensor, attention_mask: torch.Tensor
+) -> torch.Tensor:
+    """Unit-norm float32 masked means of the encoder's last hidden states (ReProver's `_encode`)."""
+    hidden = model(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state.float()
+    mask = attention_mask.unsqueeze(2).float()
+    return functional.normalize((hidden * mask).sum(dim=1) / mask.sum(dim=1), dim=1)
+
+
 class TextEncoder:
     def __init__(
         self,
@@ -54,16 +74,8 @@ class TextEncoder:
         token_ids = [byte_token_ids(text, self.max_length) for text in texts]
         embeddings = torch.empty((len(texts), self.dimension), dtype=torch.float32, device=self.device)
         for batch in length_batches([len(ids) for ids in token_ids], max_batch_tokens):
-            width = len(token_ids[batch[0]])
-            input_ids = torch.full((len(batch), width), PAD_ID, dtype=torch.long)
-            attention_mask = torch.zeros((len(batch), width), dtype=torch.long)
-            for row, index in enumerate(batch):
-                input_ids[row, : len(token_ids[index])] = torch.tensor(token_ids[index])
-                attention_mask[row, : len(token_ids[index])] = 1
-            input_ids = input_ids.to(self.device)
-            attention_mask = attention_mask.to(self.device)
-            hidden = self.model(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state.float()
-            mask = attention_mask.unsqueeze(2).float()
-            pooled = (hidden * mask).sum(dim=1) / mask.sum(dim=1)
-            embeddings[torch.tensor(batch, device=self.device)] = functional.normalize(pooled, dim=1)
+            input_ids, attention_mask = padded_batch([token_ids[index] for index in batch], self.device)
+            embeddings[torch.tensor(batch, device=self.device)] = pooled_embeddings(
+                self.model, input_ids, attention_mask
+            )
         return embeddings

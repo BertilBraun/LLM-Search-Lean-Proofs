@@ -26,7 +26,7 @@ from lean_search.corpora.tracing import state_before
 from lean_search.data import Split, load_minif2f
 from lean_search.lean import LeanReplConfig, LeanReplPool, ProofState
 from lean_search.retrieval.annotation import Annotation, Applicability, annotate
-from lean_search.retrieval.config import ApplicabilityConfig, RetrievalConfig
+from lean_search.retrieval.config import DEFAULT_RETRIEVER, ApplicabilityConfig, RetrievalConfig
 from lean_search.retrieval.premises import (
     MINIF2F_OPEN_NAMESPACES,
     RetrievedPremise,
@@ -109,6 +109,7 @@ def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--candidates", type=CandidateSource, choices=list(CandidateSource), required=True)
     parser.add_argument("--candidate-count", type=int, default=32)
+    parser.add_argument("--retriever", default=DEFAULT_RETRIEVER, help="for --candidates retrieved")
     parser.add_argument("--processes", type=int, default=8)
     parser.add_argument("--traced-states", type=int, default=256)
     parser.add_argument("--heartbeats", type=int, default=ApplicabilityConfig.heartbeats)
@@ -152,8 +153,10 @@ def minif2f_tasks() -> list[AnnotationTask]:
     ]
 
 
-def retrieved_candidates(tasks: Sequence[AnnotationTask], count: int) -> list[tuple[RetrievedPremise, ...]]:
-    retriever = load_goal_retriever(RetrievalConfig(lemma_count=count, candidate_count=count))
+def retrieved_candidates(
+    tasks: Sequence[AnnotationTask], count: int, retriever_name: str
+) -> list[tuple[RetrievedPremise, ...]]:
+    retriever = load_goal_retriever(RetrievalConfig(lemma_count=count, candidate_count=count, retriever=retriever_name))
     return retriever.retrieve([task.goals for task in tasks], count)
 
 
@@ -319,7 +322,7 @@ def main() -> None:
             premises = tuple(RetrievedPremise(name, signatures[name], 0.0) for name in frequent)
             candidates = [premises] * len(tasks)
         case CandidateSource.RETRIEVED:
-            candidates = retrieved_candidates(tasks, arguments.candidate_count)
+            candidates = retrieved_candidates(tasks, arguments.candidate_count, arguments.retriever)
     print(f"{len(tasks)} states, candidates ready", flush=True)
     results, failed, restarts, wall_seconds = asyncio.run(run_tasks(tasks, candidates, config, arguments.processes))
     records = [state_record(task, annotation) for task, annotation in results]

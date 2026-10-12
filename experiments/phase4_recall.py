@@ -7,7 +7,8 @@ file (ReProver's protocol); `deployed` ranks the search's index (LeanDojo premis
 environment plus the added environment theorems; gold premises restricted to existing ones). `competition` uses
 traced validation-split competition steps whose text names an indexed premise (the step's named premises are gold),
 ranked against the deployed index. Writes
-$LEAN_SEARCH_RUNS/phase4_recall/summary/{summary.json,README.md}.
+$LEAN_SEARCH_RUNS/<run-name>/summary/{summary.json,README.md} (default phase4_recall); --retriever evaluates a
+fine-tuned encoder directory whose premises phase4_embed_premises.py has embedded.
 """
 
 import argparse
@@ -45,7 +46,7 @@ from lean_search.search.summary import markdown_table
 DATA_DIRECTORY = Path(os.environ["LEAN_SEARCH_DATA"])
 MATHLIB_DIRECTORY = DATA_DIRECTORY / "normalized" / "mathlib"
 RETRIEVAL_DIRECTORY = DATA_DIRECTORY / "retrieval"
-RUN_DIRECTORY = Path(os.environ["LEAN_SEARCH_RUNS"]) / "phase4_recall"
+RUNS_DIRECTORY = Path(os.environ["LEAN_SEARCH_RUNS"])
 KS = (1, 4, 8, 10, 16, 32, 64)
 QUERY_CHUNK = 256
 
@@ -72,6 +73,8 @@ type MaskFunction = Callable[[Sequence[Query]], torch.Tensor]
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--device", default="cuda:0")
+    parser.add_argument("--retriever", default=DEFAULT_RETRIEVER, help="Hugging Face name or encoder directory")
+    parser.add_argument("--run-name", default="phase4_recall")
     parser.add_argument("--limit", type=int, help="queries per split, for a quick run")
     return parser.parse_args()
 
@@ -147,7 +150,7 @@ def accessible_mask_function(premises: Sequence[PremiseRecord], device: str) -> 
     return mask
 
 
-def render_markdown(results: Sequence[ModeResult], query_counts: dict[str, int]) -> str:
+def render_markdown(results: Sequence[ModeResult], query_counts: dict[str, int], retriever: str) -> str:
     headers = ["Mode", "Split", "States", "Gold/state", *[f"R@{k}" for k in KS], "Hit@8", "Hit@32", "MRR"]
     rows = []
     for result in results:
@@ -168,7 +171,7 @@ def render_markdown(results: Sequence[ModeResult], query_counts: dict[str, int])
     counts = ", ".join(f"{name}: {count:,}" for name, count in query_counts.items())
     return (
         "# Offline recall of the ReProver retriever\n\n"
-        f"`{DEFAULT_RETRIEVER}`, premise embeddings in float16. R@k: mean fraction of a state's gold premises in the "
+        f"`{retriever}`, premise embeddings in float16. R@k: mean fraction of a state's gold premises in the "
         "top k (ReProver's metric); Hit@k: states with at least one gold premise in the top k. States with at least "
         f"one gold premise: {counts}.\n\n" + markdown_table(headers, rows) + "\n"
     )
@@ -176,7 +179,7 @@ def render_markdown(results: Sequence[ModeResult], query_counts: dict[str, int])
 
 def main() -> None:
     arguments = parse_arguments()
-    all_names, stored = read_embeddings(embeddings_directory(RETRIEVAL_DIRECTORY, DEFAULT_RETRIEVER))
+    all_names, stored = read_embeddings(embeddings_directory(RETRIEVAL_DIRECTORY, arguments.retriever))
     all_embeddings = stored.to(device=arguments.device, dtype=torch.float16)
     premise_by_name: dict[str, PremiseRecord] = {}
     for record in read_premise_records(MATHLIB_DIRECTORY / "premises.jsonl"):
@@ -188,7 +191,7 @@ def main() -> None:
     deployed_rows = [row for row, name in enumerate(all_names) if name in existing]
     deployed_names = [all_names[row] for row in deployed_rows]
     deployed_embeddings = all_embeddings[deployed_rows]
-    encoder = TextEncoder(DEFAULT_RETRIEVER, arguments.device, torch.bfloat16)
+    encoder = TextEncoder(arguments.retriever, arguments.device, torch.bfloat16)
     accessible = accessible_mask_function([premise_by_name[name] for name in names], arguments.device)
     corpus = set(names)
     results: list[ModeResult] = []
@@ -218,12 +221,12 @@ def main() -> None:
     results.append(
         ModeResult("competition", "traced/validation", summarize_recall(ranked, KS), time.perf_counter() - started)
     )
-    directory = RUN_DIRECTORY / "summary"
+    directory = RUNS_DIRECTORY / arguments.run_name / "summary"
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "summary.json").write_text(
         json.dumps([dataclasses.asdict(result) for result in results], indent=1), encoding="utf-8"
     )
-    markdown = render_markdown(results, query_counts)
+    markdown = render_markdown(results, query_counts, arguments.retriever)
     (directory / "README.md").write_text(markdown, encoding="utf-8")
     print(markdown)
 

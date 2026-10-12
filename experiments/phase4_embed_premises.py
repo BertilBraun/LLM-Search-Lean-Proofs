@@ -3,7 +3,7 @@
     python experiments/phase4_embed_premises.py --device cuda:0 [--dtype bfloat16] [--limit N]
 
 Writes $LEAN_SEARCH_DATA/retrieval/embeddings/<retriever>/{names.txt,embeddings.npy} (float16, unit norm) and
-$LEAN_SEARCH_RUNS/phase4_embed_premises/summary/{summary.json,README.md}. With --limit only that many premises are
+$LEAN_SEARCH_RUNS/<run-name>/summary/ (default phase4_embed_premises). With --limit only that many premises are
 embedded and nothing is written except the summary (a throughput probe).
 """
 
@@ -28,7 +28,7 @@ PREMISE_PATHS = (
     DATA_DIRECTORY / "normalized" / "mathlib" / "premises.jsonl",
     DATA_DIRECTORY / "retrieval" / "environment_premises.jsonl",
 )
-RUN_DIRECTORY = Path(os.environ["LEAN_SEARCH_RUNS"]) / "phase4_embed_premises"
+RUNS_DIRECTORY = Path(os.environ["LEAN_SEARCH_RUNS"])
 DTYPES = {"float32": torch.float32, "bfloat16": torch.bfloat16}
 CHECK_SAMPLE = 1024
 
@@ -51,6 +51,8 @@ class EmbeddingSummary:
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--device", default="cuda:0")
+    parser.add_argument("--retriever", default=DEFAULT_RETRIEVER, help="Hugging Face name or encoder directory")
+    parser.add_argument("--run-name", default="phase4_embed_premises")
     parser.add_argument("--dtype", choices=list(DTYPES), default="bfloat16")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--max-batch-tokens", type=int, default=65_536)
@@ -65,22 +67,22 @@ def main() -> None:
             premises.setdefault(record.full_name, serialize_premise(record.full_name, record.code))
     names = list(premises)[: arguments.limit]
     texts = [premises[name] for name in names]
-    encoder = TextEncoder(DEFAULT_RETRIEVER, arguments.device, DTYPES[arguments.dtype])
+    encoder = TextEncoder(arguments.retriever, arguments.device, DTYPES[arguments.dtype])
     started = time.perf_counter()
     embeddings = encoder.encode(texts, arguments.max_batch_tokens)
     if arguments.device != "cpu":
         torch.cuda.synchronize()
     seconds = time.perf_counter() - started
     sample = list(range(0, len(texts), max(1, len(texts) // CHECK_SAMPLE)))[:CHECK_SAMPLE]
-    reference = TextEncoder(DEFAULT_RETRIEVER, arguments.device, torch.float32).encode(
+    reference = TextEncoder(arguments.retriever, arguments.device, torch.float32).encode(
         [texts[index] for index in sample]
     )
     cosine = (reference * embeddings[sample]).sum(dim=1)
     written = arguments.limit is None
     if written:
-        write_embeddings(embeddings_directory(DATA_DIRECTORY / "retrieval", DEFAULT_RETRIEVER), names, embeddings)
+        write_embeddings(embeddings_directory(DATA_DIRECTORY / "retrieval", arguments.retriever), names, embeddings)
     summary = EmbeddingSummary(
-        retriever=DEFAULT_RETRIEVER,
+        retriever=arguments.retriever,
         device=arguments.device,
         dtype=arguments.dtype,
         premises=len(names),
@@ -91,7 +93,7 @@ def main() -> None:
         float32_cosine_min=cosine.min().item(),
         written=written,
     )
-    directory = RUN_DIRECTORY / "summary"
+    directory = RUNS_DIRECTORY / arguments.run_name / "summary"
     directory.mkdir(parents=True, exist_ok=True)
     name = "summary" if written else f"probe_{arguments.device.replace(':', '')}_{arguments.dtype}"
     (directory / f"{name}.json").write_text(json.dumps(dataclasses.asdict(summary), indent=1), encoding="utf-8")

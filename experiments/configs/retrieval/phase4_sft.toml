@@ -1,13 +1,11 @@
-# Lemma-aware policy adapter: continues the SFT v2 adapter for one epoch on `lemmas_v1_15m` (15M tokens, mostly
-# prompt; `lemmas_v1` subsampled with each list length 0/4/8/16/32 keeping its token share) at half the SFT learning
-# rate, ~35-40 min on both GPUs. Build the data first (CPU):
-#   python experiments/phase4_sft_data.py --config experiments/configs/retrieval/phase4_sft_data.toml #       --name lemmas_v1_15m --stage subsample --from-name lemmas_v1 --token-budget 15000000
-# The adapter is Served as the adapter `policy-lemmas` for every arm of
-# the list-length ablation. On both GPUs:
+# Lemma-aware policy adapter: continues the SFT v2 adapter for one epoch on `lemmas_v2` (~15M tokens, mostly prompt;
+# lists of 0/16/32/64 lemmas from the fine-tuned retriever, experiments/configs/retrieval/phase4_sft_data_v2.toml) at
+# half the SFT learning rate, ~35-40 min on both GPUs. Served as the adapter `policy-lemmas` for every arm of the
+# list-length ablation:
 #   torchrun --nproc-per-node 2 experiments/phase4_sft.py --config experiments/configs/retrieval/phase4_sft.toml \
 #       --run-name phase4_sft_lemmas
 model = "Qwen/Qwen3.5-2B"
-data = "lemmas_v1_15m"
+data = "lemmas_v2"
 merge = false
 initial_adapter = "/workspace/checkpoints/phase2_sft_v2/adapter"
 

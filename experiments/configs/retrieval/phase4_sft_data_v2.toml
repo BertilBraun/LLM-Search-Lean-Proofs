@@ -1,0 +1,27 @@
+# Lemma-aware SFT data v2 (phase4_sft_data.py): as v1 (experiments/configs/retrieval/phase4_sft_data.toml), but
+# retrieved by the fine-tuned retriever (phase4_retriever_finetune.py; its premise embeddings must exist), list
+# lengths 0/16/32/64 (a quarter each), the top 64 candidates checked as in the search, and ~15M estimated tokens
+# selected directly.
+sources = [
+    "goedel_lean_workbook_proofs",
+    "stp_lean_workbook",
+    "deepseek_prover_v1",
+    "lean_workbook",
+    "goedel_sft_v2",
+    "numinamath_lean_kimina",
+    "numinamath_lean_human",
+    "leanabell_sft",
+]
+token_budget = 15_000_000
+validation_examples = 2000
+lemma_counts = [0, 16, 32, 64]
+candidate_count = 64
+step_premise_injection = 0.5
+# Measured on Qwen3.5-2B: 8 lemmas add ~220 prompt tokens, 32 add ~770.
+estimated_tokens_per_lemma = 27
+max_prompt_tokens = 4096
+max_completion_tokens = 256
+max_signature_characters = 256
+reference_tokenizer = "Qwen/Qwen3.5-2B"
+seed = "phase4-lemmas-v2"
+retriever = "/workspace/checkpoints/phase4_retriever_finetune/encoder"
