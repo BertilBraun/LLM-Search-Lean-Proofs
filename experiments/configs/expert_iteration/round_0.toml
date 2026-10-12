@@ -87,6 +87,9 @@ replay_data = "v0"
 replay_fraction = 0.5
 prefilter_runs = ["phase6_pool_v1_prefilter"]
 prefilter_fraction = 0.1
+# Censored states dominate unsolved trees (about 20 per tree); the cap keeps value training near 1.5 h on one GPU
+# (v0: 3.8k tokens/s) while every exact and dead state stays.
+max_tree_states = 50000
 
 [data.value.labels]
 at_least_weight = 1.0

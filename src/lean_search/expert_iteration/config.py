@@ -65,6 +65,8 @@ class ValueDataConfig:
     prefilter_runs: tuple[str, ...] = ()
     # Their examples as a share of the round's tree labels.
     prefilter_fraction: float = 0.1
+    # Caps the distinct tree states (0: no cap) by sampling censored ones; exact and dead states are all kept.
+    max_tree_states: int = 0
 
 
 @dataclass(frozen=True)

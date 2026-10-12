@@ -1,9 +1,16 @@
+from collections import Counter
+
 import pytest
 from expert_trees import TreeBuilder
 
 from lean_search.expert_iteration.config import ValueDataConfig
 from lean_search.expert_iteration.mixing import is_held_out, replay_amount, sample_value_examples
-from lean_search.expert_iteration.value_data import prefilter_tree_examples, round_tree_examples, value_mixture
+from lean_search.expert_iteration.value_data import (
+    capped_tree_states,
+    prefilter_tree_examples,
+    round_tree_examples,
+    value_mixture,
+)
 from lean_search.search import TreeRecord
 from lean_search.value.labels import LabelKind, TreeLabelConfig, ValueExample
 
@@ -83,3 +90,16 @@ def test_held_out_share_is_close_to_the_fraction() -> None:
 def test_samples_do_not_depend_on_the_input_order() -> None:
     pool = examples(50)
     assert sample_value_examples(pool, 10, "seed") == sample_value_examples(pool[::-1], 10, "seed")
+
+
+def test_the_tree_state_cap_keeps_every_exact_and_dead_state() -> None:
+    dead = [ValueExample((f"⊢ dead {index}",), LabelKind.DEAD, 0, 0.5, "s", "s", 1) for index in range(5)]
+    censored = [ValueExample((f"⊢ open {index}",), LabelKind.AT_LEAST, 2, 1.0, "s", "s", 1) for index in range(50)]
+    kept = capped_tree_states([*examples(5, "tree"), *dead, *censored], 20, "seed")
+    assert Counter(example.kind for example in kept) == {LabelKind.EXACT: 5, LabelKind.DEAD: 5, LabelKind.AT_LEAST: 10}
+
+
+def test_the_mixture_reports_the_censored_states_it_dropped() -> None:
+    censored = [ValueExample((f"⊢ open {index}",), LabelKind.AT_LEAST, 2, 1.0, "s", "s", 1) for index in range(50)]
+    config = ValueDataConfig(replay_fraction=0.0, prefilter_fraction=0.0, max_tree_states=30)
+    assert value_mixture(censored, [], [], config, "seed").censored_dropped == 20

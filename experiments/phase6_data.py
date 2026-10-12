@@ -173,6 +173,7 @@ class ValueDataSummary:
     tree_labels: LabelCounts
     tree_depths: DepthHistograms
     tree_states: int
+    censored_dropped: int
     prefilter_trees: int
     prefilter_exact: int
     prefilter_states: int
@@ -424,6 +425,7 @@ def build_value_data(gathered: Harvest, config: RoundDataConfig, output_director
         tree_labels=label_counts(tree_labels),
         tree_depths=depth_histograms(tree_labels),
         tree_states=mixture.tree_states,
+        censored_dropped=mixture.censored_dropped,
         prefilter_trees=prefilter_trees,
         prefilter_exact=len(prefilter),
         prefilter_states=mixture.prefilter_states,
@@ -517,7 +519,9 @@ def render_markdown(summary: RoundDataSummary) -> str:
         "## Value v1",
         f"Tree labels (`value.labels`): exact remaining steps for states that reach the proof, at least 1 + the "
         f"distance to the frontier for censored states, dead for fully expanded states without either. "
-        f"{value.dropped_open:,} open-frontier labels (at least 1) carry no loss and are dropped. Pre-filter proofs: "
+        f"{value.dropped_open:,} open-frontier labels (at least 1) carry no loss and are dropped; "
+        f"{value.tree_states:,} distinct tree states kept ({value.censored_dropped:,} censored ones dropped by the "
+        f"cap of {summary.config.value.max_tree_states:,}; 0 = none). Pre-filter proofs: "
         f"{value.prefilter_exact:,} exact labels from {value.prefilter_trees:,} automation-only trees, "
         f"{value.prefilter_states:,} sampled. Replay of `{value.replay_data}`: {value.replay_states:,} of "
         f"{value.replay_available:,} states.",
