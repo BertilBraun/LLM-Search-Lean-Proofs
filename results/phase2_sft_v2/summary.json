@@ -1,0 +1,462 @@
+{
+ "run_name": "phase2_sft_v2",
+ "started": "2026-10-12T03:48:27+00:00",
+ "git_revision": "3ce77df855eaaf68bc2a5a763cc493654185e637",
+ "config": {
+  "model": "Qwen/Qwen3.5-2B",
+  "data": "v2",
+  "lora": {
+   "rank": 64,
+   "alpha": 64,
+   "dropout": 0.0
+  },
+  "optimization": {
+   "method": "lora",
+   "learning_rate": 0.0002,
+   "warmup_fraction": 0.03,
+   "minimum_learning_rate_ratio": 0.1,
+   "weight_decay": 0.0,
+   "max_gradient_norm": 1.0,
+   "epochs": 1,
+   "max_steps": 0,
+   "micro_batch_tokens": 32768,
+   "micro_batches_per_step": 1,
+   "length_group_examples": 4096,
+   "gradient_checkpointing": true,
+   "seed": 0
+  },
+  "evaluation": {
+   "interval_steps": 200,
+   "validation_examples": 2000,
+   "micro_batch_tokens": 16384,
+   "generation_examples": 256,
+   "generation_batch_size": 64,
+   "max_new_tokens": 256
+  },
+  "merge": false
+ },
+ "world_size": 2,
+ "flash_linear_attention": true,
+ "train_examples": 285178,
+ "train_tokens": 60000472,
+ "validation_examples": 2000,
+ "tokenization_seconds": 168.61572890006937,
+ "result": {
+  "steps": 981,
+  "examples": 285178,
+  "tokens": 60000472,
+  "padded_tokens": 62995418,
+  "completion_tokens": 7646772,
+  "training_seconds": 8594.088389172219,
+  "tokens_per_second": 6981.598196685435,
+  "peak_memory_gib": 14.800772190093994,
+  "trainable_parameters": 67276800,
+  "evaluations": [
+   {
+    "step": 0,
+    "validation_loss": 0.6922742591551034,
+    "validation_examples": 2000,
+    "teacher_forced_exact_match": 0.0,
+    "generation_exact_match": 0.0,
+    "generation_examples": 256,
+    "evaluation_seconds": 110.7957458619494,
+    "mismatches": [
+     {
+      "goals": [
+       "x : ℝ\nhx : x = 3 + 2 * √2\n⊢ x ^ 4 + 1 / x ^ 4 = 1154"
+      ],
+      "target": "subst hx",
+      "generated": "have h : x ^ 4 + 1 / x ^ 4 = 1154 := by\n  rw [hx]\n  norm_num [Real.sqrt_eq_iff_sq_eq, sq, mul_assoc]\n  <;> ring_nf\n  <;> norm_num\n  <;> field_simp [hx]\n  <;> ring_nf\n  <;> norm_num\n  <;> linarith"
+     },
+     {
+      "goals": [
+       "k : ℕ\nhk : k = 3986729\n⊢ let total_cells := 2011 * 2011;\n  let covered_cells := 52 * 52 * k;\n  covered_cells = total_cells → k = 3986729"
+      ],
+      "target": "simp only [hk]",
+      "generated": "simp [covered_cells, total_cells] at *\nomega"
+     },
+     {
+      "goals": [
+       "case h\nn : ℕ\nh₀ : 2 * n + 4 = 3 * n + 1\n⊢ 3 = n"
+      ],
+      "target": "rw [eq_comm]",
+      "generated": "have h₁ : n = 3 := by\n  have h₂ : 2 * n + 4 = 3 * n + 1 := h₀\n  have h₃ : n = 3 := by\n    omega\n  exact h₃"
+     },
+     {
+      "goals": [
+       "case intro.intro\na b c : ℝ\nhab : a + b > c\nhbc : b + c > a\nhca : a + c > b\nha : a > 0\nhb : b > 0\nhc : c > 0\nh₁ : 0 < a * b\nh₂ : 0 < b * c\nh₃ : 0 < c * a\nh₄ : 0 < a * b * c\nh₅ : 0 < a ^ 2 * c ^ 2\nh₆ : 0 < b ^ 2 * a ^ 2\nh₇ : 0 < c ^ 2 * b ^ 2\nh₈ : 0 < a * b * c ^ 2\nh₉ : 0 < a * b * c * (a + b - c)\nh₁₀ : 0 < a * b * c * (b + c - a)\nh₁₁ : 0 < a * b * c * (c + a - b)\nh₁₂ : 0 < a ^ 2 * b ^ 2 * c ^ 2\n⊢ a ^ 3 / b ^ 2 + b ^ 3 / c ^ 2 + c ^ 3 / a ^ 2 ≥ a / c * (a + b - c) + c / b * (c + a - b) + b / a * (b + c - a)"
+      ],
+      "target": "field_simp",
+      "generated": "import Mathlib\nimport Aesop\n\nset_option core true\n\nopen BigOperators Real Nat Topology Rat\n\ntheorem inequality_proof (a b c : ℝ) (hab : a + b > c) (hbc : b + c > a) (hca : a + c > b) (ha : a > 0) (hb : b > 0) (hc : c > 0)\n  (h₁ : 0 < a * b) (h₂ : 0 < b * c) (h₃ : 0 < c * a) (h₄ : 0 < a * b * c) (h₅ : 0 < a ^ 2 * c ^ 2) (h₆ : 0 < b ^ 2 * a ^ 2) (h₇ : 0 < c ^ 2 * b ^ 2)\n  (h₈ : 0 < a * b * c ^ 2) (h₉ : 0 < a * b * c * (a + b - c)) (h₁₀ : 0 < a * b * c * (b + c - a)) (h₁₁ :"
+     },
+     {
+      "goals": [
+       "n : ℕ\na b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\nhabc : a * b * c = 1\nh : a ^ 2 + b ^ 2 + c ^ 2 + 2 * a * b * c = 1\n⊢ a ^ (2 * n - 2) + b ^ (2 * n - 2) + c ^ (2 * n - 2) ≥ 4 * (a ^ n * b ^ n + b ^ n * c ^ n + c ^ n * a ^ n)"
+      ],
+      "target": "nlinarith [sq_nonneg (a * b * c), mul_self_nonneg (a - b * c), mul_self_nonneg (b - c * a), mul_self_nonneg (c - a * b)]\n<;> simp [pow_add, mul_assoc]\n<;> nlinarith",
+      "generated": "n : ℕ\na b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\nhabc : a * b * c = 1\nh : a ^ 2 + b ^ 2 + c ^ 2 + 2 * a * b * c = 1\n⊢ a ^ (2 * n - 2) + b ^ (2 * n - 2) + c ^ (2 * n - 2) ≥ 4 * (a ^ n * b ^ n + b ^ n * c ^ n + c ^ n * a ^ n)"
+     },
+     {
+      "goals": [
+       "x : ℕ\nh₀ : x > 0\nh₁ : x * 2 + 2 * (x - 2) ≤ 48\n⊢ x ≤ 15"
+      ],
+      "target": "zify at h₀ h₁ ⊢",
+      "generated": "have h₂ : x ≤ 15 := by\n  omega"
+     },
+     {
+      "goals": [
+       "a b c : ℕ\n⊢ (3 + a * (b * 2) + a * (c * 2) + b * (c * 2)) * 4 ≥ (a + b + c) * 12 ↔\n    3 + a * (b * 2) + a * (c * 2) + b * (c * 2) ≥ (a + b + c) * 3"
+      ],
+      "target": "ring_nf",
+      "generated": "ring_nf at *\n<;> omega"
+     },
+     {
+      "goals": [
+       "case intro.intro.intro\nX Y Z : ℝ\nhX0 : 0 ≤ X\nhX1 : X ≤ 1\nhY0 : 0 ≤ Y\nhY1 : Y ≤ 1\nhZ0 : 0 ≤ Z\nhZ1 : Z ≤ 1\n⊢ 0 ≤ (X * Y) ^ Z ∧ (X * Y) ^ Z ≤ 1"
+      ],
+      "target": "have hXY0 : (X * Y) ^ Z ≥ 0 := by positivity",
+      "generated": "case intro.intro.intro\nX Y Z : ℝ\nhX0 : 0 ≤ X\nhX1 : X ≤ 1\nhY0 : 0 ≤ Y\nhY1 : Y ≤ 1\nhZ0 : 0 ≤ Z\nhZ1 : Z ≤ 1\n⊢ 0 ≤ (X * Y) ^ Z ∧ (X * Y) ^ Z ≤ 1"
+     }
+    ]
+   },
+   {
+    "step": 200,
+    "validation_loss": 0.26761783874348316,
+    "validation_examples": 2000,
+    "teacher_forced_exact_match": 0.215,
+    "generation_exact_match": 0.203125,
+    "generation_examples": 256,
+    "evaluation_seconds": 106.75954199302942,
+    "mismatches": [
+     {
+      "goals": [
+       "x : ℝ\nhx : x = 3 + 2 * √2\n⊢ x ^ 4 + 1 / x ^ 4 = 1154"
+      ],
+      "target": "subst hx",
+      "generated": "have h₀ : x ≠ 0 := by\n  intro h\n  rw [h] at hx\n  norm_num at hx"
+     },
+     {
+      "goals": [
+       "k : ℕ\nhk : k = 3986729\n⊢ let total_cells := 2011 * 2011;\n  let covered_cells := 52 * 52 * k;\n  covered_cells = total_cells → k = 3986729"
+      ],
+      "target": "simp only [hk]",
+      "generated": "intro h"
+     },
+     {
+      "goals": [
+       "case h\nn : ℕ\nh₀ : 2 * n + 4 = 3 * n + 1\n⊢ 3 = n"
+      ],
+      "target": "rw [eq_comm]",
+      "generated": "linarith"
+     },
+     {
+      "goals": [
+       "case intro.intro\na b c : ℝ\nhab : a + b > c\nhbc : b + c > a\nhca : a + c > b\nha : a > 0\nhb : b > 0\nhc : c > 0\nh₁ : 0 < a * b\nh₂ : 0 < b * c\nh₃ : 0 < c * a\nh₄ : 0 < a * b * c\nh₅ : 0 < a ^ 2 * c ^ 2\nh₆ : 0 < b ^ 2 * a ^ 2\nh₇ : 0 < c ^ 2 * b ^ 2\nh₈ : 0 < a * b * c ^ 2\nh₉ : 0 < a * b * c * (a + b - c)\nh₁₀ : 0 < a * b * c * (b + c - a)\nh₁₁ : 0 < a * b * c * (c + a - b)\nh₁₂ : 0 < a ^ 2 * b ^ 2 * c ^ 2\n⊢ a ^ 3 / b ^ 2 + b ^ 3 / c ^ 2 + c ^ 3 / a ^ 2 ≥ a / c * (a + b - c) + c / b * (c + a - b) + b / a * (b + c - a)"
+      ],
+      "target": "field_simp",
+      "generated": "field_simp [h₁, h₂, h₃, h₄, h₅, h₆, h₇, h₈, h₉, h₁₀, h₁₁, h₁₂]"
+     },
+     {
+      "goals": [
+       "n : ℕ\na b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\nhabc : a * b * c = 1\nh : a ^ 2 + b ^ 2 + c ^ 2 + 2 * a * b * c = 1\n⊢ a ^ (2 * n - 2) + b ^ (2 * n - 2) + c ^ (2 * n - 2) ≥ 4 * (a ^ n * b ^ n + b ^ n * c ^ n + c ^ n * a ^ n)"
+      ],
+      "target": "nlinarith [sq_nonneg (a * b * c), mul_self_nonneg (a - b * c), mul_self_nonneg (b - c * a), mul_self_nonneg (c - a * b)]\n<;> simp [pow_add, mul_assoc]\n<;> nlinarith",
+      "generated": "ring_nf at h ⊢"
+     },
+     {
+      "goals": [
+       "x : ℕ\nh₀ : x > 0\nh₁ : x * 2 + 2 * (x - 2) ≤ 48\n⊢ x ≤ 15"
+      ],
+      "target": "zify at h₀ h₁ ⊢",
+      "generated": "omega"
+     },
+     {
+      "goals": [
+       "a b c : ℕ\n⊢ (3 + a * (b * 2) + a * (c * 2) + b * (c * 2)) * 4 ≥ (a + b + c) * 12 ↔\n    3 + a * (b * 2) + a * (c * 2) + b * (c * 2) ≥ (a + b + c) * 3"
+      ],
+      "target": "ring_nf",
+      "generated": "constructor <;> intro h <;> linarith"
+     },
+     {
+      "goals": [
+       "case intro.intro.intro\nX Y Z : ℝ\nhX0 : 0 ≤ X\nhX1 : X ≤ 1\nhY0 : 0 ≤ Y\nhY1 : Y ≤ 1\nhZ0 : 0 ≤ Z\nhZ1 : Z ≤ 1\n⊢ 0 ≤ (X * Y) ^ Z ∧ (X * Y) ^ Z ≤ 1"
+      ],
+      "target": "have hXY0 : (X * Y) ^ Z ≥ 0 := by positivity",
+      "generated": "constructor"
+     }
+    ]
+   },
+   {
+    "step": 400,
+    "validation_loss": 0.2425360358054061,
+    "validation_examples": 2000,
+    "teacher_forced_exact_match": 0.2295,
+    "generation_exact_match": 0.2109375,
+    "generation_examples": 256,
+    "evaluation_seconds": 140.28372093697544,
+    "mismatches": [
+     {
+      "goals": [
+       "x : ℝ\nhx : x = 3 + 2 * √2\n⊢ x ^ 4 + 1 / x ^ 4 = 1154"
+      ],
+      "target": "subst hx",
+      "generated": "have h₀ : x ≠ 0 := by\n  intro h\n  rw [h] at hx\n  norm_num at hx"
+     },
+     {
+      "goals": [
+       "k : ℕ\nhk : k = 3986729\n⊢ let total_cells := 2011 * 2011;\n  let covered_cells := 52 * 52 * k;\n  covered_cells = total_cells → k = 3986729"
+      ],
+      "target": "simp only [hk]",
+      "generated": "intro total_cells covered_cells h"
+     },
+     {
+      "goals": [
+       "case h\nn : ℕ\nh₀ : 2 * n + 4 = 3 * n + 1\n⊢ 3 = n"
+      ],
+      "target": "rw [eq_comm]",
+      "generated": "omega"
+     },
+     {
+      "goals": [
+       "case intro.intro\na b c : ℝ\nhab : a + b > c\nhbc : b + c > a\nhca : a + c > b\nha : a > 0\nhb : b > 0\nhc : c > 0\nh₁ : 0 < a * b\nh₂ : 0 < b * c\nh₃ : 0 < c * a\nh₄ : 0 < a * b * c\nh₅ : 0 < a ^ 2 * c ^ 2\nh₆ : 0 < b ^ 2 * a ^ 2\nh₇ : 0 < c ^ 2 * b ^ 2\nh₈ : 0 < a * b * c ^ 2\nh₉ : 0 < a * b * c * (a + b - c)\nh₁₀ : 0 < a * b * c * (b + c - a)\nh₁₁ : 0 < a * b * c * (c + a - b)\nh₁₂ : 0 < a ^ 2 * b ^ 2 * c ^ 2\n⊢ a ^ 3 / b ^ 2 + b ^ 3 / c ^ 2 + c ^ 3 / a ^ 2 ≥ a / c * (a + b - c) + c / b * (c + a - b) + b / a * (b + c - a)"
+      ],
+      "target": "field_simp",
+      "generated": "have h₁₃ : 0 < a ^ 2 * b ^ 2 * c ^ 2 * (a + b - c) := by positivity"
+     },
+     {
+      "goals": [
+       "n : ℕ\na b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\nhabc : a * b * c = 1\nh : a ^ 2 + b ^ 2 + c ^ 2 + 2 * a * b * c = 1\n⊢ a ^ (2 * n - 2) + b ^ (2 * n - 2) + c ^ (2 * n - 2) ≥ 4 * (a ^ n * b ^ n + b ^ n * c ^ n + c ^ n * a ^ n)"
+      ],
+      "target": "nlinarith [sq_nonneg (a * b * c), mul_self_nonneg (a - b * c), mul_self_nonneg (b - c * a), mul_self_nonneg (c - a * b)]\n<;> simp [pow_add, mul_assoc]\n<;> nlinarith",
+      "generated": "nlinarith [sq_nonneg (a - b), sq_nonneg (b - c), sq_nonneg (c - a),\n  sq_nonneg (a + b), sq_nonneg (b + c), sq_nonneg (c + a),\n  sq_nonneg (a - b + c), sq_nonneg (b - c + a), sq_nonneg (c - a + b)]"
+     },
+     {
+      "goals": [
+       "x : ℕ\nh₀ : x > 0\nh₁ : x * 2 + 2 * (x - 2) ≤ 48\n⊢ x ≤ 15"
+      ],
+      "target": "zify at h₀ h₁ ⊢",
+      "generated": "omega"
+     },
+     {
+      "goals": [
+       "a b c : ℕ\n⊢ (3 + a * (b * 2) + a * (c * 2) + b * (c * 2)) * 4 ≥ (a + b + c) * 12 ↔\n    3 + a * (b * 2) + a * (c * 2) + b * (c * 2) ≥ (a + b + c) * 3"
+      ],
+      "target": "ring_nf",
+      "generated": "constructor <;> intro h\n<;> linarith\n<;> linarith\n<;> linarith\n<;> linarith\n<;> linarith\n<;> linarith\n<;> linarith\n<;> linarith"
+     },
+     {
+      "goals": [
+       "case intro.intro.intro\nX Y Z : ℝ\nhX0 : 0 ≤ X\nhX1 : X ≤ 1\nhY0 : 0 ≤ Y\nhY1 : Y ≤ 1\nhZ0 : 0 ≤ Z\nhZ1 : Z ≤ 1\n⊢ 0 ≤ (X * Y) ^ Z ∧ (X * Y) ^ Z ≤ 1"
+      ],
+      "target": "have hXY0 : (X * Y) ^ Z ≥ 0 := by positivity",
+      "generated": "constructor"
+     }
+    ]
+   },
+   {
+    "step": 600,
+    "validation_loss": 0.2287916104593863,
+    "validation_examples": 2000,
+    "teacher_forced_exact_match": 0.2445,
+    "generation_exact_match": 0.203125,
+    "generation_examples": 256,
+    "evaluation_seconds": 153.3570915349992,
+    "mismatches": [
+     {
+      "goals": [
+       "x : ℝ\nhx : x = 3 + 2 * √2\n⊢ x ^ 4 + 1 / x ^ 4 = 1154"
+      ],
+      "target": "subst hx",
+      "generated": "have h₀ : x = 3 + 2 * Real.sqrt 2 := hx"
+     },
+     {
+      "goals": [
+       "k : ℕ\nhk : k = 3986729\n⊢ let total_cells := 2011 * 2011;\n  let covered_cells := 52 * 52 * k;\n  covered_cells = total_cells → k = 3986729"
+      ],
+      "target": "simp only [hk]",
+      "generated": "intro h"
+     },
+     {
+      "goals": [
+       "case h\nn : ℕ\nh₀ : 2 * n + 4 = 3 * n + 1\n⊢ 3 = n"
+      ],
+      "target": "rw [eq_comm]",
+      "generated": "linarith"
+     },
+     {
+      "goals": [
+       "case intro.intro\na b c : ℝ\nhab : a + b > c\nhbc : b + c > a\nhca : a + c > b\nha : a > 0\nhb : b > 0\nhc : c > 0\nh₁ : 0 < a * b\nh₂ : 0 < b * c\nh₃ : 0 < c * a\nh₄ : 0 < a * b * c\nh₅ : 0 < a ^ 2 * c ^ 2\nh₆ : 0 < b ^ 2 * a ^ 2\nh₇ : 0 < c ^ 2 * b ^ 2\nh₈ : 0 < a * b * c ^ 2\nh₉ : 0 < a * b * c * (a + b - c)\nh₁₀ : 0 < a * b * c * (b + c - a)\nh₁₁ : 0 < a * b * c * (c + a - b)\nh₁₂ : 0 < a ^ 2 * b ^ 2 * c ^ 2\n⊢ a ^ 3 / b ^ 2 + b ^ 3 / c ^ 2 + c ^ 3 / a ^ 2 ≥ a / c * (a + b - c) + c / b * (c + a - b) + b / a * (b + c - a)"
+      ],
+      "target": "field_simp",
+      "generated": "have h₁₃ : 0 < a * b * c * (a * b + b * c + c * a) := by positivity"
+     },
+     {
+      "goals": [
+       "n : ℕ\na b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\nhabc : a * b * c = 1\nh : a ^ 2 + b ^ 2 + c ^ 2 + 2 * a * b * c = 1\n⊢ a ^ (2 * n - 2) + b ^ (2 * n - 2) + c ^ (2 * n - 2) ≥ 4 * (a ^ n * b ^ n + b ^ n * c ^ n + c ^ n * a ^ n)"
+      ],
+      "target": "nlinarith [sq_nonneg (a * b * c), mul_self_nonneg (a - b * c), mul_self_nonneg (b - c * a), mul_self_nonneg (c - a * b)]\n<;> simp [pow_add, mul_assoc]\n<;> nlinarith",
+      "generated": "nlinarith [sq_nonneg (a - b), sq_nonneg (b - c), sq_nonneg (c - a),\n  mul_pos ha hb, mul_pos hb hc, mul_pos hc ha, habc, h, sq_nonneg (a - 1),\n  sq_nonneg (b - 1), sq_nonneg (c - 1)]"
+     },
+     {
+      "goals": [
+       "x : ℕ\nh₀ : x > 0\nh₁ : x * 2 + 2 * (x - 2) ≤ 48\n⊢ x ≤ 15"
+      ],
+      "target": "zify at h₀ h₁ ⊢",
+      "generated": "omega"
+     },
+     {
+      "goals": [
+       "a b c : ℕ\n⊢ (3 + a * (b * 2) + a * (c * 2) + b * (c * 2)) * 4 ≥ (a + b + c) * 12 ↔\n    3 + a * (b * 2) + a * (c * 2) + b * (c * 2) ≥ (a + b + c) * 3"
+      ],
+      "target": "ring_nf",
+      "generated": "constructor <;> intro h\n<;> nlinarith\n<;> nlinarith"
+     },
+     {
+      "goals": [
+       "case intro.intro.intro\nX Y Z : ℝ\nhX0 : 0 ≤ X\nhX1 : X ≤ 1\nhY0 : 0 ≤ Y\nhY1 : Y ≤ 1\nhZ0 : 0 ≤ Z\nhZ1 : Z ≤ 1\n⊢ 0 ≤ (X * Y) ^ Z ∧ (X * Y) ^ Z ≤ 1"
+      ],
+      "target": "have hXY0 : (X * Y) ^ Z ≥ 0 := by positivity",
+      "generated": "constructor"
+     }
+    ]
+   },
+   {
+    "step": 800,
+    "validation_loss": 0.22001670715017185,
+    "validation_examples": 2000,
+    "teacher_forced_exact_match": 0.2425,
+    "generation_exact_match": 0.19921875,
+    "generation_examples": 256,
+    "evaluation_seconds": 142.8298512690235,
+    "mismatches": [
+     {
+      "goals": [
+       "x : ℝ\nhx : x = 3 + 2 * √2\n⊢ x ^ 4 + 1 / x ^ 4 = 1154"
+      ],
+      "target": "subst hx",
+      "generated": "have h1 : x = 3 + 2 * Real.sqrt 2 := hx"
+     },
+     {
+      "goals": [
+       "k : ℕ\nhk : k = 3986729\n⊢ let total_cells := 2011 * 2011;\n  let covered_cells := 52 * 52 * k;\n  covered_cells = total_cells → k = 3986729"
+      ],
+      "target": "simp only [hk]",
+      "generated": "intro total_cells covered_cells"
+     },
+     {
+      "goals": [
+       "case h\nn : ℕ\nh₀ : 2 * n + 4 = 3 * n + 1\n⊢ 3 = n"
+      ],
+      "target": "rw [eq_comm]",
+      "generated": "linarith"
+     },
+     {
+      "goals": [
+       "case intro.intro\na b c : ℝ\nhab : a + b > c\nhbc : b + c > a\nhca : a + c > b\nha : a > 0\nhb : b > 0\nhc : c > 0\nh₁ : 0 < a * b\nh₂ : 0 < b * c\nh₃ : 0 < c * a\nh₄ : 0 < a * b * c\nh₅ : 0 < a ^ 2 * c ^ 2\nh₆ : 0 < b ^ 2 * a ^ 2\nh₇ : 0 < c ^ 2 * b ^ 2\nh₈ : 0 < a * b * c ^ 2\nh₉ : 0 < a * b * c * (a + b - c)\nh₁₀ : 0 < a * b * c * (b + c - a)\nh₁₁ : 0 < a * b * c * (c + a - b)\nh₁₂ : 0 < a ^ 2 * b ^ 2 * c ^ 2\n⊢ a ^ 3 / b ^ 2 + b ^ 3 / c ^ 2 + c ^ 3 / a ^ 2 ≥ a / c * (a + b - c) + c / b * (c + a - b) + b / a * (b + c - a)"
+      ],
+      "target": "field_simp",
+      "generated": "field_simp [ha.ne', hb.ne', hc.ne', h₁.ne', h₂.ne', h₃.ne', h₄.ne', h₅.ne', h₆.ne', h₇.ne', h₈.ne', h₉.ne', h₁₀.ne', h₁₁.ne', h₁₂.ne']"
+     },
+     {
+      "goals": [
+       "n : ℕ\na b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\nhabc : a * b * c = 1\nh : a ^ 2 + b ^ 2 + c ^ 2 + 2 * a * b * c = 1\n⊢ a ^ (2 * n - 2) + b ^ (2 * n - 2) + c ^ (2 * n - 2) ≥ 4 * (a ^ n * b ^ n + b ^ n * c ^ n + c ^ n * a ^ n)"
+      ],
+      "target": "nlinarith [sq_nonneg (a * b * c), mul_self_nonneg (a - b * c), mul_self_nonneg (b - c * a), mul_self_nonneg (c - a * b)]\n<;> simp [pow_add, mul_assoc]\n<;> nlinarith",
+      "generated": "nlinarith [sq_nonneg (a - b), sq_nonneg (b - c), sq_nonneg (c - a),\n  mul_pos ha hb, mul_pos hb hc, mul_pos hc ha, habc, h, sq_nonneg (a - 1),\n  sq_nonneg (b - 1), sq_nonneg (c - 1)]"
+     },
+     {
+      "goals": [
+       "x : ℕ\nh₀ : x > 0\nh₁ : x * 2 + 2 * (x - 2) ≤ 48\n⊢ x ≤ 15"
+      ],
+      "target": "zify at h₀ h₁ ⊢",
+      "generated": "omega"
+     },
+     {
+      "goals": [
+       "a b c : ℕ\n⊢ (3 + a * (b * 2) + a * (c * 2) + b * (c * 2)) * 4 ≥ (a + b + c) * 12 ↔\n    3 + a * (b * 2) + a * (c * 2) + b * (c * 2) ≥ (a + b + c) * 3"
+      ],
+      "target": "ring_nf",
+      "generated": "constructor <;> intro h <;> linarith"
+     },
+     {
+      "goals": [
+       "case intro.intro.intro\nX Y Z : ℝ\nhX0 : 0 ≤ X\nhX1 : X ≤ 1\nhY0 : 0 ≤ Y\nhY1 : Y ≤ 1\nhZ0 : 0 ≤ Z\nhZ1 : Z ≤ 1\n⊢ 0 ≤ (X * Y) ^ Z ∧ (X * Y) ^ Z ≤ 1"
+      ],
+      "target": "have hXY0 : (X * Y) ^ Z ≥ 0 := by positivity",
+      "generated": "constructor"
+     }
+    ]
+   },
+   {
+    "step": 981,
+    "validation_loss": 0.21530351472735385,
+    "validation_examples": 2000,
+    "teacher_forced_exact_match": 0.2575,
+    "generation_exact_match": 0.21484375,
+    "generation_examples": 256,
+    "evaluation_seconds": 121.15818188793492,
+    "mismatches": [
+     {
+      "goals": [
+       "x : ℝ\nhx : x = 3 + 2 * √2\n⊢ x ^ 4 + 1 / x ^ 4 = 1154"
+      ],
+      "target": "subst hx",
+      "generated": "have h₀ : x ≠ 0 := by\n  intro h\n  rw [h] at hx\n  norm_num at hx"
+     },
+     {
+      "goals": [
+       "k : ℕ\nhk : k = 3986729\n⊢ let total_cells := 2011 * 2011;\n  let covered_cells := 52 * 52 * k;\n  covered_cells = total_cells → k = 3986729"
+      ],
+      "target": "simp only [hk]",
+      "generated": "intro total_cells covered_cells"
+     },
+     {
+      "goals": [
+       "case h\nn : ℕ\nh₀ : 2 * n + 4 = 3 * n + 1\n⊢ 3 = n"
+      ],
+      "target": "rw [eq_comm]",
+      "generated": "linarith"
+     },
+     {
+      "goals": [
+       "case intro.intro\na b c : ℝ\nhab : a + b > c\nhbc : b + c > a\nhca : a + c > b\nha : a > 0\nhb : b > 0\nhc : c > 0\nh₁ : 0 < a * b\nh₂ : 0 < b * c\nh₃ : 0 < c * a\nh₄ : 0 < a * b * c\nh₅ : 0 < a ^ 2 * c ^ 2\nh₆ : 0 < b ^ 2 * a ^ 2\nh₇ : 0 < c ^ 2 * b ^ 2\nh₈ : 0 < a * b * c ^ 2\nh₉ : 0 < a * b * c * (a + b - c)\nh₁₀ : 0 < a * b * c * (b + c - a)\nh₁₁ : 0 < a * b * c * (c + a - b)\nh₁₂ : 0 < a ^ 2 * b ^ 2 * c ^ 2\n⊢ a ^ 3 / b ^ 2 + b ^ 3 / c ^ 2 + c ^ 3 / a ^ 2 ≥ a / c * (a + b - c) + c / b * (c + a - b) + b / a * (b + c - a)"
+      ],
+      "target": "field_simp",
+      "generated": "field_simp [h₁, h₂, h₃, h₄, h₅, h₆, h₇, h₈, h₉, h₁₀, h₁₁, h₁₂]"
+     },
+     {
+      "goals": [
+       "n : ℕ\na b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\nhabc : a * b * c = 1\nh : a ^ 2 + b ^ 2 + c ^ 2 + 2 * a * b * c = 1\n⊢ a ^ (2 * n - 2) + b ^ (2 * n - 2) + c ^ (2 * n - 2) ≥ 4 * (a ^ n * b ^ n + b ^ n * c ^ n + c ^ n * a ^ n)"
+      ],
+      "target": "nlinarith [sq_nonneg (a * b * c), mul_self_nonneg (a - b * c), mul_self_nonneg (b - c * a), mul_self_nonneg (c - a * b)]\n<;> simp [pow_add, mul_assoc]\n<;> nlinarith",
+      "generated": "nlinarith [sq_nonneg (a - b), sq_nonneg (b - c), sq_nonneg (c - a),\n  mul_pos ha hb, mul_pos hb hc, mul_pos hc ha,\n  sq_nonneg (a - 1), sq_nonneg (b - 1), sq_nonneg (c - 1)]"
+     },
+     {
+      "goals": [
+       "x : ℕ\nh₀ : x > 0\nh₁ : x * 2 + 2 * (x - 2) ≤ 48\n⊢ x ≤ 15"
+      ],
+      "target": "zify at h₀ h₁ ⊢",
+      "generated": "omega"
+     },
+     {
+      "goals": [
+       "a b c : ℕ\n⊢ (3 + a * (b * 2) + a * (c * 2) + b * (c * 2)) * 4 ≥ (a + b + c) * 12 ↔\n    3 + a * (b * 2) + a * (c * 2) + b * (c * 2) ≥ (a + b + c) * 3"
+      ],
+      "target": "ring_nf",
+      "generated": "constructor <;> intro h"
+     },
+     {
+      "goals": [
+       "case intro.intro.intro\nX Y Z : ℝ\nhX0 : 0 ≤ X\nhX1 : X ≤ 1\nhY0 : 0 ≤ Y\nhY1 : Y ≤ 1\nhZ0 : 0 ≤ Z\nhZ1 : Z ≤ 1\n⊢ 0 ≤ (X * Y) ^ Z ∧ (X * Y) ^ Z ≤ 1"
+      ],
+      "target": "have hXY0 : (X * Y) ^ Z ≥ 0 := by positivity",
+      "generated": "constructor"
+     }
+    ]
+   }
+  ]
+ },
+ "trained_model_directory": "/workspace/checkpoints/phase2_sft_v2/adapter",
+ "merged_directory": "",
+ "merge_seconds": 0.0
+}
