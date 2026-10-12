@@ -1,0 +1,50 @@
+# Automation-only pre-filter of the expert-iteration pool (experiments/phase6_pool.py): row 0's sweep with a small
+# budget. Row 0 on miniF2F-valid solved 77 of its 79 within 4 expansions and all within 8, every one within 10 s.
+# CPU only; 24 REPLs leave room for the tracing job.
+
+[lean]
+pool_size = 24
+concurrency = 24
+
+[search]
+max_expansions = 8
+max_wall_seconds = 60.0
+max_depth = 16
+tactic_timeout_seconds = 10.0
+forbidden_steps = [
+    "exact?",
+    "apply?",
+    "rw?",
+    "simp?",
+    "simp_all?",
+    "dsimp?",
+    "aesop?",
+    "hint",
+    "rw_search",
+    "library_search",
+]
+
+[expander]
+kind = "automation"
+
+[automation]
+tactics = [
+    "decide",
+    "omega",
+    "intros",
+    "constructor",
+    "rfl",
+    "simp",
+    "field_simp",
+    "norm_num",
+    "linarith",
+    "ring_nf",
+    "simp_all",
+    "nlinarith",
+    "aesop",
+]
+timeout_seconds = 10.0
+max_wall_clock_timeouts_per_tactic = 1
+
+[priority]
+kind = "depth_plus_goals"

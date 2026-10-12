@@ -1,0 +1,25 @@
+# Statement pool for expert iteration (experiments/phase6_pool.py): per source the first `candidates` statements of a
+# seeded hash order of the merged, decontaminated statement pool, interleaved so that every prefix is stratified.
+# Statements with a proof selected for tracing are left out: the policy was trained on those proofs.
+# Quotas are ceilings; the pre-filter runs over a prefix (--limit) as far as the rounds need.
+statements = "normalized/statements/merged.jsonl"
+excluded_proofs = ["normalized/proofs/selected_for_tracing.jsonl"]
+seed = "expert-iteration-pool-v1"
+prefilter_search = "experiments/configs/expert_iteration/prefilter_search.toml"
+
+[[sources]]
+name = "lean_workbook"
+candidates = 16000
+
+[[sources]]
+name = "numinamath_lean"
+candidates = 16000
+
+# Variants of NuminaMath problems; the whole set is 7,320 statements.
+[[sources]]
+name = "kimina_prover_promptset"
+candidates = 4000
+
+[[sources]]
+name = "goedel_pset_v1"
+candidates = 24000
