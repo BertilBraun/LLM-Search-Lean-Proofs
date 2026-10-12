@@ -420,6 +420,7 @@ def verification_rows(counts: Sequence[VerificationCounts]) -> list[list[object]
 
 def report() -> None:
     selection = json.loads((POOL_DIRECTORY / "selection.json").read_text(encoding="utf-8"))
+    deduplication = json.loads((POOL_DIRECTORY / "dedup.json").read_text(encoding="utf-8"))
     verified, _ = read_verified(POOL_DIRECTORY / "verified.jsonl")
     sample, _ = read_verified(POOL_DIRECTORY / "sample_verified.jsonl")
     failures = Counter(record.failures[0] for record in [*verified, *sample] if not record.verified and record.failures)
@@ -454,7 +455,19 @@ def report() -> None:
                     for corpus in selection["corpora"]
                 ],
             ),
-            f"## Candidates ({selection['candidates']:,})",
+            "## Near duplicates and negations",
+            "MinHash/LSH over normalized token 5-grams; one statement per cluster at estimated Jaccard >= "
+            f"{deduplication['threshold']} (sample pairs per similarity bin in dedup.json), the easiest kept; then "
+            f"proved negations of conjectures dropped. {deduplication['before']:,} -> {deduplication['after']:,} "
+            "statements.",
+            markdown_table(
+                ["Source", "Before", "Distinct", "Without negations"],
+                [
+                    [entry["source"], f"{entry['before']:,}", f"{entry['distinct']:,}", f"{entry['after']:,}"]
+                    for entry in deduplication["sources"]
+                ],
+            ),
+            f"## Candidates ({selection['candidates']:,} before deduplication)",
             "Each statement once, under the source of its shortest proof.",
             markdown_table(
                 ["Source", "Candidates", "Median shortest proof (tactics)"],
