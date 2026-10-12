@@ -35,8 +35,8 @@ Success against reasoning length, samples that finished (per-arm READMEs have ev
 
 | Reasoning tokens | 32–255 | 256–511 | 512–1023 | 1024–2047 | 2048–4095 |
 |---|---|---|---|---|---|
-| (e) base | 30% (42) | 21% (405) | 6% (915) | 9% (366) | 8% (219) |
-| (h) SFT v2 | 46% (736) | 32% (514) | 29% (507) | 24% (373) | 18% (314) |
+| (e) base | 31% (42) | 16% (405) | 6% (915) | 9% (366) | 8% (219) |
+| (h) SFT v2 | 46% (736) | 32% (514) | 28% (507) | 24% (373) | 18% (314) |
 
 (sample counts in parentheses; the base model rarely finishes in under 384 tokens.)
 
@@ -44,8 +44,8 @@ Success against reasoning length, samples that finished (per-arm READMEs have ev
 
 1. **Does the base model reason usefully when given enough tokens?** No. With 4096 tokens it succeeds in 4.5% of
    samples, below its own non-thinking zero-shot (7.2%) and few-shot (11.4%) prompts, at 40–60 times their tokens per
-   success; half its samples are still thinking at 4096 tokens, and its finished blocks fail in Lean more often (36%
-   errors against 14% for SFT v2 thinking).
+   success; half its samples are still thinking at 4096 tokens, and 36% of its samples are Lean errors (SFT v2
+   thinking: 14%).
 2. **Did SFT hurt thinking?** No, it helped: SFT v2 thinking beats base thinking on every measure (20.7% against 4.5%
    per sample, 55% against 18% of states, 9.4k against 61k tokens per success), also on the 48 SFT-unseen states
    (3.6% against 0.8% per sample, 14.6% against 2.1% of states; few states, so only the direction is reliable). What
