@@ -16,3 +16,20 @@ Per-call times doubled between the runs with the load of other jobs on the node,
 Lean-seconds per expansion. Row 2 spends ~5.5 Lean-seconds per expansion (`results/phase2_sft_v1_search/`), so the
 check adds 15–30%. 15 process restarts per run come from the proof-state threshold (each call leaves a REPL proof
 state) and a few wall-clock kills.
+
+## Automation follow-up (`retrieved_64_10000_automation.md`)
+
+Owner's question: is "leaves n goals" representative when the search runs automation after every step? With 64
+retrieved candidates per state, a tactic that leaves goals is retried as `<tactic> <;> (first | assumption |
+norm_num | linarith | positivity | simp)` (20,000 heartbeats); a lemma whose follow-up closes all goals is annotated
+"then automation: closes the goal".
+
+- 0.19 candidates per state (6% of the 3.1 that apply) change from "leaves goals" to "closes with automation", in
+  6.4% of the 500 states. A "no match" cannot change: the follow-up needs the tactic to apply.
+- But the automation alone closes 47 of the states (9%). In the search the sweep runs before the policy, so those
+  states never get a lemma list. On the other 453 states only 0.02 candidates per state change, in 1.3% of states.
+- Cost: 0.57 Lean-seconds per state for ~3 follow-ups (150–200 ms each), on top of 1.84 for the check itself
+  (2.41 in all for 64 candidates, ~195 calls).
+
+The option stays available (`[policy.retrieval.applicability] automation`, off by default) but is not worth its
+cost for the ablation.

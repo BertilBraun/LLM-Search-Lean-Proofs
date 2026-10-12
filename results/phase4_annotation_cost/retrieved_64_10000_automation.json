@@ -1,0 +1,178 @@
+{
+ "candidates": "retrieved",
+ "candidate_count": 64,
+ "config": {
+  "tactics": [
+   "exact {name}",
+   "apply {name}",
+   "rw [{name}]"
+  ],
+  "heartbeats": 10000,
+  "timeout_seconds": 5.0,
+  "automation": "first | assumption | norm_num | linarith | positivity | simp",
+  "automation_heartbeats": 20000
+ },
+ "processes": 8,
+ "states": 500,
+ "failed_states": 0,
+ "wall_seconds": 202.11760644696187,
+ "lean_seconds_per_state_mean": 2.4132735670846888,
+ "lean_seconds_per_state_p50": 1.5659842955647036,
+ "lean_seconds_per_state_p90": 4.1074640695005655,
+ "lean_seconds_per_state_max": 77.01340537902433,
+ "tactic_calls_per_state": 195.07,
+ "candidates_closing": 0.104,
+ "candidates_closing_with_automation": 0.188,
+ "candidates_leaving_goals": 2.946,
+ "candidates_without_match": 60.762,
+ "states_with_a_closing_candidate": 0.048,
+ "states_with_a_candidate_closing_with_automation": 0.064,
+ "automation_seconds_per_state": 0.5659899741983972,
+ "states_automation_alone_closes": 47,
+ "candidates_closing_with_automation_where_automation_alone_fails": 0.017660044150110375,
+ "states_with_a_candidate_closing_with_automation_where_automation_alone_fails": 0.013245033112582781,
+ "process_restarts": 15,
+ "tries": [
+  {
+   "tactic": "apply",
+   "outcome": "applied",
+   "count": 697,
+   "mean_seconds": 0.01787551066810145,
+   "p50_seconds": 0.016154334996826947,
+   "p90_seconds": 0.03292866097763181,
+   "p99_seconds": 0.07567448902409524,
+   "max_seconds": 0.20003437192644924
+  },
+  {
+   "tactic": "apply",
+   "outcome": "error",
+   "count": 31260,
+   "mean_seconds": 0.013165198686431828,
+   "p50_seconds": 0.007104699965566397,
+   "p90_seconds": 0.017214747960679233,
+   "p99_seconds": 0.15859817201271653,
+   "max_seconds": 1.2604764180723578
+  },
+  {
+   "tactic": "apply",
+   "outcome": "heartbeat_timeout",
+   "count": 40,
+   "mean_seconds": 0.7677336533990455,
+   "p50_seconds": 0.7806866660248488,
+   "p90_seconds": 0.8130220780149102,
+   "p99_seconds": 0.8367077551083639,
+   "max_seconds": 0.8367077551083639
+  },
+  {
+   "tactic": "apply+automation",
+   "outcome": "applied",
+   "count": 648,
+   "mean_seconds": 0.20188715949081126,
+   "p50_seconds": 0.1693932309281081,
+   "p90_seconds": 0.41836953698657453,
+   "p99_seconds": 0.9085290629882365,
+   "max_seconds": 1.39538517605979
+  },
+  {
+   "tactic": "apply+automation",
+   "outcome": "error",
+   "count": 5,
+   "mean_seconds": 0.09139495561830699,
+   "p50_seconds": 0.015986236045137048,
+   "p90_seconds": 0.400302364025265,
+   "p99_seconds": 0.400302364025265,
+   "max_seconds": 0.400302364025265
+  },
+  {
+   "tactic": "apply+automation",
+   "outcome": "heartbeat_timeout",
+   "count": 3,
+   "mean_seconds": 1.5293026993361611,
+   "p50_seconds": 1.5289177109953016,
+   "p90_seconds": 1.536976665025577,
+   "p99_seconds": 1.536976665025577,
+   "max_seconds": 1.536976665025577
+  },
+  {
+   "tactic": "exact",
+   "outcome": "applied",
+   "count": 3,
+   "mean_seconds": 0.01414981069198499,
+   "p50_seconds": 0.019871245021931827,
+   "p90_seconds": 0.021873453981243074,
+   "p99_seconds": 0.021873453981243074,
+   "max_seconds": 0.021873453981243074
+  },
+  {
+   "tactic": "exact",
+   "outcome": "error",
+   "count": 31993,
+   "mean_seconds": 0.007026597813959173,
+   "p50_seconds": 0.0031070630066096783,
+   "p90_seconds": 0.009731312049552798,
+   "p99_seconds": 0.03547060303390026,
+   "max_seconds": 8.408853846951388
+  },
+  {
+   "tactic": "exact",
+   "outcome": "heartbeat_timeout",
+   "count": 4,
+   "mean_seconds": 0.8289893077453598,
+   "p50_seconds": 0.8377630210015923,
+   "p90_seconds": 0.8453168160049245,
+   "p99_seconds": 0.8453168160049245,
+   "max_seconds": 0.8453168160049245
+  },
+  {
+   "tactic": "rw",
+   "outcome": "applied",
+   "count": 937,
+   "mean_seconds": 0.01067097754609794,
+   "p50_seconds": 0.009136015083640814,
+   "p90_seconds": 0.017875605961307883,
+   "p99_seconds": 0.03450142196379602,
+   "max_seconds": 0.07457813795190305
+  },
+  {
+   "tactic": "rw",
+   "outcome": "error",
+   "count": 31019,
+   "mean_seconds": 0.007439635447561536,
+   "p50_seconds": 0.004713710048235953,
+   "p90_seconds": 0.009922549943439662,
+   "p99_seconds": 0.024447595002129674,
+   "max_seconds": 0.7113542619626969
+  },
+  {
+   "tactic": "rw+automation",
+   "outcome": "applied",
+   "count": 910,
+   "mean_seconds": 0.15025951981897578,
+   "p50_seconds": 0.10538031603209674,
+   "p90_seconds": 0.2950479219434783,
+   "p99_seconds": 0.6750387540087104,
+   "max_seconds": 1.3559250980615616
+  },
+  {
+   "tactic": "rw+automation",
+   "outcome": "error",
+   "count": 10,
+   "mean_seconds": 0.06577726268442348,
+   "p50_seconds": 0.020614766981452703,
+   "p90_seconds": 0.29199104593135417,
+   "p99_seconds": 0.29199104593135417,
+   "max_seconds": 0.29199104593135417
+  },
+  {
+   "tactic": "rw+automation",
+   "outcome": "heartbeat_timeout",
+   "count": 6,
+   "mean_seconds": 1.6222148684901185,
+   "p50_seconds": 1.6718501169234514,
+   "p90_seconds": 1.7354944969993085,
+   "p99_seconds": 1.7354944969993085,
+   "max_seconds": 1.7354944969993085
+  }
+ ],
+ "frequent_premises": []
+}
