@@ -165,3 +165,9 @@ or the `lean_search_step.match_N` matchers of executed steps. A crash during ver
   needs a restart, or if it is past `restart_fraction` of its limits. Restarts run in the background with
   `restart_attempts` tries and exponential backoff; the slot always returns to the pool, and a REPL that still cannot
   start reports `ReplFailure(RESTART_FAILED)` from its calls instead of hanging `acquire`.
+- Closing is final, so nothing the pool started outlives it: `LeanRepl.close()` stops the process and later calls raise
+  `ReplClosedError` instead of starting a new one; `LeanReplPool.close()` cancels and awaits its restarts, schedules
+  none afterwards and closes every REPL, so a task still using one fails on its next call. A REPL start left running
+  after the program's main coroutine fails can hang `asyncio.run`'s shutdown for good (Python 3.12 never finishes a
+  process start cancelled together with its pipe-connection task), so `search_problems` also cancels and awaits the
+  other searches when one fails.

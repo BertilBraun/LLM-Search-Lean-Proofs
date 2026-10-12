@@ -28,6 +28,7 @@ class LeanReplPool:
         self._headers: list[str] = []
         self._idle: asyncio.Queue[LeanRepl] = asyncio.Queue()
         self._restarts: set[asyncio.Task[None]] = set()
+        self._closed = False
         for repl in self.repls:
             self._idle.put_nowait(repl)
 
@@ -57,6 +58,8 @@ class LeanReplPool:
             self._idle.put_nowait(repl)
 
     async def close(self) -> None:
+        """Cancels and awaits the restarts and stops every process; REPLs still in use raise on their next call."""
+        self._closed = True
         for restart in self._restarts:
             restart.cancel()
         await asyncio.gather(*self._restarts, return_exceptions=True)
@@ -68,6 +71,9 @@ class LeanReplPool:
             await repl.load_header(header)
 
     def _schedule_restart(self, repl: LeanRepl) -> None:
+        # A task started after close would outlive the pool, and asyncio's shutdown can hang cancelling a process start.
+        if self._closed:
+            return
         restart = asyncio.create_task(self._restart(repl))
         self._restarts.add(restart)
         restart.add_done_callback(self._restarts.discard)

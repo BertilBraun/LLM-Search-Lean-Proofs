@@ -263,6 +263,10 @@ class ReplFailureError(Exception):
         self.failure = failure
 
 
+class ReplClosedError(Exception):
+    pass
+
+
 def new_session_id() -> int:
     return uuid.uuid4().int
 
@@ -406,6 +410,7 @@ class LeanRepl:
         self.restart_count = 0
         self._process: asyncio.subprocess.Process | None = None
         self._must_restart = True
+        self._closed = False
         self._session = new_session_id()
         self._lock = asyncio.Lock()
         self._import_environments: dict[str, int] = {}
@@ -453,6 +458,8 @@ class LeanRepl:
             await self._replace_process()
 
     async def close(self) -> None:
+        """Final: later calls raise ReplClosedError instead of starting a process that nothing would close."""
+        self._closed = True
         async with self._lock:
             await self._stop_process()
 
@@ -803,6 +810,8 @@ class LeanRepl:
             return
         try:
             await self._replace_process()
+        except ReplClosedError:
+            raise
         except Exception as error:
             logger.exception("Starting the Lean REPL failed")
             raise ReplFailureError(
@@ -810,7 +819,7 @@ class LeanRepl:
             ) from error
 
     async def _recover(self) -> None:
-        if self._is_healthy():
+        if self._is_healthy() or self._closed:
             return
         headers = list(self._base_environments)
         try:
@@ -828,6 +837,8 @@ class LeanRepl:
 
     async def _replace_process(self) -> None:
         await self._stop_process()
+        if self._closed:
+            raise ReplClosedError("The Lean REPL was closed.")
         await self._start_process()
 
     async def _start_process(self) -> None:

@@ -170,6 +170,8 @@ per-theorem logs, datasets and checkpoints stay on the node.
 - Resolved: search generation cost is charged per batch (`CandidateBatch`), when the expander yields it. Runs before
   the fix did not charge requests whose samples all failed to parse (in `PolicyStatistics.unattributed_generated_tokens`
   instead) nor candidates left unexecuted after a proof, so their token totals are low, most for thinking mode.
+- Resolved: a run whose search raised could hang forever in `asyncio.run`'s shutdown (another search restarted a REPL
+  after the pool closed); failing runs now exit with the original exception (`src/lean_search/lean/README.md`).
 
 - Statement pools: some Lean Workbook statements lack the colon before the goal; `π` is ambiguous under
   `open … Nat Real` in the pinned Mathlib.

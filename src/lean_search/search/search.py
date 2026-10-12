@@ -159,7 +159,14 @@ async def search_problems(
             await on_completed(completed)
         return completed.result
 
-    return list(await asyncio.gather(*(search_one(problem) for problem in problems)))
+    searches = [asyncio.create_task(search_one(problem)) for problem in problems]
+    try:
+        return list(await asyncio.gather(*searches))
+    finally:
+        # After a failure the other searches must stop before the caller closes the pool under them.
+        for search in searches:
+            search.cancel()
+        await asyncio.gather(*searches, return_exceptions=True)
 
 
 def step_statistics(tree: SearchTree) -> tuple[StepStatistics, ...]:

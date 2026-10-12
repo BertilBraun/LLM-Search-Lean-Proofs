@@ -5,7 +5,15 @@ from pathlib import Path
 
 import pytest
 
-from lean_search.lean import LeanRepl, LeanReplConfig, LeanReplPool, ProofState, ReplFailure, ReplFailureKind
+from lean_search.lean import (
+    LeanRepl,
+    LeanReplConfig,
+    LeanReplPool,
+    ProofState,
+    ReplClosedError,
+    ReplFailure,
+    ReplFailureKind,
+)
 from lean_search.lean.repl import (
     CommandResponse,
     ReplErrorResponse,
@@ -43,6 +51,22 @@ async def test_pool_slot_returns_after_failed_restarts() -> None:
         acquired = repl
     await pool.close()
     assert acquired is pool.repls[0]
+
+
+async def test_closed_repl_raises_instead_of_starting_a_process() -> None:
+    repl = LeanRepl(UNSTARTABLE)
+    await repl.close()
+    with pytest.raises(ReplClosedError):
+        await repl.apply_tactic(STATE, "trivial")
+
+
+async def test_repl_released_after_the_pool_closed_leaves_no_restart_behind() -> None:
+    pool = LeanReplPool(1, UNSTARTABLE, restart_backoff_seconds=0.01)
+    with pytest.raises(RuntimeError):
+        async with pool.acquire():
+            await pool.close()
+            raise RuntimeError("the search failed")
+    assert asyncio.all_tasks() == {asyncio.current_task()}
 
 
 def test_command_response_is_parsed_into_typed_messages() -> None:
