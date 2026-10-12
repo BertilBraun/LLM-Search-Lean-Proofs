@@ -22,6 +22,8 @@ class SampleRecord:
     tactic_block: str | None
     # TRUNCATED, NO_BLOCK, EMPTY or FORBIDDEN when the sample has no usable block.
     parse_failure: StepOutcome | None
+    # The block was written without its opening fence; the search's parser would reject the sample.
+    recovered_format: bool = False
 
 
 @dataclass(frozen=True)

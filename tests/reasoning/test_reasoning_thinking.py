@@ -60,3 +60,32 @@ def test_reasoning_is_read_before_the_last_closing_tag() -> None:
 )
 def test_trainable_reasoning_is_non_empty_without_think_tags(reasoning: str, trainable: bool) -> None:
     assert is_trainable_reasoning(reasoning) == trainable
+
+
+LEAKED = "Expand and simplify.\n</think>\n\nsimp_all only [mul_one]\n```"
+
+
+def test_a_block_without_its_opening_fence_is_recovered() -> None:
+    assert parse_thinking_sample(sample(LEAKED), thinking=True).tactic_block == "simp_all only [mul_one]"
+
+
+def test_a_recovered_block_is_marked() -> None:
+    assert parse_thinking_sample(sample(LEAKED), thinking=True).recovered_format
+
+
+def test_a_fenced_block_is_not_marked_as_recovered() -> None:
+    assert not parse_thinking_sample(sample("Square terms." + ANSWER), thinking=True).recovered_format
+
+
+@pytest.mark.parametrize(
+    ("text", "finish_reason", "failure"),
+    [
+        (LEAKED, "length", ParseFailure.TRUNCATED),
+        (LEAKED + "\n```", "stop", ParseFailure.EMPTY),
+        ("Search.\n</think>\n\nexact?\n```", "stop", ParseFailure.FORBIDDEN),
+        ("simp_all only [mul_one]\n```", "stop", ParseFailure.NO_BLOCK),
+        ("Nothing.\n</think>\n\nby\n```", "stop", ParseFailure.EMPTY),
+    ],
+)
+def test_unrecoverable_answers_keep_their_failure(text: str, finish_reason: str, failure: ParseFailure) -> None:
+    assert parse_thinking_sample(sample(text, finish_reason), thinking=True).parse_failure == failure

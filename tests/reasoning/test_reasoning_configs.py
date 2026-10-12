@@ -14,7 +14,11 @@ CONFIG_DIRECTORY = Path(__file__).resolve().parents[2] / "experiments" / "config
 
 @pytest.mark.parametrize(
     "path",
-    [*CONFIG_DIRECTORY.glob("phase5_sample_*.toml"), *CONFIG_DIRECTORY.glob("phase5_pilot_*.toml")],
+    [
+        *CONFIG_DIRECTORY.glob("phase5_sample_*.toml"),
+        *CONFIG_DIRECTORY.glob("phase5_pilot_*.toml"),
+        *CONFIG_DIRECTORY.glob("phase5_eval_*.toml"),
+    ],
     ids=lambda path: path.stem,
 )
 def test_sampling_configs_load(path: Path) -> None:

@@ -57,6 +57,8 @@ class RunStatistics:
     by_reasoning_length: tuple[SampleGroup, ...]
     by_source: tuple[SampleGroup, ...]
     by_sft_exposure: tuple[SampleGroup, ...]
+    # Samples whose block was written without the opening fence, which only the reasoning pipeline parses.
+    recovered_format: SampleGroup
     selection: SelectionYield
 
 
@@ -160,6 +162,7 @@ def run_statistics(records: Sequence[StateRecord], reward: RewardConfig, selecti
                 )
             ).samples
         ),
+        recovered_format=sample_group("recovered format", usable, lambda sample: sample.sample.recovered_format),
         selection=SelectionYield(
             states_with_examples=sum(bool(state_selection) for state_selection in selected_by_state),
             examples=len(selected),

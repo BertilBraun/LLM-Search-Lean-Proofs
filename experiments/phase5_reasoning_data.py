@@ -344,6 +344,11 @@ def render_run_summary(summary: RunSummary) -> str:
         markdown_table(GROUP_HEADERS, group_rows(statistics.by_source)),
         "## By SFT exposure of the prompt state",
         markdown_table(GROUP_HEADERS, group_rows(statistics.by_sft_exposure)),
+        "## Recovered answer format",
+        "Samples that closed `</think>` and then wrote the tactic and a closing fence without the opening one (the "
+        "non-thinking answer format). The search's parser rejects them; this pipeline executes them and renders "
+        "their training targets with the opening fence.",
+        markdown_table(GROUP_HEADERS, group_rows([statistics.recovered_format])),
         "## Rejection selection",
         f"At most {selection.max_per_state} successes per state with at least {selection.min_reasoning_tokens} "
         f"reasoning tokens, shortest reasoning first, distinct blocks before repeated ones: "

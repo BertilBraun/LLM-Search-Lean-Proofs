@@ -140,6 +140,7 @@ def sample_record(index: int, sample: Sample, thinking: bool, tokenizer: PolicyT
         reasoning_tokens=reasoning_tokens,
         tactic_block=parsed.tactic_block,
         parse_failure=None if parsed.parse_failure is None else parse_failure_outcome(parsed.parse_failure),
+        recovered_format=parsed.recovered_format,
     )
 
 

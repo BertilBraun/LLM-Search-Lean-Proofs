@@ -60,6 +60,7 @@ def sample_record(
     reasoning_tokens: int = 40,
     reasoning: str = "Substitute the value of a.",
     parse_failure: StepOutcome | None = None,
+    recovered_format: bool = False,
 ) -> SampleRecord:
     text = thinking_text(reasoning, block) if block is not None else reasoning
     return SampleRecord(
@@ -72,6 +73,7 @@ def sample_record(
         reasoning_tokens=reasoning_tokens,
         tactic_block=block,
         parse_failure=parse_failure,
+        recovered_format=recovered_format,
     )
 
 

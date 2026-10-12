@@ -55,3 +55,11 @@ def test_selection_yield_counts_selected_examples() -> None:
 def test_states_that_failed_to_replay_are_excluded() -> None:
     failed = state_record([sample_record(0, "omega", 20)], [], start_failure="replay failed")
     assert run_statistics([failed], RewardConfig(), SelectionConfig()).unusable_states == 1
+
+
+def test_recovered_samples_are_reported_separately() -> None:
+    record = state_record(
+        [sample_record(0, "omega", 40, recovered_format=True), sample_record(1, "simp", 40)], EXECUTIONS
+    )
+    recovered = run_statistics([record], RewardConfig(), SelectionConfig()).recovered_format
+    assert (recovered.samples, recovered.success_rate) == (1, 1.0)

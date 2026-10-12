@@ -1,5 +1,7 @@
 import pytest
+from reasoning_records import first_state
 
+from lean_search.policy.client import Sample
 from lean_search.policy.expander import PolicyTokenizer, load_tokenizer
 from lean_search.policy.prompts import (
     BRIEF_THINKING_INSTRUCTION,
@@ -9,7 +11,9 @@ from lean_search.policy.prompts import (
     render_prompt,
     render_thinking_completion,
 )
-from lean_search.reasoning.dataset import ReasoningExample, tokenize_reasoning_example
+from lean_search.reasoning.dataset import ReasoningExample, reasoning_example, tokenize_reasoning_example
+from lean_search.reasoning.pipeline import sample_record
+from lean_search.reasoning.records import StateSamples
 from lean_search.training.sft_data import IGNORE_INDEX, SftExample, tokenize_example
 
 MODEL = "Qwen/Qwen3.5-2B"
@@ -90,6 +94,16 @@ def test_thinking_examples_are_rendered_with_their_instruction() -> None:
     tokenized = tokenize_reasoning_example(tokenizer, thinking_example(instruction=BRIEF_THINKING_INSTRUCTION))
     prompt = render_prompt(tokenizer, GOALS, thinking=True, thinking_instruction=BRIEF_THINKING_INSTRUCTION)
     assert decode(tokenized.input_ids[: tokenized.prompt_token_count]) == prompt
+
+
+def test_a_recovered_sample_is_trained_with_its_opening_fence() -> None:
+    tokenizer = CharacterTokenizer()
+    leaked = Sample("Add the hypotheses.\n</think>\n\nlinarith\n```", -1.0, 12, "stop")
+    record = sample_record(0, leaked, True, tokenizer)
+    sampled = StateSamples(first_state(), True, "", 100, 0, 512, 1.0, (record,))
+    tokenized = tokenize_reasoning_example(tokenizer, reasoning_example(sampled, record))
+    completion = decode(tokenized.input_ids[tokenized.prompt_token_count :])
+    assert completion == render_thinking_completion("Add the hypotheses.", "linarith")
 
 
 @pytest.fixture(scope="module")
