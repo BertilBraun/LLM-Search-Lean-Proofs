@@ -8,11 +8,12 @@
         --name r1                                         # rejection-sampled SFT data
 
 States: traced train-split steps (never validation, never miniF2F), at most `states_per_proof` per proof, sources
-interleaved, states whose goals are prompts of the given SFT data sets after the unseen ones. `run` asks the served
-policy for k samples per state (the search's prompt and parsing, thinking on), executes every distinct block on the
-rebuilt state in Lean and classifies it (`lean_search.reasoning.reward`), chunk by chunk: a chunk's samples and records
-are written once complete, so an interrupted run resumes at its first chunk without records (sampling runs one chunk
-ahead of Lean). The vLLM servers must already serve `policy.model` and the adapter `policy.adapter`.
+interleaved; states whose goals are prompts of the given SFT data sets are marked (statistics by SFT exposure).
+`run` asks the served policy for k samples per state (the search's prompt and parsing, thinking on), executes every
+distinct block on the rebuilt state in Lean and classifies it (`lean_search.reasoning.reward`), chunk by chunk: a
+chunk's samples and records are written once complete, so an interrupted run resumes at its first chunk without
+records (sampling runs one chunk ahead of Lean). The vLLM servers must already serve `policy.model` and the adapter
+`policy.adapter`.
 Outputs in $LEAN_SEARCH_RUNS/<run>/: config.toml, states.jsonl, chunks/<n>.{samples,records}.jsonl, chunks.jsonl
 (progress) and summary/{statistics.json,README.md,config.toml}. `select` writes
 $LEAN_SEARCH_DATA/reasoning/<name>/{train,validation}.jsonl and $LEAN_SEARCH_RUNS/phase5_data_<name>/summary/.

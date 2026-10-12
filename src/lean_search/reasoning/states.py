@@ -41,7 +41,8 @@ class StateSelectionConfig:
     states_per_proof: int = 2
     max_goal_characters: int = 3000
     seed: str = "reasoning"
-    # SFT data sets (names under $LEAN_SEARCH_DATA/sft) whose prompt states come after the unseen ones of a source.
+    # SFT data sets (names under $LEAN_SEARCH_DATA/sft) whose prompts mark a state as seen; recorded, not avoided,
+    # since the unseen states of sources the SFT data used whole are the ones whose reference step was too long.
     seen_sft_data: tuple[str, ...] = ()
     # Earlier reasoning runs whose states are skipped, so a later round prompts on fresh states.
     excluded_runs: tuple[str, ...] = ()
@@ -84,7 +85,7 @@ def select_states(
     seen_goals: Collection[bytes] = frozenset(),
     excluded_identifiers: Collection[str] = frozenset(),
 ) -> list[ReasoningState]:
-    """At most `states_per_proof` states per train-split proof; sources interleaved, unseen states first in each."""
+    """At most `states_per_proof` states per train-split proof, sources interleaved, in a fixed pseudo-random order."""
     steps_by_proof: dict[str, list[TracedStep]] = defaultdict(list)
     for step in steps:
         if step.split == DataSplit.TRAIN:
@@ -97,13 +98,10 @@ def select_states(
             if len("\n\n".join(state.goals)) <= config.max_goal_characters
             and state.identifier not in excluded_identifiers
         ]
-        candidates.sort(key=lambda state: (state.seen_in_sft, stable_fraction(state.identifier, config.seed)))
+        candidates.sort(key=lambda state: stable_fraction(state.identifier, config.seed))
         states_by_source[proof_steps[0].source].extend(candidates[: config.states_per_proof])
     ordered_sources = [
-        sorted(
-            states_by_source[source],
-            key=lambda state: (state.seen_in_sft, stable_fraction(state.identifier, f"{config.seed} order")),
-        )
+        sorted(states_by_source[source], key=lambda state: stable_fraction(state.identifier, f"{config.seed} order"))
         for source in sorted(states_by_source)
     ]
     return round_robin(ordered_sources)[: config.count]

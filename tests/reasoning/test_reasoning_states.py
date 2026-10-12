@@ -55,12 +55,6 @@ def test_sources_get_equal_shares_while_they_last() -> None:
     assert Counter(state.source for state in states) == {"large": 5, "small": 5}
 
 
-def test_states_unseen_in_sft_come_first() -> None:
-    seen = frozenset({goals_digest(GOALS[0]), goals_digest(GOALS[1])})
-    states = select_states(many_proofs("a", 5), StateSelectionConfig(count=5, states_per_proof=1), seen)
-    assert [state.seen_in_sft for state in states] == [False] * 5
-
-
 def test_seen_states_are_marked() -> None:
     seen = frozenset({goals_digest(GOALS[index]) for index in range(3)})
     states = select_states(many_proofs("a", 2), StateSelectionConfig(count=10), seen)

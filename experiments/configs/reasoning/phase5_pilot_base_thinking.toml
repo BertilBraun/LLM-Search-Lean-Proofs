@@ -6,7 +6,7 @@ count = 512
 states_per_proof = 2
 max_goal_characters = 3000
 seed = "reasoning"
-# Unseen states first within each source; sources the SFT data used whole fill their share with seen states.
+# Marks states whose goals are SFT v2 prompts (statistics by SFT exposure); they are not avoided.
 seen_sft_data = ["v2"]
 excluded_runs = []
 
