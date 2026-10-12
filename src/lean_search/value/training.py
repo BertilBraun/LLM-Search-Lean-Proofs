@@ -9,6 +9,12 @@ from pathlib import Path
 import torch
 import transformers
 
+from lean_search.training.packing import (
+    packed_hidden_states,
+    packed_micro_batches,
+    packed_positions,
+    sequence_starts,
+)
 from lean_search.training.sft import (
     LoraSettings,
     OptimizationConfig,
@@ -58,8 +64,12 @@ class TokenizedValueExample:
 @dataclass(frozen=True)
 class PromptBatch:
     input_ids: torch.Tensor
-    attention_mask: torch.Tensor
+    # Padded rows have a mask; a packed row has the positions and boundaries of its prompts instead.
+    attention_mask: torch.Tensor | None
+    # Per prompt, its last position in its row (padded) or in the packed row.
     last_positions: torch.Tensor
+    position_ids: torch.Tensor | None = None
+    sequence_starts: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -117,14 +127,17 @@ class LastPositionLogits(torch.nn.Module):
         super().__init__()
         self.causal_model = causal_model
 
-    def forward(
-        self, input_ids: torch.Tensor, attention_mask: torch.Tensor, last_positions: torch.Tensor
-    ) -> torch.Tensor:
+    def forward(self, batch: PromptBatch) -> torch.Tensor:
+        if batch.sequence_starts:
+            hidden = packed_hidden_states(
+                self.causal_model.model, batch.input_ids, batch.position_ids, batch.sequence_starts
+            )
+            return self.causal_model.lm_head(hidden[0, batch.last_positions]).float()
         hidden = self.causal_model.model(
-            input_ids=input_ids, attention_mask=attention_mask, use_cache=False
+            input_ids=batch.input_ids, attention_mask=batch.attention_mask, use_cache=False
         ).last_hidden_state
-        rows = torch.arange(len(last_positions), device=hidden.device)
-        return self.causal_model.lm_head(hidden[rows, last_positions]).float()
+        rows = torch.arange(len(batch.last_positions), device=hidden.device)
+        return self.causal_model.lm_head(hidden[rows, batch.last_positions]).float()
 
 
 def tokenize_value_example(tokenizer: ValueTokenizer, example: ValueExample) -> TokenizedValueExample:
@@ -144,13 +157,37 @@ def collate_prompts(examples: Sequence[TokenizedValueExample], pad_token_id: int
     return PromptBatch(input_ids.to(device), attention_mask.to(device), last_positions.to(device))
 
 
+def pack_prompts(examples: Sequence[TokenizedValueExample], device: torch.device) -> PromptBatch:
+    lengths = [example.token_count for example in examples]
+    starts = sequence_starts(lengths)
+    input_ids = torch.tensor([token for example in examples for token in example.input_ids]).unsqueeze(0)
+    last_positions = torch.tensor(starts[1:]) - 1
+    return PromptBatch(
+        input_ids.to(device), None, last_positions.to(device), packed_positions(lengths).to(device), starts
+    )
+
+
+def prompt_batch(
+    examples: Sequence[TokenizedValueExample], packing: bool, pad_token_id: int, device: torch.device
+) -> PromptBatch:
+    return pack_prompts(examples, device) if packing else collate_prompts(examples, pad_token_id, device)
+
+
+def plan_micro_batches(
+    lengths: Sequence[int], max_tokens: int, group_size: int, packing: bool, generator: random.Random
+) -> list[tuple[int, ...]]:
+    if packing:
+        return packed_micro_batches(lengths, max_tokens, generator)
+    return length_grouped_micro_batches(lengths, max_tokens, group_size, generator)
+
+
 def plan_value_steps(examples: Sequence[TokenizedValueExample], config: OptimizationConfig) -> list[ValueStep]:
     generator = random.Random(config.seed)
     lengths = [example.token_count for example in examples]
     steps: list[ValueStep] = []
     for _ in range(config.epochs):
-        micro_batches = length_grouped_micro_batches(
-            lengths, config.micro_batch_tokens, config.length_group_examples, generator
+        micro_batches = plan_micro_batches(
+            lengths, config.micro_batch_tokens, config.length_group_examples, config.packing, generator
         )
         # The last incomplete step of an epoch is dropped so every step has the same number of micro-batches.
         for start in range(0, len(micro_batches) - config.micro_batches_per_step + 1, config.micro_batches_per_step):
@@ -173,8 +210,9 @@ def evaluate(
     started = time.perf_counter()
     model.eval()
     lengths = [example.token_count for example in examples]
-    micro_batches = length_grouped_micro_batches(
-        lengths, config.evaluation.micro_batch_tokens, len(examples), random.Random(0)
+    packing = config.optimization.packing
+    micro_batches = plan_micro_batches(
+        lengths, config.evaluation.micro_batch_tokens, len(examples), packing, random.Random(0)
     )
     distributions: list[list[float]] = [[] for _ in examples]
     weighted_loss = 0.0
@@ -183,9 +221,9 @@ def evaluate(
     token_ids = bin_ids.tolist()
     for micro_batch in micro_batches:
         batch_examples = [examples[index] for index in micro_batch]
-        batch = collate_prompts(batch_examples, pad_token_id, device)
+        batch = prompt_batch(batch_examples, packing, pad_token_id, device)
         with torch.autocast("cuda", dtype=torch.bfloat16):
-            full_logits = model(batch.input_ids, batch.attention_mask, batch.last_positions)
+            full_logits = model(batch)
         bin_logits = full_logits[:, bin_ids]
         labels = label_tensors([example.example for example in batch_examples], device)
         weighted_loss += (labels.weights * value_losses(bin_logits, labels, config.loss.smoothing_sigma)).sum().item()
@@ -263,10 +301,10 @@ def train_value_model(
         padded_tokens = 0
         for micro_batch in step.micro_batches:
             batch_examples = [train_examples[index] for index in micro_batch]
-            batch = collate_prompts(batch_examples, tokenizer.pad_token_id, device)
+            batch = prompt_batch(batch_examples, optimization.packing, tokenizer.pad_token_id, device)
             labels = label_tensors([example.example for example in batch_examples], device)
             with torch.autocast("cuda", dtype=torch.bfloat16):
-                full_logits = model(batch.input_ids, batch.attention_mask, batch.last_positions)
+                full_logits = model(batch)
             losses = value_losses(full_logits[:, bin_ids], labels, config.loss.smoothing_sigma)
             mass_losses = bin_mass_losses(full_logits, bin_ids)
             loss = (labels.weights * (losses + config.loss.bin_mass_weight * mass_losses)).sum() / step.weight

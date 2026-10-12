@@ -21,6 +21,7 @@ from lean_search.value.training import (  # noqa: E402
     ValueTrainingConfig,
     ValueTrainingResult,
     collate_prompts,
+    pack_prompts,
     plan_value_steps,
     tokenize_value_example,
     train_value_model,
@@ -63,6 +64,20 @@ def test_collated_prompts_point_at_their_last_token() -> None:
 def test_collated_prompts_are_padded_on_the_right() -> None:
     batch = collate_prompts([tokenized(3), tokenized(5)], pad_token_id=0, device=CPU)
     assert batch.attention_mask.tolist() == [[1, 1, 1, 0, 0], [1, 1, 1, 1, 1]]
+
+
+def test_packed_prompts_point_at_their_last_token_in_the_row() -> None:
+    batch = pack_prompts([tokenized(3), tokenized(5)], device=CPU)
+    assert batch.last_positions.tolist() == [2, 7]
+
+
+def test_packed_steps_cover_every_example_once_per_epoch() -> None:
+    examples = [tokenized(random.Random(number).randint(5, 60), number=number) for number in range(200)]
+    config = OptimizationConfig(micro_batch_tokens=256, micro_batches_per_step=1, epochs=2, packing=True)
+    covered = sorted(
+        index for step in plan_value_steps(examples, config) for batch in step.micro_batches for index in batch
+    )
+    assert covered == sorted(list(range(200)) * 2)
 
 
 @dataclass(frozen=True)
