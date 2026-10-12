@@ -66,10 +66,7 @@ config = "experiments/configs/expert_iteration/round_0_evaluation_policy_v2_valu
 name = "policy_ei1_value_v1"
 config = "experiments/configs/expert_iteration/round_0_evaluation_policy_ei1_value_v1.toml"
 
-# The deferred tracing job needs the CPU the search needs: stopped right before the search, restarted after it.
-[tracing]
-process_pattern = "^python experiments/phase2_trace_proofs.py"
-restart_command = "setsid nohup python experiments/phase2_trace_proofs.py --parts pilot,main --sources goedel_sft_v2,numinamath_lean_kimina,numinamath_lean_human --pool-size 36 >> $LEAN_SEARCH_RUNS/phase2_tracing/log_deferred_36.txt 2>&1 < /dev/null &"
+# No [tracing] table: the deferred tracing job was stopped for good, so no pause or restart steps.
 
 [data]
 # Later rounds list every round's trees: proofs keep the shortest per statement, tree labels accumulate.
