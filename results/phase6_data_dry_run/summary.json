@@ -1,0 +1,609 @@
+{
+ "round_index": 0,
+ "built": "2026-10-12T04:38:01+00:00",
+ "git_revision": "2013af31820bce2287b08bf42b76ff43f7b617f4",
+ "statistics_only": true,
+ "runs": [
+  {
+   "run": "phase3_astar_v0",
+   "trees": 244,
+   "solved": 155,
+   "held_out_trees": 4,
+   "held_out_solved": 3
+  },
+  {
+   "run": "phase2_sft_v1_search",
+   "trees": 244,
+   "solved": 148,
+   "held_out_trees": 4,
+   "held_out_solved": 2
+  }
+ ],
+ "sources": [
+  {
+   "source": "other",
+   "trees": 488,
+   "solved": 303
+  }
+ ],
+ "config": {
+  "tree_runs": [
+   "phase6_round_0"
+  ],
+  "seed": "expert-iteration-round-0",
+  "held_out_fraction": 0.02,
+  "policy": {
+   "policy_steps_only": true,
+   "replay_fraction": 0.5,
+   "replay_sources": [
+    {
+     "name": "goedel_lean_workbook_proofs",
+     "weight": 1.0
+    },
+    {
+     "name": "stp_lean_workbook",
+     "weight": 1.0
+    },
+    {
+     "name": "deepseek_prover_v1",
+     "weight": 1.0
+    },
+    {
+     "name": "lean_workbook",
+     "weight": 1.0
+    },
+    {
+     "name": "goedel_sft_v2",
+     "weight": 1.0
+    },
+    {
+     "name": "numinamath_lean_kimina",
+     "weight": 1.0
+    },
+    {
+     "name": "numinamath_lean_human",
+     "weight": 1.0
+    },
+    {
+     "name": "leanabell_sft",
+     "weight": 1.0
+    }
+   ],
+   "max_prompt_tokens": 2048,
+   "max_completion_tokens": 256,
+   "validation_examples": 2000,
+   "validation_seed": "sft-v2",
+   "reference_tokenizer": "Qwen/Qwen3.5-2B"
+  },
+  "preferences": {
+   "max_pairs_per_node": 4,
+   "policy_steps_only": true,
+   "dead_subtrees": true
+  },
+  "value": {
+   "labels": {
+    "at_least_weight": 1.0,
+    "dead_weight": 0.5
+   },
+   "replay_data": "v0",
+   "replay_fraction": 0.5,
+   "prefilter_runs": [
+    "phase6_pool_v1_prefilter"
+   ],
+   "prefilter_fraction": 0.1
+  }
+ },
+ "policy": {
+  "found_proofs": 298,
+  "statements": 157,
+  "held_out_statements": 3,
+  "proof_lengths": [
+   87,
+   36,
+   20,
+   5,
+   3,
+   2,
+   0,
+   4
+  ],
+  "shorter_through_duplicates": 0,
+  "proof_steps": 315,
+  "automation_steps": 143,
+  "policy_steps_only": true,
+  "examples": 172,
+  "duplicates": 0,
+  "over_length": 0,
+  "new_examples": 172,
+  "new_tokens": 31800,
+  "prompt_tokens": {
+   "count": 172,
+   "total": 25103,
+   "mean": 145.94767441860466,
+   "p50": 131,
+   "p90": 208,
+   "p99": 355,
+   "maximum": 405
+  },
+  "completion_tokens": {
+   "count": 172,
+   "total": 6697,
+   "mean": 38.93604651162791,
+   "p50": 25,
+   "p90": 77,
+   "p99": 223,
+   "maximum": 235
+  },
+  "replay_fraction": 0.5,
+  "replay_token_budget": 31800,
+  "replay": [
+   {
+    "source": "goedel_lean_workbook_proofs",
+    "traced_steps": 73665,
+    "forbidden_steps": 0,
+    "duplicates": 4256,
+    "examined": 25,
+    "over_length": 0,
+    "selected": 25,
+    "prompt_tokens": {
+     "count": 25,
+     "total": 4118,
+     "mean": 164.72,
+     "p50": 160,
+     "p90": 200,
+     "p99": 356,
+     "maximum": 356
+    },
+    "completion_tokens": {
+     "count": 25,
+     "total": 504,
+     "mean": 20.16,
+     "p50": 10,
+     "p90": 44,
+     "p99": 93,
+     "maximum": 93
+    },
+    "total_tokens": 4622
+   },
+   {
+    "source": "stp_lean_workbook",
+    "traced_steps": 193132,
+    "forbidden_steps": 0,
+    "duplicates": 19359,
+    "examined": 17,
+    "over_length": 0,
+    "selected": 17,
+    "prompt_tokens": {
+     "count": 17,
+     "total": 4028,
+     "mean": 236.94117647058823,
+     "p50": 239,
+     "p90": 338,
+     "p99": 372,
+     "maximum": 372
+    },
+    "completion_tokens": {
+     "count": 17,
+     "total": 599,
+     "mean": 35.23529411764706,
+     "p50": 21,
+     "p90": 83,
+     "p99": 91,
+     "maximum": 91
+    },
+    "total_tokens": 4627
+   },
+   {
+    "source": "deepseek_prover_v1",
+    "traced_steps": 61849,
+    "forbidden_steps": 0,
+    "duplicates": 87,
+    "examined": 25,
+    "over_length": 0,
+    "selected": 25,
+    "prompt_tokens": {
+     "count": 25,
+     "total": 4371,
+     "mean": 174.84,
+     "p50": 170,
+     "p90": 267,
+     "p99": 345,
+     "maximum": 345
+    },
+    "completion_tokens": {
+     "count": 25,
+     "total": 259,
+     "mean": 10.36,
+     "p50": 8,
+     "p90": 23,
+     "p99": 28,
+     "maximum": 28
+    },
+    "total_tokens": 4630
+   },
+   {
+    "source": "lean_workbook",
+    "traced_steps": 2264,
+    "forbidden_steps": 0,
+    "duplicates": 210,
+    "examined": 29,
+    "over_length": 0,
+    "selected": 29,
+    "prompt_tokens": {
+     "count": 29,
+     "total": 4221,
+     "mean": 145.55172413793105,
+     "p50": 140,
+     "p90": 202,
+     "p99": 245,
+     "maximum": 245
+    },
+    "completion_tokens": {
+     "count": 29,
+     "total": 389,
+     "mean": 13.413793103448276,
+     "p50": 13,
+     "p90": 23,
+     "p99": 42,
+     "maximum": 42
+    },
+    "total_tokens": 4610
+   },
+   {
+    "source": "goedel_sft_v2",
+    "traced_steps": 12886,
+    "forbidden_steps": 0,
+    "duplicates": 0,
+    "examined": 22,
+    "over_length": 4,
+    "selected": 18,
+    "prompt_tokens": {
+     "count": 18,
+     "total": 3907,
+     "mean": 217.05555555555554,
+     "p50": 189,
+     "p90": 362,
+     "p99": 552,
+     "maximum": 552
+    },
+    "completion_tokens": {
+     "count": 18,
+     "total": 814,
+     "mean": 45.22222222222222,
+     "p50": 7,
+     "p90": 152,
+     "p99": 160,
+     "maximum": 160
+    },
+    "total_tokens": 4721
+   },
+   {
+    "source": "numinamath_lean_kimina",
+    "traced_steps": 8384,
+    "forbidden_steps": 0,
+    "duplicates": 5,
+    "examined": 23,
+    "over_length": 1,
+    "selected": 22,
+    "prompt_tokens": {
+     "count": 22,
+     "total": 3834,
+     "mean": 174.27272727272728,
+     "p50": 176,
+     "p90": 239,
+     "p99": 257,
+     "maximum": 257
+    },
+    "completion_tokens": {
+     "count": 22,
+     "total": 936,
+     "mean": 42.54545454545455,
+     "p50": 30,
+     "p90": 131,
+     "p99": 135,
+     "maximum": 135
+    },
+    "total_tokens": 4770
+   },
+   {
+    "source": "numinamath_lean_human",
+    "traced_steps": 0,
+    "forbidden_steps": 0,
+    "duplicates": 0,
+    "examined": 0,
+    "over_length": 0,
+    "selected": 0,
+    "prompt_tokens": {
+     "count": 0,
+     "total": 0,
+     "mean": 0.0,
+     "p50": 0,
+     "p90": 0,
+     "p99": 0,
+     "maximum": 0
+    },
+    "completion_tokens": {
+     "count": 0,
+     "total": 0,
+     "mean": 0.0,
+     "p50": 0,
+     "p90": 0,
+     "p99": 0,
+     "maximum": 0
+    },
+    "total_tokens": 0
+   },
+   {
+    "source": "leanabell_sft",
+    "traced_steps": 56594,
+    "forbidden_steps": 0,
+    "duplicates": 71,
+    "examined": 31,
+    "over_length": 1,
+    "selected": 30,
+    "prompt_tokens": {
+     "count": 30,
+     "total": 4112,
+     "mean": 137.06666666666666,
+     "p50": 140,
+     "p90": 186,
+     "p99": 215,
+     "maximum": 215
+    },
+    "completion_tokens": {
+     "count": 30,
+     "total": 589,
+     "mean": 19.633333333333333,
+     "p50": 16,
+     "p90": 36,
+     "p99": 108,
+     "maximum": 108
+    },
+    "total_tokens": 4701
+   }
+  ],
+  "replay_examples": 166,
+  "replay_tokens": 32681,
+  "validation_examples": 2000,
+  "held_out_examples": 3
+ },
+ "preferences": {
+  "max_pairs_per_node": 4,
+  "nodes": 357,
+  "nodes_with_pairs": 229,
+  "rejectable": 1079,
+  "rejected_more_likely": 285,
+  "pairs_before_deduplication": 662,
+  "pairs": 658,
+  "over_length": 0,
+  "held_out_pairs": 8,
+  "by_rejection": [
+   {
+    "rejection": "error",
+    "pairs": 635
+   },
+   {
+    "rejection": "timeout",
+    "pairs": 19
+   },
+   {
+    "rejection": "dead",
+    "pairs": 4
+   }
+  ],
+  "pairs_per_node": [
+   128,
+   54,
+   36,
+   20,
+   119
+  ],
+  "chosen_completion_tokens": {
+   "count": 658,
+   "total": 24809,
+   "mean": 37.703647416413375,
+   "p50": 23,
+   "p90": 77,
+   "p99": 223,
+   "maximum": 235
+  },
+  "rejected_completion_tokens": {
+   "count": 658,
+   "total": 27663,
+   "mean": 42.04103343465046,
+   "p50": 30,
+   "p90": 90,
+   "p99": 205,
+   "maximum": 232
+  }
+ },
+ "value": {
+  "all_labels": {
+   "examples": 38345,
+   "exact": 697,
+   "at_least": 37110,
+   "dead": 538,
+   "exact_bins": [
+    298,
+    137,
+    83,
+    66,
+    30,
+    20,
+    11,
+    52
+   ],
+   "at_least_bins": [
+    27394,
+    8066,
+    1390,
+    188,
+    48,
+    15,
+    5,
+    4
+   ]
+  },
+  "dropped_open": 27394,
+  "tree_labels": {
+   "examples": 10951,
+   "exact": 697,
+   "at_least": 9716,
+   "dead": 538,
+   "exact_bins": [
+    298,
+    137,
+    83,
+    66,
+    30,
+    20,
+    11,
+    52
+   ],
+   "at_least_bins": [
+    0,
+    8066,
+    1390,
+    188,
+    48,
+    15,
+    5,
+    4
+   ]
+  },
+  "tree_depths": {
+   "exact": [
+    298,
+    155,
+    93,
+    46,
+    27,
+    16,
+    12,
+    12,
+    8,
+    8,
+    5,
+    5,
+    5,
+    3,
+    3,
+    1,
+    0
+   ],
+   "at_least": [
+    178,
+    639,
+    1615,
+    2199,
+    1038,
+    477,
+    325,
+    238,
+    247,
+    248,
+    267,
+    312,
+    333,
+    382,
+    502,
+    716,
+    0
+   ],
+   "dead": [
+    4,
+    28,
+    63,
+    83,
+    82,
+    60,
+    54,
+    44,
+    24,
+    20,
+    20,
+    16,
+    13,
+    9,
+    13,
+    5,
+    0
+   ]
+  },
+  "tree_states": 10158,
+  "prefilter_trees": 152,
+  "prefilter_exact": 193,
+  "prefilter_states": 193,
+  "replay_data": "v0",
+  "replay_available": 134652,
+  "replay_states": 10351,
+  "train": {
+   "examples": 20702,
+   "exact": 11077,
+   "at_least": 9124,
+   "dead": 501,
+   "exact_bins": [
+    3492,
+    2239,
+    1604,
+    1063,
+    774,
+    571,
+    428,
+    906
+   ],
+   "at_least_bins": [
+    0,
+    7555,
+    1332,
+    174,
+    45,
+    13,
+    4,
+    1
+   ]
+  },
+  "train_by_source": {
+   "other": 10158,
+   "goedel_lean_workbook_proofs": 4527,
+   "stp_lean_workbook": 3732,
+   "numinamath_lean_kimina": 644,
+   "goedel_sft_v2": 524,
+   "leanabell_sft": 478,
+   "deepseek_prover_v1": 352,
+   "goedel_pset_v1": 178,
+   "lean_workbook": 94,
+   "kimina_prover_promptset": 15
+  },
+  "validation_tree_states": 242,
+  "validation_replay_states": 2616,
+  "validation": {
+   "examples": 2858,
+   "exact": 2633,
+   "at_least": 170,
+   "dead": 55,
+   "exact_bins": [
+    802,
+    540,
+    367,
+    247,
+    190,
+    145,
+    103,
+    239
+   ],
+   "at_least_bins": [
+    0,
+    149,
+    17,
+    2,
+    2,
+    0,
+    0,
+    0
+   ]
+  }
+ },
+ "output_directory": "",
+ "seconds": 124.29579573404044
+}
