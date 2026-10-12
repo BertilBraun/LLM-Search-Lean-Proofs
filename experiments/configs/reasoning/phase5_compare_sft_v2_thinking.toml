@@ -35,8 +35,8 @@ tactic_timeout_seconds = 10.0
 foreign_header_batch_size = 16
 
 [pipeline]
-# One chunk: 4096-token stragglers idle the GPUs at the end of every chunk.
-chunk_states = 512
+# Completed chunks keep their results if the arm's wall time is capped.
+chunk_states = 128
 requests_in_flight = 128
 
 [reward]
