@@ -5,12 +5,14 @@ import pytest
 torch = pytest.importorskip("torch")
 transformers = pytest.importorskip("transformers")
 
+from lean_search.training.packing import packed_micro_batches  # noqa: E402
 from lean_search.training.sft import (  # noqa: E402
     CompletionLoss,
     OptimizationConfig,
     collate,
     learning_rate_factor,
     length_grouped_micro_batches,
+    pack,
     plan_steps,
 )
 from lean_search.training.sft_data import IGNORE_INDEX, SftExample, TokenizedExample  # noqa: E402
@@ -113,3 +115,38 @@ def test_completion_loss_matches_the_model_loss_on_the_same_labels() -> None:
         token_losses, _, _ = CompletionLoss(model)(BATCH.input_ids, BATCH.attention_mask, BATCH.labels)
         reference = model(input_ids=BATCH.input_ids, attention_mask=BATCH.attention_mask, labels=BATCH.labels).loss
     assert token_losses.mean().item() == pytest.approx(reference.item(), rel=1e-5)
+
+
+def packed_batches() -> list[tuple[int, ...]]:
+    return packed_micro_batches(LENGTHS, BUDGET, random.Random(0))
+
+
+def test_packed_micro_batches_cover_every_example_once() -> None:
+    assert sorted(index for batch in packed_batches() for index in batch) == list(range(len(LENGTHS)))
+
+
+def test_packed_micro_batches_stay_within_the_token_budget() -> None:
+    assert all(sum(LENGTHS[index] for index in batch) <= BUDGET for batch in packed_batches())
+
+
+def test_packed_micro_batches_are_nearly_full() -> None:
+    assert sum(LENGTHS) / len(packed_batches()) > 0.85 * BUDGET
+
+
+PACKED = pack([tokenized((5, 6, 7), 2), tokenized((5, 6, 7, 8, 9), 3)], device=CPU)
+
+
+def test_pack_concatenates_the_examples_into_one_row() -> None:
+    assert PACKED.input_ids.tolist() == [[5, 6, 7, 5, 6, 7, 8, 9]]
+
+
+def test_pack_restarts_positions_at_every_example() -> None:
+    assert PACKED.position_ids is not None and PACKED.position_ids.tolist() == [[0, 1, 2, 0, 1, 2, 3, 4]]
+
+
+def test_pack_records_where_examples_start() -> None:
+    assert PACKED.sequence_starts == (0, 3, 8)
+
+
+def test_no_packed_target_crosses_an_example_boundary() -> None:
+    assert PACKED.labels[0, 3].item() == IGNORE_INDEX

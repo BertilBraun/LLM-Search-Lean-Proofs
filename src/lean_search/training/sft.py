@@ -20,6 +20,13 @@ import transformers
 
 from lean_search.policy.adapters import LORA_TARGET_PATTERN, copy_tokenizer_and_processor_files, load_base_model
 from lean_search.policy.prompts import END_OF_TURN, FENCE, normalize_tactic_block
+from lean_search.training.packing import (
+    enable_packed_sequences,
+    packed_hidden_states,
+    packed_micro_batches,
+    packed_positions,
+    sequence_starts,
+)
 from lean_search.training.sft_data import IGNORE_INDEX, TokenizedExample
 
 VISION_PARAMETER = re.compile(r"\bvisual\b")
@@ -49,12 +56,14 @@ class OptimizationConfig:
     epochs: int = 1
     # 0 runs every step of the planned epochs.
     max_steps: int = 0
-    # Padded tokens (longest example times examples) per micro-batch on one GPU.
+    # Padded tokens (longest example times examples) per micro-batch on one GPU; real tokens when packing.
     micro_batch_tokens: int = 16384
     micro_batches_per_step: int = 4
-    # Examples sorted by length within groups of this size before batching.
+    # Examples sorted by length within groups of this size before batching (padded micro-batches only).
     length_group_examples: int = 4096
     gradient_checkpointing: bool = True
+    # Concatenate shuffled examples into one row per micro-batch, without padding (Qwen3.5 only).
+    packing: bool = False
     seed: int = 0
 
 
@@ -89,8 +98,11 @@ class OptimizerStep:
 @dataclass(frozen=True)
 class Batch:
     input_ids: torch.Tensor
-    attention_mask: torch.Tensor
+    # Padded rows have a mask; a packed row has the positions and boundaries of its examples instead.
+    attention_mask: torch.Tensor | None
     labels: torch.Tensor
+    position_ids: torch.Tensor | None = None
+    sequence_starts: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -207,8 +219,12 @@ def plan_steps(
     micro_batches_per_step = config.micro_batches_per_step * world_size
     steps: list[OptimizerStep] = []
     for _ in range(config.epochs):
-        micro_batches = length_grouped_micro_batches(
-            lengths, config.micro_batch_tokens, config.length_group_examples, generator
+        micro_batches = (
+            packed_micro_batches(lengths, config.micro_batch_tokens, generator)
+            if config.packing
+            else length_grouped_micro_batches(
+                lengths, config.micro_batch_tokens, config.length_group_examples, generator
+            )
         )
         # The last incomplete step of an epoch is dropped so every step has the same number of micro-batches.
         for start in range(0, len(micro_batches) - micro_batches_per_step + 1, micro_batches_per_step):
@@ -238,6 +254,20 @@ def collate(examples: Sequence[TokenizedExample], pad_token_id: int, device: tor
     return Batch(input_ids.to(device), attention_mask.to(device), labels.to(device))
 
 
+def pack(examples: Sequence[TokenizedExample], device: torch.device) -> Batch:
+    # Each example starts with a prompt token, whose label is ignored, so no target crosses an example boundary.
+    lengths = [example.token_count for example in examples]
+    input_ids = torch.tensor([token for example in examples for token in example.input_ids]).unsqueeze(0)
+    labels = torch.tensor([label for example in examples for label in example.labels]).unsqueeze(0)
+    return Batch(
+        input_ids.to(device), None, labels.to(device), packed_positions(lengths).to(device), sequence_starts(lengths)
+    )
+
+
+def micro_batch(examples: Sequence[TokenizedExample], packing: bool, pad_token_id: int, device: torch.device) -> Batch:
+    return pack(examples, device) if packing else collate(examples, pad_token_id, device)
+
+
 def token_losses_and_correctness(
     lm_head: torch.nn.Module, hidden: torch.Tensor, targets: torch.Tensor
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -253,11 +283,20 @@ class CompletionLoss(torch.nn.Module):
         self.causal_model = causal_model
 
     def forward(
-        self, input_ids: torch.Tensor, attention_mask: torch.Tensor, labels: torch.Tensor
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor | None,
+        labels: torch.Tensor,
+        position_ids: torch.Tensor | None = None,
+        sequence_starts: tuple[int, ...] = (),
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        hidden = self.causal_model.model(
-            input_ids=input_ids, attention_mask=attention_mask, use_cache=False
-        ).last_hidden_state
+        """Losses and argmax hits of the completion positions, and the example (row or packed slot) of each."""
+        if sequence_starts:
+            hidden = packed_hidden_states(self.causal_model.model, input_ids, position_ids, sequence_starts)
+        else:
+            hidden = self.causal_model.model(
+                input_ids=input_ids, attention_mask=attention_mask, use_cache=False
+            ).last_hidden_state
         targets = labels[:, 1:]
         mask = targets != IGNORE_INDEX
         selected_hidden = hidden[:, :-1][mask]
@@ -275,7 +314,10 @@ class CompletionLoss(torch.nn.Module):
         ]
         token_losses = torch.cat([losses for losses, _ in chunks])
         correct = torch.cat([chunk_correct for _, chunk_correct in chunks])
-        return token_losses, correct, mask.nonzero()[:, 0]
+        if not sequence_starts:
+            return token_losses, correct, mask.nonzero()[:, 0]
+        sequence_ends = torch.tensor(sequence_starts[1:], device=input_ids.device)
+        return token_losses, correct, torch.searchsorted(sequence_ends, mask[0].nonzero()[:, 0], right=True)
 
 
 def load_trainable_model(
@@ -289,6 +331,8 @@ def load_trainable_model(
     torch.manual_seed(optimization.seed)
     model = load_base_model(model_name, device=str(device))
     model.config.use_cache = False
+    if optimization.packing:
+        enable_packed_sequences(model)
     if optimization.gradient_checkpointing:
         model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
     match optimization.method:
@@ -321,22 +365,29 @@ def validation_metrics(
     loss_module: CompletionLoss,
     examples: Sequence[TokenizedExample],
     micro_batch_tokens: int,
+    packing: bool,
     pad_token_id: int,
     device: torch.device,
 ) -> tuple[float, float]:
     """Mean completion-token loss and the fraction of examples whose every target token is the argmax."""
     lengths = [example.token_count for example in examples]
-    micro_batches = length_grouped_micro_batches(lengths, micro_batch_tokens, len(examples), random.Random(0))
+    micro_batches = (
+        packed_micro_batches(lengths, micro_batch_tokens, random.Random(0))
+        if packing
+        else length_grouped_micro_batches(lengths, micro_batch_tokens, len(examples), random.Random(0))
+    )
     loss_sum = 0.0
     token_count = 0
     exact = 0
-    for micro_batch in micro_batches:
-        batch = collate([examples[index] for index in micro_batch], pad_token_id, device)
+    for indices in micro_batches:
+        batch = micro_batch([examples[index] for index in indices], packing, pad_token_id, device)
         with torch.autocast("cuda", dtype=torch.bfloat16):
-            token_losses, correct, rows = loss_module(batch.input_ids, batch.attention_mask, batch.labels)
+            token_losses, correct, rows = loss_module(
+                batch.input_ids, batch.attention_mask, batch.labels, batch.position_ids, batch.sequence_starts
+            )
         loss_sum += token_losses.sum().item()
         token_count += token_losses.numel()
-        wrong_per_row = torch.bincount(rows[~correct], minlength=len(micro_batch))
+        wrong_per_row = torch.bincount(rows[~correct], minlength=len(indices))
         exact += int((wrong_per_row == 0).sum().item())
     return loss_sum / token_count, exact / len(examples)
 
@@ -381,12 +432,18 @@ def evaluate(
     tokenizer: transformers.PreTrainedTokenizerBase,
     validation: Sequence[TokenizedExample],
     config: EvaluationConfig,
+    packing: bool,
     device: torch.device,
 ) -> EvaluationRecord:
     start = time.perf_counter()
     causal_model.eval()
     validation_loss, teacher_forced = validation_metrics(
-        loss_module, validation[: config.validation_examples], config.micro_batch_tokens, tokenizer.pad_token_id, device
+        loss_module,
+        validation[: config.validation_examples],
+        config.micro_batch_tokens,
+        packing,
+        tokenizer.pad_token_id,
+        device,
     )
     generation_sample = validation[: config.generation_examples]
     generated = generate_tactic_blocks(
@@ -442,9 +499,18 @@ def train(
     evaluations: list[EvaluationRecord] = []
 
     def evaluate_now(step: int) -> None:
+        if not config.evaluation.validation_examples:
+            return
         if context.is_main:
             record = evaluate(
-                step, loss_module, causal_model, tokenizer, validation_examples, config.evaluation, context.device
+                step,
+                loss_module,
+                causal_model,
+                tokenizer,
+                validation_examples,
+                config.evaluation,
+                optimization.packing,
+                context.device,
             )
             evaluations.append(record)
             on_evaluation(record)
@@ -461,15 +527,17 @@ def train(
         # Summed losses over the step's completion tokens on all ranks; DDP averages gradients across ranks.
         scale = context.world_size / step.completion_tokens
         step_totals = torch.zeros(5, dtype=torch.float64, device=context.device)
-        for micro_index, micro_batch in enumerate(local_batches):
-            batch_examples = [train_examples[index] for index in micro_batch]
-            batch = collate(batch_examples, tokenizer.pad_token_id, context.device)
+        for micro_index, indices in enumerate(local_batches):
+            batch_examples = [train_examples[index] for index in indices]
+            batch = micro_batch(batch_examples, optimization.packing, tokenizer.pad_token_id, context.device)
             synchronize = micro_index == len(local_batches) - 1 or context.world_size == 1
             with (
                 contextlib.nullcontext() if synchronize else distributed_module.no_sync(),
                 torch.autocast("cuda", dtype=torch.bfloat16),
             ):
-                token_losses, _, _ = distributed_module(batch.input_ids, batch.attention_mask, batch.labels)
+                token_losses, _, _ = distributed_module(
+                    batch.input_ids, batch.attention_mask, batch.labels, batch.position_ids, batch.sequence_starts
+                )
                 loss = token_losses.sum() * scale
             loss.backward()
             step_totals[0] += token_losses.detach().sum()
