@@ -6,6 +6,9 @@ from typing import Any, Literal, Self
 import httpx
 
 TOKEN_ID_PREFIX = "token_id:"
+TRANSPORT_ATTEMPTS = 3
+# Timeouts are not retried: a request that ran out its timeout would only run it out again.
+RETRIED_TRANSPORT_ERRORS = (httpx.NetworkError, httpx.RemoteProtocolError)
 
 
 @dataclass(frozen=True)
@@ -148,6 +151,15 @@ class PolicyClient:
         response.raise_for_status()
 
     async def _post(self, path: str, body: dict[str, Any], adapter: str | None) -> dict[str, Any]:
+        # Under load vLLM sometimes closes a kept-alive connection mid-request; every request here can be repeated.
+        for _ in range(TRANSPORT_ATTEMPTS - 1):
+            try:
+                return await self._post_once(path, body, adapter)
+            except RETRIED_TRANSPORT_ERRORS:
+                pass
+        return await self._post_once(path, body, adapter)
+
+    async def _post_once(self, path: str, body: dict[str, Any], adapter: str | None) -> dict[str, Any]:
         response = await self._http.post(path, json={"model": adapter or self.model, **body})
         response.raise_for_status()
         return response.json()
