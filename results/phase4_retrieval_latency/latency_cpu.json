@@ -1,0 +1,57 @@
+{
+ "device": "cpu",
+ "index_premises": 174254,
+ "random_index": true,
+ "goal_bytes_mean": 96.58196721311475,
+ "goal_bytes_p90": 164,
+ "rows": [
+  {
+   "device": "cpu",
+   "threads": 4,
+   "batch_goals": 1,
+   "encode_seconds_per_batch": 0.2802665210328996,
+   "search_seconds_per_batch": 0.06665685749612749,
+   "seconds_per_goal": 0.3469233785290271
+  },
+  {
+   "device": "cpu",
+   "threads": 4,
+   "batch_goals": 8,
+   "encode_seconds_per_batch": 3.805017364502419,
+   "search_seconds_per_batch": 0.11638589348876849,
+   "seconds_per_goal": 0.4901754072488984
+  },
+  {
+   "device": "cpu",
+   "threads": 4,
+   "batch_goals": 32,
+   "encode_seconds_per_batch": 25.04971009795554,
+   "search_seconds_per_batch": 0.17924578906968236,
+   "seconds_per_goal": 0.7884048714695382
+  },
+  {
+   "device": "cpu",
+   "threads": 8,
+   "batch_goals": 1,
+   "encode_seconds_per_batch": 0.13622193154878914,
+   "search_seconds_per_batch": 0.0630849344888702,
+   "seconds_per_goal": 0.19930686603765935
+  },
+  {
+   "device": "cpu",
+   "threads": 8,
+   "batch_goals": 8,
+   "encode_seconds_per_batch": 1.4885152475326322,
+   "search_seconds_per_batch": 0.14751677197637036,
+   "seconds_per_goal": 0.20450400243862532
+  },
+  {
+   "device": "cpu",
+   "threads": 8,
+   "batch_goals": 32,
+   "encode_seconds_per_batch": 13.594221409060992,
+   "search_seconds_per_batch": 0.18745101091917604,
+   "seconds_per_goal": 0.43067726312438026
+  }
+ ]
+}

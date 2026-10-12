@@ -32,14 +32,16 @@ vLLM leaves free. On the shared CPU of the node one goal takes ~200 ms with 8 th
 
 LeanDojo Benchmark 4 v10 lists 180,907 premises (Mathlib `29dcec07`, 19 days newer than our pin). Their names are
 compared as `Name.toString` with every constant of the pinned environment and printed with `ppSignature`
-(`signatures.jsonl`): 174,254 exist (3.7% do not: renamed Mathlib lemmas, newer Lean core, Aesop, ProofWidgets).
+(`signatures.jsonl`): 174,254 exist and print (3.7% do not exist: renamed Mathlib lemmas, newer Lean core, Aesop,
+ProofWidgets).
 
 LeanDojo's corpus only has declarations written in source files, so it lacks `to_additive` translations and
 aliases, among them common competition lemmas (`add_comm`, `mul_pos`, `mul_nonneg`, `Finset.sum_range_succ`,
 `abs_of_nonneg`, `sub_nonneg`): a quarter of the theorem names that traced competition steps mention. The name check
 adds the environment's non-internal theorems outside LeanDojo's corpus, minus compiler-generated companions
 (`proof_N`, `eq_N`, `match_N`, `sizeOf_spec`, `inj`, `injEq`) and metaprogramming namespaces (Lean, Mathlib, Aesop,
-Std, Batteries, ...), with code `theorem <signature>` synthesized from the signature (`environment_premises.jsonl`).
+Std, Batteries, ...), with code `theorem <signature>` synthesized from the signature (`environment_premises.jsonl`):
+25,556 theorems, for a deployed index of 199,810 premises.
 
 ## Applicability check (`annotation.py`)
 
@@ -55,30 +57,44 @@ The best try wins (closes, then fewer goals, then the earlier tactic). Candidate
 they may be hints for `nlinarith`, rewrites under binders or lemmas the model applies with arguments. The shown
 lemmas are the best k of the N candidates ordered by applicability class, then retrieval score.
 
-Cost on miniF2F-valid roots and traced competition states (32 candidates, 8 processes on the loaded node,
-`results/phase4_annotation_cost/`): ~96 tactic calls and 0.75 Lean-seconds per expansion (p50 0.45), failing calls
-2–6 ms (`exact`, `rw`) and 6 ms (`apply`) at the median. Every call leaves a REPL proof state, so a process reaches
+Cost on miniF2F-valid roots and traced competition states (32 candidates, 8 processes,
+`results/phase4_annotation_cost/`): ~96 tactic calls and 0.75–1.6 Lean-seconds per expansion depending on the
+node's load (failing calls take 2–8 ms at the median). Every call leaves a REPL proof state, so a process reaches
 the pool's restart threshold (half of 8,000 states) after about 40 expanded nodes. The row-2 search spends ~5.5
-Lean-seconds per expansion, so the check adds ~15%. These seconds are not in the search's `lean_seconds`
+Lean-seconds per expansion, so the check adds 15–30%. These seconds are not in the search's `lean_seconds`
 accounting; `policy.json` reports them under `lemmas`.
 
 ## Prompt lines
 
 One line per lemma: the compact signature (universe parameters, instance arguments and implicit type variables
 dropped, cut at `max_signature_characters` = 256) and, if it applied, a comment. The list goes into the existing
-slot of the policy prompt (`policy.prompts.user_message`):
+slot of the policy prompt (`policy.prompts.user_message`). The user turn for `algebra_sqineq_2unitcircatblt1` with
+k = 8, as checked in Lean (the 32 candidates here are the theorems most often named in traced competition steps,
+standing in for the retriever until the premise embeddings exist):
 
 ````text
 Proof state:
 ```lean
-GOALS
+a b : ℝ
+h₀ : a ^ 2 + b ^ 2 = 2
+⊢ a * b ≤ 1
 ```
 
 Lemmas that may help:
 ```lean
-LINES
+mul_comm (a b : G) : a * b = b * a  -- rw: leaves 1 goal
+le_of_sub_nonneg {a b : α} : 0 ≤ a - b → b ≤ a  -- apply: leaves 1 goal
+sq_nonneg (a : α) : 0 ≤ a ^ 2
+Real.sqrt (x : ℝ) : ℝ
+mul_pos {a b : α} (ha : 0 < a) (hb : 0 < b) : 0 < a * b
+mul_self_nonneg (a : α) : 0 ≤ a * a
+Real.sq_sqrt {x : ℝ} (h : 0 ≤ x) : √x ^ 2 = x
+div_le_div_iff {a b c d : α} (b0 : 0 < b) (d0 : 0 < d) : a / b ≤ c / d ↔ a * d ≤ c * b
 ```
 ````
+
+On Qwen3.5-2B this zero-shot prompt is 320 tokens instead of 101; 32 lemmas make it 870 (about 25 tokens per
+lemma). The list differs from node to node, so vLLM's prefix cache cannot share it.
 
 ## Configuration
 

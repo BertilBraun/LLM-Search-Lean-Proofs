@@ -1,0 +1,164 @@
+{
+ "premises": 180907,
+ "existing": 174259,
+ "missing": 6648,
+ "print_errors": 5,
+ "shards": 4,
+ "seconds": 322.7865700760158,
+ "by_kind": [
+  {
+   "group": "commanddeclaration",
+   "premises": 163879,
+   "missing": 5579
+  },
+  {
+   "group": "lemma",
+   "premises": 16969,
+   "missing": 1083
+  },
+  {
+   "group": "leanelabcommandcommandirreducibledef",
+   "premises": 125,
+   "missing": 26
+  }
+ ],
+ "by_library": [
+  {
+   "group": "Mathlib",
+   "premises": 156948,
+   "missing": 3538
+  },
+  {
+   "group": "lean4",
+   "premises": 19634,
+   "missing": 2588
+  },
+  {
+   "group": "batteries",
+   "premises": 2883,
+   "missing": 182
+  },
+  {
+   "group": "aesop",
+   "premises": 1122,
+   "missing": 245
+  },
+  {
+   "group": "proofwidgets",
+   "premises": 252,
+   "missing": 126
+  },
+  {
+   "group": "Qq",
+   "premises": 119,
+   "missing": 9
+  },
+  {
+   "group": "importGraph",
+   "premises": 15,
+   "missing": 0
+  }
+ ],
+ "signature_characters": {
+  "mean": 192.13209549071618,
+  "p50": 158,
+  "p90": 357,
+  "p99": 685,
+  "maximum": 4561
+ },
+ "compact_signature_characters": {
+  "mean": 128.95339572593963,
+  "p50": 104,
+  "p90": 233,
+  "p99": 487,
+  "maximum": 4524
+ },
+ "missing_examples": [
+  "isValidChar_UInt32",
+  "List.set_eq_of_length_le",
+  "Lean.JsonNumber.fromPositiveFloat!",
+  "Lean.Meta.isClassImp?",
+  "Lean.Meta.getFirstCtor",
+  "Lean.Meta.updateList",
+  "Lean.FuzzyMatching.fuzzyMatchCore",
+  "Lean.Meta.Match.expandBitVecValuePattern",
+  "Lean.Elab.Term.Do.mkUnit",
+  "Lean.IR.FreeIndices.withIndex",
+  "Lean.Meta.Grind.pushNewHEq",
+  "Lean.Elab.Command.findFieldInfo?",
+  "UInt16.toNat_mul",
+  "Lean.Meta.simpAssignmentArg",
+  "Batteries.HashMap.Imp.pairwise_replaceF",
+  "Aesop.extractProofRapp",
+  "Aesop.withPPAnalyze",
+  "List.getElem?_scanl_zero",
+  "Mathlib.Meta.FunProp.RefinedDiscrTree.GetUnify.M.run",
+  "RestrictGenTopology.of_continuous_prop",
+  "antilipschitzWith_inv_iff",
+  "CategoryTheory.largeCurriedCoyonedaLemma",
+  "contDiff_one_iff_hasFDerivAt",
+  "MeasureTheory.SignedMeasure.restrictNonposSeq_disjoint",
+  "CategoryTheory.Functor.CommShift.comp",
+  "Grp.SurjectiveOfEpiAuxs.comp_eq",
+  "AlgebraicGeometry.ΓSpec.toOpen_unit_app_val_c_app'",
+  "WeierstrassCurve.Affine.Y_sub_polynomialY",
+  "fastLegendreSym.eq",
+  "GromovHausdorff.candidates_le_maxVar",
+  "Surreal.Multiplication.mulOption_lt_mul_of_equiv",
+  "Subring.op_unop",
+  "SimpleGraph.IsTuranMaximal.card_parts_le",
+  "Finset.Colex.antisymm_aux",
+  "ManyOneDegree.le_trans",
+  "Matroid.comap",
+  "Subalgebra.linearEquivOp",
+  "Algebra.Presentation.baseChange",
+  "LLVM.getBasicBlockParent",
+  "Lean.IR.LLVM.size_tType"
+ ],
+ "environment_theorems": 217671,
+ "added_theorems": 25556,
+ "competition_theorem_mentions": 5158,
+ "competition_mentions_in_leandojo": 3846,
+ "added_examples": [
+  "AEMeasurable.add",
+  "AddEquiv.neg_symm",
+  "AddMonoidHom.comp_zero",
+  "AddSubgroup.le_topologicalClosure",
+  "AddSubmonoid.op_coe",
+  "AlgebraicGeometry.Scheme.Pullback.gluing_J",
+  "Bimon_.toMon_Comon__map_hom",
+  "CategoryTheory.CechNerveTerminalFrom.wideCospan.limitIsoPi_inv_comp_pi_assoc",
+  "CategoryTheory.Equivalence.symm_inverse",
+  "CategoryTheory.GradedObject.mapTrifunctorMap_obj",
+  "CategoryTheory.Limits.Cocone.toOver_pt",
+  "CategoryTheory.Limits.coconeOfConeUnop_pt",
+  "CategoryTheory.Mat_.isoBiproductEmbedding_inv",
+  "CategoryTheory.OplaxFunctor.map₂_rightUnitor",
+  "CategoryTheory.ShortComplex.HomologyData.ofIsLimitKernelFork_iso",
+  "CategoryTheory.ShortComplex.rightHomologyι_descOpcycles_π_eq_zero_of_boundary_assoc",
+  "CategoryTheory.kernel_comp_cokernel_assoc",
+  "CommMon_.mul_comm",
+  "ContinuousMonoidHom.fst_toFun",
+  "Equiv.mulLeft₀_apply",
+  "Finset.Nonempty.bex",
+  "Finset.vadd_subset_vadd_left",
+  "Function.support_add",
+  "HomologicalComplex.natIsoSc'_inv_app_τ₂",
+  "IsBoundedLinearMap.toIsLinearMap",
+  "LawfulBitraversable.bitraverse_id_id",
+  "LocallyConstant.congrRightₗ_symm_apply_apply",
+  "MeasureTheory.Measure.singularPart_def",
+  "MonoidHom.flipHom_apply",
+  "NonUnitalSubsemiring.topEquiv_apply",
+  "PerfectField.separable_of_irreducible",
+  "Quaternion.rat_cast_imI",
+  "SemilatSupCat.dual_map",
+  "Shrink.linearEquiv_symm_apply",
+  "Sum.liftRel_iff",
+  "UniformConvexSpace.uniform_convex",
+  "add_eq_zero_iff_neg_eq",
+  "finsum_mem_add_distrib'",
+  "map_sum",
+  "selfAdjointPartL_apply_coe"
+ ]
+}
