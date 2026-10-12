@@ -34,7 +34,7 @@ from lean_search.expert_iteration.preferences import ValueJumpConfig
 from lean_search.expert_iteration.replay_buffer import FifoBuffer, ValueSample
 from lean_search.expert_iteration.serving import (
     LoopPaths,
-    LoraAdapterPublisher,
+    MergedPublisher,
     ModelVersion,
     StopStartRelease,
     read_current,
@@ -176,6 +176,10 @@ def test_automation_only_proofs_give_no_policy_samples(tmp_path: Path) -> None:
     assert (summary.proofs, summary.policy_proofs, summary.policy_samples) == (1, 0, 0)
 
 
+def create_directory(adapter: str, output_directory: Path) -> None:
+    output_directory.mkdir(parents=True)
+
+
 def loop_config(compress_reasoning: bool = False) -> LoopConfig:
     servers = (
         ServerEndpoint("gpu0", 0, "http://127.0.0.1:8100/v1"),
@@ -184,7 +188,7 @@ def loop_config(compress_reasoning: bool = False) -> LoopConfig:
     return LoopConfig(
         name="loop",
         initial=InitialModels("/policy", "/value"),
-        serving=ServingConfig("base", "served", "base", servers),
+        serving=ServingConfig("base", "base", servers[:1], servers[1:]),
         search=SearchServiceConfig("search.toml"),
         training=TrainingConfig(
             seed="test",
@@ -215,7 +219,7 @@ def phase_trainer(tmp_path: Path) -> tuple[LoopPaths, PhaseTrainer]:
     write_examples(paths.data_root / "value" / "v0" / "validation.jsonl", replay[:5])
     record_published(paths, ModelVersion(0, "/policy", "/value", PUBLISHED_AT, "initial"))
     write_shard(paths.shards, 0, ["a.1", "a.2", "a.3"], solved={"a.1", "a.2"})
-    publisher = LoraAdapterPublisher(config.serving)
+    publisher = MergedPublisher(config.serving, tmp_path / "weights", create_directory)
     trainer = PhaseTrainer(config, paths, publisher, StopStartRelease(publisher), tmp_path / "checkpoints", print, True)
     return paths, trainer
 
@@ -288,7 +292,7 @@ def idle_trainer(tmp_path: Path, events: list[str]) -> tuple[LoopPaths, PhaseTra
     write_examples(paths.data_root / "value" / "v0" / "train.jsonl", [])
     write_examples(paths.data_root / "value" / "v0" / "validation.jsonl", [])
     record_published(paths, ModelVersion(0, "/policy", "/value", PUBLISHED_AT, "initial"))
-    publisher = LoraAdapterPublisher(config.serving)
+    publisher = MergedPublisher(config.serving, tmp_path / "weights", create_directory)
     return paths, PhaseTrainer(
         config, paths, publisher, RecordingRelease(events), tmp_path / "checkpoints", print, True
     )
@@ -331,7 +335,7 @@ class FirstSentence:
 def compressing_trainer(tmp_path: Path, shortener: FirstSentence | None) -> PhaseTrainer:
     config = loop_config(compress_reasoning=True)
     paths = LoopPaths(tmp_path, tmp_path, config.name)
-    publisher = LoraAdapterPublisher(config.serving)
+    publisher = MergedPublisher(config.serving, tmp_path / "weights", create_directory)
     return PhaseTrainer(config, paths, publisher, StopStartRelease(publisher), tmp_path, print, True, shortener)
 
 

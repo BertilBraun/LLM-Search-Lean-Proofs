@@ -9,6 +9,7 @@ close the root. The proofs never train anything: they certify provability and es
 """
 
 import json
+import re
 import time
 import tomllib
 from collections.abc import Iterable, Iterator, Sequence
@@ -19,10 +20,10 @@ from lean_search.corpora.lean_text import split_top_level_tactics
 from lean_search.corpora.records import ProofRecord, StatementRecord
 from lean_search.expert_iteration.pool import canonical_header, problem_name
 from lean_search.lean import LeanError, LeanRepl, LeanTimeout, ProofState, ReplFailure
-from lean_search.lean.text import theorem_name
 from lean_search.search.records import from_json_object, to_json
 
 MAX_FAILURE_CHARACTERS = 300
+DECLARED_NAME = re.compile(r"\s*(?:theorem|lemma)\s+(\S+)")
 
 
 @dataclass(frozen=True)
@@ -81,7 +82,8 @@ class StatementProofs:
 
 def is_negation(statement: StatementRecord) -> bool:
     """A proved negation of a (often misformalized) conjecture, as Goedel-Prover's data names them."""
-    return "negation" in theorem_name(statement.formal_statement)
+    declared = DECLARED_NAME.match(statement.formal_statement)
+    return declared is not None and "negation" in declared.group(1)
 
 
 def known_proof(record: ProofRecord) -> KnownProof:

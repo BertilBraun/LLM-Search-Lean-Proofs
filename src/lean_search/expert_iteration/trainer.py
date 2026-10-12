@@ -392,7 +392,7 @@ class PhaseTrainer:
                 policy, value = await self.train(state)
                 return dataclasses.replace(state, policy_adapter=policy, value_adapter=value)
             case PhaseStage.PUBLISH:
-                self.publish(state)
+                await asyncio.to_thread(self.publish, state)
             case PhaseStage.RESTORE:
                 version = read_current(self.paths)
                 await asyncio.gather(*(self.gpu_release.restore(server, version) for server in servers))
@@ -618,9 +618,11 @@ class PhaseTrainer:
         log_path = self.paths.directory / "training" / f"phase_{phase:04d}_{name}.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         environment = os.environ | {"CUDA_VISIBLE_DEVICES": str(stage.gpu)}
+        # The service runs pinned and niced (deployment/background.sh); training ranks feed a GPU and run unpinned.
+        unpinned = f"taskset --cpu-list 0-{os.cpu_count() - 1} nice -n -19 {command}"
         with log_path.open("a", encoding="utf-8") as log_file:
             process = await asyncio.create_subprocess_exec(
-                "bash", "-c", command, cwd=REPOSITORY_DIRECTORY, env=environment, stdout=log_file, stderr=log_file
+                "bash", "-c", unpinned, cwd=REPOSITORY_DIRECTORY, env=environment, stdout=log_file, stderr=log_file
             )
             if await process.wait():
                 raise RuntimeError(f"{name} training for phase {phase} failed; see {log_path}")

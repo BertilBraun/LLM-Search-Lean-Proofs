@@ -1,6 +1,6 @@
-# Template of the loop's searches (experiments/phase6_service.py): A* ordered by h + 0.25 depth, row 4's automation
-# sweep and sampling (n = 16 at temperature 0.8, 512 tokens). The service fills in the served model and adapters,
-# every server, and each stage's budget (loop.toml [search.scheduler]).
+# Template of the loop's searches (experiments/phase6_service.py): A* ordered by h + 0.25 depth plus the policy
+# prior, the 7-tactic automation sweep overlapped with the policy request, and sampling (n = 16 at temperature 0.8,
+# 512 tokens). The service fills in the merged policy and value servers and each stage's budget (loop.toml).
 
 [lean]
 # The service's REPL pool is search.concurrency; restarting REPLs past 30% of their memory limit keeps 100+
@@ -13,6 +13,8 @@ restart_fraction = 0.3
 max_expansions = 32
 max_wall_seconds = 600.0
 max_depth = 16
+# Score each child as soon as it exists, while the expansion's other candidates run.
+score_children_early = true
 tactic_timeout_seconds = 10.0
 forbidden_steps = [
     "exact?",
@@ -29,6 +31,8 @@ forbidden_steps = [
 
 [expander]
 kind = "automation_then_policy"
+# Send the policy request while the automation sweep runs.
+overlap = true
 
 # The 7-tactic sweep (unless the performance agent's per-tactic breakdown recommends another list); pool v3's
 # automation probe uses the same list.
@@ -47,10 +51,9 @@ policy_prior_weight = 0.2
 automation_log_probability = -1.0
 
 [policy]
-model = "search-qwen3.5-2b"
+model = "policy-merged"
 tokenizer = "Qwen/Qwen3.5-2B"
 server_urls = ["http://127.0.0.1:8100/v1", "http://127.0.0.1:8101/v1"]
-adapter = "policy"
 # Samples per expansion: the budget-shape test (16 x 64 vs 8 x 128 vs 4 x 256 at equal generations) sets it; with
 # n = 4 the stage budgets (loop.toml, in expansions) should rise so that a stage generates about as much.
 sample_count = 16
@@ -63,10 +66,9 @@ thinking = false
 few_shot = false
 
 [value]
-model = "search-qwen3.5-2b"
+model = "value-merged"
 tokenizer = "Qwen/Qwen3.5-2B"
-server_urls = ["http://127.0.0.1:8100/v1", "http://127.0.0.1:8101/v1"]
-adapter = "value"
+server_urls = ["http://127.0.0.1:8200/v1", "http://127.0.0.1:8201/v1"]
 
 [value.readout]
 eight_or_more_steps = 12.0

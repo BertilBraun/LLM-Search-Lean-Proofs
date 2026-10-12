@@ -19,17 +19,27 @@ class ServerEndpoint:
     name: str
     gpu: int
     url: str
+    # Its share of the GPU's memory (GPU_MEMORY_UTILIZATION); 0 keeps serve_model.sh's default.
+    memory_share: float = 0.0
 
 
 @dataclass(frozen=True)
 class ServingConfig:
+    """Merged policy and merged value weights, each a vLLM instance without LoRA on every GPU."""
+
+    # deployment/README.md: 151.6 samples/s at 95-96% utilization, against 138 for adapters on the raw base.
+
     base_model: str
-    # The --served-model-name of every server; the policy and value adapters keep their names across phases.
-    served_model: str
     tokenizer: str
-    servers: tuple[ServerEndpoint, ...]
-    policy_adapter_name: str = "policy"
-    value_adapter_name: str = "value"
+    policy_servers: tuple[ServerEndpoint, ...]
+    value_servers: tuple[ServerEndpoint, ...]
+    # The --served-model-name of the policy and the value instances, the same in every version.
+    policy_model: str = "policy-merged"
+    value_model: str = "value-merged"
+
+    @property
+    def servers(self) -> tuple[ServerEndpoint, ...]:
+        return (*self.policy_servers, *self.value_servers)
 
 
 @dataclass(frozen=True)

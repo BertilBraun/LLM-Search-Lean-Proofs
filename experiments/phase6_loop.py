@@ -34,10 +34,10 @@ from lean_search.expert_iteration.loop_metrics import (
     stage_metrics,
     version_metrics,
 )
+from lean_search.expert_iteration.merging import merged_publisher
 from lean_search.expert_iteration.search_service import ServiceHeartbeat
 from lean_search.expert_iteration.serving import (
     LoopPaths,
-    LoraAdapterPublisher,
     ModelVersion,
     read_current,
     record_published,
@@ -49,6 +49,7 @@ from lean_search.search.summary import markdown_table
 
 DATA_DIRECTORY = Path(os.environ["LEAN_SEARCH_DATA"])
 RUNS_DIRECTORY = Path(os.environ["LEAN_SEARCH_RUNS"])
+CHECKPOINTS_DIRECTORY = Path(os.environ["LEAN_SEARCH_CHECKPOINTS"])
 
 
 class Command(StrEnum):
@@ -90,13 +91,14 @@ def initialize(config: LoopConfig, config_path: Path, paths: LoopPaths) -> None:
     paths.directory.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(config_path, paths.config)
     version = ModelVersion(0, config.initial.policy_adapter, config.initial.value_adapter, now(), "initial")
-    record_published(paths, LoraAdapterPublisher(config.serving).prepare(version))
+    print("Merging the initial adapters into full weights (CPU, about a minute)")
+    record_published(paths, merged_publisher(config, CHECKPOINTS_DIRECTORY).prepare(version))
     print(f"Version 0 published in {paths.directory}; start the servers with:")
     print_serve_commands(config, paths)
 
 
 def print_serve_commands(config: LoopConfig, paths: LoopPaths) -> None:
-    publisher = LoraAdapterPublisher(config.serving)
+    publisher = merged_publisher(config, CHECKPOINTS_DIRECTORY)
     current = read_current(paths)
     for server in config.serving.servers:
         print(publisher.serve_command(current, server))
@@ -300,9 +302,15 @@ def print_commands(config_path: Path, paths: LoopPaths) -> None:
             [
                 f"python experiments/phase6_loop.py {config} init",
                 "# start the servers with the commands init (or serve-commands) prints, then:",
-                f"setsid nohup python experiments/phase6_service.py {config} >> {log}/service.log 2>&1 < /dev/null &",
-                f"setsid nohup python experiments/phase6_evaluator.py {config} >> {log}/evaluator.log 2>&1 "
-                "< /dev/null &",
+                "# the searches' Lean REPLs are the CPU load: 40 pinned CPUs (deployment/README.md, CPU budget)",
+                "BACKGROUND_CPUS=40 setsid nohup deployment/background.sh python experiments/phase6_service.py "
+                f"{config} >> {log}/service.log 2>&1 < /dev/null &",
+                f"BACKGROUND_CPUS=40 setsid nohup deployment/background.sh python experiments/phase6_evaluator.py "
+                f"{config} >> {log}/evaluator.log 2>&1 < /dev/null &",
+                "# pool v3 verification ahead of the curriculum (shares the 40 background CPUs)",
+                "BACKGROUND_CPUS=40 setsid nohup deployment/background.sh python experiments/phase6_pool_v3.py "
+                "--config experiments/configs/expert_iteration/pool_v3.toml --step verify "
+                f"--loop-config {config_path.as_posix()} >> {log}/verify.log 2>&1 < /dev/null &",
                 f"python experiments/phase6_loop.py {config} status",
                 "# stop a process with kill (SIGTERM) on its python PID; each resumes from disk",
             ]

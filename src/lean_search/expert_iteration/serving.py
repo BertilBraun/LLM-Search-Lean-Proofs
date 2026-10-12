@@ -1,24 +1,29 @@
 """Model versions, the "current" pointer, and the interfaces that publish weights and free the GPUs for training.
 
-A training phase stops (or puts to sleep) every server (GpuRelease.release), trains, publishes version k + 1
-(Publisher.prepare, then the versions log and models/current.json) and brings the servers back with it
-(GpuRelease.restore). The adapters keep their served names across versions, so the searches simply continue. Both
-interfaces are protocols: a merged policy, in-place weight reload or vLLM sleep mode plug in without touching the
-searches; the LoRA-adapter publisher with stop/start works with today's servers.
+A training phase puts every server to sleep (GpuRelease.release: weights and KV cache freed in 0.4 s), trains,
+publishes version k + 1 (Publisher.prepare merges the new adapters into full weights, ~17 s each on the CPU; then the
+versions log and models/current.json) and wakes the servers with the new weights (GpuRelease.restore, ~2 s). The
+served model names stay, so the searches simply continue. Restarting the servers (stop/start, 1-2.5 minutes) is the
+fallback, e.g. after a reboot (deployment/README.md).
 """
 
 import asyncio
+import dataclasses
 import json
 import os
+import shutil
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 from urllib.parse import urlparse
 
 from lean_search.expert_iteration.loop_config import ServerEndpoint, ServingConfig
+from lean_search.policy.server_control import release_gpu, restore_gpu
 from lean_search.search.records import from_json_object, to_json
 
 REPOSITORY_DIRECTORY = Path(__file__).resolve().parents[3]
+MERGED_MARKER = "merged_from.txt"
 
 
 @dataclass(frozen=True)
@@ -31,6 +36,9 @@ class ModelVersion:
     published_at: str
     # Why the phase that produced it started ("initial" for version 0).
     trigger: str
+    # The adapters merged into full weights, as the servers load them; empty before Publisher.prepare.
+    policy_weights: str = ""
+    value_weights: str = ""
 
 
 @dataclass(frozen=True)
@@ -160,21 +168,52 @@ class GpuRelease(Protocol):
     async def restore(self, server: ServerEndpoint, version: ModelVersion) -> None: ...
 
 
-class LoraAdapterPublisher:
-    """Policy and value as LoRA adapters on the raw base model, under the same served names in every version."""
+def merged_directory(weights_root: Path, version: int, kind: str) -> Path:
+    return weights_root / f"v{version:04d}" / kind
 
-    def __init__(self, config: ServingConfig) -> None:
+
+class MergedPublisher:
+    """Merges each version's policy and value adapters into full weights for the merged instances."""
+
+    def __init__(self, config: ServingConfig, weights_root: Path, merge: Callable[[str, Path], None]) -> None:
         self.config = config
+        self.weights_root = weights_root
+        # Merges an adapter into the base model's weights at a directory (lean_search.policy.adapters.merge_adapter).
+        self.merge = merge
+        self.merged: dict[str, Path] = {}
 
     def prepare(self, version: ModelVersion) -> ModelVersion:
-        return version
+        policy = self.merged_weights(
+            version.policy_adapter, merged_directory(self.weights_root, version.version, "policy")
+        )
+        value = self.merged_weights(
+            version.value_adapter, merged_directory(self.weights_root, version.version, "value")
+        )
+        return dataclasses.replace(version, policy_weights=str(policy), value_weights=str(value))
+
+    def merged_weights(self, adapter: str, directory: Path) -> Path:
+        """An adapter merged once: an unchanged adapter (e.g. the value model when it did not train) reuses it."""
+        if adapter in self.merged:
+            return self.merged[adapter]
+        if not (directory / MERGED_MARKER).exists():
+            temporary = directory.with_name(directory.name + ".tmp")
+            shutil.rmtree(temporary, ignore_errors=True)
+            self.merge(adapter, temporary)
+            (temporary / MERGED_MARKER).write_text(adapter, encoding="utf-8")
+            shutil.rmtree(directory, ignore_errors=True)
+            os.replace(temporary, directory)
+        self.merged[adapter] = directory
+        return directory
+
+    def weights(self, version: ModelVersion, server: ServerEndpoint) -> str:
+        return version.policy_weights if server in self.config.policy_servers else version.value_weights
 
     def serve_command(self, version: ModelVersion, server: ServerEndpoint) -> str:
+        served = self.config.policy_model if server in self.config.policy_servers else self.config.value_model
+        memory = f"GPU_MEMORY_UTILIZATION={server.memory_share} " if server.memory_share else ""
         return (
-            f"deployment/serve_model.sh {server.name} {self.config.base_model} {server.gpu} {server_port(server)} "
-            f"--served-model-name {self.config.served_model} --lora-modules "
-            f"{self.config.policy_adapter_name}={version.policy_adapter} "
-            f"{self.config.value_adapter_name}={version.value_adapter}"
+            f"{memory}SLEEP_MODE=1 deployment/serve_model.sh {server.name} {self.weights(version, server)} "
+            f"{server.gpu} {server_port(server)} --served-model-name {served} --no-enable-lora"
         )
 
 
@@ -184,8 +223,21 @@ async def run_shell(command: str) -> None:
         raise RuntimeError(f"Command failed: {command}")
 
 
+class SleepRelease:
+    """vLLM sleep mode: the server frees its GPU and later reloads the version's weights in place."""
+
+    def __init__(self, publisher: MergedPublisher) -> None:
+        self.publisher = publisher
+
+    async def release(self, server: ServerEndpoint) -> None:
+        await release_gpu(server.url)
+
+    async def restore(self, server: ServerEndpoint, version: ModelVersion) -> None:
+        await restore_gpu(server.url, Path(self.publisher.weights(version, server)))
+
+
 class StopStartRelease:
-    """Stops the vLLM server for training and starts it again (1.5-2.5 minutes with warm caches)."""
+    """Stops the vLLM server for training and starts it again (1-2.5 minutes with warm caches)."""
 
     def __init__(self, publisher: Publisher) -> None:
         self.publisher = publisher

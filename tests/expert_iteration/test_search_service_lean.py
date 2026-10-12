@@ -61,7 +61,7 @@ def loop_config() -> LoopConfig:
     return LoopConfig(
         name="loop",
         initial=InitialModels("/policy", "/value"),
-        serving=ServingConfig("base", "served", "base", SERVERS),
+        serving=ServingConfig("base", "base", SERVERS[:1], SERVERS[1:]),
         search=SearchServiceConfig(
             "unused",
             curriculum=CurriculumConfig(verified="pool/verified.jsonl", reload_seconds=1.0),

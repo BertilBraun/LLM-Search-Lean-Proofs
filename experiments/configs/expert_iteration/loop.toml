@@ -11,22 +11,37 @@ name = "phase6_loop"
 policy_adapter = "/workspace/checkpoints/phase2_sft_v2/adapter"
 value_adapter = "/workspace/checkpoints/phase3_value_v0/adapter"
 
+# Per GPU a merged-policy and a merged-value vLLM instance without LoRA, started with SLEEP_MODE=1 so that a phase
+# frees the GPUs in place and reloads the new weights in seconds (deployment/README.md, results/gpu_utilization/).
 [serving]
 base_model = "Qwen/Qwen3.5-2B"
-served_model = "search-qwen3.5-2b"
 tokenizer = "Qwen/Qwen3.5-2B"
-policy_adapter_name = "policy"
-value_adapter_name = "value"
+policy_model = "policy-merged"
+value_model = "value-merged"
 
-[[serving.servers]]
-name = "search-gpu0"
+[[serving.policy_servers]]
+name = "policy-gpu0"
 gpu = 0
 url = "http://127.0.0.1:8100/v1"
+memory_share = 0.58
 
-[[serving.servers]]
-name = "search-gpu1"
+[[serving.policy_servers]]
+name = "policy-gpu1"
 gpu = 1
 url = "http://127.0.0.1:8101/v1"
+memory_share = 0.58
+
+[[serving.value_servers]]
+name = "value-gpu0"
+gpu = 0
+url = "http://127.0.0.1:8200/v1"
+memory_share = 0.30
+
+[[serving.value_servers]]
+name = "value-gpu1"
+gpu = 1
+url = "http://127.0.0.1:8201/v1"
+memory_share = 0.30
 
 [search]
 search_config = "experiments/configs/expert_iteration/loop_search.toml"
@@ -35,8 +50,9 @@ open_candidates = ""
 open_share = 0.0
 # Stale frontier states (scored by an older value model) re-scored together when one reaches the top.
 lazy_rescore_states = 32
-# Concurrent searches (one REPL each); the performance agent's measurement sets the final value.
-concurrency = 128
+# Concurrent searches (one REPL each), the service pinned to 40 CPUs (results/gpu_utilization/: 120 searches keep
+# both GPUs at 95-96% with the merged instances).
+concurrency = 120
 shard_attempts = 1000
 shard_minutes = 10.0
 heartbeat_seconds = 30.0

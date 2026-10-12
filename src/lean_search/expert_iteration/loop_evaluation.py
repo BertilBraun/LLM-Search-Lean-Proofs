@@ -34,13 +34,16 @@ def due_version(
 
 
 def evaluation_config_text(template: str, serving: ServingConfig, config: EvaluationLoopConfig) -> str:
-    """The template on the served adapters at the evaluation's budget and concurrency."""
+    """The template on the merged policy and value servers at the evaluation's budget and concurrency."""
     table = tomllib.loads(template)
-    urls = [server.url for server in serving.servers]
     table["lean"] = table.get("lean", {}) | {"pool_size": config.concurrency, "concurrency": config.concurrency}
     table["search"] = table.get("search", {}) | {"max_expansions": config.max_expansions}
-    for section, adapter in (("policy", serving.policy_adapter_name), ("value", serving.value_adapter_name)):
-        table[section] = table[section] | {"model": serving.served_model, "adapter": adapter, "server_urls": urls}
+    for section, model, servers in (
+        ("policy", serving.policy_model, serving.policy_servers),
+        ("value", serving.value_model, serving.value_servers),
+    ):
+        section_table = {key: value for key, value in table[section].items() if key != "adapter"}
+        table[section] = section_table | {"model": model, "server_urls": [server.url for server in servers]}
     return toml_text(table)
 
 

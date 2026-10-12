@@ -132,15 +132,20 @@ class StageStart:
 
 
 def served_run_config(template: RunConfig, config: LoopConfig) -> RunConfig:
-    """The template with the served adapters on every server; a template without a value model keeps none."""
+    """The template on the merged policy and value servers; a template without a value model keeps none."""
     serving = config.serving
-    urls = tuple(server.url for server in serving.servers)
     policy = dataclasses.replace(
-        template.policy, model=serving.served_model, adapter=serving.policy_adapter_name, server_urls=urls
+        template.policy,
+        model=serving.policy_model,
+        adapter=None,
+        server_urls=tuple(server.url for server in serving.policy_servers),
     )
     value = (
         dataclasses.replace(
-            template.value, model=serving.served_model, adapter=serving.value_adapter_name, server_urls=urls
+            template.value,
+            model=serving.value_model,
+            adapter=None,
+            server_urls=tuple(server.url for server in serving.value_servers),
         )
         if template.value.model
         else template.value

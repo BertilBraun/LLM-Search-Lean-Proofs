@@ -20,7 +20,9 @@ from lean_search.expert_iteration.shards import AttemptRecord, Decision
 from lean_search.value.labels import LabelKind, ValueExample
 
 EVALUATION = EvaluationLoopConfig("evaluation.toml", every_versions=3, max_expansions=32, concurrency=16)
-SERVING = ServingConfig("base", "served", "base", (ServerEndpoint("gpu0", 0, "http://a/v1"),))
+SERVING = ServingConfig(
+    "base", "base", (ServerEndpoint("p0", 0, "http://p/v1"),), (ServerEndpoint("v0", 0, "http://v/v1"),)
+)
 
 
 def exact(steps: int, estimate: float) -> VersionedValueExample:
@@ -74,7 +76,7 @@ def test_the_current_version_is_evaluated_when_due(published: list[int], evaluat
     assert (None if chosen is None else chosen.version) == due
 
 
-def test_the_evaluation_config_requests_the_served_adapters_at_the_reduced_budget() -> None:
+def test_the_evaluation_config_requests_the_merged_servers_at_the_reduced_budget() -> None:
     template = (
         '[lean]\npool_size = 40\nconcurrency = 40\n\n[search]\nmax_expansions = 64\n\n[policy]\nmodel = "served"\n'
         'adapter = "old"\n\n[value]\nmodel = "served"\nadapter = "old"\n'
@@ -83,9 +85,9 @@ def test_the_evaluation_config_requests_the_served_adapters_at_the_reduced_budge
     assert (
         table["lean"]["concurrency"],
         table["search"]["max_expansions"],
-        table["policy"]["adapter"],
+        "adapter" in table["policy"],
         table["value"]["server_urls"],
-    ) == (16, 32, "policy", ["http://a/v1"])
+    ) == (16, 32, False, ["http://v/v1"])
 
 
 def stage_records() -> list[AttemptRecord]:

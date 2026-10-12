@@ -1,12 +1,14 @@
 from pathlib import Path
 
+import pytest
 from loop_fixtures import verified
 
-from lean_search.corpora.records import ProofRecord
+from lean_search.corpora.records import ProofRecord, StatementRecord
 from lean_search.expert_iteration.known_proofs import (
     StatementProofs,
     add_proof,
     easiest_first,
+    is_negation,
     known_proof,
     read_verified,
 )
@@ -55,3 +57,15 @@ def test_reading_verified_records_waits_for_a_line_being_written(tmp_path: Path)
     path.write_bytes((complete + to_json(verified(1, 1))[:20]).encode())
     records, offset = read_verified(path)
     assert ([record.name for record in records], offset) == (["s.t0"], len(complete.encode()))
+
+
+@pytest.mark.parametrize(
+    ("statement", "negation"),
+    [
+        ("theorem extracted_7d0b_negation : ¬ (∀ x : ℝ, x = 2) := by", True),
+        ("theorem lean_workbook_1 (x : ℝ) : x = x := by", False),
+        ("example : (1 : ℕ) = 1 := by", False),
+    ],
+)
+def test_proved_negations_are_recognized_by_name(statement: str, negation: bool) -> None:
+    assert is_negation(StatementRecord("s", "t", "", statement, "", "")) == negation
