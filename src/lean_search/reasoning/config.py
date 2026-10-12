@@ -16,6 +16,8 @@ from lean_search.value.config import ValueConfig
 @dataclass(frozen=True)
 class ReasoningRunConfig:
     policy: PolicyConfig
+    # Added to the system prompt in thinking mode, e.g. prompts.BRIEF_THINKING_INSTRUCTION; empty keeps the plain one.
+    thinking_instruction: str = ""
     states: StateSelectionConfig = field(default_factory=StateSelectionConfig)
     execution: ExecutionConfig = field(default_factory=ExecutionConfig)
     pipeline: PipelineConfig = field(default_factory=PipelineConfig)

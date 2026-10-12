@@ -202,7 +202,9 @@ async def run_pipeline(config: ReasoningRunConfig, directory: RunDirectory, stat
     async with contextlib.AsyncExitStack() as stack:
         sample_state = unavailable_sampler
         if needs_sampling:
-            sampler = await stack.enter_async_context(open_sampler(config.policy, config.pipeline.requests_in_flight))
+            sampler = await stack.enter_async_context(
+                open_sampler(config.policy, config.pipeline.requests_in_flight, config.thinking_instruction)
+            )
             sample_state = sampler.sample
         executor = await stack.enter_async_context(open_executor(preloaded_header(states), config.execution))
         remaining_steps = None
@@ -321,7 +323,9 @@ def render_run_summary(summary: RunSummary) -> str:
     sections = [
         f"# Reasoning run `{summary.run_name}`",
         f"{statistics.states} traced train-split states, k={policy.sample_count} samples each from `{policy.model}`"
-        f" (adapter `{policy.adapter}`), thinking {'on' if policy.thinking else 'off'}, temperature "
+        f" (adapter `{policy.adapter}`), thinking {'on' if policy.thinking else 'off'}"
+        + (f" with the system prompt addition “{config.thinking_instruction}”" if config.thinking_instruction else "")
+        + ", temperature "
         f"{policy.temperature:g}, at most {policy.max_tokens} generated tokens (reasoning and block; truncation is a "
         f"failure). Every distinct block ran on its rebuilt state with `apply_block` "
         f"({config.execution.tactic_timeout_seconds:g} s wall clock). Success: {success_rule}. "
@@ -443,7 +447,8 @@ def command_select(arguments: argparse.Namespace) -> None:
     for record in usable:
         state = record.sampled.state
         examples = [
-            reasoning_example(state, sample) for sample in select_samples(record, config.reward, config.selection)
+            reasoning_example(record.sampled, sample)
+            for sample in select_samples(record, config.reward, config.selection)
         ]
         states_with_examples += bool(examples)
         if is_validation_proof(state.step.proof_identifier, config.validation_fraction, config.seed):

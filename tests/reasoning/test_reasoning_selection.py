@@ -1,6 +1,6 @@
 from reasoning_records import execution, sample_record, state_record
 
-from lean_search.reasoning.dataset import SelectionConfig, select_samples
+from lean_search.reasoning.dataset import SelectionConfig, reasoning_example, select_samples
 from lean_search.reasoning.reward import RewardConfig, StepOutcome
 
 REWARD = RewardConfig()
@@ -66,3 +66,9 @@ def test_later_reference_states_follow_the_reward_config() -> None:
         [sample_record(0, "subst h₀\nsubst h₁", 40)], [execution("subst h₀\nsubst h₁", StepOutcome.REFERENCE, 2)]
     )
     assert select_samples(record, RewardConfig(accept_later_reference_states=False), SELECTION) == []
+
+
+def test_examples_keep_the_instruction_their_reasoning_was_sampled_with() -> None:
+    record = state_record([sample_record(0, "omega", 40)], [SUCCESSFUL["omega"]], thinking_instruction="Be brief.")
+    (sample,) = select_samples(record, REWARD, SELECTION)
+    assert reasoning_example(record.sampled, sample).thinking_instruction == "Be brief."

@@ -13,6 +13,8 @@ SYSTEM_PROMPT = (
     "You are a Lean 4 and Mathlib expert. Given the current proof state, write the next tactic or tactics that make "
     "progress on it. Reply with a single ```lean code block that contains only tactics."
 )
+# Optionally appended to the system prompt in thinking mode to keep the thoughts short.
+BRIEF_THINKING_INSTRUCTION = "Think briefly (a few sentences) about which tactic to use; do not restate the goal."
 ASSISTANT_PREFILL = "```lean\n"
 FENCE = "```"
 END_OF_TURN = "<|im_end|>"
@@ -72,8 +74,14 @@ def assistant_message(tactic_block: str) -> str:
     return f"{ASSISTANT_PREFILL}{tactic_block}\n{FENCE}"
 
 
-def prompt_messages(goals: Sequence[str], lemmas: Sequence[str] = (), *, few_shot: bool = False) -> list[ChatMessage]:
-    messages = [ChatMessage("system", SYSTEM_PROMPT)]
+def system_prompt(instruction: str = "") -> str:
+    return f"{SYSTEM_PROMPT} {instruction}" if instruction else SYSTEM_PROMPT
+
+
+def prompt_messages(
+    goals: Sequence[str], lemmas: Sequence[str] = (), *, few_shot: bool = False, system_instruction: str = ""
+) -> list[ChatMessage]:
+    messages = [ChatMessage("system", system_prompt(system_instruction))]
     if few_shot:
         for example in FEW_SHOT_EXAMPLES:
             messages.append(ChatMessage("user", user_message(example.goals)))
@@ -89,10 +97,13 @@ def render_prompt(
     *,
     few_shot: bool = False,
     thinking: bool = False,
+    thinking_instruction: str = "",
 ) -> str:
+    """`thinking_instruction` extends the system prompt in thinking mode only."""
+    instruction = thinking_instruction if thinking else ""
     conversation = [
         {"role": message.role, "content": message.content}
-        for message in prompt_messages(goals, lemmas, few_shot=few_shot)
+        for message in prompt_messages(goals, lemmas, few_shot=few_shot, system_instruction=instruction)
     ]
     text = template.apply_chat_template(
         conversation, tokenize=False, add_generation_prompt=True, enable_thinking=thinking

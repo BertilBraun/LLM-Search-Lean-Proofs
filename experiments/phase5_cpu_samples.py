@@ -88,7 +88,12 @@ def main() -> None:
     results: list[StateSamples] = []
     for start in range(0, len(states), arguments.states_per_batch):
         batch = states[start : start + arguments.states_per_batch]
-        prompts = [render_prompt(tokenizer, state.goals, thinking=policy.thinking) for state in batch]
+        prompts = [
+            render_prompt(
+                tokenizer, state.goals, thinking=policy.thinking, thinking_instruction=config.thinking_instruction
+            )
+            for state in batch
+        ]
         inputs = tokenizer(prompts, return_tensors="pt", padding=True, add_special_tokens=False)
         started = time.monotonic()
         with torch.no_grad():
@@ -103,7 +108,16 @@ def main() -> None:
             )
             prompt_tokens = int(inputs["attention_mask"][index].sum())
             results.append(
-                StateSamples(state, policy.thinking, prompt_tokens, 0, policy.max_tokens, seconds / len(batch), samples)
+                StateSamples(
+                    state,
+                    policy.thinking,
+                    config.thinking_instruction,
+                    prompt_tokens,
+                    0,
+                    policy.max_tokens,
+                    seconds / len(batch),
+                    samples,
+                )
             )
         generated = sum(sample.generated_tokens for result in results[-len(batch) :] for sample in result.samples)
         # Written after every batch, so an interrupted estimate keeps the states sampled so far.

@@ -37,7 +37,7 @@ FIRST_STATE_BLOCKS = {
 def sampled(state: ReasoningState, blocks: list[str]) -> StateSamples:
     samples = [sample_record(index, block) for index, block in enumerate(blocks)]
     truncated = sample_record(len(blocks), None, 512, parse_failure=StepOutcome.TRUNCATED)
-    return StateSamples(state, True, 100, 0, 512, 1.0, (*samples, truncated))
+    return StateSamples(state, True, "", 100, 0, 512, 1.0, (*samples, truncated))
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="module")

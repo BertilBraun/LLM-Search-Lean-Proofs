@@ -93,6 +93,7 @@ def state_record(
     executions: Sequence[BlockExecution],
     state: ReasoningState | None = None,
     start_failure: str = "",
+    thinking_instruction: str = "",
 ) -> StateRecord:
-    sampled = StateSamples(state or first_state(), True, 120, 100, 512, 1.0, tuple(samples))
+    sampled = StateSamples(state or first_state(), True, thinking_instruction, 120, 100, 512, 1.0, tuple(samples))
     return StateRecord(sampled, start_failure, tuple(executions))

@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from lean_search.policy.prompts import BRIEF_THINKING_INSTRUCTION
 from lean_search.reasoning.config import load_reasoning_run_config
 from lean_search.reasoning.dataset import ReasoningDataConfig
 from lean_search.search import load_run_config
@@ -36,3 +37,8 @@ def test_sft_configs_continue_an_adapter(path: Path) -> None:
     from lean_search.training.sft import SftConfig
 
     assert from_json_object(SftConfig, tomllib.loads(path.read_text(encoding="utf-8"))).initial_adapter
+
+
+@pytest.mark.parametrize("path", sorted(CONFIG_DIRECTORY.glob("phase5_pilot_*_brief.toml")), ids=lambda path: path.stem)
+def test_brief_pilot_arms_use_the_shared_instruction(path: Path) -> None:
+    assert load_reasoning_run_config(path).thinking_instruction == BRIEF_THINKING_INSTRUCTION

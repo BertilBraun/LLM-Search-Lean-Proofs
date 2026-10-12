@@ -8,9 +8,8 @@ from pathlib import Path
 
 from lean_search.corpora.tracing import stable_fraction
 from lean_search.policy.prompts import render_prompt, render_thinking_completion
-from lean_search.reasoning.records import SampleRecord, StateRecord, scored_samples
+from lean_search.reasoning.records import SampleRecord, StateRecord, StateSamples, scored_samples
 from lean_search.reasoning.reward import RewardConfig
-from lean_search.reasoning.states import ReasoningState
 from lean_search.reasoning.thinking import is_trainable_reasoning
 from lean_search.training.sft_data import SftExample, TokenizedExample, Tokenizer, ordering_key, tokenize_example
 
@@ -50,6 +49,8 @@ class ReasoningExample:
     tactic_block: str
     # None for a non-thinking replay example.
     reasoning: str | None
+    # The thinking-mode system prompt addition the reasoning was sampled with.
+    thinking_instruction: str
 
 
 def trainable_successes(record: StateRecord, reward: RewardConfig, selection: SelectionConfig) -> list[SampleRecord]:
@@ -78,17 +79,23 @@ def select_samples(record: StateRecord, reward: RewardConfig, selection: Selecti
     return (distinct + repeated)[: selection.max_per_state]
 
 
-def reasoning_example(state: ReasoningState, sample: SampleRecord) -> ReasoningExample:
+def reasoning_example(sampled: StateSamples, sample: SampleRecord) -> ReasoningExample:
     assert sample.tactic_block is not None
-    step = state.step
+    step = sampled.state.step
     return ReasoningExample(
-        step.source, step.proof_identifier, step.step_index, state.goals, sample.tactic_block, sample.reasoning
+        step.source,
+        step.proof_identifier,
+        step.step_index,
+        sampled.state.goals,
+        sample.tactic_block,
+        sample.reasoning,
+        sampled.thinking_instruction,
     )
 
 
 def replay_example(example: SftExample) -> ReasoningExample:
     return ReasoningExample(
-        example.source, example.proof_identifier, example.step_index, example.goals, example.tactic_block, None
+        example.source, example.proof_identifier, example.step_index, example.goals, example.tactic_block, None, ""
     )
 
 
@@ -110,7 +117,9 @@ def tokenize_reasoning_example(tokenizer: Tokenizer, example: ReasoningExample) 
         case None:
             return tokenize_example(tokenizer, sft_example)
         case str() as reasoning:
-            prompt = render_prompt(tokenizer, example.goals, thinking=True)
+            prompt = render_prompt(
+                tokenizer, example.goals, thinking=True, thinking_instruction=example.thinking_instruction
+            )
             prompt_ids = tokenizer.encode(prompt, add_special_tokens=False)
             completion = render_thinking_completion(reasoning, example.tactic_block)
             completion_ids = tokenizer.encode(completion, add_special_tokens=False)

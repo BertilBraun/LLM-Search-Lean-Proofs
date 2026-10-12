@@ -28,6 +28,8 @@ class SampleRecord:
 class StateSamples:
     state: ReasoningState
     thinking: bool
+    # The addition to the system prompt in thinking mode (`render_prompt`'s `thinking_instruction`).
+    thinking_instruction: str
     prompt_tokens: int
     cached_prompt_tokens: int
     max_tokens: int
