@@ -13,20 +13,24 @@ Lean. Log-probabilities are not computed (0.0). Without --adapter-path the base 
 import argparse
 import dataclasses
 import os
+import sys
 import time
 from pathlib import Path
 
-import peft
-import torch
-import transformers
+# flash-linear-attention's Triton kernels need a GPU; without it transformers takes its PyTorch path.
+sys.modules["fla"] = None
 
-from lean_search.policy.adapters import load_base_model
-from lean_search.policy.client import Sample
-from lean_search.policy.prompts import END_OF_TURN, LENGTH_FINISH_REASON, render_prompt
-from lean_search.reasoning.config import load_reasoning_run_config
-from lean_search.reasoning.pipeline import sample_record
-from lean_search.reasoning.records import RunDirectory, StateSamples, read_records, write_records
-from lean_search.reasoning.states import ReasoningState
+import peft  # noqa: E402
+import torch  # noqa: E402
+import transformers  # noqa: E402
+
+from lean_search.policy.adapters import load_base_model  # noqa: E402
+from lean_search.policy.client import Sample  # noqa: E402
+from lean_search.policy.prompts import END_OF_TURN, LENGTH_FINISH_REASON, render_prompt  # noqa: E402
+from lean_search.reasoning.config import load_reasoning_run_config  # noqa: E402
+from lean_search.reasoning.pipeline import sample_record  # noqa: E402
+from lean_search.reasoning.records import RunDirectory, StateSamples, read_records, write_records  # noqa: E402
+from lean_search.reasoning.states import ReasoningState  # noqa: E402
 
 RUNS_DIRECTORY = Path(os.environ.get("LEAN_SEARCH_RUNS", "/workspace/runs"))
 STOP_FINISH_REASON = "stop"
