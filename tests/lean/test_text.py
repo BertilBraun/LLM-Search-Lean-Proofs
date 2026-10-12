@@ -1,12 +1,15 @@
 import pytest
 
 from lean_search.lean.text import (
+    HeaderParts,
+    auxiliary_statement,
     executed_proof,
     find_forbidden_tokens,
     is_incomplete_input,
     lean_string_literal,
     lex,
     normalize_goal,
+    split_header,
     split_tactics,
     theorem_name,
     theorem_with_proof,
@@ -226,3 +229,55 @@ def test_theorem_with_proof_adds_by_after_a_bare_definition_sign() -> None:
 def test_theorem_with_proof_rejects_a_statement_without_proof_position() -> None:
     with pytest.raises(ValueError):
         theorem_with_proof("theorem t : True", "trivial")
+
+
+@pytest.mark.parametrize(
+    ("header", "expected"),
+    [
+        (
+            "import Mathlib\nimport Aesop\nset_option maxHeartbeats 0\nopen Real",
+            HeaderParts("import Mathlib\nimport Aesop", "set_option maxHeartbeats 0\nopen Real"),
+        ),
+        (
+            "import  Mathlib -- all of it\n\nimport Aesop\n\nopen Nat\n",
+            HeaderParts("import Mathlib\nimport Aesop", "\nopen Nat\n"),
+        ),
+        (
+            "/- imports -/\nimport Mathlib\n/- opens -/\nopen Nat",
+            HeaderParts("import Mathlib", "/- opens -/\nopen Nat"),
+        ),
+        ("import Mathlib\n", HeaderParts("import Mathlib", "")),
+        ("open Nat\nimport Mathlib", HeaderParts("", "open Nat\nimport Mathlib")),
+        ("", HeaderParts("", "")),
+    ],
+)
+def test_split_header_separates_the_imports_from_the_commands(header: str, expected: HeaderParts) -> None:
+    assert split_header(header) == expected
+
+
+@pytest.mark.parametrize(
+    ("statement", "expected"),
+    [
+        (
+            "theorem t (a : ℕ) (h : a = 2) : a + 1 = 3 := by",
+            "theorem t.lean_search_auxiliaries (a : ℕ) (h : a = 2) : ( a + 1 = 3 \n) → True := fun _ => trivial",
+        ),
+        (
+            "theorem t : ∀ x : ℕ, x = x :=",
+            "theorem t.lean_search_auxiliaries : ( ∀ x : ℕ, x = x \n) → True := fun _ => trivial",
+        ),
+        (
+            "/-- doc: x -/\nlemma t {S : Set (ℕ × ℕ)} (h : S = {(x, y) | x = y}) :\n"
+            "  (1, 1) ∈ S := by -- proof: below\n",
+            "/-- doc: x -/\nlemma t.lean_search_auxiliaries {S : Set (ℕ × ℕ)} (h : S = {(x, y) | x = y}) :"
+            " (\n  (1, 1) ∈ S \n) → True := fun _ => trivial",
+        ),
+    ],
+)
+def test_auxiliary_statement_proves_only_true(statement: str, expected: str) -> None:
+    assert auxiliary_statement(statement) == expected
+
+
+@pytest.mark.parametrize("statement", ["theorem t := by", "def t : ℕ := 3", "theorem t : True"])
+def test_auxiliary_statement_of_an_unreadable_statement_is_none(statement: str) -> None:
+    assert auxiliary_statement(statement) is None

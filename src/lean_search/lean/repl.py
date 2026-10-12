@@ -11,7 +11,7 @@ import signal
 import textwrap
 import time
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -19,12 +19,14 @@ from typing import NamedTuple
 
 from lean_search.lean.text import (
     FORBIDDEN_TOKENS,
+    auxiliary_statement,
     executed_proof,
     find_forbidden_tokens,
     is_incomplete_input,
     join_tactics,
     lean_string_literal,
     normalize_goal,
+    split_header,
     split_tactics,
     theorem_name,
     theorem_with_proof,
@@ -36,17 +38,35 @@ REPL_BINARY = Path(".lake/packages/REPL/.lake/build/bin/repl")
 STANDARD_AXIOMS = frozenset({"propext", "Classical.choice", "Quot.sound"})
 
 # Tactic-level `set_option maxHeartbeats N in` does not change the heartbeat limit in Lean 4.9, so we define our own.
-# It only bounds heartbeats and adds checks; see README.md for why verification soundness does not depend on it.
+# It bounds heartbeats, names auxiliary declarations and adds checks; see README.md for why soundness is unaffected.
 BASE_ENVIRONMENT_DEFINITIONS = """open Lean Elab Tactic in
 elab "lean_search_heartbeats " limit:num " => " tactics:tacticSeq : tactic => do
   let goals ← getGoals
-  Lean.Core.withCurrHeartbeats <|
-    withTheReader Lean.Core.Context (fun context => { context with maxHeartbeats := limit.getNat * 1000 }) do
-      evalTactic tactics
-      pruneSolvedGoals
+  let previousMessages := (← Core.getMessageLog).unreported.size
+  let declName := (← Term.getDeclName?).getD `lean_search_step
+  withTheReader Term.Context (fun context => { context with declName? := declName }) <|
+    Lean.Core.withCurrHeartbeats <|
+      withTheReader Lean.Core.Context (fun context => { context with maxHeartbeats := limit.getNat * 1000 }) do
+        evalTactic tactics
+        pruneSolvedGoals
   for goal in goals do
     if (← instantiateMVars (mkMVar goal)).hasSorry then
-      throwError "lean_search: the tactic closed a goal with sorry"
+      let messages := (← Core.getMessageLog).unreported.toList.drop previousMessages
+      let errors ← (messages.filter (·.severity == .error)).mapM (·.data.toString)
+      throwError (String.intercalate "\\n" (errors ++ ["lean_search: the tactic closed a goal with sorry"]))
+
+open Lean Elab Tactic in
+elab "lean_search_check_constants" : tactic => do
+  let environment ← getEnv
+  for goal in ← getGoals do
+    goal.withContext do
+      let mut expressions := #[← goal.getType]
+      for declaration in ← getLCtx do
+        expressions := (expressions.push declaration.type).append declaration.value?.toArray
+      for expression in expressions do
+        for constant in (← instantiateMVars expression).getUsedConstants do
+          unless environment.contains constant do
+            throwError m!"lean_search: unknown constant {constant}"
 
 open Lean Elab Command in
 elab "lean_search_single_command " text:str : command => do
@@ -54,6 +74,13 @@ elab "lean_search_single_command " text:str : command => do
   | .ok _ => pure ()
   | .error message => throwError "lean_search: not exactly one command: {message}"
 """
+CHECK_CONSTANTS_TACTIC = "lean_search_check_constants"
+# Raised by Lean's runtime for arithmetic on values too large to represent: a function of the tactic's input alone.
+DETERMINISTIC_PANICS = frozenset(
+    {"Nat.pow exponent is too big", "Nat.shiftl exponent is too big", "Nat.shiftr exponent is too big"}
+)
+INTERNAL_PANIC_PREFIX = "INTERNAL PANIC: "
+INTERNAL_PANIC_EXIT_CODE = 1
 
 _HEARTBEAT_MESSAGES = ("(deterministic) timeout", "maximum number of heartbeats")
 _STREAM_LIMIT_BYTES = 1 << 28
@@ -108,6 +135,8 @@ class ProofState:
 @dataclass(frozen=True)
 class LeanError:
     message: str
+    # The process died in a deterministic Lean runtime panic (see `DETERMINISTIC_PANICS`) and was restarted.
+    panic: bool = False
 
 
 @dataclass(frozen=True)
@@ -219,7 +248,9 @@ class _Verification:
 
 
 class ReplCrashedError(Exception):
-    pass
+    def __init__(self, message: str, panic: str | None = None) -> None:
+        super().__init__(message)
+        self.panic = panic
 
 
 class ReplWallClockTimeoutError(Exception):
@@ -353,6 +384,19 @@ def _failure(message: str) -> LeanError | LeanTimeout:
     return LeanError(message)
 
 
+def deterministic_panic(stderr_lines: Sequence[str], return_code: int | None) -> str | None:
+    """The panic message if the process exited through one of `DETERMINISTIC_PANICS`, else None."""
+    lines = [line.strip() for line in stderr_lines if line.strip()]
+    if return_code != INTERNAL_PANIC_EXIT_CODE or not lines or not lines[-1].startswith(INTERNAL_PANIC_PREFIX):
+        return None
+    message = lines[-1].removeprefix(INTERNAL_PANIC_PREFIX)
+    return message if message in DETERMINISTIC_PANICS else None
+
+
+def _panic_error(panic: str) -> LeanError:
+    return LeanError(f"Lean panic: {panic}", panic=True)
+
+
 class LeanRepl:
     """One REPL process. Operations are serialized; proof states survive restarts by transparent replay."""
 
@@ -364,8 +408,10 @@ class LeanRepl:
         self._must_restart = True
         self._session = new_session_id()
         self._lock = asyncio.Lock()
+        self._import_environments: dict[str, int] = {}
         self._header_environments: dict[str, int] = {}
         self._base_environments: dict[str, int] = {}
+        self._header_failures: dict[str, str] = {}
         self._replayed_states: dict[tuple[str, str, tuple[tuple[str, int], ...]], ProofState] = {}
         self._stderr_tail: collections.deque[str] = collections.deque(maxlen=40)
         self._stderr_task: asyncio.Task[None] | None = None
@@ -545,12 +591,31 @@ class LeanRepl:
     async def _start_proof(self, statement: str, header: str) -> ProofState | LeanError | LeanTimeout:
         try:
             environment = await self._base_environment(header)
-            command = theorem_with_proof(statement, "sorry")
-            response = await self._command(command, environment, self.config.command_timeout_seconds)
+            root = await self._elaborate_statement(statement, header, environment)
+            if not isinstance(root, ProofState) or await self._constants_are_known(root):
+                return root
+            # The REPL gives the root the environment before the statement, which lacks the statement's matchers.
+            auxiliary_environment = await self._auxiliary_environment(statement, environment)
+            if auxiliary_environment is None:
+                return root
+            repaired = await self._elaborate_statement(statement, header, auxiliary_environment)
+            if isinstance(repaired, ProofState) and await self._constants_are_known(repaired):
+                return repaired
+            return root
         except ReplWallClockTimeoutError:
             return LeanTimeout("Statement elaboration exceeded the wall-clock limit.", wall_clock=True)
         except ValueError as error:
             return LeanError(str(error))
+        except ReplCrashedError as crash:
+            if crash.panic is None:
+                raise
+            return _panic_error(crash.panic)
+
+    async def _elaborate_statement(
+        self, statement: str, header: str, environment: int
+    ) -> ProofState | LeanError | LeanTimeout:
+        command = theorem_with_proof(statement, "sorry")
+        response = await self._command(command, environment, self.config.command_timeout_seconds)
         errors = response.texts(Severity.ERROR)
         if errors:
             return _failure("\n".join(errors))
@@ -559,6 +624,24 @@ class LeanRepl:
         proof_state = response.sorries[0].proof_state
         self.proof_state_count = max(self.proof_state_count, proof_state + 1)
         return ProofState(header, statement, (), (response.sorries[0].goal,), proof_state, self._session)
+
+    async def _constants_are_known(self, state: ProofState) -> bool:
+        response = await self._tactic(
+            CHECK_CONSTANTS_TACTIC, state.repl_proof_state, self.config.tactic_timeout_seconds
+        )
+        match response:
+            case ReplErrorResponse():
+                return False
+            case TacticResponse():
+                self.proof_state_count = max(self.proof_state_count, response.proof_state + 1)
+                return not response.texts(Severity.ERROR)
+
+    async def _auxiliary_environment(self, statement: str, environment: int) -> int | None:
+        command = auxiliary_statement(statement)
+        if command is None:
+            return None
+        response = await self._command(command, environment, self.config.command_timeout_seconds)
+        return None if response.texts(Severity.ERROR) else response.environment
 
     def _limits(self, heartbeats: int | None, timeout_seconds: float | None) -> TacticLimits:
         return TacticLimits(
@@ -578,6 +661,10 @@ class LeanRepl:
             return await self._run_tactic(live_state, tactic, limits)
         except ReplWallClockTimeoutError:
             return LeanTimeout("The tactic exceeded the wall-clock limit.", wall_clock=True)
+        except ReplCrashedError as crash:
+            if crash.panic is None:
+                raise
+            return _panic_error(crash.panic)
 
     async def _run_tactic(
         self, state: ProofState, tactic: str, limits: TacticLimits
@@ -644,25 +731,48 @@ class LeanRepl:
                     ReplFailure(ReplFailureKind.REPLAY_FAILED, f"Replaying the proof state failed: {message}")
                 )
 
-    async def _header_environment(self, header: str) -> int:
-        if header not in self._header_environments:
-            payload = await self._request({"cmd": header}, self.config.command_timeout_seconds)
+    async def _import_environment(self, imports: str) -> int:
+        # Every import builds its own copy of the imported environment (~4 GiB for Mathlib), so headers share one.
+        if imports not in self._import_environments:
+            payload = await self._request({"cmd": imports}, self.config.command_timeout_seconds)
             match self._parse(parse_command_response, payload):
                 case ReplErrorResponse(message=message):
                     raise ValueError(f"The header does not elaborate: {message}")
                 case CommandResponse() as response if response.texts(Severity.ERROR):
                     raise ValueError(f"The header does not elaborate: {response.texts(Severity.ERROR)}")
                 case CommandResponse() as response:
-                    self._header_environments[header] = response.environment
+                    self._import_environments[imports] = response.environment
+        return self._import_environments[imports]
+
+    async def _header_environment(self, header: str) -> int:
+        if header not in self._header_environments:
+            imports, commands = split_header(header)
+            environment = await self._import_environment(imports)
+            if commands.strip():
+                response = await self._command(commands, environment, self.config.command_timeout_seconds)
+                if response.texts(Severity.ERROR):
+                    raise ValueError(f"The header does not elaborate: {response.texts(Severity.ERROR)}")
+                environment = response.environment
+            self._header_environments[header] = environment
         return self._header_environments[header]
 
     async def _base_environment(self, header: str) -> int:
+        if header in self._header_failures:
+            raise ValueError(self._header_failures[header])
         if header not in self._base_environments:
-            environment = await self._header_environment(header)
-            response = await self._command(
-                BASE_ENVIRONMENT_DEFINITIONS, environment, self.config.command_timeout_seconds
-            )
-            assert not response.texts(Severity.ERROR), response
+            try:
+                environment = await self._header_environment(header)
+                response = await self._command(
+                    BASE_ENVIRONMENT_DEFINITIONS, environment, self.config.command_timeout_seconds
+                )
+                if response.texts(Severity.ERROR):
+                    raise ValueError(
+                        "The header does not elaborate with the search wrapper, which needs Lean itself "
+                        f"(`import Mathlib` or `import Lean`): {response.texts(Severity.ERROR)[0][:500]}"
+                    )
+            except ValueError as error:
+                self._header_failures[header] = str(error)
+                raise
             self._base_environments[header] = response.environment
         return self._base_environments[header]
 
@@ -740,8 +850,10 @@ class LeanRepl:
         self._process = process
         self._session = new_session_id()
         self.proof_state_count = 0
+        self._import_environments.clear()
         self._header_environments.clear()
         self._base_environments.clear()
+        self._header_failures.clear()
         self._replayed_states.clear()
         self._stderr_tail = collections.deque(maxlen=40)
         self._stderr_task = asyncio.create_task(self._drain_stderr(process, self._stderr_tail))
@@ -791,7 +903,10 @@ class LeanRepl:
             raise ReplWallClockTimeoutError from timeout
         except (OSError, ValueError, ReplCrashedError) as crash:
             await self._kill_process()
-            raise ReplCrashedError(f"The Lean REPL process died: {''.join(self._stderr_tail)[-2000:]}") from crash
+            raise ReplCrashedError(
+                f"The Lean REPL process died: {''.join(self._stderr_tail)[-2000:]}",
+                deterministic_panic(self._stderr_tail, process.returncode),
+            ) from crash
         except BaseException:
             # Cancelled mid-request: the REPL would answer later and desynchronize every following request.
             self._abandon_process()

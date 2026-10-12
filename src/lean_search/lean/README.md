@@ -25,8 +25,8 @@ async with LeanReplPool(32) as pool:
 
 | Call | Returns |
 |---|---|
-| `start_proof(statement, header)` | `TacticResult(outcome, elapsed_seconds)`; outcome is the root `ProofState`, `LeanError`, `LeanTimeout` or `ReplFailure` |
-| `apply_tactic(state, tactic, heartbeats=None, timeout_seconds=None)` | `TacticResult`; a new `ProofState` (no goals = proved), `LeanError(message)`, `LeanTimeout(message, wall_clock)` or `ReplFailure(kind, message)` |
+| `start_proof(statement, header)` | `TacticResult(outcome, elapsed_seconds)`; outcome is the root `ProofState`, `LeanError` (also for a header that does not elaborate or lacks Lean), `LeanTimeout` or `ReplFailure` |
+| `apply_tactic(state, tactic, heartbeats=None, timeout_seconds=None)` | `TacticResult`; a new `ProofState` (no goals = proved), `LeanError(message, panic)`, `LeanTimeout(message, wall_clock)` or `ReplFailure(kind, message)` |
 | `apply_block(state, block, heartbeats=None, timeout_seconds=None)` | `BlockResult(state, applied_tactics, total_tactics, failure, elapsed_seconds)`; `failure` is `LeanError \| LeanTimeout \| ReplFailure \| None` |
 | `verify_state(state)` | `VerificationResult(verified, problems, axioms, elapsed_seconds, plain_verified)`: `verified` checks the steps as executed, `plain_verified` the unwrapped text |
 | `verify_proof(statement, proof, header)` | `VerificationResult` for a plain proof text (`plain_verified` is `None`) |
@@ -36,10 +36,21 @@ async with LeanReplPool(32) as pool:
 
 - `LeanError` and `LeanTimeout` are the candidate's own result: Lean rejected the tactic, or it exceeded its heartbeat
   limit (`wall_clock=False`) or the wall-clock backstop (`wall_clock=True`, the process is killed and restarted).
+  `LeanError(panic=True)` (message `Lean panic: ...`) means the tactic killed the process with a deterministic runtime
+  panic (see below); the process was restarted.
 - `ReplFailure(kind, message)` is never the candidate's fault and must not become a negative training label. Kinds
   (`ReplFailureKind`): `CRASHED` (the process died or broke the protocol, including the per-process memory cap),
   `REPLAY_FAILED` (rebuilding the parent state failed or timed out), `REPLAY_MISMATCH` (the rebuilt parent has different
   goals than recorded) and `RESTART_FAILED` (the process could not be started).
+- Which deaths are the tactic's fault: Lean's runtime aborts the whole process (`INTERNAL PANIC: <message>`, exit code
+  1) instead of throwing a catchable error in a few places. Only the arithmetic panics in `DETERMINISTIC_PANICS`
+  (`Nat.pow`, `Nat.shiftl`, `Nat.shiftr` "exponent is too big", e.g. `simp_all` or `rfl` on `amc12a_2008_p15`
+  evaluating `2 ^ (2008 ^ 2 + 2 ^ 2008)`) count: they depend only on the values the tactic computes with, not on
+  memory limits, load or timing, so a retry panics again. They count only when the candidate's own tactic (or the
+  statement in `start_proof`) was running, the panic is the last stderr line and the exit code is 1. Everything else
+  stays `ReplFailure(CRASHED)`: `INTERNAL PANIC: out of memory`, `GNU MP: Cannot allocate memory` and `std::bad_alloc`
+  (all from the memory cap), stack overflows, signals (OOM killer, external kills), panics while replaying a parent and
+  unknown messages.
 - A step is a success only if the REPL returns a proof state with no error message, no `sorry` and no goal closed by a
   term containing `sorryAx`. This REPL version returns a proof state, often with no goals, for tactics whose errors
   were logged rather than thrown (`exact foo`), and `apply?`, `hint` and `slim_check` close goals with `sorryAx`
@@ -51,10 +62,25 @@ async with LeanReplPool(32) as pool:
   defined in the base environment (header + `BASE_ENVIRONMENT_DEFINITIONS`) because `set_option maxHeartbeats N in` has
   no effect on tactics in Lean 4.9. The wrapper records the goals, runs the tactic with `maxHeartbeats := N`, prunes
   solved goals, and throws if a recorded goal's instantiated assignment contains `sorryAx`. A goal assigned a term with
-  fresh metavariables (`refine ⟨?_, ?_⟩`) passes.
+  fresh metavariables (`refine ⟨?_, ?_⟩`) passes. The thrown message is the errors the tactic logged (usually why the
+  term became `sorry`, e.g. `unknown identifier 'foo'`) followed by `lean_search: the tactic closed a goal with sorry`;
+  if a logged error is a heartbeat error, the step is a `LeanTimeout`.
+- The REPL's tactic mode has no declaration name, so tactics that create auxiliary matchers (`intro ⟨a, b⟩`,
+  `fun ⟨a, b⟩ => …`, `let ⟨a, b⟩ := h`, `match h with …`) used to fail with "auxiliary declaration cannot be created
+  when declaration name is not available". When no name is set, the wrapper runs the tactic with the declaration name
+  `lean_search_step`; matchers get fresh names (`lean_search_step.match_1`, `_2`, ...) from the environment of the
+  proof state, which later steps and replays inherit. Inside a theorem (verification) the theorem's own name is kept.
+- The REPL also gives a statement's root proof state the environment from before the statement, which lacks the
+  matchers the statement itself created (`{(x, y) | x = y}` elaborates to `test_set.match_1`): steps failed with
+  `unknown constant 'X.match_1'` and goals printed as `@X.match_1 (fun x => Prop) x fun x y => x = y`. `start_proof`
+  therefore checks the root with `lean_search_check_constants` (every constant of the goals must exist in the
+  environment); if one is missing, it first elaborates `theorem X.lean_search_auxiliaries binders : (type) → True`,
+  which adds the statement's matchers but proves only `True`, and elaborates the statement on top of it, where Lean's
+  matcher cache reuses them. The repaired root is used only if it passes the check; otherwise the old root is kept.
 - `FORBIDDEN_TOKENS` (`text.py`) are rejected before Lean sees the text: `sorry`-like closers and unsound
   evaluation (`native_decide`, `ofReduceBool`, ...), metaprogramming and limits (`run_tac`, `set_option`, `sleep`,
-  ...), our own syntax, and suggestion tactics (`apply?`, `exact?`, `rw?`, `hint`, `slim_check`, `aesop?`, `simp?`,
+  ...), our own syntax and names (`lean_search_heartbeats`, `lean_search_step`, `lean_search_auxiliaries`, ...), and
+  suggestion tactics (`apply?`, `exact?`, `rw?`, `hint`, `slim_check`, `aesop?`, `simp?`,
   `simp_all?`, `dsimp?` and their `?!` forms, `rw_search`, `library_search`, `observe`). `says` (runs only its
   second tactic) and `decide!` (not in Lean 4.9) are not on the list. `LeanReplConfig.forbidden_tokens` overrides the
   set (the tests use it to reach the deeper checks).
@@ -82,6 +108,13 @@ async with LeanReplPool(32) as pool:
 - Session ids are random (uuid4), so a state from another process or `LeanRepl` is never mistaken for a live one.
 - `ProofState.goal_key` (whitespace-normalized goals) is the de-duplication key; `proof` is the plain tactic text,
   `executed_proof` the text with every step wrapped in its heartbeat limit.
+- Replay is deterministic, but only for identical commands before it: Lean's fresh-name counters depend on everything
+  elaborated earlier in the chain (header, `BASE_ENVIRONMENT_DEFINITIONS`), and the runtime of heavy steps is chaotic
+  in them. One `nlinarith` step takes 16.4 s with the old base definitions, 98 s after appending an unrelated
+  one-line theorem, and over 150 s with the current ones; its goals never change. Large rational arithmetic is not
+  counted in heartbeats, so such steps can flip between success and the wall-clock backstop whenever the base
+  definitions change (4 of 500 sampled traced proofs did when they last changed). `?m.N` numbers in goals shift too
+  (13 of 267k traced steps show one).
 
 ## Verification
 
@@ -99,10 +132,13 @@ REPL commands, and accept only if all pass:
 `verify_state` checks the steps wrapped exactly as the search executed them (`state.executed_proof`), so a step that
 behaved differently without its heartbeat limit (`try simp` that times out inside `try`) cannot make a found proof
 fail, and reports in `plain_verified` whether the unwrapped text also verifies. Soundness does not depend on the
-wrapper: it is a tactic macro that only lowers `maxHeartbeats` for its body and adds checks that can make it fail; it
-adds no declarations or axioms and assigns no goal itself, so the elaborated term is the one its body produces, which
-the kernel checks when the theorem is added and step 3 audits for axioms. A crash during verification is reported as
-a problem (`verified = False`).
+wrapper: it is a tactic that only lowers `maxHeartbeats` for its body, supplies a declaration name when none is set
+(never the case inside a theorem, so not during verification), and adds checks that can make it fail; it adds no
+declarations or axioms itself and assigns no goal, so the elaborated term is the one its body produces, which the
+kernel checks when the theorem is added and step 3 audits for axioms. Verification also never sees the step-mode
+helpers: it starts from the base environment, without `X.lean_search_auxiliaries` (which only proves `True` anyway)
+or the `lean_search_step.match_N` matchers of executed steps. A crash during verification is reported as a problem
+(`verified = False`).
 
 ## Processes
 
@@ -113,6 +149,13 @@ a problem (`verified = False`).
 - `elapsed_seconds` is wall-clock time inside the process lock, including any restart: a kill restarts the process and
   re-imports its headers (about 3.5 s) before the call returns; a threshold restart (default 2 GiB private memory or
   8000 proof states) and replays are charged to the call that triggers them.
+- Headers: each distinct set of `import` lines is imported once per process; the rest of a header (`open`,
+  `set_option`, helper definitions) is elaborated as a command on top of it, and the wrapper definitions on top of
+  that, each cached per header. A second header with the same imports costs about 0.6 s and 0.01 GiB instead of a
+  second import of Mathlib (7–12 s and 3.9 GiB of private memory). A header that does not elaborate, or lacks Lean
+  itself (no imports: the wrapper needs `import Lean` or Mathlib), makes `start_proof` return a `LeanError` starting
+  with `The header does not elaborate` and `verify_*` report it as a problem; the failure is cached per process, so a
+  bad header is not re-imported for every statement. `load_header` raises `ValueError` for such headers.
 - Each REPL runs with `RLIMIT_DATA = max_data_bytes` (default 6 GiB; it counts private memory, not the shared `.olean`
   mappings, and a REPL holds about 0.25 GiB after `import Mathlib`), so a runaway tactic crashes its own process
   (`ReplFailure(CRASHED)`) instead of the node. `PR_SET_PDEATHSIG` kills REPLs when the orchestrating process dies

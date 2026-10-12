@@ -5,6 +5,7 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
+from typing import NamedTuple
 
 FORBIDDEN_TOKENS = frozenset(
     {
@@ -31,9 +32,12 @@ FORBIDDEN_TOKENS = frozenset(
         "by_elab",
         "sleep",
         "polyrith",
-        # Our own wrapper syntax.
+        # Our own wrapper syntax and names.
         "lean_search_heartbeats",
         "lean_search_single_command",
+        "lean_search_check_constants",
+        "lean_search_auxiliaries",
+        "lean_search_step",
         # `apply?`, `hint` and `slim_check` close goals with `sorryAx` and no error; the others build a lemma index.
         "apply?",
         "exact?",
@@ -65,6 +69,14 @@ _SAFE_BEFORE_COMMENT = ")]}⟩,"
 _THEOREM_NAME_PATTERN = re.compile(r"^\s*(?:theorem|lemma)\s+([^\s(){}\[\]:]+)", re.MULTILINE)
 _WHITESPACE_PATTERN = re.compile(r"\s+")
 _PROOF_POSITION_PATTERN = re.compile(r":=\s*by$")
+_PROOF_START_PATTERN = re.compile(r":=\s*(?:by\s*)?$")
+_HEADER_LINE_PATTERN = re.compile(r"^\s*(?:import\s|prelude\b)")
+AUXILIARY_THEOREM_SUFFIX = "lean_search_auxiliaries"
+
+
+class HeaderParts(NamedTuple):
+    imports: str
+    commands: str
 
 
 class LexicalKind(Enum):
@@ -284,3 +296,46 @@ def theorem_with_proof(statement: str, proof: str) -> str:
 
 def join_tactics(tactics: Sequence[str]) -> str:
     return "\n".join(tactics)
+
+
+def split_header(header: str) -> HeaderParts:
+    """The leading `import` (and `prelude`) lines, whitespace-normalized, and the text after the last of them."""
+    lines = header.split("\n")
+    import_lines: list[str] = []
+    commands_start = 0
+    for index, code_line in enumerate(lex(header).masked(frozenset({LexicalKind.CODE})).split("\n")):
+        if _HEADER_LINE_PATTERN.match(code_line):
+            import_lines.append(" ".join(code_line.split()))
+            commands_start = index + 1
+        elif code_line.strip():
+            break
+    return HeaderParts("\n".join(import_lines), "\n".join(lines[commands_start:]))
+
+
+def auxiliary_statement(statement: str) -> str | None:
+    """`theorem X.lean_search_auxiliaries binders : (type) → True`: the statement's matchers without a proof of it."""
+    name_match = _THEOREM_NAME_PATTERN.search(statement)
+    code = lex(statement).masked(frozenset({LexicalKind.CODE}))
+    proof_start = _PROOF_START_PATTERN.search(code)
+    if name_match is None or proof_start is None:
+        return None
+    colon = _signature_colon(code, name_match.end(), proof_start.start())
+    if colon is None:
+        return None
+    return (
+        f"{statement[: name_match.end()]}.{AUXILIARY_THEOREM_SUFFIX}{statement[name_match.end() : colon]}"
+        f": ({statement[colon + 1 : proof_start.start()]}\n) → True := fun _ => trivial"
+    )
+
+
+def _signature_colon(code: str, start: int, end: int) -> int | None:
+    depth = 0
+    for index in range(start, end):
+        character = code[index]
+        if character in _OPENING_BRACKETS:
+            depth += 1
+        elif character in _CLOSING_BRACKETS:
+            depth -= 1
+        elif character == ":" and depth == 0 and code[index + 1 : index + 2] != "=":
+            return index
+    return None

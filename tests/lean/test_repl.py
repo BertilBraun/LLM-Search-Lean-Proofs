@@ -28,6 +28,10 @@ STATEMENT = "theorem test_sum (a b : ℕ) (h₀ : a = 2) (h₁ : b = 3) : a + b 
 CONJUNCTION_STATEMENT = "theorem test_and (a b : ℕ) (h₀ : a = 2) (h₁ : b = 3) : a = 2 ∧ b = 3 := by\n"
 FALSE_STATEMENT = "theorem false_claim : ∀ n : ℕ, n ≠ 777777 := by\n"
 CLOSED_STATEMENT = "theorem two_plus_three : 2 + 3 = 5 := by\n"
+IMPLICATION_STATEMENT = "theorem test_chain (a b c : ℕ) : a = b ∧ b = c → a = c := by\n"
+SET_BUILDER_STATEMENT = "theorem test_set (S : Set (ℕ × ℕ)) (h : S = {(x, y) | x = y}) : (1, 1) ∈ S := by\n"
+PANIC_STATEMENT = "theorem test_power (k : ℕ) (h₀ : k = 2008 ^ 2 + 2 ^ 2008) : (k ^ 2 + 2 ^ k) % 10 = 6 := by\n"
+OTHER_HEADER = "import Mathlib\nimport Aesop\n\nnoncomputable def header_constant : ℕ := 7\n\nopen Real\n"
 SLOW_TACTIC = "sleep 60000"
 SLEEPING_PROOF = "sleep 1500\nomega"
 SLEEP_ALLOWED = LeanReplConfig(tactic_timeout_seconds=30.0, forbidden_tokens=FORBIDDEN_TOKENS - {"sleep"})
@@ -119,6 +123,13 @@ async def test_logged_elaboration_error_is_an_error(repl: LeanRepl, initial_stat
     assert isinstance(result.outcome, LeanError)
 
 
+async def test_goal_closed_with_sorry_keeps_the_original_error(repl: LeanRepl, initial_state: ProofState) -> None:
+    result = await repl.apply_tactic(initial_state, "exact undefined_lemma")
+    assert result.outcome == LeanError(
+        "unknown identifier 'undefined_lemma'\nlean_search: the tactic closed a goal with sorry"
+    )
+
+
 async def test_unparsable_tactic_is_an_error(repl: LeanRepl, initial_state: ProofState) -> None:
     result = await repl.apply_tactic(initial_state, "simp [")
     assert isinstance(result.outcome, LeanError)
@@ -160,6 +171,118 @@ async def test_goal_closed_with_sorry_is_an_error(unchecked_repl: LeanRepl, stat
 async def test_placeholders_left_by_refine_are_open_goals(repl: LeanRepl) -> None:
     result = await repl.apply_tactic(await start(repl, CONJUNCTION_STATEMENT), "refine ⟨?_, ?_⟩")
     assert isinstance(result.outcome, ProofState) and len(result.outcome.goals) == 2
+
+
+@pytest.mark.parametrize(
+    "tactic",
+    [
+        "intro ⟨h₁, h₂⟩\nexact h₁.trans h₂",
+        "exact fun ⟨h₁, h₂⟩ => h₁.trans h₂",
+        "intro h\nmatch h with\n| ⟨h₁, h₂⟩ => exact h₁.trans h₂",
+        "intro h\nlet ⟨h₁, h₂⟩ := h\nexact h₁.trans h₂",
+    ],
+)
+async def test_pattern_matching_step_proves_the_theorem(repl: LeanRepl, tactic: str) -> None:
+    result = await repl.apply_tactic(await start(repl, IMPLICATION_STATEMENT), tactic)
+    assert isinstance(result.outcome, ProofState) and result.outcome.is_proved, result.outcome
+
+
+async def test_pattern_matching_step_destructures_the_hypothesis(repl: LeanRepl) -> None:
+    result = await repl.apply_tactic(await start(repl, IMPLICATION_STATEMENT), "intro ⟨h₁, h₂⟩")
+    assert isinstance(result.outcome, ProofState) and result.outcome.goals == (
+        "a b c : ℕ\nh₁ : a = b\nh₂ : b = c\n⊢ a = c",
+    )
+
+
+async def test_steps_after_a_matcher_step_create_their_own_matchers_after_a_restart(repl: LeanRepl) -> None:
+    introduced = await repl.apply_tactic(await start(repl, IMPLICATION_STATEMENT), "intro ⟨h₁, h₂⟩")
+    assert isinstance(introduced.outcome, ProofState), introduced.outcome
+    await repl.restart()
+    block = "have swap : ∀ p : ℕ × ℕ, p.1 + p.2 = p.2 + p.1 := fun ⟨x, y⟩ => Nat.add_comm x y\nexact h₁.trans h₂"
+    result = await repl.apply_tactic(introduced.outcome, block)
+    assert isinstance(result.outcome, ProofState) and result.outcome.is_proved, result.outcome
+
+
+async def test_pattern_matching_step_closed_with_sorry_is_an_error(unchecked_repl: LeanRepl) -> None:
+    result = await unchecked_repl.apply_tactic(
+        await start(unchecked_repl, IMPLICATION_STATEMENT), "exact fun ⟨h₁, h₂⟩ => sorry"
+    )
+    assert isinstance(result.outcome, LeanError) and "sorry" in result.outcome.message
+
+
+async def test_verify_state_accepts_a_pattern_matching_proof(repl: LeanRepl) -> None:
+    result = await repl.apply_block(await start(repl, IMPLICATION_STATEMENT), "intro ⟨h₁, h₂⟩\nexact h₁.trans h₂")
+    verification = await repl.verify_state(result.state)
+    assert (verification.verified, verification.plain_verified) == (True, True), verification.problems
+
+
+async def test_verification_rejects_a_pattern_matching_proof_with_sorry(unchecked_repl: LeanRepl) -> None:
+    result = await unchecked_repl.verify_proof(IMPLICATION_STATEMENT, "intro ⟨h₁, h₂⟩\nexact sorryAx _ false", HEADER)
+    assert not result.verified
+
+
+async def test_statement_matchers_are_pretty_printed(repl: LeanRepl) -> None:
+    state = await start(repl, SET_BUILDER_STATEMENT)
+    assert state.goals == ("S : Set (ℕ × ℕ)\nh : S = {(x, y) | x = y}\n⊢ (1, 1) ∈ S",)
+
+
+async def test_step_can_unfold_a_statement_matcher(repl: LeanRepl) -> None:
+    result = await repl.apply_tactic(await start(repl, SET_BUILDER_STATEMENT), "simp [h]")
+    assert isinstance(result.outcome, ProofState) and result.outcome.is_proved, result.outcome
+
+
+async def test_statement_matchers_survive_a_restart(repl: LeanRepl) -> None:
+    rewritten = await repl.apply_tactic(await start(repl, SET_BUILDER_STATEMENT), "rw [h]")
+    assert isinstance(rewritten.outcome, ProofState), rewritten.outcome
+    await repl.restart()
+    result = await repl.apply_tactic(rewritten.outcome, "simp")
+    assert isinstance(result.outcome, ProofState) and result.outcome.is_proved, result.outcome
+
+
+async def test_verify_state_accepts_a_proof_through_a_statement_matcher(repl: LeanRepl) -> None:
+    result = await repl.apply_tactic(await start(repl, SET_BUILDER_STATEMENT), "simp [h]")
+    assert isinstance(result.outcome, ProofState), result.outcome
+    verification = await repl.verify_state(result.outcome)
+    assert verification.verified, verification.problems
+
+
+@pytest.mark.parametrize("tactic", ["exact test_set.lean_search_auxiliaries S h", "exact lean_search_step.match_1"])
+async def test_auxiliary_names_are_forbidden(repl: LeanRepl, tactic: str) -> None:
+    result = await repl.apply_tactic(await start(repl, SET_BUILDER_STATEMENT), tactic)
+    assert isinstance(result.outcome, LeanError) and result.outcome.message.startswith("Forbidden tokens")
+
+
+async def test_header_commands_apply_to_the_statement(repl: LeanRepl) -> None:
+    result = await repl.start_proof("theorem test_header : header_constant = 7 := by\n", OTHER_HEADER)
+    assert isinstance(result.outcome, ProofState), result.outcome
+
+
+async def test_second_header_reuses_the_imported_environment() -> None:
+    async with LeanRepl() as fresh_repl:
+        await fresh_repl.load_header(HEADER)
+        before = fresh_repl.memory_usage().anonymous_bytes
+        await fresh_repl.load_header(OTHER_HEADER)
+        growth = fresh_repl.memory_usage().anonymous_bytes - before
+    assert growth < 256 << 20
+
+
+@pytest.mark.parametrize("header", ["open Nat\n", "", "import Mathlib.Does.Not.Exist\n"])
+async def test_header_without_lean_is_an_error(repl: LeanRepl, header: str) -> None:
+    result = await repl.start_proof(STATEMENT, header)
+    assert isinstance(result.outcome, LeanError) and result.outcome.message.startswith("The header does not elaborate")
+
+
+@pytest.mark.parametrize("tactic", ["simp_all", "subst h₀\nrfl"])
+async def test_deterministic_panic_is_the_tactics_error(repl: LeanRepl, tactic: str) -> None:
+    result = await repl.apply_tactic(await start(repl, PANIC_STATEMENT), tactic)
+    assert result.outcome == LeanError("Lean panic: Nat.pow exponent is too big", panic=True)
+
+
+async def test_state_survives_a_deterministic_panic(repl: LeanRepl) -> None:
+    state = await start(repl, PANIC_STATEMENT)
+    await repl.apply_tactic(state, "simp_all")
+    result = await repl.apply_tactic(state, "clear h₀")
+    assert isinstance(result.outcome, ProofState) and result.outcome.goals == ("k : ℕ\n⊢ (k ^ 2 + 2 ^ k) % 10 = 6",)
 
 
 async def test_heartbeat_limit_is_a_deterministic_timeout(repl: LeanRepl, initial_state: ProofState) -> None:

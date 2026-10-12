@@ -13,6 +13,7 @@ from lean_search.lean.repl import (
     ReplSorry,
     Severity,
     TacticResponse,
+    deterministic_panic,
     parse_axioms,
     parse_command_response,
     parse_tactic_response,
@@ -91,3 +92,26 @@ def test_axioms_are_read_only_from_a_single_matching_report(
     messages: tuple[ReplMessage, ...], expected: tuple[str, ...] | None
 ) -> None:
     assert parse_axioms(CommandResponse(0, messages, ()), "t") == expected
+
+
+@pytest.mark.parametrize(
+    ("stderr_lines", "return_code", "expected"),
+    [
+        (["INTERNAL PANIC: Nat.pow exponent is too big\n"], 1, "Nat.pow exponent is too big"),
+        (
+            ["PANIC at f Mod:1:2: oops\n", "INTERNAL PANIC: Nat.shiftl exponent is too big\n", "\n"],
+            1,
+            "Nat.shiftl exponent is too big",
+        ),
+        (["INTERNAL PANIC: out of memory\n"], 1, None),
+        (["GNU MP: Cannot allocate memory (size=536903728)\n"], -6, None),
+        (["libc++abi: terminating due to uncaught exception of type std::bad_alloc: std::bad_alloc\n"], -6, None),
+        (["INTERNAL PANIC: Nat.pow exponent is too big\n"], -9, None),
+        (["INTERNAL PANIC: Nat.pow exponent is too big\n", "Stack overflow detected. Aborting.\n"], 1, None),
+        ([], -9, None),
+    ],
+)
+def test_only_deterministic_runtime_panics_are_the_tactics_fault(
+    stderr_lines: list[str], return_code: int, expected: str | None
+) -> None:
+    assert deterministic_panic(stderr_lines, return_code) == expected

@@ -158,13 +158,15 @@ per-theorem logs, datasets and checkpoints stay on the node.
 
 ## Known issues (backlog)
 
-- REPL tactic mode has no declaration name, so steps that create auxiliary matchers (`intro ⟨a, b⟩`,
-  `fun ⟨a, b⟩ => …`, `let ⟨…⟩ := h`) fail in step-by-step execution although they compile in whole proofs
-  (~0.8% of traced proofs). Fix in the wrapper after the Phase 1 probe, so probe numbers stay comparable.
-- Loading a second header into a REPL process re-imports Mathlib (~3.9 GiB); import once and elaborate the rest
-  of the header as a command. A header without imports raises instead of returning an error.
-- The wrapper's "goal closed with sorry" error replaces Lean's original message.
-- Lean panics inside tactics (e.g. `Nat.pow exponent is too big`) surface as `ReplFailure(CRASHED)` and are
-  therefore never used as negative labels, although they are deterministic.
 - Statement pools: some Lean Workbook statements lack the colon before the goal; `π` is ambiguous under
   `open … Nat Real` in the pinned Mathlib.
+- Resolved in the Lean layer (`src/lean_search/lean/README.md`); data traced before the fix still has the old
+  behavior: pattern-matching steps (`intro ⟨a, b⟩`, `fun ⟨…⟩`, `match`) and statements with their own matchers
+  (`{(x, y) | …}`) now replay step by step; a second header in a process no longer re-imports Mathlib (3.9 GiB);
+  a header without Lean is a `LeanError`; the "closed a goal with sorry" error keeps Lean's message; deterministic
+  runtime panics (`Nat.pow exponent is too big`) are `LeanError(panic=True)`, a negative label. Re-tracing the
+  455 traced proofs that failed with "closed a goal with sorry" or "unknown constant": 142 now replay completely
+  and verify, 124 show the heartbeat timeout the old message hid, 189 keep a genuine error. 500 sampled complete
+  proofs replay with identical goals (1,669 steps); 4 heavy `nlinarith` steps (17–59 s before) now exceed the 60 s
+  backstop, because their runtime is chaotic in Lean's fresh-name counters, which shift whenever the base
+  definitions change.
