@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass
 from types import TracebackType
@@ -49,6 +50,8 @@ class PolicyClient:
             timeout=httpx.Timeout(timeout_seconds, connect=30.0),
             limits=httpx.Limits(max_connections=max_connections, max_keepalive_connections=max_connections),
         )
+        # Requests beyond the pool size wait here: httpx's own queue costs quadratic CPU in its length.
+        self._in_flight = asyncio.Semaphore(max_connections)
 
     async def __aenter__(self) -> Self:
         return self
@@ -160,7 +163,8 @@ class PolicyClient:
         return await self._post_once(path, body, adapter)
 
     async def _post_once(self, path: str, body: dict[str, Any], adapter: str | None) -> dict[str, Any]:
-        response = await self._http.post(path, json={"model": adapter or self.model, **body})
+        async with self._in_flight:
+            response = await self._http.post(path, json={"model": adapter or self.model, **body})
         response.raise_for_status()
         return response.json()
 
