@@ -49,6 +49,8 @@ class ValueTrainingConfig:
     loss: LossConfig = field(default_factory=LossConfig)
     readout: Readout = field(default_factory=Readout)
     evaluation: ValueEvaluationConfig = field(default_factory=ValueEvaluationConfig)
+    # A value LoRA adapter to continue training (its own rank and alpha replace `lora`); empty starts a new one.
+    initial_adapter: str = ""
 
 
 @dataclass(frozen=True)
@@ -253,6 +255,14 @@ def evaluate(
     )
 
 
+def load_value_model(config: ValueTrainingConfig, device: torch.device) -> tuple[torch.nn.Module, LastPositionLogits]:
+    """The PEFT module to save and the logits module it trains, from config.initial_adapter when one is given."""
+    saved_module, causal_model = load_trainable_model(
+        config.model, config.optimization, config.lora, device, config.initial_adapter
+    )
+    return saved_module, LastPositionLogits(causal_model)
+
+
 def train_value_model(
     config: ValueTrainingConfig,
     tokenizer: transformers.PreTrainedTokenizerBase,
@@ -264,8 +274,7 @@ def train_value_model(
     on_evaluation: Callable[[ValueEvaluationRecord], None],
 ) -> ValueTrainingResult:
     optimization = config.optimization
-    saved_module, causal_model = load_trainable_model(config.model, optimization, config.lora, device)
-    model = LastPositionLogits(causal_model)
+    saved_module, model = load_value_model(config, device)
     bin_ids = torch.tensor(bin_token_ids(tokenizer), device=device)
     parameters = trainable_parameters(model)
     optimizer = torch.optim.AdamW(

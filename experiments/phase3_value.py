@@ -120,7 +120,12 @@ def render_markdown(summary: ValueRunSummary) -> str:
             f"`{config.data}`: {summary.train_examples:,} train states ({summary.train_over_length:,} over "
             f"{config.max_prompt_tokens:,} prompt tokens dropped), {summary.validation_examples:,} validation states",
         ],
-        ["LoRA", f"rank {config.lora.rank}, alpha {config.lora.alpha}, dropout {config.lora.dropout:g}"],
+        [
+            "LoRA",
+            f"continued from `{config.initial_adapter}`"
+            if config.initial_adapter
+            else f"rank {config.lora.rank}, alpha {config.lora.alpha}, dropout {config.lora.dropout:g}",
+        ],
         [
             "Optimization",
             f"AdamW, learning rate {optimization.learning_rate:g}, warmup {optimization.warmup_fraction:g}, cosine "

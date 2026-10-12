@@ -8,6 +8,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 transformers = pytest.importorskip("transformers")
+peft = pytest.importorskip("peft")
 
 from lean_search.policy.adapters import LORA_TARGET_PATTERN  # noqa: E402
 from lean_search.search.records import from_json_object  # noqa: E402
@@ -21,6 +22,7 @@ from lean_search.value.training import (  # noqa: E402
     ValueTrainingConfig,
     ValueTrainingResult,
     collate_prompts,
+    load_value_model,
     pack_prompts,
     plan_value_steps,
     tokenize_value_example,
@@ -78,6 +80,68 @@ def test_packed_steps_cover_every_example_once_per_epoch() -> None:
         index for step in plan_value_steps(examples, config) for batch in step.micro_batches for index in batch
     )
     assert covered == sorted(list(range(200)) * 2)
+
+
+@pytest.fixture(scope="module")
+def tiny_model(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    config = transformers.Qwen3Config(
+        vocab_size=64,
+        hidden_size=32,
+        intermediate_size=64,
+        num_hidden_layers=1,
+        num_attention_heads=2,
+        num_key_value_heads=1,
+        head_dim=16,
+        max_position_embeddings=64,
+    )
+    directory = tmp_path_factory.mktemp("tiny") / "model"
+    transformers.Qwen3ForCausalLM(config).save_pretrained(directory)
+    return directory
+
+
+def lora_weights(module: torch.nn.Module) -> dict[str, torch.Tensor]:
+    return {name: tensor.detach().clone() for name, tensor in peft.get_peft_model_state_dict(module).items()}
+
+
+@pytest.fixture(scope="module")
+def trained_adapter(tiny_model: Path, tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, dict[str, torch.Tensor]]:
+    """An adapter whose weights differ from a fresh one's, as after a round of training."""
+    saved_module, _ = load_value_model(ValueTrainingConfig(model=str(tiny_model), data="test"), CPU)
+    generator = torch.Generator().manual_seed(1)
+    with torch.no_grad():
+        for parameter in saved_module.parameters():
+            if parameter.requires_grad:
+                parameter.add_(torch.randn(parameter.shape, generator=generator).to(parameter.dtype))
+    directory = tmp_path_factory.mktemp("adapter") / "adapter"
+    saved_module.save_pretrained(directory)
+    return directory, lora_weights(saved_module)
+
+
+def test_value_training_starts_from_the_initial_adapter_weights(
+    tiny_model: Path, trained_adapter: tuple[Path, dict[str, torch.Tensor]]
+) -> None:
+    directory, saved = trained_adapter
+    config = ValueTrainingConfig(model=str(tiny_model), data="test", initial_adapter=str(directory))
+    loaded = lora_weights(load_value_model(config, CPU)[0])
+    assert loaded.keys() == saved.keys() and all(torch.equal(loaded[name], saved[name]) for name in saved)
+
+
+def test_the_initial_adapter_is_trained(
+    tiny_model: Path, trained_adapter: tuple[Path, dict[str, torch.Tensor]]
+) -> None:
+    directory, _ = trained_adapter
+    config = ValueTrainingConfig(model=str(tiny_model), data="test", initial_adapter=str(directory))
+    _, model = load_value_model(config, CPU)
+    trainable = [name for name, parameter in model.named_parameters() if parameter.requires_grad]
+    assert trainable and all("lora_" in name for name in trainable)
+
+
+def test_without_an_initial_adapter_training_starts_fresh(
+    tiny_model: Path, trained_adapter: tuple[Path, dict[str, torch.Tensor]]
+) -> None:
+    _, saved = trained_adapter
+    fresh = lora_weights(load_value_model(ValueTrainingConfig(model=str(tiny_model), data="test"), CPU)[0])
+    assert not any(torch.equal(fresh[name], saved[name]) for name in saved)
 
 
 @dataclass(frozen=True)

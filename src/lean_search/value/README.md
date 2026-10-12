@@ -74,7 +74,8 @@ terms add up to the ordinary full-vocabulary cross-entropy of the bin token.
 ## Training (`training.py`, `experiments/phase3_value.py`)
 
 LoRA on all language-model linear layers (`policy.adapters.LORA_TARGET_PATTERN`), bf16 autocast, gradient
-checkpointing, length-grouped micro-batches and the cosine schedule of `training.sft`. Only the last position's
+checkpointing, length-grouped micro-batches and the cosine schedule of `training.sft`. `initial_adapter` (a path) continues
+training a published value adapter, with its own rank and alpha, instead of starting a new one. Only the last position's
 hidden state is projected onto the vocabulary. Validation: weighted loss, bin accuracy (exact and dead labels), MAE
 of the expected steps given alive (exact labels; `8+` read out as in the readout), Spearman correlation of `h` with
 the exact remaining steps, dead-vs-exact AUC of `p_dead`, mean probability of censored events, the bins' full-vocabulary
