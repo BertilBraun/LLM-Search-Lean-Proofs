@@ -1,7 +1,7 @@
 """The searches' output: append-only shards of search stages and their trees, each stage tagged with its model.
 
 A shard is a directory shards/<sequence>/ with attempts.jsonl (one AttemptRecord per search stage, written after the
-stage's tree) and trees/<problem>.s<stage>.json.gz (plus .reasoning.jsonl.gz with the thoughts behind each step when
+stage's tree) and trees/<problem>.s<stage>.json.gz (plus .reasoning.json.gz with the thoughts behind each step when
 the policy thinks). A search that escalates to a further stage writes a record per stage; only its last record carries
 the tree. A shard is open while an OPEN marker exists and immutable once closed (summary.json written, marker removed);
 readers use closed shards only. A shard left open by a crash is closed on the next start, without a line a kill cut
@@ -13,12 +13,12 @@ import datetime
 import json
 import os
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
-from lean_search.expert_iteration.thinking import StepReasoning, read_reasoning, write_reasoning
+from lean_search.expert_iteration.thinking import TreeReasoning, read_reasoning, write_reasoning
 from lean_search.search import StopReason, TreeRecord, read_tree, write_tree
 from lean_search.search.records import from_json_object, to_json
 
@@ -101,7 +101,7 @@ def tree_file_name(problem_name: str, stage: int) -> str:
 
 
 def reasoning_file_name(problem_name: str, stage: int) -> str:
-    return f"trees/{problem_name}.s{stage}.reasoning.jsonl.gz"
+    return f"trees/{problem_name}.s{stage}.reasoning.json.gz"
 
 
 def read_attempts(shard: Path) -> list[AttemptRecord]:
@@ -123,8 +123,8 @@ def read_attempt_tree(shard: Path, attempt: AttemptRecord) -> TreeRecord:
     return read_tree(shard / attempt.tree_file)
 
 
-def read_attempt_reasoning(shard: Path, attempt: AttemptRecord) -> list[StepReasoning]:
-    return [] if attempt.reasoning_file is None else read_reasoning(shard / attempt.reasoning_file)
+def read_attempt_reasoning(shard: Path, attempt: AttemptRecord) -> TreeReasoning | None:
+    return None if attempt.reasoning_file is None else read_reasoning(shard / attempt.reasoning_file)
 
 
 def is_open(shard: Path) -> bool:
@@ -193,7 +193,7 @@ class ShardWriter:
         self.closed: list[ShardSummary] = []
 
     def write(
-        self, attempt: AttemptRecord, tree: TreeRecord | None, reasoning: Sequence[StepReasoning] = ()
+        self, attempt: AttemptRecord, tree: TreeRecord | None, reasoning: TreeReasoning | None = None
     ) -> AttemptRecord:
         if self.shard is not None and (
             self.count >= self.max_attempts or time.monotonic() - self.opened_monotonic >= self.max_seconds
@@ -203,7 +203,7 @@ class ShardWriter:
         if tree is not None:
             attempt = dataclasses.replace(attempt, tree_file=tree_file_name(attempt.problem_name, attempt.stage))
             write_tree(shard / attempt.tree_file, tree)
-        if reasoning:
+        if reasoning is not None:
             reasoning_file = reasoning_file_name(attempt.problem_name, attempt.stage)
             attempt = dataclasses.replace(attempt, reasoning_file=reasoning_file)
             write_reasoning(shard / reasoning_file, reasoning)

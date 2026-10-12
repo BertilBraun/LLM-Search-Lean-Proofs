@@ -7,6 +7,7 @@ from pathlib import Path
 from lean_search.expert_iteration.config import PreferenceConfig
 from lean_search.expert_iteration.curriculum import CurriculumConfig
 from lean_search.expert_iteration.preferences import ValueJumpConfig
+from lean_search.expert_iteration.thinking import CompressionConfig
 from lean_search.search.records import from_json_object
 from lean_search.training.sft_data import SourceWeight
 from lean_search.value.labels import TreeLabelConfig
@@ -146,9 +147,10 @@ class TrainingConfig:
     traced_directory: str = "traced"
     traced_sources: tuple[SourceWeight, ...] = ()
     value_dataset: str = "v0"
-    # Thinking mode: shorten long reasoning traces of the policy samples before training (the reasoning module's
-    # compression with its sufficiency check); the trainer refuses to run with it on until that module is wired in.
+    # Thinking mode: shorten long reasoning of proof-step pairs before training, while the servers still run (the
+    # reasoning module's rewrite with its sufficiency check, thinking_compression.py).
     compress_reasoning: bool = False
+    compression: CompressionConfig = field(default_factory=CompressionConfig)
 
 
 @dataclass(frozen=True)

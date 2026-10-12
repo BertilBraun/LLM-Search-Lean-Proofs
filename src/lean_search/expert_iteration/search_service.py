@@ -55,7 +55,7 @@ from lean_search.expert_iteration.shards import (
     now,
     recover_open_shards,
 )
-from lean_search.expert_iteration.thinking import StepReasoning
+from lean_search.expert_iteration.thinking import TreeReasoning
 from lean_search.expert_iteration.thinking_expander import ReasoningExpander, ReasoningLog
 from lean_search.expert_iteration.trainer import PhaseStage, PhaseTrainer, read_phase_state
 from lean_search.lean import LeanRepl, LeanReplConfig, LeanReplPool
@@ -409,7 +409,7 @@ class SearchService:
             if decision != Decision.ESCALATED:
                 return False
             max_expansions = stages[result.stage].max_expansions
-            await self.record(stage_attempt(job, start, result, search, decision, max_expansions), None, [])
+            await self.record(stage_attempt(job, start, result, search, decision, max_expansions), None, None)
             start = StageStart(self.version, now())
             return True
 
@@ -431,7 +431,7 @@ class SearchService:
             self.live.discard(search)
         if completed.result.stop_reason == StopReason.START_FAILED:
             attempt = load_failure_attempt(job, start, completed.result, stages[job.stage].max_expansions)
-            await self.record(attempt, None, [])
+            await self.record(attempt, None, None)
             return
         assert completed.tree is not None, job.name
         last = search.stage_results[-1]
@@ -441,9 +441,11 @@ class SearchService:
             proof_steps=len(completed.result.proof_steps),
         )
         tree = tree_record(completed.tree, job.statement.formal_statement, completed.result)
-        await self.record(attempt, tree, self.reasoning_log.take(job.name))
+        steps = self.reasoning_log.take(job.name)
+        reasoning = TreeReasoning(job.statement.header, tuple(steps)) if steps else None
+        await self.record(attempt, tree, reasoning)
 
-    async def record(self, attempt: AttemptRecord, tree: TreeRecord | None, reasoning: list[StepReasoning]) -> None:
+    async def record(self, attempt: AttemptRecord, tree: TreeRecord | None, reasoning: TreeReasoning | None) -> None:
         async with self.write_lock:
             attempt = await asyncio.to_thread(self.writer.write, attempt, tree, reasoning)
         self.scheduler.record(attempt)

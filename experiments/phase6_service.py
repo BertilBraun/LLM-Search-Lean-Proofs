@@ -21,8 +21,9 @@ import signal
 from pathlib import Path
 
 from lean_search.expert_iteration.loop_config import load_loop_config
-from lean_search.expert_iteration.search_service import SearchService
+from lean_search.expert_iteration.search_service import SearchService, served_run_config
 from lean_search.expert_iteration.serving import LoopPaths, LoraAdapterPublisher, StopStartRelease
+from lean_search.expert_iteration.thinking_compression import CompressingShortener
 from lean_search.expert_iteration.trainer import PhaseTrainer
 from lean_search.search import load_run_config
 from lean_search.value.training import ValueTrainingConfig
@@ -47,8 +48,20 @@ async def run(config_path: Path) -> None:
     paths = LoopPaths(RUNS_DIRECTORY, DATA_DIRECTORY, config.name)
     template = load_run_config(REPOSITORY_DIRECTORY / config.search.search_config)
     publisher = LoraAdapterPublisher(config.serving)
+    shortener = (
+        CompressingShortener(config.training.compression, served_run_config(template, config).policy)
+        if config.training.compress_reasoning
+        else None
+    )
     trainer = PhaseTrainer(
-        config, paths, publisher, StopStartRelease(publisher), CHECKPOINTS_DIRECTORY, log, value_training_continues()
+        config,
+        paths,
+        publisher,
+        StopStartRelease(publisher),
+        CHECKPOINTS_DIRECTORY,
+        log,
+        value_training_continues(),
+        shortener,
     )
     stop = asyncio.Event()
     asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, stop.set)

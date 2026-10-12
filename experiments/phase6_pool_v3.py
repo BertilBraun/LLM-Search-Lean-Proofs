@@ -9,8 +9,9 @@ statements easiest first by their shortest proof, with up to `proofs_per_stateme
 $LEAN_SEARCH_DATA/expert_iteration/pool_v3/candidates.jsonl, plus per-corpus counts.
 
 deduplicate: clusters near-duplicate statements (the same problem formalized several ways) by MinHash/LSH over
-normalized token 5-grams (near_duplicates.py) and keeps the easiest member of each cluster; the full list moves to
-candidates_all.jsonl. dedup.json holds the counts per source before and after and sample pairs per similarity bin.
+normalized token 5-grams (near_duplicates.py) and keeps the easiest member of each cluster, without proved
+negations of conjectures (`drop_negations`); the full list moves to candidates_all.jsonl. dedup.json holds the counts
+per source before and after and sample pairs per similarity bin.
 
 verify (CPU only; run it niced): compiles each candidate's proofs in our Lean environment, shortest first, until one
 passes, in candidate order and in batches, keeping `verification.lead` usable statements ahead of what the loop
@@ -51,6 +52,7 @@ from lean_search.expert_iteration.known_proofs import (
     VerifiedStatement,
     add_proof,
     easiest_first,
+    is_negation,
     load_known_proof_pool_config,
     read_candidates,
     read_verified,
@@ -210,6 +212,8 @@ def select(config: KnownProofPoolConfig) -> None:
 class SourceDeduplication:
     source: str
     before: int
+    # Representatives of their near-duplicate cluster, then without negations.
+    distinct: int
     after: int
 
 
@@ -241,9 +245,12 @@ def deduplicate(config: KnownProofPoolConfig) -> None:
         (POOL_DIRECTORY / "candidates.jsonl").rename(all_candidates)
     hasher = MinHasher()
     sources: list[str] = []
+    negations: set[int] = set()
     signatures = []
-    for candidate in read_candidates(all_candidates):
+    for index, candidate in enumerate(read_candidates(all_candidates)):
         sources.append(candidate.statement.source)
+        if config.drop_negations and is_negation(candidate.statement):
+            negations.add(index)
         signatures.append(hasher.signature(candidate.statement.formal_statement))
     log(f"{len(signatures):,} signatures")
     pairs = similar_pairs(numpy.stack(signatures))
@@ -261,18 +268,23 @@ def deduplicate(config: KnownProofPoolConfig) -> None:
         for index, candidate in enumerate(read_candidates(all_candidates)):
             if index in wanted:
                 statements[index] = candidate.statement.formal_statement
-            if representatives[index] == index:
+            if representatives[index] == index and index not in negations:
                 output.write(to_json(candidate) + "\n")
                 kept += 1
     before = Counter(sources)
-    after = Counter(source for index, source in enumerate(sources) if representatives[index] == index)
+    distinct = Counter(source for index, source in enumerate(sources) if representatives[index] == index)
+    after = Counter(
+        source for index, source in enumerate(sources) if representatives[index] == index and index not in negations
+    )
     sizes = Counter(representatives)
     summary = DeduplicationSummary(
         threshold=config.near_duplicate_jaccard,
         before=len(sources),
         after=kept,
         largest_clusters=tuple(size for _, size in sizes.most_common(10)),
-        sources=tuple(SourceDeduplication(source, before[source], after[source]) for source in sorted(before)),
+        sources=tuple(
+            SourceDeduplication(source, before[source], distinct[source], after[source]) for source in sorted(before)
+        ),
         samples=tuple(
             PairSample(
                 pair.estimated_jaccard,

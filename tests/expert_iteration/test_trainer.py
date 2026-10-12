@@ -31,7 +31,7 @@ from lean_search.expert_iteration.loop_config import (
     TrainingConfig,
 )
 from lean_search.expert_iteration.preferences import ValueJumpConfig
-from lean_search.expert_iteration.replay_buffer import FifoBuffer, PolicySample, SampleOrigin, ValueSample
+from lean_search.expert_iteration.replay_buffer import FifoBuffer, ValueSample
 from lean_search.expert_iteration.serving import (
     LoopPaths,
     LoraAdapterPublisher,
@@ -42,6 +42,7 @@ from lean_search.expert_iteration.serving import (
     write_json_atomically,
 )
 from lean_search.expert_iteration.shards import Decision, ShardWriter
+from lean_search.expert_iteration.thinking import StepReasoning, ThinkingItem, TreeReasoning
 from lean_search.expert_iteration.trainer import (
     BufferInflows,
     PhaseData,
@@ -58,7 +59,7 @@ from lean_search.expert_iteration.trainer import (
     value_gate,
 )
 from lean_search.search import StepSource
-from lean_search.training.dpo_data import PreferencePair, read_pairs
+from lean_search.training.dpo_data import read_pairs
 from lean_search.training.sft_data import SourceWeight
 from lean_search.value.labels import LabelKind, TreeLabelConfig, ValueExample, read_examples, write_examples
 
@@ -124,7 +125,7 @@ def test_training_configs_get_the_phase_data_and_initial_adapter() -> None:
 
 def test_stages_run_in_order() -> None:
     assert [next_stage(stage) for stage in (PhaseStage.PAUSE, PhaseStage.TRAIN, PhaseStage.RESUME)] == [
-        PhaseStage.RELEASE,
+        PhaseStage.COMPRESS,
         PhaseStage.PUBLISH,
         PhaseStage.DONE,
     ]
@@ -323,11 +324,8 @@ async def test_an_interrupted_phase_continues_at_its_stage(tmp_path: Path) -> No
 
 
 class FirstSentence:
-    def shorten(self, pairs: Sequence[PreferencePair]) -> list[PreferencePair]:
-        return [
-            dataclasses.replace(pair, chosen_reasoning=(pair.chosen_reasoning or "").split(".")[0] + ".")
-            for pair in pairs
-        ]
+    async def shorten(self, items: Sequence[ThinkingItem]) -> list[str]:
+        return [(item.pair.chosen_reasoning or "").split(".")[0] + "." for item in items]
 
 
 def compressing_trainer(tmp_path: Path, shortener: FirstSentence | None) -> PhaseTrainer:
@@ -342,12 +340,29 @@ def test_reasoning_compression_needs_the_reasoning_module(tmp_path: Path) -> Non
         compressing_trainer(tmp_path, None)
 
 
-def test_only_thinking_pairs_are_shortened(tmp_path: Path) -> None:
+def thinking_shard(paths: LoopPaths) -> None:
+    builder = TreeBuilder("⊢ r", problem_name="a.t")
+    builder.failure(builder.root, "exact foo")
+    proved = builder.child(builder.root, step="linarith")
+    steps = (StepReasoning(0, "linarith", "It is linear. Then a long detour."), StepReasoning(0, "exact foo", "Foo."))
+    writer = ShardWriter(paths.shards, max_attempts=10, max_seconds=1e9)
+    record = attempt("a.t", proved=True, decision=Decision.SOLVED)
+    writer.write(record, builder.record(proved), TreeReasoning("import Mathlib", steps))
+    writer.close()
+
+
+async def test_the_compress_stage_shortens_new_proof_step_reasoning(tmp_path: Path) -> None:
     trainer = compressing_trainer(tmp_path, FirstSentence())
-    thinking = PreferencePair("s", "v1/a", 0, ("⊢ p",), "simp", None, "none", "Short. Then a long detour.")
-    plain = PreferencePair("s", "v1/b", 0, ("⊢ q",), "ring", None, "none")
-    samples = [PolicySample(SampleOrigin.SEARCH, 1, pair) for pair in (thinking, plain)]
-    assert [pair.chosen_reasoning for pair in trainer.training_pairs(samples)] == [None, "Short."]
+    thinking_shard(trainer.paths)
+    await trainer.compress_reasoning()
+    (digest,) = digested(trainer.paths.digests)
+    assert [versioned.pair.chosen_reasoning for versioned in read_policy(digest)] == ["It is linear."]
+
+
+def test_a_phase_uses_each_digest_once(tmp_path: Path) -> None:
+    paths, trainer = phase_trainer(tmp_path)
+    trainer.build_data(1)
+    assert trainer.build_data(2).new_proofs == 0
 
 
 def test_the_value_dataset_is_topped_up_to_its_floor(tmp_path: Path) -> None:

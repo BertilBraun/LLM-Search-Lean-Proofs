@@ -19,6 +19,7 @@ from lean_search.corpora.lean_text import split_top_level_tactics
 from lean_search.corpora.records import ProofRecord, StatementRecord
 from lean_search.expert_iteration.pool import canonical_header, problem_name
 from lean_search.lean import LeanError, LeanRepl, LeanTimeout, ProofState, ReplFailure
+from lean_search.lean.text import theorem_name
 from lean_search.search.records import from_json_object, to_json
 
 MAX_FAILURE_CHARACTERS = 300
@@ -76,6 +77,11 @@ class StatementProofs:
     statement: StatementRecord
     sources: set[str] = field(default_factory=set)
     proofs: list[KnownProof] = field(default_factory=list)
+
+
+def is_negation(statement: StatementRecord) -> bool:
+    """A proved negation of a (often misformalized) conjecture, as Goedel-Prover's data names them."""
+    return "negation" in theorem_name(statement.formal_statement)
 
 
 def known_proof(record: ProofRecord) -> KnownProof:
@@ -245,6 +251,8 @@ class KnownProofPoolConfig:
     proofs_per_statement: int = 3
     # Statements whose estimated Jaccard similarity of normalized token 5-grams reaches this are one problem.
     near_duplicate_jaccard: float = 0.7
+    # Proved negations of conjectures (`*_negation`) say little about solving problems; the curriculum leaves them out.
+    drop_negations: bool = True
     verification: VerificationConfig = field(default_factory=VerificationConfig)
 
 

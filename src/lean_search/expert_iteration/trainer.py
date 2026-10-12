@@ -4,15 +4,19 @@ A phase starts after `new_proofs` new proofs (at least `min_minutes` after the l
 runs these stages, each recorded in training/state.json so that a crash resumes at the stage it interrupted:
 
 pause    the searches stop sending requests and keep their trees and REPL proof states; the open shard closes
+compress (thinking mode with training.compress_reasoning) new closed shards are digested and the reasoning of their
+         proof-step pairs is shortened on the still-running servers, keeping only versions that still lead the policy
+         to a working step
 release  every vLLM server stops (or sleeps), freeing both GPUs
-data     new closed shards are digested; the value model's quality on held-out fresh trees decides whether
+data     the digests not used yet (new closed shards are digested first); the value model's quality on held-out
+         fresh trees decides whether
          value-jump pairs count; the search samples enter the policy and value FIFO buffers (capacities follow the
          inflow); each model trains on reuse x (samples added) drawn uniformly from its buffer
 train    the policy (DPO + NLL, reference = the published policy) and the value model (bin cross-entropy) continue
          from the current adapters, in parallel, one GPU each
 publish  version k + 1 is prepared (e.g. merged) and pointed at by models/current.json
 restore  the servers come back with the new weights
-resume   the searches continue where they paused; the open frontiers are re-scored with the new value model
+resume   the searches continue where they paused; stale frontier states are re-scored as they come up
 """
 
 import asyncio
@@ -35,9 +39,13 @@ from lean_search.expert_iteration.digests import (
     VersionedPair,
     VersionedValueExample,
     digest_new_shards,
+    digested,
+    read_contexts,
+    read_digest_summary,
     read_jumps,
     read_policy,
     read_values,
+    write_policy,
 )
 from lean_search.expert_iteration.loop_config import LoopConfig, TrainingConfig, TrainingStage
 from lean_search.expert_iteration.mixing import is_held_out
@@ -66,6 +74,7 @@ from lean_search.expert_iteration.serving import (
     write_json_atomically,
 )
 from lean_search.expert_iteration.shards import SUMMARY_FILE, now, read_attempts, read_shard_summary
+from lean_search.expert_iteration.thinking import ThinkingItem
 from lean_search.expert_iteration.toml_text import toml_text
 from lean_search.policy.prompts import normalize_tactic_block
 from lean_search.search.records import from_json_object, to_json
@@ -74,12 +83,16 @@ from lean_search.value.labels import LabelKind, ValueExample, merge_duplicates, 
 from lean_search.value.metrics import roc_auc, spearman_correlation
 
 REPOSITORY_DIRECTORY = Path(__file__).resolve().parents[3]
+COMPRESSED_MARKER = "compressed"
+# Digests whose samples entered the buffers, one name per line.
+USED_DIGESTS_FILE = "used_digests.txt"
 VALIDATION_SAMPLES = 1000
 EVALUATION_WAIT_SECONDS = 1800.0
 
 
 class PhaseStage(StrEnum):
     PAUSE = "pause"
+    COMPRESS = "compress"
     RELEASE = "release"
     DATA = "data"
     TRAIN = "train"
@@ -163,9 +176,9 @@ class PausableSearches(Protocol):
 
 
 class ReasoningShortener(Protocol):
-    """Shortens the reasoning of thinking-mode pairs while it still suffices for the chosen step."""
+    """Per item, a shorter reasoning that still leads the policy to a working step, or the item's own."""
 
-    def shorten(self, pairs: Sequence[PreferencePair]) -> list[PreferencePair]: ...
+    async def shorten(self, items: Sequence[ThinkingItem]) -> list[str]: ...
 
 
 def phase_trigger(progress: Progress, config: TrainingConfig) -> str | None:
@@ -368,6 +381,9 @@ class PhaseTrainer:
                 await self.wait_for_evaluation()
                 if searches is not None:
                     await searches.pause()
+            case PhaseStage.COMPRESS:
+                if self.config.training.compress_reasoning:
+                    await self.compress_reasoning()
             case PhaseStage.RELEASE:
                 await asyncio.gather(*(self.gpu_release.release(server) for server in servers))
             case PhaseStage.DATA:
@@ -393,10 +409,40 @@ class PhaseTrainer:
             await asyncio.sleep(10)
             waited += 10
 
+    async def compress_reasoning(self) -> None:
+        """Shortens the reasoning of the new digests' proof-step pairs, once per digest."""
+        assert self.reasoning_shortener is not None
+        await asyncio.to_thread(digest_new_shards, self.paths.shards, self.paths.digests, self.digest_config)
+        used = self.used_digests()
+        for digest in digested(self.paths.digests):
+            marker = digest / COMPRESSED_MARKER
+            if digest.name in used or marker.exists():
+                continue
+            pairs = list(read_policy(digest))
+            contexts = {context.pair_key: context for context in read_contexts(digest)}
+            positions = [position for position, pair in enumerate(pairs) if pair_key(pair.pair).hex() in contexts]
+            items = [
+                ThinkingItem(pairs[position].pair, contexts[pair_key(pairs[position].pair).hex()])
+                for position in positions
+            ]
+            shortened = await self.reasoning_shortener.shorten(items)
+            for position, reasoning in zip(positions, shortened, strict=True):
+                pair = dataclasses.replace(pairs[position].pair, chosen_reasoning=reasoning)
+                pairs[position] = dataclasses.replace(pairs[position], pair=pair)
+            write_policy(digest, pairs)
+            marker.write_text(now(), encoding="utf-8")
+            self.log(f"Reasoning of {len(items):,} pairs of digest {digest.name} shortened where it stayed sufficient")
+
+    def used_digests(self) -> set[str]:
+        path = self.paths.buffers / USED_DIGESTS_FILE
+        return set(path.read_text(encoding="utf-8").split()) if path.exists() else set()
+
     def build_data(self, phase: int) -> PhaseData:
         training = self.config.training
-        new_digests = digest_new_shards(self.paths.shards, self.paths.digests, self.digest_config)
-        digests = [self.paths.digests / summary.shard for summary in new_digests]
+        digest_new_shards(self.paths.shards, self.paths.digests, self.digest_config)
+        used = self.used_digests()
+        digests = [digest for digest in digested(self.paths.digests) if digest.name not in used]
+        new_digests = [read_digest_summary(digest) for digest in digests]
         new_values = [value for digest in digests for value in read_values(digest)]
         gate = value_gate(
             [value for value in new_values if self.held_out(value.example.identifier)], training.value_jumps
@@ -442,13 +488,16 @@ class PhaseTrainer:
         held_out_pairs = [
             pair.pair for pair in new_pairs if self.held_out(identifier_problem(pair.pair.proof_identifier))
         ]
-        write_pairs(directory / "policy" / "train.jsonl", self.training_pairs(policy_trained))
+        write_pairs(directory / "policy" / "train.jsonl", (sample.pair for sample in policy_trained))
         write_pairs(directory / "policy" / "validation.jsonl", held_out_pairs[:VALIDATION_SAMPLES])
         write_examples(directory / "value" / "train.jsonl", (sample.example for sample in value_trained))
         write_examples(directory / "value" / "validation.jsonl", self.value_validation(new_values))
         write_buffer(self.paths.buffers / "policy.jsonl", policy_buffer)
         write_buffer(self.paths.buffers / "value.jsonl", value_buffer)
         write_json_atomically(self.paths.buffers / "inflows.json", BufferInflows(policy_inflow, value_inflow))
+        (self.paths.buffers / USED_DIGESTS_FILE).write_text(
+            "".join(f"{name}\n" for name in sorted(used | {digest.name for digest in digests})), encoding="utf-8"
+        )
         data = PhaseData(
             policy=phase_statistics(
                 "policy", policy_buffer, policy_inflow, len(new_policy), policy_evicted, policy_trained
@@ -464,15 +513,6 @@ class PhaseTrainer:
         )
         (directory / "data.json").write_text(to_json(data), encoding="utf-8")
         return data
-
-    def training_pairs(self, samples: Sequence[PolicySample]) -> list[PreferencePair]:
-        """The phase's policy pairs; with compress_reasoning, pairs with reasoning have it shortened first."""
-        pairs = [sample.pair for sample in samples]
-        if self.reasoning_shortener is None or not self.config.training.compress_reasoning:
-            return pairs
-        thinking = [pair for pair in pairs if pair.chosen_reasoning is not None]
-        plain = [pair for pair in pairs if pair.chosen_reasoning is None]
-        return [*plain, *self.reasoning_shortener.shorten(thinking)]
 
     def value_validation(self, new_values: Sequence[VersionedValueExample]) -> list[ValueExample]:
         dataset = self.paths.data_root / "value" / self.config.training.value_dataset / "validation.jsonl"

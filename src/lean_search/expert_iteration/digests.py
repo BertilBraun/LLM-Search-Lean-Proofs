@@ -15,13 +15,13 @@ import hashlib
 import json
 import os
 import shutil
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 from lean_search.expert_iteration.config import PreferenceConfig
 from lean_search.expert_iteration.pool import problem_source
-from lean_search.expert_iteration.preferences import ValueJumpConfig, node_pairs, value_jump_pairs
+from lean_search.expert_iteration.preferences import NO_REASONING, ValueJumpConfig, node_pairs, value_jump_pairs
 from lean_search.expert_iteration.proofs import EXPERT_ITERATION_SOURCE, FoundProof, found_proofs, uses_policy
 from lean_search.expert_iteration.shards import (
     closed_shards,
@@ -30,18 +30,19 @@ from lean_search.expert_iteration.shards import (
     read_attempts,
     read_shard_summary,
 )
-from lean_search.expert_iteration.thinking import edge_reasoning
+from lean_search.expert_iteration.thinking import ThinkingContext, TreeReasoning, edge_reasoning
 from lean_search.expert_iteration.value_data import carries_no_loss
 from lean_search.policy.prompts import normalize_tactic_block
 from lean_search.search import TreeRecord
 from lean_search.search.records import from_json_object, to_json
-from lean_search.training.dpo_data import PreferencePair
+from lean_search.training.dpo_data import PreferencePair, pair_key
 from lean_search.value.labels import LabelKind, TreeLabelConfig, ValueExample, tree_examples
 
 SUMMARY_FILE = "summary.json"
 POLICY_FILE = "policy.jsonl"
 JUMPS_FILE = "jumps.jsonl"
 VALUES_FILE = "values.jsonl"
+CONTEXTS_FILE = "contexts.jsonl"
 LABEL_PRIORITY = {LabelKind.EXACT: 0, LabelKind.DEAD: 1, LabelKind.AT_LEAST: 2}
 
 
@@ -90,6 +91,7 @@ class ShardDigest:
     policy: list[VersionedPair]
     jumps: list[VersionedPair]
     values: list[VersionedValueExample]
+    contexts: list[ThinkingContext]
 
 
 def label_order(example: VersionedValueExample) -> tuple[int, bytes]:
@@ -108,27 +110,49 @@ def tree_value_samples(record: TreeRecord, version: int, config: DigestConfig) -
     return sorted(samples, key=label_order)[: config.max_labels_per_tree]
 
 
+def thinking_context(record: TreeRecord, proof: FoundProof, step_index: int, header: str, key: str) -> ThinkingContext:
+    steps = proof.steps
+    return ThinkingContext(
+        key,
+        header,
+        record.statement,
+        tuple(step.step for step in steps[:step_index]),
+        steps[step_index].goals,
+        tuple(record.nodes[step.child_id].goals for step in steps[step_index:]),
+    )
+
+
 def proof_policy_samples(
-    record: TreeRecord, proof: FoundProof, version: int, config: DigestConfig, reasoning: Mapping[int, str]
-) -> list[VersionedPair]:
+    record: TreeRecord, proof: FoundProof, version: int, config: DigestConfig, reasoning: TreeReasoning | None
+) -> tuple[list[VersionedPair], list[ThinkingContext]]:
+    """The proof's pairs, and the context of each pair whose chosen step has reasoning."""
+    edges = NO_REASONING if reasoning is None else edge_reasoning(record, reasoning.steps)
     samples = []
-    for node in node_pairs(record, proof, config.preferences, reasoning):
-        if node.pairs:
-            samples.extend(VersionedPair(version, pair) for pair in node.pairs)
-        elif config.chosen_only_steps:
-            step = proof.steps[node.step_index]
-            chosen = PreferencePair(
-                EXPERT_ITERATION_SOURCE,
-                proof.identifier,
-                node.step_index,
-                step.goals,
-                normalize_tactic_block(step.step),
-                None,
-                "none",
-                reasoning.get(record.nodes[step.child_id].edge_id),
+    contexts = []
+    for node in node_pairs(record, proof, config.preferences, edges):
+        step = proof.steps[node.step_index]
+        pairs = list(node.pairs)
+        if not pairs and config.chosen_only_steps:
+            pairs.append(
+                PreferencePair(
+                    EXPERT_ITERATION_SOURCE,
+                    proof.identifier,
+                    node.step_index,
+                    step.goals,
+                    normalize_tactic_block(step.step),
+                    None,
+                    "none",
+                    edges.get(record.nodes[step.child_id].edge_id),
+                )
             )
-            samples.append(VersionedPair(version, chosen))
-    return samples
+        samples.extend(VersionedPair(version, pair) for pair in pairs)
+        if reasoning is not None:
+            contexts.extend(
+                thinking_context(record, proof, node.step_index, reasoning.header, pair_key(pair).hex())
+                for pair in pairs
+                if pair.chosen_reasoning is not None
+            )
+    return samples, contexts
 
 
 def digest_shard(shard: Path, config: DigestConfig) -> ShardDigest:
@@ -136,24 +160,28 @@ def digest_shard(shard: Path, config: DigestConfig) -> ShardDigest:
     policy: list[VersionedPair] = []
     jumps: list[VersionedPair] = []
     values: list[VersionedValueExample] = []
+    contexts: list[ThinkingContext] = []
     for attempt in read_attempts(shard):
         if attempt.tree_file is None:
             continue
         record = read_attempt_tree(shard, attempt)
-        reasoning = edge_reasoning(record, read_attempt_reasoning(shard, attempt))
+        reasoning = read_attempt_reasoning(shard, attempt)
+        edges = NO_REASONING if reasoning is None else edge_reasoning(record, reasoning.steps)
         version = attempt.model_version
         run = f"v{version}"
         values.extend(tree_value_samples(record, version, config))
         if config.value_jumps.enabled:
             jumps.extend(
-                VersionedPair(version, pair) for pair in value_jump_pairs(record, run, config.value_jumps, reasoning)
+                VersionedPair(version, pair) for pair in value_jump_pairs(record, run, config.value_jumps, edges)
             )
         for proof in found_proofs(run, record):
             proofs += 1
             if uses_policy(proof):
                 policy_proofs += 1
-                policy.extend(proof_policy_samples(record, proof, version, config, reasoning))
-    return ShardDigest(proofs, policy_proofs, policy, jumps, values)
+                proof_samples, proof_contexts = proof_policy_samples(record, proof, version, config, reasoning)
+                policy.extend(proof_samples)
+                contexts.extend(proof_contexts)
+    return ShardDigest(proofs, policy_proofs, policy, jumps, values, contexts)
 
 
 def write_lines(path: Path, records: Sequence[object]) -> None:
@@ -180,6 +208,7 @@ def write_digest(digests: Path, shard: Path, digest: ShardDigest) -> DigestSumma
     write_lines(temporary / POLICY_FILE, digest.policy)
     write_lines(temporary / JUMPS_FILE, digest.jumps)
     write_lines(temporary / VALUES_FILE, digest.values)
+    write_lines(temporary / CONTEXTS_FILE, digest.contexts)
     (temporary / SUMMARY_FILE).write_text(to_json(summary), encoding="utf-8")
     os.replace(temporary, digests / shard.name)
     return summary
@@ -216,6 +245,18 @@ def read_policy(digest: Path) -> Iterator[VersionedPair]:
 
 def read_jumps(digest: Path) -> Iterator[VersionedPair]:
     return read_pairs_file(digest / JUMPS_FILE)
+
+
+def read_contexts(digest: Path) -> Iterator[ThinkingContext]:
+    with (digest / CONTEXTS_FILE).open(encoding="utf-8") as lines:
+        yield from (from_json_object(ThinkingContext, json.loads(line)) for line in lines)
+
+
+def write_policy(digest: Path, pairs: Sequence[VersionedPair]) -> None:
+    """Replaces a digest's policy pairs (e.g. with shortened reasoning), atomically."""
+    temporary = digest / (POLICY_FILE + ".tmp")
+    write_lines(temporary, pairs)
+    os.replace(temporary, digest / POLICY_FILE)
 
 
 def read_values(digest: Path) -> Iterator[VersionedValueExample]:
