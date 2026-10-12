@@ -19,6 +19,7 @@ import httpx
 import pynvml
 
 CPU_STAT = Path("/sys/fs/cgroup/cpu.stat")
+MEMORY_STAT = Path("/sys/fs/cgroup/memory.stat")
 METRIC_LINE = re.compile(r"^(vllm:[a-z_]+)(\{[^}]*\})? ([0-9.e+-]+)$")
 SUMMED_METRICS = (
     "vllm:generation_tokens_total",
@@ -51,6 +52,8 @@ class Sample:
     periods: int
     throttled_periods: int
     load_average: float
+    # Anonymous memory of the cgroup (REPLs, Python, vLLM host memory); page cache is not counted.
+    anonymous_memory_gib: float
     servers: tuple[ServerCounters, ...]
     finished_searches: int
 
@@ -63,6 +66,7 @@ class Summary:
     cpu_cores_used: float
     throttled_fraction: float
     load_average: float
+    peak_anonymous_memory_gib: float
     generated_tokens_per_second: float
     prompt_tokens_per_second: float
     policy_samples_per_second: float
@@ -91,6 +95,10 @@ def parse_arguments() -> argparse.Namespace:
 
 def read_cpu_stat() -> dict[str, int]:
     return {key: int(value) for key, value in (line.split() for line in CPU_STAT.read_text().splitlines())}
+
+
+def anonymous_memory_bytes() -> int:
+    return next(int(line.split()[1]) for line in MEMORY_STAT.read_text().splitlines() if line.startswith("anon "))
 
 
 def server_counters(http: httpx.Client, server_url: str) -> ServerCounters:
@@ -126,6 +134,7 @@ def record(arguments: argparse.Namespace) -> None:
                 periods=cpu_stat["nr_periods"],
                 throttled_periods=cpu_stat["nr_throttled"],
                 load_average=float(Path("/proc/loadavg").read_text().split()[0]),
+                anonymous_memory_gib=anonymous_memory_bytes() / 2**30,
                 servers=tuple(server_counters(http, url) for url in arguments.server_url),
                 finished_searches=count_lines(arguments.results),
             )
@@ -173,6 +182,7 @@ def summarize(samples: list[Sample], start: float, end: float, samples_per_reque
         cpu_cores_used=(last.cpu_usage_seconds - first.cpu_usage_seconds) / seconds,
         throttled_fraction=(last.throttled_periods - first.throttled_periods) / max(1, last.periods - first.periods),
         load_average=mean([sample.load_average for sample in window]),
+        peak_anonymous_memory_gib=max(sample.anonymous_memory_gib for sample in window),
         generated_tokens_per_second=server_rate("generation_tokens"),
         prompt_tokens_per_second=server_rate("prompt_tokens"),
         policy_samples_per_second=policy_request_rate * samples_per_request,
