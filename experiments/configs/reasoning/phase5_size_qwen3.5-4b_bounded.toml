@@ -1,6 +1,6 @@
 # Bounded thinking for Qwen3.5-4B: the size probe's first 128 states at cap 1024 with the brevity
-# instruction: does success hold when its reasoning is cut short? Same server as
-# phase5_size_qwen3.5-4b.toml.
+# instruction: does success hold when its reasoning is cut short? On GPU 1 next to the bounded 9B:
+#   deployment/serve_model.sh probe-4b Qwen/Qwen3.5-4B 1 8111 --no-enable-lora
 
 [states]
 count = 512
@@ -20,7 +20,7 @@ split = "validation"
 [policy]
 model = "probe-4b"
 tokenizer = "Qwen/Qwen3.5-4B"
-server_urls = ["http://127.0.0.1:8110/v1"]
+server_urls = ["http://127.0.0.1:8111/v1"]
 sample_count = 8
 temperature = 0.8
 top_p = 1.0
