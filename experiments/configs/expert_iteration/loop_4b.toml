@@ -1,0 +1,260 @@
+# The expert-iteration loop with the Qwen3.5-4B student policy in thinking mode (phase6_loop.py commands prints how to
+# start it): as loop.toml, with the policy merged into Qwen3.5-4B next to the 2B value model v0, thinking samples of at
+# most 1,024 tokens without the policy prior (a thinking candidate's log-probability includes its reasoning tokens),
+# compression of reasoning over 350 tokens to about half, the policy buffer prefilled with the student's own SFT data
+# (reasoning/teacher_9b) and the statements the 2B loop started left out. init with --curriculum-from phase6_loop and
+# --value-buffer-from phase6_loop carries the band and the value buffer over.
+name = "phase6_loop_4b"
+
+# The 4B student (9B-teacher reasoning SFT, phase5_sft_student_4b) and value v0; init --policy-adapter (e.g. a
+# round-2 student) / --value-adapter override them.
+[initial]
+policy_adapter = "/workspace/checkpoints/phase5_sft_student_4b/adapter"
+value_adapter = "/workspace/checkpoints/phase3_value_v0/adapter"
+
+# Per GPU a merged 4B policy and a merged 2B value vLLM instance without LoRA (bf16), started with SLEEP_MODE=1. On a
+# 24 GiB 3090 the policy's 0.64 holds its 8.7 GiB of weights and ~5.5 GiB of KV cache (~40k tokens: about 80 running
+# thinking samples of up to 1,024 tokens, as the reasoning agent's 4B serving at 0.62); 128 sequences leave room for
+# short ones. The value's 0.26 holds its 4.2 GiB and the KV of 96 prompts.
+[serving]
+policy_base_model = "Qwen/Qwen3.5-4B"
+value_base_model = "Qwen/Qwen3.5-2B"
+policy_model = "policy-merged"
+value_model = "value-merged"
+dtype = "bfloat16"
+
+[[serving.policy_servers]]
+name = "policy-gpu0"
+gpu = 0
+url = "http://127.0.0.1:8100/v1"
+memory_share = 0.64
+max_num_seqs = 128
+max_num_batched_tokens = 8192
+
+[[serving.policy_servers]]
+name = "policy-gpu1"
+gpu = 1
+url = "http://127.0.0.1:8101/v1"
+memory_share = 0.64
+max_num_seqs = 128
+max_num_batched_tokens = 8192
+
+[[serving.value_servers]]
+name = "value-gpu0"
+gpu = 0
+url = "http://127.0.0.1:8200/v1"
+memory_share = 0.26
+max_num_seqs = 96
+
+[[serving.value_servers]]
+name = "value-gpu1"
+gpu = 1
+url = "http://127.0.0.1:8201/v1"
+memory_share = 0.26
+max_num_seqs = 96
+
+[search]
+search_config = "experiments/configs/expert_iteration/loop_search_4b.toml"
+# The 2B loop's started statements are not fed again.
+previous_loops = ["phase6_loop"]
+# The open pool without known proofs (pool v2), an optional later source: open_share of the fresh starts.
+open_candidates = ""
+open_share = 0.0
+# Stale frontier states (scored by an older value model) re-scored together when one reaches the top.
+lazy_rescore_states = 32
+
+# Concurrent searches (one REPL each), the service pinned to 40 CPUs (results/gpu_utilization/: 120 searches keep
+# both GPUs at 95-96% with the merged instances).
+concurrency = 120
+shard_attempts = 1000
+shard_minutes = 10.0
+heartbeat_seconds = 30.0
+
+# The policy's mode in the searches, the evaluation and the training pairs: thinking samples (n = 8 as without) of at
+# most max_tokens tokens with the bootstrap's plain prompt; each phase then shortens long reasoning before training
+# (training.compress_reasoning). On since version 5 (owner decision after the equal-token comparison).
+[search.thinking]
+enabled = true
+max_tokens = 1024
+instruction = ""
+
+[search.harvest]
+max_remaining_steps = 1.5
+max_expansions = 8
+
+# difficulty = 0.5 x (tactics of the verified known proof) + 0.5 x (the current value model's root h); the band
+# [low, low + width] starts at the easiest statement the automation does not close and moves by band_step after
+# `window` outcomes: up at a solve rate of at least 50%, down below 30%.
+[search.curriculum]
+verified = "expert_iteration/pool_v3/verified.jsonl"
+minimum_statements = 3000
+proof_steps_weight = 0.5
+root_value_weight = 0.5
+characters_weight = 0.0
+band_width = 1.0
+band_step = 0.5
+window = 50
+raise_solve_rate = 0.5
+# At 80% solved or more the band moves 1.5 at once.
+fast_raise_solve_rate = 0.8
+fast_band_step = 1.5
+lower_solve_rate = 0.3
+root_value_refresh = 4096
+reload_seconds = 300.0
+seed = "phase6-curriculum"
+
+[search.scheduler]
+promising_depth = 0
+# At most 30 of the 120 searches run stages 1-2 (near the frontier stage 1 found 3.5x fewer proofs per generated token
+# than stage 0, and the frontier h barely predicts which escalations pay).
+max_escalated_share = 0.25
+
+# Each stage's budget is a total over the statement's search, in expansions only: the wall caps (4 h a stage) only
+# catch hung searches. A stage is entered when the best h on the open frontier is at most max_frontier_value; the
+# stages' proofs per GPU-hour (phase6_loop.py metrics) tune these gates. At n = 8 (loop_search.toml) an expansion
+# costs about half of one at n = 16: 64 / 192 / 512 expansions are 512 / 1,536 / 4,096 generations.
+[[search.scheduler.stages]]
+max_expansions = 64
+max_wall_seconds = 14400.0
+
+[[search.scheduler.stages]]
+max_expansions = 192
+max_wall_seconds = 14400.0
+max_frontier_value = 3.0
+
+[[search.scheduler.stages]]
+max_expansions = 512
+max_wall_seconds = 14400.0
+max_frontier_value = 2.0
+
+# NuminaMath candidates rarely have any known proof (0.1% in the untraced Goedel-Prover set).
+[[search.scheduler.source_weights]]
+name = "numinamath_lean"
+weight = 0.3
+
+[training]
+new_proofs = 400
+min_minutes = 20.0
+max_minutes = 60.0
+minimum_new_proofs = 20
+check_seconds = 30.0
+# Lazy re-scoring (search.lazy_rescore_states) replaces re-scoring every frontier right after a phase.
+rescore_frontier = false
+rescore_max_seconds = 60.0
+seed = "phase6-loop-4b"
+held_out_fraction = 0.02
+max_labels_per_tree = 16
+# Per-phase training caps for at most ~15 minutes a phase: the 4B policy trains packed on one GPU at about 2k tokens/s
+# (the student SFT's 4k tokens/s on two), and a thinking pair is ~2.5k tokens with its reference pass.
+max_policy_samples = 600
+max_value_samples = 9600
+chosen_only_steps = false
+traced_directory = "traced"
+value_dataset = "v0"
+policy_dataset = "reasoning/teacher_9b"
+# In thinking mode, shorten long reasoning of proof-step pairs before training (the reasoning module).
+compress_reasoning = true
+
+# The reasoning agent's round-2 rule (experiments/configs/reasoning/phase5_shortening_9b_light.toml): reasoning over
+# 350 tokens condensed (by the served policy, without thinking) to about half, keeping every step; rewrites under 100
+# tokens, under 30% or over 80% of the original, or over 700 tokens are rejected, and a rewrite is kept only if one of 4
+# policy samples with it as its thoughts gives a working step.
+[training.compression]
+min_tokens = 350
+target_tokens = 150
+target_ratio = 0.5
+min_accepted_tokens = 100
+min_accepted_ratio = 0.3
+max_accepted_ratio = 0.8
+max_accepted_tokens = 700
+rewrite_max_tokens = 800
+candidates = 2
+sufficiency_samples = 4
+sufficiency_max_tokens = 256
+lean_processes = 8
+requests_in_flight = 64
+
+[training.policy]
+config = "experiments/configs/expert_iteration/loop_policy_4b.toml"
+gpu = 0
+
+[training.value]
+config = "experiments/configs/expert_iteration/loop_value_4b.toml"
+gpu = 1
+
+# Capacities start here and then hold about 3.5 phases of the measured inflow.
+[training.policy_buffer]
+initial_capacity = 10000
+minimum_capacity = 2000
+capacity_phases = 3.5
+reuse = 1.0
+minimum_dataset_share = 0.1
+
+[training.value_buffer]
+initial_capacity = 80000
+minimum_capacity = 16000
+capacity_phases = 3.5
+reuse = 1.0
+minimum_dataset_share = 0.1
+
+[training.preferences]
+max_dead_per_node = 2
+max_failed_per_node = 1
+policy_steps_only = true
+dead_subtrees = true
+
+# Off until the value model ranks held-out fresh trees well (v0: Spearman ~0.70, dead AUC ~0.45).
+[training.value_jumps]
+enabled = true
+chosen_max_value = 1.5
+margin = 3.0
+max_per_node = 2
+gate_spearman = 0.7
+gate_dead_auc = 0.75
+gate_minimum_states = 50
+
+# Dead-end labels stay: v0 puts dead ends ~2.3 steps from done, and they are what corrects that.
+[training.labels]
+at_least_weight = 1.0
+dead_weight = 0.5
+
+[[training.traced_sources]]
+name = "goedel_lean_workbook_proofs"
+weight = 1.0
+
+[[training.traced_sources]]
+name = "stp_lean_workbook"
+weight = 1.0
+
+[[training.traced_sources]]
+name = "deepseek_prover_v1"
+weight = 1.0
+
+[[training.traced_sources]]
+name = "lean_workbook"
+weight = 1.0
+
+[[training.traced_sources]]
+name = "goedel_sft_v2"
+weight = 1.0
+
+[[training.traced_sources]]
+name = "numinamath_lean_kimina"
+weight = 1.0
+
+[[training.traced_sources]]
+name = "numinamath_lean_human"
+weight = 1.0
+
+[[training.traced_sources]]
+name = "leanabell_sft"
+weight = 1.0
+
+# 16 expansions (x 8 thinking samples) inside the first phase pause 3 hours after the last evaluation (searches paused):
+# the GPUs and the service's 40 CPUs to itself.
+[evaluation]
+config = "experiments/configs/expert_iteration/loop_evaluation_4b.toml"
+every_hours = 3.0
+max_expansions = 16
+concurrency = 120
+check_seconds = 120.0

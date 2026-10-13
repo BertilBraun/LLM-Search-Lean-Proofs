@@ -32,8 +32,9 @@ class ServingConfig:
 
     # deployment/README.md: 151.6 samples/s at 95-96% utilization, against 138 for adapters on the raw base.
 
-    base_model: str
-    tokenizer: str
+    # The models the policy and the value adapters are merged into (e.g. a 4B policy next to the 2B value).
+    policy_base_model: str
+    value_base_model: str
     policy_servers: tuple[ServerEndpoint, ...]
     value_servers: tuple[ServerEndpoint, ...]
     # The --served-model-name of the policy and the value instances, the same in every version.
@@ -109,6 +110,8 @@ class SearchServiceConfig:
     open_share: float = 0.0
     # Stale frontier states (scored by an older value model) re-scored together when one reaches the top; 0 never.
     lazy_rescore_states: int = 32
+    # Earlier loops whose started statements this one does not feed again (e.g. a fresh run for another policy).
+    previous_loops: tuple[str, ...] = ()
     thinking: ThinkingConfig = field(default_factory=ThinkingConfig)
     # Concurrent searches, each holding a REPL; REPLs mostly wait on the GPU, so this may exceed the core count.
     concurrency: int = 128
@@ -180,6 +183,9 @@ class TrainingConfig:
     traced_directory: str = "traced"
     traced_sources: tuple[SourceWeight, ...] = ()
     value_dataset: str = "v0"
+    # The policy buffer's dataset samples: a reasoning data set under $LEAN_SEARCH_DATA (e.g. reasoning/teacher_9b, the
+    # student's own SFT data, with its reasoning), or the traced steps when empty.
+    policy_dataset: str = ""
     # In thinking mode (search.thinking), shorten long reasoning of proof-step pairs before training while the
     # servers still run (the reasoning module's rewrite with its sufficiency check, thinking_compression.py).
     compress_reasoning: bool = True

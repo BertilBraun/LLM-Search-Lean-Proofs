@@ -187,30 +187,34 @@ def merged_directory(weights_root: Path, version: int, kind: str) -> Path:
 class MergedPublisher:
     """Merges each version's policy and value adapters into full weights for the merged instances."""
 
-    def __init__(self, config: ServingConfig, weights_root: Path, merge: Callable[[str, Path], None]) -> None:
+    def __init__(self, config: ServingConfig, weights_root: Path, merge: Callable[[str, str, Path], None]) -> None:
         self.config = config
         self.weights_root = weights_root
-        # Merges an adapter into the base model's weights at a directory (lean_search.policy.adapters.merge_adapter).
+        # Merges an adapter into a base model's weights at a directory (lean_search.policy.adapters.merge_adapter).
         self.merge = merge
         self.merged: dict[str, Path] = {}
 
     def prepare(self, version: ModelVersion) -> ModelVersion:
         policy = self.merged_weights(
-            version.policy_adapter, merged_directory(self.weights_root, version.version, "policy")
+            self.config.policy_base_model,
+            version.policy_adapter,
+            merged_directory(self.weights_root, version.version, "policy"),
         )
         value = self.merged_weights(
-            version.value_adapter, merged_directory(self.weights_root, version.version, "value")
+            self.config.value_base_model,
+            version.value_adapter,
+            merged_directory(self.weights_root, version.version, "value"),
         )
         return dataclasses.replace(version, policy_weights=str(policy), value_weights=str(value))
 
-    def merged_weights(self, adapter: str, directory: Path) -> Path:
+    def merged_weights(self, base_model: str, adapter: str, directory: Path) -> Path:
         """An adapter merged once: an unchanged adapter (e.g. the value model when it did not train) reuses it."""
         if adapter in self.merged:
             return self.merged[adapter]
         if not (directory / MERGED_MARKER).exists():
             temporary = directory.with_name(directory.name + ".tmp")
             shutil.rmtree(temporary, ignore_errors=True)
-            self.merge(adapter, temporary)
+            self.merge(base_model, adapter, temporary)
             (temporary / MERGED_MARKER).write_text(adapter, encoding="utf-8")
             shutil.rmtree(directory, ignore_errors=True)
             os.replace(temporary, directory)

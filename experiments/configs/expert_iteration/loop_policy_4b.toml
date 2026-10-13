@@ -1,0 +1,33 @@
+# The 4B student's phase training: loop_policy.toml with Qwen3.5-4B, thinking completions up to 1,024 tokens plus the
+# step, and packed rows of 16k real tokens with compiled element-wise layers (as the student's SFT).
+# Template of a phase's policy training (experiments/phase6_dpo.py, one GPU): DPO on the phase's sample of the policy
+# buffer plus the NLL of every chosen step, from the published policy adapter, which is also the frozen reference.
+# Batches of 64 items, 10 warmup steps, then a constant learning rate. The phase fills in data and initial_adapter.
+model = "Qwen/Qwen3.5-4B"
+beta = 0.1
+chosen_nll_weight = 0.5
+batch_items = 64
+warmup_steps = 10
+max_prompt_tokens = 2048
+# 512 as the search samples; in thinking mode the reasoning counts too (e.g. 2560 for max_tokens = 2048), and
+# thinking_instruction must match the search's policy.thinking_instruction.
+max_completion_tokens = 1088
+thinking_instruction = ""
+
+[optimization]
+method = "lora"
+learning_rate = 1e-5
+minimum_learning_rate_ratio = 1.0
+weight_decay = 0.0
+max_gradient_norm = 1.0
+epochs = 1
+micro_batch_tokens = 16384
+gradient_checkpointing = true
+packing = true
+compile_layers = true
+seed = 0
+
+[evaluation]
+interval_steps = 1000
+validation_pairs = 200
+micro_batch_tokens = 16384

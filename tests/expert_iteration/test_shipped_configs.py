@@ -19,6 +19,7 @@ from lean_search.search.records import from_json_object
 REPOSITORY_DIRECTORY = Path(__file__).resolve().parents[2]
 CONFIG_DIRECTORY = REPOSITORY_DIRECTORY / "experiments" / "configs" / "expert_iteration"
 ROUND_CONFIGS = sorted(path for path in CONFIG_DIRECTORY.glob("*.toml") if re.fullmatch(r"round_\d+\.toml", path.name))
+LOOP_CONFIGS = [CONFIG_DIRECTORY / "loop.toml", CONFIG_DIRECTORY / "loop_4b.toml"]
 
 
 def test_the_pool_config_loads() -> None:
@@ -75,23 +76,41 @@ def test_the_round_training_configs_parse(path: Path) -> None:
     assert [type(training) for training in loaded] == [SftConfig, DpoConfig, ValueTrainingConfig]
 
 
-def test_the_loop_config_loads() -> None:
-    assert load_loop_config(CONFIG_DIRECTORY / "loop.toml").search.scheduler.stages
+@pytest.mark.parametrize("path", LOOP_CONFIGS, ids=lambda path: path.stem)
+def test_the_loop_config_loads(path: Path) -> None:
+    assert load_loop_config(path).search.scheduler.stages
 
 
-def test_the_loop_search_and_evaluation_templates_load() -> None:
-    config = load_loop_config(CONFIG_DIRECTORY / "loop.toml")
+@pytest.mark.parametrize("path", LOOP_CONFIGS, ids=lambda path: path.stem)
+def test_the_loop_search_and_evaluation_templates_load(path: Path) -> None:
+    config = load_loop_config(path)
     paths = (config.search.search_config, config.evaluation.config)
     templates = [load_run_config(REPOSITORY_DIRECTORY / path) for path in paths]
     assert all(template.value.model for template in templates)
 
 
-def test_the_loop_training_templates_parse_once_filled() -> None:
+@pytest.mark.parametrize("path", LOOP_CONFIGS, ids=lambda path: path.stem)
+def test_the_loop_templates_tokenize_as_the_served_policy(path: Path) -> None:
+    config = load_loop_config(path)
+    paths = (config.search.search_config, config.evaluation.config)
+    tokenizers = {load_run_config(REPOSITORY_DIRECTORY / path).policy.tokenizer for path in paths}
+    assert tokenizers == {config.serving.policy_base_model}
+
+
+@pytest.mark.parametrize("path", LOOP_CONFIGS, ids=lambda path: path.stem)
+def test_the_loop_policy_trains_the_served_base_model(path: Path) -> None:
+    config = load_loop_config(path)
+    training = tomllib.loads((REPOSITORY_DIRECTORY / config.training.policy.config).read_text(encoding="utf-8"))
+    assert training["model"] == config.serving.policy_base_model
+
+
+@pytest.mark.parametrize("path", LOOP_CONFIGS, ids=lambda path: path.stem)
+def test_the_loop_training_templates_parse_once_filled(path: Path) -> None:
     pytest.importorskip("torch")
     from lean_search.training.dpo import DpoConfig
     from lean_search.value.training import ValueTrainingConfig
 
-    training = load_loop_config(CONFIG_DIRECTORY / "loop.toml").training
+    training = load_loop_config(path).training
     value_continues = "initial_adapter" in {field.name for field in dataclasses.fields(ValueTrainingConfig)}
     filled = []
     for target, stage, takes_adapter in (

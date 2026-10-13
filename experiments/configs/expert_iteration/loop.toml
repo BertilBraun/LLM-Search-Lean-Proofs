@@ -18,8 +18,8 @@ value_adapter = "/workspace/checkpoints/phase3_value_v0/adapter"
 # results/gpu_utilization/thinking/README.md: the policy at 0.62 of the memory with 512 sequences and 8,192 tokens per
 # step, the value at 0.25 with 96 sequences.
 [serving]
-base_model = "Qwen/Qwen3.5-2B"
-tokenizer = "Qwen/Qwen3.5-2B"
+policy_base_model = "Qwen/Qwen3.5-2B"
+value_base_model = "Qwen/Qwen3.5-2B"
 policy_model = "policy-merged"
 value_model = "value-merged"
 dtype = "bfloat16"

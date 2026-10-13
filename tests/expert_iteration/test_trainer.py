@@ -11,6 +11,7 @@ from loop_fixtures import attempt, write_shard
 
 from lean_search.corpora.records import DataSplit, TracedStep, write_jsonl
 from lean_search.expert_iteration.config import PreferenceConfig
+from lean_search.expert_iteration.curriculum import CurriculumState
 from lean_search.expert_iteration.digests import (
     DigestConfig,
     VersionedValueExample,
@@ -52,16 +53,21 @@ from lean_search.expert_iteration.trainer import (
     PhaseState,
     PhaseTrainer,
     Progress,
+    carry_over,
     next_stage,
     phase_trigger,
     policy_settings,
     progress_since,
     read_inflows,
     read_phase_state,
+    reasoning_policy_samples,
     training_config_text,
     value_gate,
 )
+from lean_search.reasoning.dataset import ReasoningExample, ReasoningOrigin
+from lean_search.reasoning.dataset import write_examples as write_reasoning_examples
 from lean_search.search import StepSource
+from lean_search.search.records import from_json_object
 from lean_search.training.dpo_data import read_pairs
 from lean_search.training.sft_data import SourceWeight
 from lean_search.value.labels import LabelKind, TreeLabelConfig, ValueExample, read_examples, write_examples
@@ -179,7 +185,7 @@ def test_automation_only_proofs_give_no_policy_samples(tmp_path: Path) -> None:
     assert (summary.proofs, summary.policy_proofs, summary.policy_samples) == (1, 0, 0)
 
 
-def create_directory(adapter: str, output_directory: Path) -> None:
+def create_directory(base_model: str, adapter: str, output_directory: Path) -> None:
     output_directory.mkdir(parents=True)
 
 
@@ -236,6 +242,32 @@ def test_a_phase_trains_on_as_many_policy_samples_as_it_added(tmp_path: Path) ->
     paths, data = built_phase(tmp_path)
     trained = list(read_pairs(paths.phase_data(1) / "policy" / "train.jsonl"))
     assert (data.policy.added, len(trained)) == (2, 2)
+
+
+def test_reasoning_dataset_samples_keep_their_reasoning(tmp_path: Path) -> None:
+    path = tmp_path / "train.jsonl"
+    example = ReasoningExample("s", "p0", 0, ("⊢ 1 = 1",), "rfl", "Reflexivity.", "", ReasoningOrigin.SAMPLED)
+    write_reasoning_examples(path, [example])
+    (sample,) = reasoning_policy_samples(path, 5, "seed")
+    assert (sample.pair.chosen, sample.pair.chosen_reasoning) == ("rfl", "Reflexivity.")
+
+
+def test_a_carried_over_curriculum_keeps_the_band_without_the_outcomes(tmp_path: Path) -> None:
+    earlier = LoopPaths(tmp_path, tmp_path, "earlier")
+    write_json_atomically(earlier.curriculum, CurriculumState(8.5, 4, (True, False)))
+    paths = LoopPaths(tmp_path, tmp_path, "loop")
+    carry_over(paths, earlier, None)
+    assert from_json_object(CurriculumState, json.loads(paths.curriculum.read_text())) == CurriculumState(8.5, 4, ())
+
+
+def test_a_carried_over_value_buffer_keeps_its_inflow(tmp_path: Path) -> None:
+    earlier = LoopPaths(tmp_path, tmp_path, "earlier")
+    earlier.buffers.mkdir(parents=True)
+    (earlier.buffers / "value.jsonl").write_text("", encoding="utf-8")
+    write_json_atomically(earlier.buffers / "inflows.json", BufferInflows(120.0, 900.0))
+    paths = LoopPaths(tmp_path, tmp_path, "loop")
+    carry_over(paths, None, earlier)
+    assert read_inflows(paths) == BufferInflows(None, 900.0)
 
 
 def test_the_policy_buffer_starts_with_dataset_steps(tmp_path: Path) -> None:

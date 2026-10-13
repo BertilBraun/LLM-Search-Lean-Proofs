@@ -36,6 +36,13 @@ class CompressionConfig:
     min_tokens: int = 300
     target_tokens: int = 150
     max_accepted_tokens: int = 200
+    min_accepted_tokens: int = 0
+    # Above 0, rewrites condense to this fraction of the original, keeping every step, and are accepted between the
+    # two ratios of its length (the reasoning agent's round-2 rule); rewrite_max_tokens bounds a rewrite's sample.
+    target_ratio: float = 0.0
+    min_accepted_ratio: float = 0.0
+    max_accepted_ratio: float = 1.0
+    rewrite_max_tokens: int = 320
     candidates: int = 2
     # The rewriting model is the served base model (None) or an adapter of it, without thinking.
     rewriter_adapter: str | None = None

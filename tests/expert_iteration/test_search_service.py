@@ -2,7 +2,7 @@ import asyncio
 from pathlib import Path
 
 import pytest
-from loop_fixtures import verified
+from loop_fixtures import verified, write_shard
 
 from lean_search.corpora.records import write_jsonl
 from lean_search.expert_iteration.curriculum import CurriculumConfig
@@ -16,7 +16,12 @@ from lean_search.expert_iteration.loop_config import (
     ThinkingConfig,
     TrainingConfig,
 )
-from lean_search.expert_iteration.search_service import SearchService, rescoring_fits, served_run_config
+from lean_search.expert_iteration.search_service import (
+    SearchService,
+    rescoring_fits,
+    served_run_config,
+    started_in_loops,
+)
 from lean_search.expert_iteration.serving import LoopPaths, ModelVersion, record_published
 from lean_search.search import RunConfig
 from lean_search.search.records import to_json
@@ -72,3 +77,9 @@ def test_a_thinking_loop_samples_in_thinking_mode() -> None:
         "policy-merged",
         ("http://p/v1",),
     )
+
+
+def test_statements_started_by_earlier_loops_are_collected(tmp_path: Path) -> None:
+    paths = LoopPaths(tmp_path, tmp_path, "loop")
+    write_shard(LoopPaths(tmp_path, tmp_path, "earlier").shards, 0, ["a.1", "a.2"], solved={"a.1"})
+    assert started_in_loops(paths, ["earlier"]) == {"a.1", "a.2"}

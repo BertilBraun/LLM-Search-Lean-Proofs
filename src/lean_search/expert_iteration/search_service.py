@@ -243,6 +243,12 @@ def load_failure_attempt(job: Job, start: StageStart, result: SearchResult, max_
     )
 
 
+def started_in_loops(paths: LoopPaths, loops: Sequence[str]) -> set[str]:
+    """The statements earlier loops (next to this one) started."""
+    earlier = [LoopPaths(paths.runs_root, paths.data_root, loop) for loop in loops]
+    return {attempt.problem_name for loop in earlier for attempt in all_attempts(loop.shards)}
+
+
 class SearchService:
     def __init__(
         self,
@@ -301,6 +307,7 @@ class SearchService:
             self.scheduler.add_statements(unverified, open_pool=False)
             curriculum_statements += unverified
         replayed = self.scheduler.replay(all_attempts(self.paths.shards))
+        self.curriculum.mark_started(started_in_loops(self.paths, search.previous_loops))
         if self.paths.curriculum.exists():
             state = json.loads(self.paths.curriculum.read_text(encoding="utf-8"))
             self.curriculum.restore(from_json_object(CurriculumState, state))

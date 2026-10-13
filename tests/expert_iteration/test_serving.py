@@ -19,7 +19,7 @@ class RecordingMerge:
     def __init__(self) -> None:
         self.merged: list[str] = []
 
-    def __call__(self, adapter: str, output_directory: Path) -> None:
+    def __call__(self, base_model: str, adapter: str, output_directory: Path) -> None:
         self.merged.append(adapter)
         output_directory.mkdir(parents=True)
 

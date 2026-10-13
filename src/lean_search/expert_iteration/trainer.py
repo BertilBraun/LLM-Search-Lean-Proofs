@@ -28,6 +28,7 @@ import datetime
 import json
 import os
 import random
+import shutil
 import time
 import tomllib
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -38,6 +39,7 @@ from types import MappingProxyType
 from typing import Protocol
 
 from lean_search.corpora.records import DataSplit, read_traced_steps
+from lean_search.expert_iteration.curriculum import CurriculumState
 from lean_search.expert_iteration.digests import (
     DigestConfig,
     VersionedPair,
@@ -89,6 +91,7 @@ from lean_search.expert_iteration.shards import SUMMARY_FILE, now, read_attempts
 from lean_search.expert_iteration.thinking import ThinkingItem
 from lean_search.expert_iteration.toml_text import toml_text
 from lean_search.policy.prompts import normalize_tactic_block
+from lean_search.reasoning.dataset import read_examples as read_reasoning_examples
 from lean_search.search.records import from_json_object, to_json
 from lean_search.search.summary import RunSummary
 from lean_search.training.dpo_data import PreferencePair, pair_key, write_pairs
@@ -290,6 +293,29 @@ def dataset_policy_samples(traced_directory: Path, sources: Sequence[str], count
     ]
 
 
+def reasoning_policy_samples(path: Path, count: int, seed: str) -> list[PolicySample]:
+    """A reasoning SFT data set's steps as chosen-only samples, with their reasoning (thinking format) or without."""
+    examples = list(read_reasoning_examples(path))
+    chosen = random.Random(seed).sample(examples, min(count, len(examples)))
+    return [
+        PolicySample(
+            SampleOrigin.DATASET,
+            0,
+            PreferencePair(
+                example.source,
+                example.proof_identifier,
+                example.step_index,
+                example.goals,
+                normalize_tactic_block(example.tactic_block),
+                None,
+                "dataset",
+                example.reasoning,
+            ),
+        )
+        for example in chosen
+    ]
+
+
 def dataset_value_samples(path: Path, count: int, seed: str) -> list[ValueSample]:
     examples = list(read_examples(path))
     chosen = random.Random(seed).sample(examples, min(count, len(examples)))
@@ -328,6 +354,19 @@ def read_phase_state(paths: LoopPaths) -> PhaseState | None:
     if not paths.phase_state.exists():
         return None
     return from_json_object(PhaseState, json.loads(paths.phase_state.read_text(encoding="utf-8")))
+
+
+def carry_over(paths: LoopPaths, curriculum_from: LoopPaths | None, value_buffer_from: LoopPaths | None) -> None:
+    """An earlier loop's curriculum band (without its outcomes) and value buffer; the policy buffer starts fresh."""
+    if curriculum_from is not None:
+        state = from_json_object(CurriculumState, json.loads(curriculum_from.curriculum.read_text(encoding="utf-8")))
+        write_json_atomically(paths.curriculum, dataclasses.replace(state, outcomes=()))
+    if value_buffer_from is not None:
+        paths.buffers.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(value_buffer_from.buffers / "value.jsonl", paths.buffers / "value.jsonl")
+        write_json_atomically(
+            paths.buffers / "inflows.json", BufferInflows(None, read_inflows(value_buffer_from).value)
+        )
 
 
 def read_inflows(paths: LoopPaths) -> BufferInflows:
@@ -606,15 +645,17 @@ class PhaseTrainer:
         shortfall = buffer.dataset_shortfall()
         if not shortfall:
             return
-        training = self.config.training
         present = {pair_key(sample.pair) for sample in buffer.dataset}
-        drawn = dataset_policy_samples(
-            self.paths.data_root / training.traced_directory,
-            [source.name for source in training.traced_sources],
-            shortfall + len(present),
-            f"{training.seed}/{phase}",
-        )
+        drawn = self.policy_dataset_samples(shortfall + len(present), f"{self.config.training.seed}/{phase}")
         buffer.add([sample for sample in drawn if pair_key(sample.pair) not in present][:shortfall])
+
+    def policy_dataset_samples(self, count: int, seed: str) -> list[PolicySample]:
+        training = self.config.training
+        if training.policy_dataset:
+            path = self.paths.data_root / training.policy_dataset / "train.jsonl"
+            return reasoning_policy_samples(path, count, seed)
+        sources = [source.name for source in training.traced_sources]
+        return dataset_policy_samples(self.paths.data_root / training.traced_directory, sources, count, seed)
 
     def top_up_value_dataset(self, buffer: FifoBuffer[ValueSample], phase: int) -> None:
         shortfall = buffer.dataset_shortfall()
@@ -633,13 +674,7 @@ class PhaseTrainer:
             # The phase sets the capacity; until then the buffer holds what it held.
             stored = list(read_buffer_items(path, PolicySample))
             return FifoBuffer(len(stored), stored)
-        sources = [source.name for source in training.traced_sources]
-        samples = dataset_policy_samples(
-            self.paths.data_root / training.traced_directory,
-            sources,
-            training.policy_buffer.initial_capacity,
-            training.seed,
-        )
+        samples = self.policy_dataset_samples(training.policy_buffer.initial_capacity, training.seed)
         return FifoBuffer(training.policy_buffer.initial_capacity, samples)
 
     def load_value_buffer(self) -> FifoBuffer[ValueSample]:

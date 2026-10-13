@@ -55,7 +55,7 @@ from lean_search.expert_iteration.serving import (
     write_json_atomically,
 )
 from lean_search.expert_iteration.shards import all_attempts, now
-from lean_search.expert_iteration.trainer import PhaseRecord, PhaseStage, read_phase_state
+from lean_search.expert_iteration.trainer import PhaseRecord, PhaseStage, carry_over, read_phase_state
 from lean_search.search.records import from_json_object
 from lean_search.search.summary import markdown_table
 
@@ -97,6 +97,8 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("command", type=Command, choices=list(Command))
     parser.add_argument("--policy-adapter", help="init: version 0's policy adapter instead of [initial] policy_adapter")
     parser.add_argument("--value-adapter", help="init: version 0's value adapter instead of [initial] value_adapter")
+    parser.add_argument("--curriculum-from", help="init: start the curriculum's band where this earlier loop's stands")
+    parser.add_argument("--value-buffer-from", help="init: start with this earlier loop's value replay buffer")
     return parser.parse_args()
 
 
@@ -105,6 +107,10 @@ def read_phases(paths: LoopPaths) -> list[PhaseRecord]:
         return []
     with paths.phases.open(encoding="utf-8") as lines:
         return [from_json_object(PhaseRecord, json.loads(line)) for line in lines if line.strip()]
+
+
+def earlier_loop(name: str | None) -> LoopPaths | None:
+    return LoopPaths(RUNS_DIRECTORY, DATA_DIRECTORY, name) if name else None
 
 
 def initialize(config: LoopConfig, config_path: Path, paths: LoopPaths, initial: InitialModels) -> None:
@@ -468,6 +474,7 @@ def main() -> None:
                 arguments.value_adapter or config.initial.value_adapter,
             )
             initialize(config, arguments.config, paths, initial)
+            carry_over(paths, earlier_loop(arguments.curriculum_from), earlier_loop(arguments.value_buffer_from))
         case Command.STATUS:
             print_status(config, paths)
         case Command.METRICS:

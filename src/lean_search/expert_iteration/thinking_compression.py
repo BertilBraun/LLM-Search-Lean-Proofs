@@ -53,6 +53,11 @@ class CompressingShortener:
             adapter=config.rewriter_adapter,
             target_tokens=config.target_tokens,
             max_accepted_tokens=config.max_accepted_tokens,
+            min_accepted_tokens=config.min_accepted_tokens,
+            target_ratio=config.target_ratio,
+            min_accepted_ratio=config.min_accepted_ratio,
+            max_accepted_ratio=config.max_accepted_ratio,
+            max_tokens=config.rewrite_max_tokens,
             candidates=config.candidates,
             requests_in_flight=config.requests_in_flight,
         )
