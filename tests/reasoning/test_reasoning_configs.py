@@ -84,3 +84,11 @@ def test_the_data_selection_matches_its_sampling_run(run_name: str, data_name: s
 
 def test_the_student_data_drops_the_teacher_instruction() -> None:
     assert data_config("phase5_data_teacher_9b.toml").thinking_instruction == ""
+
+
+def test_the_light_data_keeps_what_the_light_shortening_leaves_uncompressed() -> None:
+    shortening = from_json_object(
+        ShorteningConfig, tomllib.loads((CONFIG_DIRECTORY / "phase5_shortening_9b_light.toml").read_text("utf-8"))
+    )
+    data = data_config("phase5_data_teacher_9b_light.toml")
+    assert (data.shortening, data.max_kept_reasoning_tokens) == ("9b_light", shortening.max_kept_reasoning_tokens)

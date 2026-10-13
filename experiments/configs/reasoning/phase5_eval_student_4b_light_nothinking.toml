@@ -1,0 +1,53 @@
+# Arm: the second-round 4B student (phase5_sft_student_4b_light) without thinking, cap 256.
+# The 9B-teacher test's evaluation on the bootstrap evaluation's 512 traced validation states (statements held
+# out from all training; `states --states-from phase5_eval_bootstrap_sft_v2_thinking`), k=8, temperature 0.8, the
+# reasoning pipeline's success metric; the 2B bootstrap arms are phase5_eval_bootstrap_r1_{thinking,nothinking}.
+# Both servers serve the merged student as student-4b:
+#   deployment/serve_model.sh student-4b-gpu<gpu> /workspace/checkpoints/phase5_sft_student_4b_light/merged <gpu> \
+#       810<gpu> --served-model-name student-4b --no-enable-lora
+
+[states]
+count = 512
+states_per_proof = 2
+max_goal_characters = 3000
+seed = "bootstrap-eval"
+seen_sft_data = ["v2", "4b"]
+unseen_only = true
+# The deferred Goedel SFT v2 tracing is in the shards, not in the snapshot SFT v2 was built from.
+traced = "shards"
+# The sources whose unseen states are not biased: the other sources' few unseen states are mostly those whose
+# reference step SFT dropped as too long.
+sources = ["goedel_sft_v2", "stp_lean_workbook"]
+excluded_runs = []
+split = "validation"
+
+[policy]
+model = "student-4b"
+tokenizer = "Qwen/Qwen3.5-4B"
+server_urls = ["http://127.0.0.1:8100/v1", "http://127.0.0.1:8101/v1"]
+sample_count = 8
+temperature = 0.8
+top_p = 1.0
+max_tokens = 256
+thinking = false
+few_shot = false
+request_timeout_seconds = 1800.0
+
+[execution]
+pool_size = 16
+tactic_timeout_seconds = 10.0
+foreign_header_batch_size = 16
+
+[pipeline]
+chunk_states = 128
+requests_in_flight = 128
+
+[reward]
+accept_later_reference_states = true
+value_progress = false
+value_progress_margin = 1.0
+
+[selection]
+max_per_state = 2
+min_reasoning_tokens = 16
+max_reasoning_tokens = 0

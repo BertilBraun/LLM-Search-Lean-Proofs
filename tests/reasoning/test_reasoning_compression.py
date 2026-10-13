@@ -3,6 +3,8 @@ from reasoning_records import GOALS, execution
 
 from lean_search.policy.prompts import render_thinking_completion, thinking_prefill
 from lean_search.reasoning.compression import (
+    LengthBounds,
+    RewriteConfig,
     RewriteDefect,
     RewriteMode,
     RewriteRequest,
@@ -79,3 +81,39 @@ def test_a_check_without_a_succeeding_sample_is_insufficient() -> None:
 
 def test_a_state_that_could_not_be_rebuilt_is_insufficient() -> None:
     assert not sufficiency_check(("omega",), LeanTaskResult("replay failed", ()), RewardConfig()).sufficient
+
+
+CONDENSING = RewriteConfig(
+    target_tokens=150,
+    max_accepted_tokens=600,
+    min_accepted_tokens=100,
+    target_ratio=0.5,
+    min_accepted_ratio=0.3,
+    max_accepted_ratio=0.8,
+)
+
+
+@pytest.mark.parametrize(
+    ("config", "original_tokens", "bounds"),
+    [
+        (RewriteConfig(target_tokens=150, max_accepted_tokens=200), 600, LengthBounds(150, 0, 200, condense=False)),
+        (CONDENSING, 600, LengthBounds(300, 180, 480, condense=True)),
+        (CONDENSING, 400, LengthBounds(200, 120, 320, condense=True)),
+        (CONDENSING, 1000, LengthBounds(500, 300, 600, condense=True)),
+        (CONDENSING, 0, LengthBounds(150, 100, 600, condense=False)),
+    ],
+)
+def test_condensing_bounds_follow_the_original_length(
+    config: RewriteConfig, original_tokens: int, bounds: LengthBounds
+) -> None:
+    assert config.bounds(original_tokens) == bounds
+
+
+def test_rewrites_below_the_minimum_are_too_short() -> None:
+    defect = rewrite_defect("Squares bound the products.", "stop", 90, REQUEST, 600, min_accepted_tokens=100)
+    assert defect == RewriteDefect.TOO_SHORT
+
+
+def test_condensing_asks_to_keep_every_step() -> None:
+    (_, user) = rewrite_messages(REQUEST, RewriteMode.COMPRESS, 300, condense=True)
+    assert "keep every mathematical step" in user.content and "about 300 tokens" in user.content

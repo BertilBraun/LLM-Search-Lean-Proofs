@@ -1,0 +1,31 @@
+# Second student round: light compression of the 9B teacher's successes (`shorten --config phase5_teacher_9b.toml
+# --run-name phase5_teacher_9b --name 9b_light --shortening-config` this file). Successes over 350 reasoning tokens are
+# condensed by the 9B without thinking to about half their length (dropping restatements, dead ends and repetition,
+# keeping every step); shorter ones stay as they are. Rewrites under 100 tokens, under 30% or over 80% of the original
+# are rejected with the usual defects; the sufficiency check samples the teacher (the run's policy) with the rewrite
+# as its thoughts. Both GPUs serve the 9B as teacher-9b (see phase5_teacher_9b.toml).
+
+max_kept_reasoning_tokens = 350
+candidates_per_state = 3
+rationalize_runs = []
+
+[rewrite]
+model = "teacher-9b"
+tokenizer = "Qwen/Qwen3.5-9B"
+server_urls = ["http://127.0.0.1:8110/v1", "http://127.0.0.1:8111/v1"]
+target_tokens = 150
+target_ratio = 0.5
+min_accepted_tokens = 100
+min_accepted_ratio = 0.3
+max_accepted_ratio = 0.8
+max_accepted_tokens = 700
+max_tokens = 800
+candidates = 2
+temperature = 0.7
+top_p = 1.0
+
+[sufficiency]
+sample_count = 4
+temperature = 0.8
+top_p = 1.0
+max_tokens = 256

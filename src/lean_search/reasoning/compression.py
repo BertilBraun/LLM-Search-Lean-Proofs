@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import itertools
+import math
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
@@ -43,8 +44,17 @@ class RewriteDefect(StrEnum):
     THINK_TAG = "think_tag"
     CODE_BLOCK = "code_block"
     TOO_LONG = "too_long"
+    TOO_SHORT = "too_short"
     COPIES_STEP = "copies_step"
     RESTATES_GOAL = "restates_goal"
+
+
+@dataclass(frozen=True)
+class LengthBounds:
+    target: int
+    minimum: int
+    maximum: int
+    condense: bool
 
 
 @dataclass(frozen=True)
@@ -59,12 +69,29 @@ class RewriteConfig:
     target_tokens: int = 150
     # Rewrites longer than this are rejected.
     max_accepted_tokens: int = 200
+    # Rewrites shorter than this are rejected.
+    min_accepted_tokens: int = 0
+    # Above 0, compressions condense instead of summarizing: the instruction asks for this fraction of the original's
+    # tokens and to keep every step, and the accepted lengths are also bounded by these fractions of the original.
+    target_ratio: float = 0.0
+    min_accepted_ratio: float = 0.0
+    max_accepted_ratio: float = 1.0
     max_tokens: int = 320
     candidates: int = 2
     temperature: float = 0.7
     top_p: float = 1.0
     requests_in_flight: int = 128
     request_timeout_seconds: float = 600.0
+
+    def bounds(self, original_tokens: int) -> LengthBounds:
+        if not self.target_ratio or not original_tokens:
+            return LengthBounds(self.target_tokens, self.min_accepted_tokens, self.max_accepted_tokens, condense=False)
+        return LengthBounds(
+            round(self.target_ratio * original_tokens),
+            max(self.min_accepted_tokens, math.ceil(self.min_accepted_ratio * original_tokens)),
+            min(self.max_accepted_tokens, math.floor(self.max_accepted_ratio * original_tokens)),
+            condense=True,
+        )
 
 
 @dataclass(frozen=True)
@@ -82,7 +109,14 @@ class Rewrite:
     defect: RewriteDefect | None
 
 
-def rewrite_instruction(mode: RewriteMode, target_tokens: int) -> str:
+def rewrite_instruction(mode: RewriteMode, target_tokens: int, condense: bool = False) -> str:
+    if condense and mode == RewriteMode.COMPRESS:
+        return (
+            f"Condense the reasoning above, which led to the step, to about {target_tokens} tokens: remove "
+            "restatements of the goal and the hypotheses, dead ends and repetition; keep every mathematical step and "
+            "equation and the reason for choosing the step's tactic, and add nothing that is not in the reasoning. Do "
+            "not copy the step's code and write no code blocks. Reply with the condensed reasoning only."
+        )
     rules = (
         f"Use at most {target_tokens} tokens: the key insight and why this step fits the proof state. Never restate "
         "the goal or the hypotheses, do not copy the step's code and write no code blocks. Reply with the reasoning "
@@ -95,12 +129,14 @@ def rewrite_instruction(mode: RewriteMode, target_tokens: int) -> str:
             return f"Write the reasoning that leads to the step above. {rules}"
 
 
-def rewrite_messages(request: RewriteRequest, mode: RewriteMode, target_tokens: int) -> list[ChatMessage]:
+def rewrite_messages(
+    request: RewriteRequest, mode: RewriteMode, target_tokens: int, condense: bool = False
+) -> list[ChatMessage]:
     sections = [user_message(request.goals)]
     if mode == RewriteMode.COMPRESS:
         sections.append(f"Reasoning:\n{request.reasoning.strip()}")
     sections.append(f"Step:\n```lean\n{request.tactic_block}\n```")
-    sections.append(rewrite_instruction(mode, target_tokens))
+    sections.append(rewrite_instruction(mode, target_tokens, condense))
     return [ChatMessage("system", REWRITER_SYSTEM_PROMPT), ChatMessage("user", "\n\n".join(sections))]
 
 
@@ -121,7 +157,12 @@ def copies_step(text: str, tactic_block: str) -> bool:
 
 
 def rewrite_defect(
-    text: str, finish_reason: str, tokens: int, request: RewriteRequest, max_accepted_tokens: int
+    text: str,
+    finish_reason: str,
+    tokens: int,
+    request: RewriteRequest,
+    max_accepted_tokens: int,
+    min_accepted_tokens: int = 0,
 ) -> RewriteDefect | None:
     if finish_reason == LENGTH_FINISH_REASON:
         return RewriteDefect.TRUNCATED
@@ -133,6 +174,8 @@ def rewrite_defect(
         return RewriteDefect.CODE_BLOCK
     if tokens > max_accepted_tokens:
         return RewriteDefect.TOO_LONG
+    if tokens < min_accepted_tokens:
+        return RewriteDefect.TOO_SHORT
     if copies_step(text, request.tactic_block):
         return RewriteDefect.COPIES_STEP
     if restates_goal(text, request.goals):
@@ -148,9 +191,10 @@ class ReasoningRewriter:
         self._semaphore = asyncio.Semaphore(config.requests_in_flight)
 
     async def rewrite(self, request: RewriteRequest, mode: RewriteMode) -> tuple[Rewrite, ...]:
+        bounds = self.config.bounds(self.token_count(request.reasoning.strip()))
         conversation = [
             {"role": message.role, "content": message.content}
-            for message in rewrite_messages(request, mode, self.config.target_tokens)
+            for message in rewrite_messages(request, mode, bounds.target, bounds.condense)
         ]
         prompt = self.tokenizer.apply_chat_template(
             conversation, tokenize=False, add_generation_prompt=True, enable_thinking=False
@@ -164,12 +208,15 @@ class ReasoningRewriter:
                 top_p=self.config.top_p,
                 adapter=self.config.adapter,
             )
-        return tuple(self.rewrite_of(sample, request) for sample in generation.samples)
+        return tuple(self.rewrite_of(sample, request, bounds) for sample in generation.samples)
 
-    def rewrite_of(self, sample: Sample, request: RewriteRequest) -> Rewrite:
+    def token_count(self, text: str) -> int:
+        return len(self.tokenizer.encode(text, add_special_tokens=False)) if text else 0
+
+    def rewrite_of(self, sample: Sample, request: RewriteRequest, bounds: LengthBounds) -> Rewrite:
         text = sample.text.strip()
-        tokens = len(self.tokenizer.encode(text, add_special_tokens=False))
-        defect = rewrite_defect(text, sample.finish_reason, tokens, request, self.config.max_accepted_tokens)
+        tokens = self.token_count(text)
+        defect = rewrite_defect(text, sample.finish_reason, tokens, request, bounds.maximum, bounds.minimum)
         return Rewrite(text, tokens, defect)
 
 
