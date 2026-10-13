@@ -438,18 +438,20 @@ def print_commands(config: LoopConfig, config_path: Path, paths: LoopPaths) -> N
     )
     ports = " ".join(str(server_port(server)) for server in config.serving.servers)
     background = "BACKGROUND_CPUS=40 setsid nohup deployment/background.sh python"
+    earlier = config.search.previous_loops[-1] if config.search.previous_loops else ""
+    carried = f" --curriculum-from {earlier} --value-buffer-from {earlier}" if earlier else ""
     print(
         "\n".join(
             [
                 "# 1. Version 0: merge the initial policy and value adapters into full weights (CPU, about a minute)",
                 f"python experiments/phase6_loop.py {option} init --policy-adapter "
-                f"{config.initial.policy_adapter} --value-adapter {config.initial.value_adapter}",
+                f"{config.initial.policy_adapter} --value-adapter {config.initial.value_adapter}{carried}",
                 "# 2. Servers: per GPU the merged policy and the merged value, in sleep mode for the phases",
                 *(publisher.serve_command(initial, server) for server in config.serving.servers),
                 f"for port in {ports}; do until curl -sf http://127.0.0.1:$port/v1/models > /dev/null; do sleep 10; "
                 "done; done",
-                "# 3. The search service with its training phases, which also evaluate version 0 and every "
-                f"{config.evaluation.every_versions}rd version on miniF2F-valid",
+                "# 3. The search service with its training phases, which also evaluate version 0 on miniF2F-valid and "
+                f"again in the first phase pause {config.evaluation.every_hours:g} h after the last evaluation",
                 f"{background} experiments/phase6_service.py {option} >> {log}/service.log 2>&1 < /dev/null &",
                 "# Optional, not run by default (the curriculum feeds unverified statements): the pool v3 verifier",
                 f"# {background} experiments/phase6_pool_v3.py"

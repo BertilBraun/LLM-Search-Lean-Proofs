@@ -16,8 +16,8 @@ train    the policy (DPO + NLL, reference = the published policy) and the value 
          from the current adapters, in parallel, one GPU each
 publish  version k + 1 is prepared (e.g. merged) and pointed at by models/current.json
 restore  the servers come back with the new weights
-evaluate (version 0 and every `evaluation.every_versions`-th) miniF2F-valid at the evaluation's reduced budget, with
-         the GPUs and the service's CPUs to itself while the searches stay paused
+evaluate when none ran yet or the last one finished `evaluation.every_hours` ago: miniF2F-valid at the evaluation's
+         reduced budget, with the GPUs and the service's CPUs to itself while the searches stay paused
 resume   the searches continue where they paused; stale frontier states are re-scored as they come up
 """
 
