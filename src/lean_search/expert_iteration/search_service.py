@@ -527,31 +527,26 @@ class SearchService:
         )
 
     async def follow_control(self, stop: asyncio.Event) -> None:
-        """Holds or releases the loop as search/control.json asks; a running phase finishes first."""
+        """Holds or releases the searches as search/control.json asks; a running phase finishes first."""
+        # phase6_loop.py stops and starts the servers itself, unpinned as GPU feeders run.
         while not stop.is_set():
             await sleep_unless_stopped(stop, CONTROL_SECONDS)
-            if not self.paths.control.exists() or self.trainer is None:
+            if not self.paths.control.exists():
                 continue
             control = from_json_object(ServiceControl, json.loads(self.paths.control.read_text(encoding="utf-8")))
             if control.hold and not self.held:
                 await self.gpu_lock.acquire()
                 await self.pause()
-                await asyncio.gather(
-                    *(self.trainer.gpu_release.release(server) for server in self.config.serving.servers)
-                )
                 self.held = True
                 self.write_heartbeat()
-                self.log("Held: searches paused in place, servers asleep")
+                self.log("Held: searches paused in place")
             elif not control.hold and self.held:
-                version = read_current(self.paths)
-                await asyncio.gather(
-                    *(self.trainer.gpu_release.restore(server, version) for server in self.config.serving.servers)
-                )
-                await self.resume(False)
+                self.version = read_current(self.paths).version
+                self.gate.resume()
                 self.held = False
                 self.gpu_lock.release()
                 self.write_heartbeat()
-                self.log("Released: servers awake, searches resumed")
+                self.log("Released: searches resumed")
 
     async def pause(self) -> None:
         """No request leaves until resume; searches keep their trees, REPL states and place in the queue."""

@@ -9,9 +9,9 @@ status prints one block for the watchdog: service alive, version, statements pro
 curriculum band, GPU utilization and the verifier's lead. metrics computes per-version solve rates, proofs per hour
 and value calibration on fresh trees, each budget stage's proofs per GPU-hour (to tune the stage gates), and the
 phases' buffer statistics, into $LEAN_SEARCH_RUNS/<loop>/summary/{metrics.json,README.md}.
-hold pauses every search in place (trees and REPL states kept) and puts the vLLM servers to sleep, so both GPUs are
-free for other jobs, without training; release wakes the servers and resumes the searches. Both wait until the running
-service has followed (a running training phase finishes first).
+hold pauses every search in place (trees and REPL states kept) and stops the vLLM servers, so both GPUs are free for
+other jobs, without training; release starts the servers with the current version and resumes the searches. Both wait
+until the running service has followed (a running training phase finishes first).
 serve-commands prints how to start each vLLM server with the current version (also after a reboot); commands prints
 the launch sequence: init, servers, service (which also evaluates, inside its training pauses), status.
 """
@@ -58,6 +58,7 @@ from lean_search.expert_iteration.trainer import PhaseRecord, PhaseStage, read_p
 from lean_search.search.records import from_json_object
 from lean_search.search.summary import markdown_table
 
+REPOSITORY_DIRECTORY = Path(__file__).resolve().parents[1]
 DATA_DIRECTORY = Path(os.environ["LEAN_SEARCH_DATA"])
 RUNS_DIRECTORY = Path(os.environ["LEAN_SEARCH_RUNS"])
 CHECKPOINTS_DIRECTORY = Path(os.environ["LEAN_SEARCH_CHECKPOINTS"])
@@ -175,16 +176,34 @@ def kind_summary(outcomes: KindOutcomes) -> str:
 
 
 def request_hold(paths: LoopPaths, hold: bool) -> None:
+    """Asks the service to hold or release its searches and waits until its heartbeat says so."""
     write_json_atomically(paths.control, ServiceControl(hold, now()))
     for _ in range(CONTROL_WAIT_SECONDS // 10):
         if paths.heartbeat.exists():
             heartbeat = from_json_object(ServiceHeartbeat, json.loads(paths.heartbeat.read_text(encoding="utf-8")))
             if heartbeat.held == hold:
-                print(f"{'Held' if hold else 'Released'} at {heartbeat.written_at}")
-                print("\n".join(gpu_lines()))
+                print(f"Searches {'held' if hold else 'released'} at {heartbeat.written_at}")
                 return
         time.sleep(10)
     raise RuntimeError(f"The service did not follow within {CONTROL_WAIT_SECONDS} s; status shows where it stands.")
+
+
+def hold(config: LoopConfig, paths: LoopPaths) -> None:
+    """Searches paused in place, then the servers stopped: both GPUs free (sleeping servers keep ~0.8 GiB each)."""
+    request_hold(paths, True)
+    for server in config.serving.servers:
+        subprocess.run(["deployment/stop_model.sh", server.name], cwd=REPOSITORY_DIRECTORY, check=True)
+    print("\n".join(gpu_lines()))
+
+
+def release(config: LoopConfig, paths: LoopPaths) -> None:
+    """The servers started with the current version (each waits until healthy), then the searches resumed."""
+    publisher = merged_publisher(config, CHECKPOINTS_DIRECTORY)
+    current = read_current(paths)
+    for server in config.serving.servers:
+        subprocess.run(["bash", "-c", publisher.serve_command(current, server)], cwd=REPOSITORY_DIRECTORY, check=True)
+    request_hold(paths, False)
+    print("\n".join(gpu_lines()))
 
 
 def print_status(config: LoopConfig, paths: LoopPaths) -> None:
@@ -455,9 +474,9 @@ def main() -> None:
         case Command.SERVE_COMMANDS:
             print_serve_commands(config, paths)
         case Command.HOLD:
-            request_hold(paths, True)
+            hold(config, paths)
         case Command.RELEASE:
-            request_hold(paths, False)
+            release(config, paths)
         case Command.COMMANDS:
             print_commands(config, arguments.config, paths)
 
