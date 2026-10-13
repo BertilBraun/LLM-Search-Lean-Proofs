@@ -61,7 +61,7 @@ non-thinking mode is kept).
 
 By source, bootstrap thinking at cap 512: Goedel SFT v2 46.9% per sample / 58.6% of states, STP 37.3% / 67.2%
 (SFT v2 thinking: 27.4% / 46.9% and 5.3% / 18.4%). The bootstrap adapter's thoughts are short (median reasoning
-under 128 tokens; success 88% for 1–31 tokens, 81% for 32–63, 49% for 64–127, 33–39% above).
+under 128 tokens among the samples that finish; success 88% for 1–31 tokens, 81% for 32–63, 49% for 64–127, 33–39% above).
 
 One round of training on its own short successful thoughts makes thinking 2.6 times as accurate per sample (42.1%
 against 16.3%) at 59% of the tokens, and cuts its tokens per success 4.4-fold (2,450 → 557). The non-thinking mode is
