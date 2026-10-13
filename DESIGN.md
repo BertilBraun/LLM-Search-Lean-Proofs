@@ -217,6 +217,14 @@ per-theorem logs, datasets and checkpoints stay on the node.
   Lean per expansion −32%, run time −48%, solve rate unchanged. Serving: policy 0.62 memory / 512 sequences /
   8,192 batched tokens (+5%); FP8 weight-only no faster on a 2B model.
 
+- **9B teacher → 4B student** (`results/phase5_teacher_student/`): 4B Lean SFT (20M tokens) matches SFT v2 2B on
+  the probe. The 9B (bounded thinking) yields 2,134 Lean-verified reasoning examples from 3,072 unseen states;
+  compression to ~60 tokens passes 95% but produces generic rewrites. Student reasoning is much sounder (12/17
+  correct on non-trivial successful steps vs 6/17 for the 2B) but solves less: 37.8% per sample thinking, 43.9%
+  non-thinking (2B bootstrap 42.1% / 46.0%). Equal-token search on miniF2F-valid: 2B non-thinking n=16 159,
+  4B student non-thinking 156, 2B thinking 152, 4B thinking 147 (the 4B's thinking arm hit the 900 s wall clock,
+  ~1.9k tokens/s on a 3090).
+
 ## Known issues (backlog)
 - Resolved: search generation cost is charged per batch (`CandidateBatch`), when the expander yields it. Runs before
   the fix did not charge requests whose samples all failed to parse (in `PolicyStatistics.unattributed_generated_tokens`
