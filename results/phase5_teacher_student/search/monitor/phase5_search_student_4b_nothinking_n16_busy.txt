@@ -1,0 +1,22 @@
+{
+ "window_seconds": 479.457022047136,
+ "gpu_utilization": [
+  99.88125,
+  96.84375
+ ],
+ "gpu_power_watts": [
+  347.66339791666667,
+  341.17924375
+ ],
+ "cpu_cores_used": 37.42479799416784,
+ "throttled_fraction": 0.0,
+ "load_average": 98.1375,
+ "peak_anonymous_memory_gib": 101.90205001831055,
+ "generated_tokens_per_second": 1036.1408367300135,
+ "prompt_tokens_per_second": 9824.918154054885,
+ "policy_samples_per_second": 46.81962922172639,
+ "requests_per_second": 2.926226826357899,
+ "running_sequences": 79.96666666666667,
+ "waiting_sequences": 300.2291666666667,
+ "finished_searches_per_hour": 397.95016284325527
+}

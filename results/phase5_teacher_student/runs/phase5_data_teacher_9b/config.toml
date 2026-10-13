@@ -1,0 +1,25 @@
+# 9B-teacher data for the 4B student (phase5_reasoning_data.py select --name teacher_9b): per state at most two
+# teacher successes with at most 256 reasoning tokens as sampled, or with a sufficient compression (shortening `9b`),
+# and as many non-thinking replay examples from the student's own SFT data `4b` (the owner's 50/50 mix; no SFT
+# example the student has not seen). The examples use the plain thinking prompt: the teacher's brevity instruction
+# is not part of the student's prompt.
+runs = ["phase5_teacher_9b"]
+replay_data = "4b"
+replay_ratio = 1.0
+validation_fraction = 0.03
+validation_replay_examples = 500
+tokenizer = "Qwen/Qwen3.5-4B"
+seed = "teacher-9b"
+max_kept_reasoning_tokens = 256
+shortening = "9b"
+thinking_instruction = ""
+
+[reward]
+accept_later_reference_states = true
+value_progress = false
+value_progress_margin = 1.0
+
+[selection]
+max_per_state = 2
+min_reasoning_tokens = 16
+max_reasoning_tokens = 0

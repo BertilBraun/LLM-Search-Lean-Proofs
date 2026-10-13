@@ -1,0 +1,197 @@
+{
+ "run_name": "phase5_sft_student_4b",
+ "started": "2026-10-13T19:19:05+00:00",
+ "git_revision": "b669b059b1ecef637039908fdcf8f5dc877695b0",
+ "config": {
+  "model": "Qwen/Qwen3.5-4B",
+  "data": "teacher_9b",
+  "lora": {
+   "rank": 64,
+   "alpha": 64,
+   "dropout": 0.0
+  },
+  "optimization": {
+   "method": "lora",
+   "learning_rate": 0.0001,
+   "warmup_fraction": 0.03,
+   "minimum_learning_rate_ratio": 0.1,
+   "weight_decay": 0.0,
+   "max_gradient_norm": 1.0,
+   "epochs": 2,
+   "max_steps": 0,
+   "micro_batch_tokens": 16384,
+   "micro_batches_per_step": 2,
+   "length_group_examples": 4096,
+   "gradient_checkpointing": true,
+   "packing": true,
+   "compile_layers": true,
+   "seed": 0
+  },
+  "evaluation": {
+   "interval_steps": 50,
+   "validation_examples": 2000,
+   "micro_batch_tokens": 16384,
+   "generation_examples": 256,
+   "generation_batch_size": 16,
+   "max_new_tokens": 256
+  },
+  "merge": false,
+  "initial_adapter": "/workspace/checkpoints/phase2_sft_4b/adapter"
+ },
+ "world_size": 2,
+ "flash_linear_attention": true,
+ "train_examples": 4268,
+ "train_tokens": 1186201,
+ "validation_examples": 567,
+ "tokenization_seconds": 3.1424821850378066,
+ "result": {
+  "steps": 36,
+  "examples": 8405,
+  "tokens": 2334291,
+  "padded_tokens": 2334291,
+  "completion_tokens": 670114,
+  "training_seconds": 599.8590461495332,
+  "tokens_per_second": 3891.3991794967556,
+  "peak_memory_gib": 17.721230506896973,
+  "trainable_parameters": 129859584,
+  "evaluations": [
+   {
+    "step": 0,
+    "validation_loss": 0.45845275725586604,
+    "validation_examples": 567,
+    "teacher_forced_exact_match": 0.24514991181657847,
+    "generation_exact_match": 0.2734375,
+    "generation_examples": 256,
+    "evaluation_seconds": 323.93706934084184,
+    "mismatches": [
+     {
+      "goals": [
+       "case intro.intro\na b c : ℝ\na_pos : a > 0\nb_pos : b > 0\nc_pos : c > 0\nh₁ : 0 < a * b\nh₂ : 0 < b * c\nh₃ : 0 < c * a\n⊢ a ^ 2 / (a ^ 2 + a * b + b ^ 2) + b ^ 2 / (b ^ 2 + b * c + c ^ 2) + c ^ 2 / (c ^ 2 + c * a + a ^ 2) ≥ 1"
+      ],
+      "target": "field_simp [h₁.ne', h₂.ne', h₃.ne']",
+      "generated": "have h₄ : 0 < a * b * (b * c) := by positivity"
+     },
+     {
+      "goals": [
+       "x : ℕ\n⊢ 1200 * ↑x ≡ ↑x [ZMOD 1199]"
+      ],
+      "target": "rw [Int.ModEq]",
+      "generated": "simp [Int.ModEq, Int.emod_eq_of_lt]"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nh₁ : a ^ 3 + b ^ 3 + c ^ 3 = 64\nh₂ : a + b = 0\nh₃ : b = -a\nh₄ : a ^ 3 + (-a) ^ 3 + c ^ 3 = 64\nh₅ : c ^ 3 = 64 - a ^ 3 - (-a) ^ 3\nh₆ : c ^ 3 = 64\nh₇ : c = 4\n⊢ c = 4"
+      ],
+      "target": "assumption\n<;> norm_num",
+      "generated": "exact h₇"
+     },
+     {
+      "goals": [
+       "⊢ 2 - 1 = 1"
+      ],
+      "target": "ring\n<;> norm_num",
+      "generated": "norm_num"
+     },
+     {
+      "goals": [
+       "a b : ℝ\nha : 0 ≤ a ∧ a ≤ 1 / 4\nhb : 0 ≤ b ∧ b ≤ 1 / 4\nh₀ : 0 ≤ √2\nh₁ : a / (1 + b ^ 2) ≤ a\nh₂ : b / (1 + a ^ 2) ≤ b\n⊢ a / (1 + b ^ 2) + b / (1 + a ^ 2) ≤ 2 * √2 / 3"
+      ],
+      "target": "nlinarith [sq_sqrt (show 0 ≤ 2 by norm_num)]",
+      "generated": "nlinarith [sq_sqrt (show 0 ≤ 2 by norm_num),\n  mul_self_nonneg (a - b),\n  mul_self_nonneg (a + b),\n  mul_self_nonneg (a - b + Real.sqrt 2),\n  mul_self_nonneg (a + b - Real.sqrt 2)]"
+     },
+     {
+      "goals": [
+       "x : ℝ\nh₀ : x > 0\nh₁ : 15 / 3 = x / 8\n⊢ x = 40"
+      ],
+      "target": "rw [div_eq_inv_mul] at h₁",
+      "generated": "field_simp at h₁"
+     },
+     {
+      "goals": [
+       "x y A : ℝ\nh1 : x > 0 ∧ y > 0 ∧ x + y = 1\nh2 : A = x ^ 2 + y ^ 2 + x * y + 4 / (x * y)\nx_pos : x > 0\ny_pos : y > 0\nxy_pos : 0 < x * y\nA_ineq : A = x ^ 2 + y ^ 2 + x * y + 4 / (x * y)\n⊢ x * y * 4 ≤ x * y * (x ^ 2 + y ^ 2 + x * y) + 4"
+      ],
+      "target": "nlinarith [mul_self_nonneg (x - y), mul_self_nonneg (x + y)]",
+      "generated": "nlinarith [sq_nonneg (x - y), sq_nonneg (x + y), sq_nonneg (x * y - 1), sq_nonneg (x * y + 1)]"
+     },
+     {
+      "goals": [
+       "a : ℝ\nh₀ : 0 ≤ (a ^ 2 - 1) ^ 2\nh₁ : 0 ≤ (a ^ 2 - 1) ^ 2 * (1 + a ^ 2)\n⊢ 2 * a ^ 4 + 1 / (1 + a ^ 2) ≥ 3 * a ^ 2 - 1"
+      ],
+      "target": "field_simp [h₀, h₁]",
+      "generated": "have h₂ : 0 ≤ (a^2 - 1)^2 * (1 + a^2) * (1 + a^2) := by nlinarith"
+     }
+    ]
+   },
+   {
+    "step": 36,
+    "validation_loss": 0.32864289145459863,
+    "validation_examples": 567,
+    "teacher_forced_exact_match": 0.21869488536155202,
+    "generation_exact_match": 0.26171875,
+    "generation_examples": 256,
+    "evaluation_seconds": 208.4929177078884,
+    "mismatches": [
+     {
+      "goals": [
+       "case intro.intro\na b c : ℝ\na_pos : a > 0\nb_pos : b > 0\nc_pos : c > 0\nh₁ : 0 < a * b\nh₂ : 0 < b * c\nh₃ : 0 < c * a\n⊢ a ^ 2 / (a ^ 2 + a * b + b ^ 2) + b ^ 2 / (b ^ 2 + b * c + c ^ 2) + c ^ 2 / (c ^ 2 + c * a + a ^ 2) ≥ 1"
+      ],
+      "target": "field_simp [h₁.ne', h₂.ne', h₃.ne']",
+      "generated": "have h₄ : 0 < a * b * c := by positivity"
+     },
+     {
+      "goals": [
+       "x : ℕ\n⊢ 1200 * ↑x ≡ ↑x [ZMOD 1199]"
+      ],
+      "target": "rw [Int.ModEq]",
+      "generated": "simp [Int.ModEq, Int.emod_eq_of_lt]"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nh₁ : a ^ 3 + b ^ 3 + c ^ 3 = 64\nh₂ : a + b = 0\nh₃ : b = -a\nh₄ : a ^ 3 + (-a) ^ 3 + c ^ 3 = 64\nh₅ : c ^ 3 = 64 - a ^ 3 - (-a) ^ 3\nh₆ : c ^ 3 = 64\nh₇ : c = 4\n⊢ c = 4"
+      ],
+      "target": "assumption\n<;> norm_num",
+      "generated": "exact h₇"
+     },
+     {
+      "goals": [
+       "⊢ 2 - 1 = 1"
+      ],
+      "target": "ring\n<;> norm_num",
+      "generated": "norm_num"
+     },
+     {
+      "goals": [
+       "a b : ℝ\nha : 0 ≤ a ∧ a ≤ 1 / 4\nhb : 0 ≤ b ∧ b ≤ 1 / 4\nh₀ : 0 ≤ √2\nh₁ : a / (1 + b ^ 2) ≤ a\nh₂ : b / (1 + a ^ 2) ≤ b\n⊢ a / (1 + b ^ 2) + b / (1 + a ^ 2) ≤ 2 * √2 / 3"
+      ],
+      "target": "nlinarith [sq_sqrt (show 0 ≤ 2 by norm_num)]",
+      "generated": "have h₃ : a / (1 + b ^ 2) + b / (1 + a ^ 2) ≤ a + b := by\n  linarith"
+     },
+     {
+      "goals": [
+       "x : ℝ\nh₀ : x > 0\nh₁ : 15 / 3 = x / 8\n⊢ x = 40"
+      ],
+      "target": "rw [div_eq_inv_mul] at h₁",
+      "generated": "field_simp at h₁"
+     },
+     {
+      "goals": [
+       "x y A : ℝ\nh1 : x > 0 ∧ y > 0 ∧ x + y = 1\nh2 : A = x ^ 2 + y ^ 2 + x * y + 4 / (x * y)\nx_pos : x > 0\ny_pos : y > 0\nxy_pos : 0 < x * y\nA_ineq : A = x ^ 2 + y ^ 2 + x * y + 4 / (x * y)\n⊢ x * y * 4 ≤ x * y * (x ^ 2 + y ^ 2 + x * y) + 4"
+      ],
+      "target": "nlinarith [mul_self_nonneg (x - y), mul_self_nonneg (x + y)]",
+      "generated": "nlinarith [sq_nonneg (x - y), sq_nonneg (x + y), sq_nonneg (x * y - 1)]"
+     },
+     {
+      "goals": [
+       "a : ℝ\nh₀ : 0 ≤ (a ^ 2 - 1) ^ 2\nh₁ : 0 ≤ (a ^ 2 - 1) ^ 2 * (1 + a ^ 2)\n⊢ 2 * a ^ 4 + 1 / (1 + a ^ 2) ≥ 3 * a ^ 2 - 1"
+      ],
+      "target": "field_simp [h₀, h₁]",
+      "generated": "have h₂ : 0 ≤ (a^2 - 1)^2 * (1 + a^2) * (1 + a^2) := by nlinarith"
+     }
+    ]
+   }
+  ]
+ },
+ "trained_model_directory": "/workspace/checkpoints/phase5_sft_student_4b/adapter",
+ "merged_directory": "",
+ "merge_seconds": 0.0
+}

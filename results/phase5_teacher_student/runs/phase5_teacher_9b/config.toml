@@ -1,0 +1,80 @@
+# 9B teacher for a 4B student: bounded thinking samples of Qwen3.5-9B (post-trained, no adapter; cap 1024 with the
+# brevity instruction, which keeps its success: results/phase5_model_size_probe/) on the bootstrap's SFT-unseen train
+# states (`states --states-from phase5_bootstrap_r1`, `run --state-limit 3072`), disjoint from the validation states of
+# the evaluations. Successes with more than 256 reasoning tokens are compressed by the 9B without thinking and kept
+# only if the 9B, given the compression as its thoughts, still writes a successful step (`shorten --name 9b`). One
+# server per RTX 3090:
+#   MAX_MODEL_LEN=5120 GPU_MEMORY_UTILIZATION=0.95 deployment/serve_model.sh teacher-9b-gpu<gpu> Qwen/Qwen3.5-9B <gpu> \
+#       811<gpu> --served-model-name teacher-9b --no-enable-lora --max-num-seqs 64
+
+[states]
+count = 8000
+states_per_proof = 2
+max_goal_characters = 3000
+seed = "bootstrap"
+# The 4B student's SFT data (a 20M-token sample of the v2 mix) covers some of the bootstrap's v2-unseen states.
+seen_sft_data = ["v2", "4b"]
+unseen_only = true
+# The deferred Goedel SFT v2 tracing is in the shards, not in the snapshot SFT v2 was built from.
+traced = "shards"
+# The sources whose unseen states are not biased: the other sources' few unseen states are mostly those whose
+# reference step SFT dropped as too long.
+sources = ["goedel_sft_v2", "stp_lean_workbook"]
+excluded_runs = []
+
+[policy]
+model = "teacher-9b"
+tokenizer = "Qwen/Qwen3.5-9B"
+server_urls = ["http://127.0.0.1:8110/v1", "http://127.0.0.1:8111/v1"]
+sample_count = 8
+temperature = 0.8
+top_p = 1.0
+# Reasoning and block together; truncated samples are failures.
+max_tokens = 1024
+thinking = true
+thinking_instruction = "Think briefly (a few sentences) about which tactic to use; do not restate the goal."
+few_shot = false
+request_timeout_seconds = 1800.0
+
+[execution]
+pool_size = 16
+tactic_timeout_seconds = 10.0
+foreign_header_batch_size = 16
+
+[pipeline]
+chunk_states = 256
+requests_in_flight = 128
+
+[reward]
+accept_later_reference_states = true
+value_progress = false
+value_progress_margin = 1.0
+
+[selection]
+max_per_state = 2
+min_reasoning_tokens = 16
+max_reasoning_tokens = 0
+
+[shortening]
+max_kept_reasoning_tokens = 256
+candidates_per_state = 3
+rationalize_runs = []
+
+# The teacher without thinking rewrites; the sufficiency check samples the teacher (the policy) with the rewrite as
+# its thoughts.
+[shortening.rewrite]
+model = "teacher-9b"
+tokenizer = "Qwen/Qwen3.5-9B"
+server_urls = ["http://127.0.0.1:8110/v1", "http://127.0.0.1:8111/v1"]
+target_tokens = 150
+max_accepted_tokens = 200
+max_tokens = 320
+candidates = 2
+temperature = 0.7
+top_p = 1.0
+
+[shortening.sufficiency]
+sample_count = 4
+temperature = 0.8
+top_p = 1.0
+max_tokens = 256
