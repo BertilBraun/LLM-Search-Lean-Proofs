@@ -264,7 +264,10 @@ class PairScorer:
     def score_all(self, pairs: Sequence[TokenizedPair], micro_batch_tokens: int) -> tuple[ItemScores, float]:
         """Scores of every item, and the mean token NLL of all chosen completions."""
         lengths = [pair.padded_length for pair in pairs]
-        micro_batches = length_grouped_micro_batches(lengths, micro_batch_tokens, len(pairs), random.Random(0))
+        # A phase without held-out pairs has nothing to validate on.
+        micro_batches = (
+            length_grouped_micro_batches(lengths, micro_batch_tokens, len(pairs), random.Random(0)) if pairs else []
+        )
         chosen = torch.zeros(len(pairs))
         rejected = torch.zeros(len(pairs))
         nll = 0.0

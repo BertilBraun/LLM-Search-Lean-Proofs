@@ -640,7 +640,7 @@ class PhaseTrainer:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         environment = os.environ | {"CUDA_VISIBLE_DEVICES": str(stage.gpu)}
         # The service runs pinned and niced (deployment/background.sh); training ranks feed a GPU and run unpinned.
-        unpinned = f"taskset --cpu-list 0-{os.cpu_count() - 1} nice -n -19 {command}"
+        unpinned = f"taskset --cpu-list 0-{os.cpu_count() - 1} {command}"
         with log_path.open("a", encoding="utf-8") as log_file:
             process = await asyncio.create_subprocess_exec(
                 "bash", "-c", unpinned, cwd=REPOSITORY_DIRECTORY, env=environment, stdout=log_file, stderr=log_file

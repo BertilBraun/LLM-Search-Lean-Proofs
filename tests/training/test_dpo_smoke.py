@@ -89,3 +89,28 @@ def test_dpo_opens_a_reward_margin_on_its_training_pairs(tiny_model: tuple[Path,
         config, CharacterTokenizer(), pairs, pairs, torch.device("cpu"), tmp_path / "adapter", print, evaluations.append
     )
     assert evaluations[-1].metrics.reward_margin > 0.1
+
+
+def test_dpo_trains_without_validation_pairs(tiny_model: tuple[Path, Path], tmp_path: Path) -> None:
+    model, adapter = tiny_model
+    config = DpoConfig(
+        model=str(model),
+        initial_adapter=str(adapter),
+        data="unused",
+        optimization=OptimizationConfig(
+            warmup_fraction=0.0, micro_batch_tokens=8192, length_group_examples=8, gradient_checkpointing=False
+        ),
+        evaluation=DpoEvaluationConfig(interval_steps=1000, validation_pairs=8, micro_batch_tokens=8192),
+    )
+    evaluations: list[DpoEvaluationRecord] = []
+    train_dpo(
+        config,
+        CharacterTokenizer(),
+        preference_pairs(),
+        [],
+        torch.device("cpu"),
+        tmp_path / "adapter",
+        print,
+        evaluations.append,
+    )
+    assert (tmp_path / "adapter" / "adapter_config.json").exists() and evaluations == []
