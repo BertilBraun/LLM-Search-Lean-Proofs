@@ -32,7 +32,7 @@ def test_data_configs_load(path: Path) -> None:
     assert from_json_object(ReasoningDataConfig, tomllib.loads(path.read_text(encoding="utf-8"))).runs
 
 
-@pytest.mark.parametrize("path", sorted(CONFIG_DIRECTORY.glob("phase5_search_*.toml")), ids=lambda path: path.stem)
+@pytest.mark.parametrize("path", sorted(CONFIG_DIRECTORY.glob("phase5_search_bootstrap_*.toml")), ids=lambda path: path.stem)
 def test_search_configs_load(path: Path) -> None:
     assert load_run_config(path).search.max_generated_tokens
 

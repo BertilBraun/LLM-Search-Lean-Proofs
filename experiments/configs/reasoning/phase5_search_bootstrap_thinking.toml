@@ -1,0 +1,78 @@
+# Arm T: thinking, n = 8, cap 512.
+# Ablation-ladder row 5 on miniF2F-valid, equal generated tokens per theorem: the bootstrap policy
+# (phase5_sft_bootstrap_r1, merged) thinking vs not, with the search setup of results/gpu_utilization/ and
+# results/phase3_search_shape/ (merged policy and value v0 instances on both GPUs, 120 searches pinned to 40 CPUs,
+# overlap, early value scoring, 7-tactic sweep). The budget is 96k generated tokens per theorem (about 50 thinking
+# expansions at n = 8); expansions are capped high enough that tokens bind, wall clock at 900 s per theorem.
+# Priority f = h + 0.25·depth without the policy prior: a thinking candidate's log-probability includes its
+# reasoning tokens, so the prior would penalize thinking steps by tens of steps; both arms drop it.
+
+[lean]
+pool_size = 120
+concurrency = 120
+
+[search]
+max_generated_tokens = 96000
+max_expansions = 1000
+max_wall_seconds = 900.0
+max_depth = 16
+score_children_early = true
+tactic_timeout_seconds = 10.0
+forbidden_steps = [
+    "exact?",
+    "apply?",
+    "rw?",
+    "simp?",
+    "simp_all?",
+    "dsimp?",
+    "aesop?",
+    "hint",
+    "rw_search",
+    "library_search",
+]
+
+[expander]
+kind = "automation_then_policy"
+overlap = true
+
+[automation]
+tactics = [
+    "omega",
+    "constructor",
+    "rfl",
+    "field_simp",
+    "ring_nf",
+    "simp_all",
+    "nlinarith",
+]
+timeout_seconds = 10.0
+max_wall_clock_timeouts_per_tactic = 1
+
+[priority]
+kind = "a_star"
+value_weight = 1.0
+depth_weight = 0.25
+policy_prior_weight = 0.0
+automation_log_probability = -2.8
+
+[policy]
+model = "policy-merged"
+server_urls = ["http://127.0.0.1:8100/v1", "http://127.0.0.1:8101/v1"]
+tokenizer = "Qwen/Qwen3.5-2B"
+sample_count = 8
+temperature = 0.8
+top_p = 1.0
+# The cap of the bootstrap evaluation (results/phase5_bootstrap/).
+max_tokens = 512
+thinking = true
+few_shot = false
+
+[value]
+model = "value-merged"
+server_urls = ["http://127.0.0.1:8200/v1", "http://127.0.0.1:8201/v1"]
+tokenizer = "Qwen/Qwen3.5-2B"
+
+[value.readout]
+eight_or_more_steps = 12.0
+# v0 has no dead labels: p_dead is ~1e-7, so D does not change h.
+dead_steps = 16.0
