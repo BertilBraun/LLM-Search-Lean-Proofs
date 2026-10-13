@@ -230,6 +230,10 @@ def optional(value: float | None, specification: str) -> str:
     return "–" if value is None else format(value, specification)
 
 
+def gpu_count(config: LoopConfig) -> int:
+    return len({server.gpu for server in config.serving.servers})
+
+
 def write_metrics(config: LoopConfig, paths: LoopPaths) -> None:
     attempts = list(all_attempts(paths.shards))
     phases = read_phases(paths)
@@ -240,7 +244,7 @@ def write_metrics(config: LoopConfig, paths: LoopPaths) -> None:
         totals=run_totals(attempts, datetime.datetime.now(datetime.UTC)),
         search_seconds=searched,
         versions=tuple(version_metrics(attempts, all_values(paths.digests))),
-        stages=tuple(stage_metrics(attempts, len(config.serving.servers), searched)),
+        stages=tuple(stage_metrics(attempts, gpu_count(config), searched)),
         phases=tuple(phases),
     )
     version_rows = [
@@ -313,7 +317,7 @@ def write_metrics(config: LoopConfig, paths: LoopPaths) -> None:
             ),
             "## Per budget stage",
             "Stage records, statements solved in the stage, proofs with harvested ones, statements escalated to the "
-            f"next stage, expansions, GPU-hours (the {len(config.serving.servers)} servers' search time "
+            f"next stage, expansions, GPU-hours (the {gpu_count(config)} GPUs' search time "
             f"{metrics.search_seconds / 3600:.1f} h attributed by generated tokens), proofs per GPU-hour and the mean "
             "stage wall time (s).",
             markdown_table(
