@@ -62,9 +62,9 @@ heartbeat_seconds = 30.0
 
 # The policy's mode in the searches, the evaluation and the training pairs: thinking samples (n = 8 as without) of at
 # most max_tokens tokens with the bootstrap's plain prompt; each phase then shortens long reasoning before training
-# (training.compress_reasoning). The equal-token comparison decides it.
+# (training.compress_reasoning). On since version 5 (owner decision after the equal-token comparison).
 [search.thinking]
-enabled = false
+enabled = true
 max_tokens = 512
 instruction = ""
 
@@ -99,23 +99,22 @@ promising_depth = 0
 # than stage 0, and the frontier h barely predicts which escalations pay).
 max_escalated_share = 0.25
 
-# Each stage's budget is a total over the statement's search; a stage is entered when the best h on the open frontier
-# is at most max_frontier_value. The stages' proofs per GPU-hour (phase6_loop.py metrics) tune these gates. At n = 8
-# (loop_search.toml) an expansion costs about half of one at n = 16: 64 / 192 / 512 expansions are 512 / 1,536 / 4,096
-# generations (the n = 16 plan's 32 / 128 / 512 were 512 / 2,048 / 8,192), the last stage capped at 512 expansions;
-# the wall caps keep about 9.4 s per expansion.
+# Each stage's budget is a total over the statement's search, in expansions only: the wall caps (4 h a stage) only
+# catch hung searches. A stage is entered when the best h on the open frontier is at most max_frontier_value; the
+# stages' proofs per GPU-hour (phase6_loop.py metrics) tune these gates. At n = 8 (loop_search.toml) an expansion
+# costs about half of one at n = 16: 64 / 192 / 512 expansions are 512 / 1,536 / 4,096 generations.
 [[search.scheduler.stages]]
 max_expansions = 64
-max_wall_seconds = 600.0
+max_wall_seconds = 14400.0
 
 [[search.scheduler.stages]]
 max_expansions = 192
-max_wall_seconds = 1800.0
+max_wall_seconds = 14400.0
 max_frontier_value = 3.0
 
 [[search.scheduler.stages]]
 max_expansions = 512
-max_wall_seconds = 4800.0
+max_wall_seconds = 14400.0
 max_frontier_value = 2.0
 
 # NuminaMath candidates rarely have any known proof (0.1% in the untraced Goedel-Prover set).

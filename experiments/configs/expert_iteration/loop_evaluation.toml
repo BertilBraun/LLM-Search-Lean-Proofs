@@ -8,7 +8,8 @@ concurrency = 40
 
 [search]
 max_expansions = 64
-max_wall_seconds = 600.0
+# Expansions are the budget; the wall cap only catches hung searches.
+max_wall_seconds = 14400.0
 max_depth = 16
 # Score each child as soon as it exists, while the expansion's other candidates run.
 score_children_early = true
