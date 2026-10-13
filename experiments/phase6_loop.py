@@ -180,7 +180,7 @@ def print_status(config: LoopConfig, paths: LoopPaths) -> None:
         lines.append(
             f"service: {'alive' if alive else 'STALE'} (heartbeat {age:.1f} min ago), {activity}, "
             f"{heartbeat.live_searches} searches in flight (by stage {stages}), {heartbeat.session_failures} server "
-            "errors this session"
+            f"errors and {heartbeat.session_rescored_states:,} lazily re-scored states this session"
         )
     else:
         heartbeat = None

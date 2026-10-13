@@ -98,6 +98,8 @@ class ServiceHeartbeat:
     session_attempts: int
     session_proofs: int
     session_harvested_proofs: int
+    # Frontier states re-scored lazily because a newer value model was published.
+    session_rescored_states: int
     session_failures: int
     scheduler: SchedulerCounts
 
@@ -268,6 +270,7 @@ class SearchService:
         self.session_attempts = 0
         self.session_proofs = 0
         self.session_harvested_proofs = 0
+        self.session_rescored_states = 0
         self.session_failures = 0
         # Open states re-scored per second at the last re-scoring; None before the first.
         self.rescore_rate: float | None = None
@@ -451,6 +454,7 @@ class SearchService:
             completed = await search.run()
         finally:
             self.live.discard(search)
+            self.session_rescored_states += search.lazily_rescored
         if completed.result.stop_reason == StopReason.START_FAILED:
             attempt = load_failure_attempt(job, start, completed.result, stages[job.stage].max_expansions)
             await self.record(attempt, None, None)
@@ -546,6 +550,8 @@ class SearchService:
                 session_attempts=self.session_attempts,
                 session_proofs=self.session_proofs,
                 session_harvested_proofs=self.session_harvested_proofs,
+                session_rescored_states=self.session_rescored_states
+                + sum(search.lazily_rescored for search in self.live),
                 session_failures=self.session_failures,
                 scheduler=self.scheduler.counts(),
             ),
