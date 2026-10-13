@@ -173,6 +173,8 @@ allows.
   - [x] A* with v0 on the SFT v2 policy: **157/244 (64.3%)** vs 148 for row 2 (12 new, 3 lost, sign test
     p ≈ 0.035), ahead at every expansion and wall-clock budget, 21% less Lean time
     (`results/phase3_astar_v0_sft_v2/`).
+  - [x] Search shape at ~1,024 generations (`results/phase3_search_shape/`): 16×64 156, 8×128 154, 4×256 153;
+    policy prior w_p 0.2 154, 0.4 153 (all within noise). Loop uses n = 8, w_p = 0.2.
   - [ ] Value v1 from statement-pool search trees (dead and censored labels).
 - [ ] **Phase 4** — Retriever, applicability annotation, list-length ablation (row 3).
   - [x] ReProver retriever over 199,810 premises (LeanDojo corpus plus 25,556 `to_additive`/alias theorems it
@@ -182,7 +184,13 @@ allows.
 - [ ] **Phase 5** — Single-step on-policy reasoning (row 5).
   - [x] Pilot (`results/phase5_pilot/`): SFT v2 with thinking succeeds on 12.5% of samples vs 48.2% without,
     at ~80× the tokens per success; a brevity instruction does not shorten thoughts; the base model is worse.
-  - [ ] One round of rejection-sampling training (8k states); stop if tokens per success stay > 10× non-thinking.
+  - [x] Base vs SFT thinking (`results/phase5_compare/`): SFT improved thinking (20.7% vs 4.5% per sample); the base
+    model reasons poorly even at 4,096 tokens; short thoughts succeed most.
+  - [x] Short-reasoning bootstrap (`results/phase5_bootstrap/`): 8k SFT-unseen states, Lean-verified thinking
+    samples, long traces compressed to ~95 tokens by Qwen3.5-2B with a sufficiency check (78.8% pass), 50/50 with
+    non-thinking replay. On unseen states thinking goes from 16.3% to **42.1% per sample at 234 tokens** (512 cap);
+    tokens per success 557 vs 89 non-thinking (6.2×, passes the 10× rule); non-thinking unchanged (46%).
+  - [ ] Equal-token search comparison (thinking n = 8 vs non-thinking n = 8).
 - [ ] **Phase 6** — Expert iteration rounds (row 6).
 - [ ] **Phase 7** — Final ladder on miniF2F-test, write-up in `results/README.md`.
 
