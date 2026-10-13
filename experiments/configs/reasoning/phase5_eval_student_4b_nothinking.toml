@@ -11,7 +11,7 @@ count = 512
 states_per_proof = 2
 max_goal_characters = 3000
 seed = "bootstrap-eval"
-seen_sft_data = ["v2"]
+seen_sft_data = ["v2", "4b"]
 unseen_only = true
 # The deferred Goedel SFT v2 tracing is in the shards, not in the snapshot SFT v2 was built from.
 traced = "shards"

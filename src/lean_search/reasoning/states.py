@@ -87,6 +87,10 @@ def proof_states(steps: Sequence[TracedStep], seen_goals: Collection[bytes] = fr
     ]
 
 
+def without_seen_states(states: Iterable[ReasoningState], seen_goals: Collection[bytes]) -> list[ReasoningState]:
+    return [state for state in states if goals_digest(state.goals) not in seen_goals]
+
+
 def round_robin[T](sequences: Sequence[Sequence[T]]) -> list[T]:
     # Equal shares while every sequence lasts; the exhausted ones leave the rest to the others.
     longest = max((len(sequence) for sequence in sequences), default=0)

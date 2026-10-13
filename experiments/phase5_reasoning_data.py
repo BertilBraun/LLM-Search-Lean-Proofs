@@ -72,7 +72,13 @@ from lean_search.reasoning.shortening import (
     shortening_statistics,
     shortening_targets,
 )
-from lean_search.reasoning.states import ReasoningState, TracedSource, goals_digest, select_states
+from lean_search.reasoning.states import (
+    ReasoningState,
+    TracedSource,
+    goals_digest,
+    select_states,
+    without_seen_states,
+)
 from lean_search.reasoning.statistics import RunStatistics, SampleGroup, run_statistics
 from lean_search.search.records import from_json_object, to_json
 from lean_search.search.summary import markdown_table
@@ -167,16 +173,22 @@ def command_states(arguments: argparse.Namespace, config: ReasoningRunConfig, di
     if directory.states.exists():
         raise ValueError(f"{directory.states} exists; the state set is fixed once chosen.")
     keep_config(arguments, directory)
-    if arguments.states_from:
-        states = read_records(run_directory(arguments.states_from).states, ReasoningState)[arguments.states_skip :]
-        write_records(directory.states, states)
-        print(f"{len(states)} states of {arguments.states_from} into {directory.states}")
-        return
     seen_goals = frozenset(
         goals_digest(example.goals)
         for name in config.states.seen_sft_data
         for example in read_examples(DATA_DIRECTORY / "sft" / name / "train.jsonl")
     )
+    if arguments.states_from:
+        states = read_records(run_directory(arguments.states_from).states, ReasoningState)[arguments.states_skip :]
+        copied = len(states)
+        if config.states.unseen_only:
+            states = without_seen_states(states, seen_goals)
+        write_records(directory.states, states)
+        print(
+            f"{len(states)} of {copied} states of {arguments.states_from} (unseen only: "
+            f"{config.states.unseen_only}) into {directory.states}"
+        )
+        return
     excluded = frozenset(
         state.identifier
         for run in config.states.excluded_runs

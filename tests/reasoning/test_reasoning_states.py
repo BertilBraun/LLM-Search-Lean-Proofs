@@ -11,6 +11,7 @@ from lean_search.reasoning.states import (
     proof_states,
     round_robin,
     select_states,
+    without_seen_states,
 )
 
 
@@ -90,3 +91,9 @@ def test_unseen_only_skips_states_seen_in_sft() -> None:
     seen = frozenset({goals_digest(GOALS[0])})
     states = select_states(many_proofs("a", 4), StateSelectionConfig(count=100, unseen_only=True), seen)
     assert {state.step.step_index for state in states} <= {1, 2}
+
+
+def test_states_seen_by_a_later_sft_data_set_can_be_dropped() -> None:
+    states = select_states(many_proofs("a", 4), StateSelectionConfig(count=100))
+    remaining = without_seen_states(states, frozenset({goals_digest(GOALS[0])}))
+    assert {state.step.step_index for state in remaining} == {state.step.step_index for state in states} - {0}
