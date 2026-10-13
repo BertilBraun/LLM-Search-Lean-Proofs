@@ -1,0 +1,16 @@
+ "seconds": 120.0,
+ "generated_tokens_per_second": 8730.075,
+ "samples_per_second": 26.533333333333335,
+ "policy_requests_per_second": 3.316666666666667,
+ "mean_tokens_per_sample": 329.0229271356784,
+ "truncated_share": 0.35615577889447236,
+ "value_prompt_tokens_per_second": 8112.783333333334,
+ "gpu_utilization": [
+  98.00833333333334,
+  96.19166666666666
+ ],
+ "gpu_power_watts": [
+  346.5569,
+  342.55488333333335
+ ]
+}

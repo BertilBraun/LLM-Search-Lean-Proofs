@@ -17,6 +17,9 @@ max_depth = 16
 # Score each child as soon as it exists, while the expansion's other candidates run.
 score_children_early = true
 tactic_timeout_seconds = 10.0
+# Policy candidates stop at 25k heartbeats, inside Lean and without a restart, before the 10 s wall clock kills the
+# process: a third fewer Lean seconds per expansion at an equal solve rate (results/gpu_utilization/thinking/).
+tactic_heartbeats = 25000
 forbidden_steps = [
     "exact?",
     "apply?",
@@ -40,6 +43,8 @@ overlap = true
 [automation]
 tactics = ["omega", "constructor", "rfl", "field_simp", "ring_nf", "simp_all", "nlinarith"]
 timeout_seconds = 10.0
+# The sweep keeps the REPL's default limit.
+heartbeats = 200000
 max_wall_clock_timeouts_per_tactic = 1
 
 # Predicted remaining steps dominate: f = h + 0.25 depth + 0.2 x (the path's mean negative step log-probability);

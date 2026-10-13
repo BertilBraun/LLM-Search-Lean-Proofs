@@ -1,0 +1,78 @@
+# Template of the loop's searches (experiments/phase6_service.py): A* ordered by h + 0.25 depth plus the policy
+# prior, the 7-tactic automation sweep overlapped with the policy request, and sampling (n = 8 at temperature 0.8,
+# 512 tokens). The service fills in the merged policy and value servers and each stage's budget (loop.toml).
+
+[lean]
+# The service's REPL pool is search.concurrency; restarting REPLs past 30% of their memory limit keeps 100+
+# of them within the node's memory.
+pool_size = 120
+concurrency = 120
+restart_fraction = 0.3
+
+[search]
+max_expansions = 16
+# Expansions are the budget; the wall cap only catches hung searches.
+max_wall_seconds = 14400.0
+max_depth = 16
+# Score each child as soon as it exists, while the expansion's other candidates run.
+score_children_early = true
+tactic_timeout_seconds = 10.0
+tactic_heartbeats = 50000
+forbidden_steps = [
+    "exact?",
+    "apply?",
+    "rw?",
+    "simp?",
+    "simp_all?",
+    "dsimp?",
+    "aesop?",
+    "hint",
+    "rw_search",
+    "library_search",
+]
+
+[expander]
+kind = "automation_then_policy"
+# Send the policy request while the automation sweep runs.
+overlap = true
+
+# The 7-tactic sweep (unless the performance agent's per-tactic breakdown recommends another list); pool v3's
+# automation probe uses the same list.
+[automation]
+tactics = ["omega", "constructor", "rfl", "field_simp", "ring_nf", "simp_all", "nlinarith"]
+timeout_seconds = 10.0
+heartbeats = 200000
+max_wall_clock_timeouts_per_tactic = 1
+
+# Predicted remaining steps dominate: f = h + 0.25 depth + 0.2 x (the path's mean negative step log-probability);
+# a miniF2F-valid sweep of policy_prior_weight (0 / 0.2 / 0.4) may change the last weight.
+[priority]
+kind = "a_star"
+value_weight = 1.0
+depth_weight = 0.25
+policy_prior_weight = 0.2
+automation_log_probability = -1.0
+
+[policy]
+model = "policy-merged"
+tokenizer = "Qwen/Qwen3.5-2B"
+server_urls = ["http://127.0.0.1:8300/v1", "http://127.0.0.1:8301/v1"]
+# The budget-shape test on miniF2F-valid at equal generations: 16 x 64 = 156, 8 x 128 = 154, 4 x 256 = 153 solved,
+# equal within noise; n = 8 halves the cost of an expansion, so the loop's stages count twice the expansions.
+sample_count = 8
+temperature = 0.8
+top_p = 1.0
+# Thinking mode: thinking = true with max_tokens up to 2048 (and the same thinking_instruction in loop_policy.toml);
+# the service then keeps each step's reasoning for training.
+max_tokens = 512
+thinking = true
+few_shot = false
+
+[value]
+model = "value-merged"
+tokenizer = "Qwen/Qwen3.5-2B"
+server_urls = ["http://127.0.0.1:8400/v1", "http://127.0.0.1:8401/v1"]
+
+[value.readout]
+eight_or_more_steps = 12.0
+dead_steps = 16.0
