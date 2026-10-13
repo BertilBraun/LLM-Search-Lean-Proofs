@@ -13,37 +13,46 @@ name = "phase6_loop"
 policy_adapter = "/workspace/checkpoints/phase5_sft_bootstrap_r1/adapter"
 value_adapter = "/workspace/checkpoints/phase3_value_v0/adapter"
 
-# Per GPU a merged-policy and a merged-value vLLM instance without LoRA, started with SLEEP_MODE=1 so that a phase
-# frees the GPUs in place and reloads the new weights in seconds (deployment/README.md, results/gpu_utilization/).
+# Per GPU a merged-policy and a merged-value vLLM instance without LoRA (bf16), started with SLEEP_MODE=1 so that a
+# phase frees the GPUs in place and reloads the new weights in seconds. Thinking-mode settings from
+# results/gpu_utilization/thinking/README.md: the policy at 0.62 of the memory with 512 sequences and 8,192 tokens per
+# step, the value at 0.25 with 96 sequences.
 [serving]
 base_model = "Qwen/Qwen3.5-2B"
 tokenizer = "Qwen/Qwen3.5-2B"
 policy_model = "policy-merged"
 value_model = "value-merged"
+dtype = "bfloat16"
 
 [[serving.policy_servers]]
 name = "policy-gpu0"
 gpu = 0
 url = "http://127.0.0.1:8100/v1"
-memory_share = 0.58
+memory_share = 0.62
+max_num_seqs = 512
+max_num_batched_tokens = 8192
 
 [[serving.policy_servers]]
 name = "policy-gpu1"
 gpu = 1
 url = "http://127.0.0.1:8101/v1"
-memory_share = 0.58
+memory_share = 0.62
+max_num_seqs = 512
+max_num_batched_tokens = 8192
 
 [[serving.value_servers]]
 name = "value-gpu0"
 gpu = 0
 url = "http://127.0.0.1:8200/v1"
-memory_share = 0.30
+memory_share = 0.25
+max_num_seqs = 96
 
 [[serving.value_servers]]
 name = "value-gpu1"
 gpu = 1
 url = "http://127.0.0.1:8201/v1"
-memory_share = 0.30
+memory_share = 0.25
+max_num_seqs = 96
 
 [search]
 search_config = "experiments/configs/expert_iteration/loop_search.toml"

@@ -11,7 +11,7 @@ from lean_search.expert_iteration.serving import (
 )
 
 POLICY_SERVER = ServerEndpoint("policy-gpu1", 1, "http://127.0.0.1:8101/v1", 0.58)
-VALUE_SERVER = ServerEndpoint("value-gpu1", 1, "http://127.0.0.1:8201/v1", 0.3)
+VALUE_SERVER = ServerEndpoint("value-gpu1", 1, "http://127.0.0.1:8201/v1", 0.25, max_num_seqs=96)
 CONFIG = ServingConfig("Qwen/Qwen3.5-2B", "Qwen/Qwen3.5-2B", (POLICY_SERVER,), (VALUE_SERVER,))
 
 
@@ -48,8 +48,8 @@ def test_each_instance_serves_its_kind_of_weights(tmp_path: Path) -> None:
     publisher = MergedPublisher(CONFIG, tmp_path, RecordingMerge())
     version = publisher.prepare(ModelVersion(2, "/policy2", "/value2", "now", "proofs"))
     assert publisher.serve_command(version, VALUE_SERVER) == (
-        f"GPU_MEMORY_UTILIZATION=0.3 SLEEP_MODE=1 deployment/serve_model.sh value-gpu1 {tmp_path / 'v0002' / 'value'} "
-        "1 8201 --served-model-name value-merged --no-enable-lora"
+        "GPU_MEMORY_UTILIZATION=0.25 MAX_NUM_SEQS=96 SLEEP_MODE=1 deployment/serve_model.sh value-gpu1 "
+        f"{tmp_path / 'v0002' / 'value'} 1 8201 --served-model-name value-merged --no-enable-lora --dtype bfloat16"
     )
 
 

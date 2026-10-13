@@ -214,10 +214,16 @@ class MergedPublisher:
 
     def serve_command(self, version: ModelVersion, server: ServerEndpoint) -> str:
         served = self.config.policy_model if server in self.config.policy_servers else self.config.value_model
-        memory = f"GPU_MEMORY_UTILIZATION={server.memory_share} " if server.memory_share else ""
+        settings = (
+            ("GPU_MEMORY_UTILIZATION", server.memory_share),
+            ("MAX_NUM_SEQS", server.max_num_seqs),
+            ("MAX_NUM_BATCHED_TOKENS", server.max_num_batched_tokens),
+        )
+        environment = "".join(f"{name}={value} " for name, value in settings if value)
         return (
-            f"{memory}SLEEP_MODE=1 deployment/serve_model.sh {server.name} {self.weights(version, server)} "
-            f"{server.gpu} {server_port(server)} --served-model-name {served} --no-enable-lora"
+            f"{environment}SLEEP_MODE=1 deployment/serve_model.sh {server.name} {self.weights(version, server)} "
+            f"{server.gpu} {server_port(server)} --served-model-name {served} --no-enable-lora "
+            f"--dtype {self.config.dtype}"
         )
 
 

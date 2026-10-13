@@ -19,8 +19,11 @@ class ServerEndpoint:
     name: str
     gpu: int
     url: str
-    # Its share of the GPU's memory (GPU_MEMORY_UTILIZATION); 0 keeps serve_model.sh's default.
+    # Its share of the GPU's memory (GPU_MEMORY_UTILIZATION), sequences in flight (MAX_NUM_SEQS) and tokens per
+    # scheduler step (MAX_NUM_BATCHED_TOKENS); 0 keeps serve_model.sh's (vLLM's) default.
     memory_share: float = 0.0
+    max_num_seqs: int = 0
+    max_num_batched_tokens: int = 0
 
 
 @dataclass(frozen=True)
@@ -36,6 +39,7 @@ class ServingConfig:
     # The --served-model-name of the policy and the value instances, the same in every version.
     policy_model: str = "policy-merged"
     value_model: str = "value-merged"
+    dtype: str = "bfloat16"
 
     @property
     def servers(self) -> tuple[ServerEndpoint, ...]:
