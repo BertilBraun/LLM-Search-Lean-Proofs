@@ -39,9 +39,11 @@ REPOSITORY_DIRECTORY = Path(__file__).resolve().parents[1]
 RUN_DIRECTORY = Path(os.environ["LEAN_SEARCH_RUNS"]) / "reasoning_retention"
 LENGTH_FINISH_REASON = "length"
 JUDGED_TRACE_CHARACTERS = 12000
-FORCED_ANSWER_TOKENS = 256
+FORCED_ANSWER_TOKENS = 64
 BOX_INSTRUCTION = "\\boxed{}"
 FORCED_THINK_END = f"\n{THINK_END}\n\n"
+# A written-out solution does not fit in a short budget, so the forced answer starts inside the box.
+FORCED_ANSWER_PREFIX = "The final answer is $\\boxed{"
 
 
 @dataclass(frozen=True)
@@ -106,7 +108,7 @@ class ScoredSample:
 
 @dataclass(frozen=True)
 class ForcedAnswer:
-    """A truncated sample continued for at most FORCED_ANSWER_TOKENS, its thinking closed first if still open."""
+    """A truncated sample cut short with its thinking closed and FORCED_ANSWER_PREFIX, then completed."""
 
     unique_id: str
     sample_index: int
@@ -311,7 +313,10 @@ async def force_answers(
             )
             async with semaphore:
                 generation = await client.generate(
-                    prompt + sample.text + ("" if THINK_END in sample.text else FORCED_THINK_END),
+                    prompt
+                    + sample.text
+                    + ("\n\n" if THINK_END in sample.text else FORCED_THINK_END)
+                    + FORCED_ANSWER_PREFIX,
                     sample_count=1,
                     max_tokens=FORCED_ANSWER_TOKENS,
                     temperature=config.temperature,
@@ -319,8 +324,7 @@ async def force_answers(
                     adapter=adapter,
                 )
             answer_text = generation.samples[0].text
-            # An answer cut off after the thinking block may have opened its box before the cap.
-            answer = last_boxed(sample.text.partition(THINK_END)[2] + answer_text)
+            answer = last_boxed(FORCED_ANSWER_PREFIX + answer_text)
             correct = answer is not None and answers_match(answer, problem.answer)
             return ForcedAnswer(problem.unique_id, sample_index, answer_text, answer, correct)
 
@@ -436,10 +440,9 @@ def command_summarize(config: RetentionConfig) -> None:
         f"{len(problems)} MATH-500 problems stratified by level and subject (seed `{config.seed}`), thinking on, "
         f"k = {config.sample_count} samples at temperature {config.temperature} (top-p {config.top_p}), at most "
         f"{config.max_tokens} generated tokens; the answer is the last \\boxed{{}} after the thinking block. Forced "
-        "answers: a sample cut off at the cap is continued for at most "
-        f"{FORCED_ANSWER_TOKENS} more tokens, its thinking first closed with `</think>` if still open "
-        "(budget forcing), "
-        "which separates reasoning from stopping.",
+        "answers: a sample cut off at the cap gets its thinking closed with `</think>` (if still open) and "
+        f"`{FORCED_ANSWER_PREFIX}`, then at most {FORCED_ANSWER_TOKENS} tokens to finish the box (budget forcing); "
+        "this separates reasoning from stopping.",
         markdown_table(
             [
                 "Model",
