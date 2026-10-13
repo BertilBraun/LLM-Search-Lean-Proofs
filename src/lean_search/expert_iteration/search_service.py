@@ -8,7 +8,7 @@ and REPL while its open frontier stays close to a proof; every stage writes a re
 with the tree (and, in thinking mode, the reasoning behind each step). A training phase pauses every policy and value
 request at the gate: searches keep their trees and REPL proof states, nothing in flight is lost, and they continue
 after the phase with the new weights; stale frontier states are re-scored lazily when they reach the top. The service's
-state is rebuilt from the shards on start; searches cut off by a crash start again at the stage they had reached.
+state is rebuilt from the shards on start; searches cut off by a crash start over from stage 0.
 """
 
 import asyncio

@@ -89,14 +89,14 @@ def test_a_released_fresh_job_comes_back_first() -> None:
     assert again is not None and (again.name, again.stage) == (job.name, 0)
 
 
-def test_a_released_escalated_job_restarts_at_its_stage() -> None:
+def test_a_released_escalated_job_starts_over() -> None:
     scheduler = scheduler_with(a=2)
     job = scheduler.next_job()
     assert job is not None
     scheduler.record(attempt(job.name, decision=Decision.ESCALATED))
     scheduler.release(job)
     again = scheduler.next_job()
-    assert again is not None and (again.name, again.stage) == (job.name, 1)
+    assert again is not None and (again.name, again.stage) == (job.name, 0)
 
 
 def test_solved_and_retired_statements_never_come_back() -> None:
@@ -125,8 +125,8 @@ def test_replay_restarts_cut_off_searches_first_most_promising_first() -> None:
     scheduler.replay(log)
     jobs = [scheduler.next_job() for _ in range(4)]
     assert [(job.name, job.stage) if job else None for job in jobs] == [
-        ("a.a_3", 2),
-        ("a.a_1", 1),
+        ("a.a_3", 0),
+        ("a.a_1", 0),
         ("a.a_5", 0),
         None,
     ]

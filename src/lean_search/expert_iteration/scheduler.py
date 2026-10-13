@@ -6,8 +6,7 @@ sources by weight. The curriculum learns the outcome of every statement it fed. 
 the same tree: after each stage, an unsolved statement continues into the next stage (a larger total budget) when the
 best open state of its tree is close enough to a proof by the value model; otherwise, or after the last stage, it is
 retired. The state is rebuilt from the attempt log, so the service resumes after a crash: a search cut off before it
-ended starts again from scratch at the stage it had reached, waiting in a queue ahead of fresh statements, most
-promising first.
+ended starts over from stage 0, waiting in a queue ahead of fresh statements, most promising first.
 """
 
 import heapq
@@ -151,8 +150,10 @@ class Scheduler:
                 self.curriculum.mark_started([attempt.problem_name])
             entry.certified = attempt.certified
             if attempt.decision == Decision.ESCALATED:
+                # A cut-off search starts over from stage 0: restarting a late stage from scratch would hold a
+                # search for that stage's whole budget outside the escalation share.
                 entry.status = StatementStatus.QUEUED
-                entry.stage = attempt.stage + 1
+                entry.stage = 0
                 entry.priority = restart_priority(attempt)
                 if entry.statement is not None:
                     heapq.heappush(self.restarts, (entry.priority, attempt.problem_name))
@@ -188,8 +189,9 @@ class Scheduler:
             self.curriculum.record_outcome(attempt.problem_name, attempt.decision == Decision.SOLVED)
 
     def release(self, job: Job) -> None:
-        """A search that failed for infrastructure reasons starts again at the stage it had reached."""
+        """A search that failed for infrastructure reasons starts over from stage 0, ahead of fresh statements."""
         entry = self.entries[job.name]
+        entry.stage = 0
         if entry.stage == 0 and job.name in self.open_names:
             self.fresh_started -= 1
             self.open_started -= 1
