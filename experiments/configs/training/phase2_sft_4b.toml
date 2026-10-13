@@ -28,9 +28,9 @@ compile_layers = true
 seed = 0
 
 [evaluation]
-interval_steps = 100
+interval_steps = 1000
 validation_examples = 1000
 micro_batch_tokens = 16384
 generation_examples = 128
-generation_batch_size = 64
+generation_batch_size = 16
 max_new_tokens = 256
