@@ -205,6 +205,18 @@ allows.
 Results of each phase are committed under `results/` as small JSON summaries plus a markdown table; large
 per-theorem logs, datasets and checkpoints stay on the node.
 
+### Findings 2026-10-13
+
+- **Model-size reasoning probe** (`results/phase5_model_size_probe/`, 128 unseen states, k = 8): 2B bootstrap 47.0%
+  per sample / 960 tokens per success; Qwen3.5-4B 24.2% / 12,819 (65% still thinking at 4,096); Qwen3.5-9B 27.8% /
+  5,629, bounded to 1,024 tokens 28.7% / 2,077. Hand-judged reasoning on non-trivial successful steps: 2B correct
+  6/17 (pattern matching), 4B 9/10, 9B 10/10. Larger models reason soundly; their steps fail on Lean syntax and long
+  blocks, not on mathematics.
+- **Lean waste in the loop** (`results/gpu_utilization/thinking/`): 120 REPLs on 40 CPUs turned 10 s wall-clock
+  limits into ~3 CPU-seconds, so heavy candidates were killed and replayed. Policy candidates at 25k heartbeats:
+  Lean per expansion −32%, run time −48%, solve rate unchanged. Serving: policy 0.62 memory / 512 sequences /
+  8,192 batched tokens (+5%); FP8 weight-only no faster on a 2B model.
+
 ## Known issues (backlog)
 - Resolved: search generation cost is charged per batch (`CandidateBatch`), when the expander yields it. Runs before
   the fix did not charge requests whose samples all failed to parse (in `PolicyStatistics.unattributed_generated_tokens`
