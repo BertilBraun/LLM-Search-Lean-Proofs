@@ -190,7 +190,10 @@ allows.
     samples, long traces compressed to ~95 tokens by Qwen3.5-2B with a sufficiency check (78.8% pass), 50/50 with
     non-thinking replay. On unseen states thinking goes from 16.3% to **42.1% per sample at 234 tokens** (512 cap);
     tokens per success 557 vs 89 non-thinking (6.2×, passes the 10× rule); non-thinking unchanged (46%).
-  - [ ] Equal-token search comparison (thinking n = 8 vs non-thinking n = 8).
+  - [x] Equal-token search comparison (`results/phase5_search/`, 96k generated tokens per theorem, bootstrap
+    policy): thinking n = 8 **152**, non-thinking n = 8 **156**, n = 16 **159**. Per expansion thinking is as good,
+    but each expansion costs ~11× the tokens, so at equal compute short reasoning does not pay yet. The loop runs
+    non-thinking from the bootstrap policy.
 - [ ] **Phase 6** — Expert iteration rounds (row 6).
 - [ ] **Phase 7** — Final ladder on miniF2F-test, write-up in `results/README.md`.
 
