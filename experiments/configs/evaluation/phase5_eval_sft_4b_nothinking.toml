@@ -1,0 +1,55 @@
+# Control for the 9B-teacher test: the 4B SFT adapter alone (phase2_sft_4b, no reasoning training), without thinking,
+# on the same 512 states and settings as phase5_eval_student_4b_nothinking. Separates "the 4B SFT is weaker" from
+# "reasoning training hurt". Served as an adapter on the raw base:
+#   deployment/serve_model.sh sft-4b-base Qwen/Qwen3.5-4B <gpu> 8132, then load
+#   /workspace/checkpoints/phase2_sft_4b/adapter as `sft-4b` (POST /v1/load_lora_adapter);
+#   python experiments/phase5_reasoning_data.py states --config <this> --run-name phase5_eval_sft_4b_nothinking \
+#       --states-from phase5_eval_student_4b_nothinking
+#   python experiments/phase5_reasoning_data.py run / statistics --config <this> --run-name phase5_eval_sft_4b_nothinking
+
+[states]
+count = 512
+states_per_proof = 2
+max_goal_characters = 3000
+seed = "bootstrap-eval"
+seen_sft_data = ["v2", "4b"]
+unseen_only = true
+# The deferred Goedel SFT v2 tracing is in the shards, not in the snapshot SFT v2 was built from.
+traced = "shards"
+# The sources whose unseen states are not biased: the other sources' few unseen states are mostly those whose
+# reference step SFT dropped as too long.
+sources = ["goedel_sft_v2", "stp_lean_workbook"]
+excluded_runs = []
+split = "validation"
+
+[policy]
+model = "sft-4b-base"
+adapter = "sft-4b"
+tokenizer = "Qwen/Qwen3.5-4B"
+server_urls = ["http://127.0.0.1:8132/v1"]
+sample_count = 8
+temperature = 0.8
+top_p = 1.0
+max_tokens = 256
+thinking = false
+few_shot = false
+request_timeout_seconds = 1800.0
+
+[execution]
+pool_size = 16
+tactic_timeout_seconds = 10.0
+foreign_header_batch_size = 16
+
+[pipeline]
+chunk_states = 128
+requests_in_flight = 128
+
+[reward]
+accept_later_reference_states = true
+value_progress = false
+value_progress_margin = 1.0
+
+[selection]
+max_per_state = 2
+min_reasoning_tokens = 16
+max_reasoning_tokens = 0
