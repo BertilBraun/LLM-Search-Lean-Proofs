@@ -1,0 +1,79 @@
+# Arm: the 4B student without thinking, n = 16.
+# The 9B-teacher test on miniF2F-valid, equal generated tokens per theorem (the protocol of
+# phase5_search_bootstrap_*: 96k tokens, A* without the policy prior, value v0, 7-tactic sweep); the 2B bootstrap
+# without thinking at n = 16 proved 159 (results/phase5_search/). Per GPU the merged student and a merged value v0
+# instance; the 4B's weights leave it a smaller KV cache than the 2B had:
+#   GPU_MEMORY_UTILIZATION=0.62 deployment/serve_model.sh policy-gpu<gpu> \
+#       /workspace/checkpoints/phase5_sft_student_4b/merged <gpu> 810<gpu> --served-model-name policy-merged \
+#       --no-enable-lora
+#   GPU_MEMORY_UTILIZATION=0.30 deployment/serve_model.sh value-gpu<gpu> /workspace/checkpoints/phase3_value_v0/merged \
+#       <gpu> 820<gpu> --served-model-name value-merged --no-enable-lora
+
+[lean]
+pool_size = 120
+concurrency = 120
+
+[search]
+max_generated_tokens = 96000
+max_expansions = 1000
+max_wall_seconds = 900.0
+max_depth = 16
+score_children_early = true
+tactic_timeout_seconds = 10.0
+forbidden_steps = [
+    "exact?",
+    "apply?",
+    "rw?",
+    "simp?",
+    "simp_all?",
+    "dsimp?",
+    "aesop?",
+    "hint",
+    "rw_search",
+    "library_search",
+]
+
+[expander]
+kind = "automation_then_policy"
+overlap = true
+
+[automation]
+tactics = [
+    "omega",
+    "constructor",
+    "rfl",
+    "field_simp",
+    "ring_nf",
+    "simp_all",
+    "nlinarith",
+]
+timeout_seconds = 10.0
+max_wall_clock_timeouts_per_tactic = 1
+
+[priority]
+kind = "a_star"
+value_weight = 1.0
+depth_weight = 0.25
+policy_prior_weight = 0.0
+automation_log_probability = -2.8
+
+[policy]
+model = "policy-merged"
+server_urls = ["http://127.0.0.1:8100/v1", "http://127.0.0.1:8101/v1"]
+tokenizer = "Qwen/Qwen3.5-4B"
+sample_count = 16
+temperature = 0.8
+top_p = 1.0
+max_tokens = 256
+thinking = false
+few_shot = false
+
+[value]
+model = "value-merged"
+server_urls = ["http://127.0.0.1:8200/v1", "http://127.0.0.1:8201/v1"]
+tokenizer = "Qwen/Qwen3.5-2B"
+
+[value.readout]
+eight_or_more_steps = 12.0
+# v0 has no dead labels: p_dead is ~1e-7, so D does not change h.
+dead_steps = 16.0

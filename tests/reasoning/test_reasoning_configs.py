@@ -21,6 +21,7 @@ CONFIG_DIRECTORY = Path(__file__).resolve().parents[2] / "experiments" / "config
         *CONFIG_DIRECTORY.glob("phase5_eval_*.toml"),
         *CONFIG_DIRECTORY.glob("phase5_compare_*.toml"),
         *CONFIG_DIRECTORY.glob("phase5_size_*.toml"),
+        *CONFIG_DIRECTORY.glob("phase5_teacher_*.toml"),
     ],
     ids=lambda path: path.stem,
 )
@@ -33,9 +34,7 @@ def test_data_configs_load(path: Path) -> None:
     assert from_json_object(ReasoningDataConfig, tomllib.loads(path.read_text(encoding="utf-8"))).runs
 
 
-@pytest.mark.parametrize(
-    "path", sorted(CONFIG_DIRECTORY.glob("phase5_search_bootstrap_*.toml")), ids=lambda path: path.stem
-)
+@pytest.mark.parametrize("path", sorted(CONFIG_DIRECTORY.glob("phase5_search_*.toml")), ids=lambda path: path.stem)
 def test_search_configs_load(path: Path) -> None:
     assert load_run_config(path).search.max_generated_tokens
 
@@ -50,7 +49,11 @@ def test_sft_configs_continue_an_adapter(path: Path) -> None:
 
 @pytest.mark.parametrize(
     "path",
-    [*CONFIG_DIRECTORY.glob("phase5_pilot_*_brief.toml"), *CONFIG_DIRECTORY.glob("phase5_size_*_bounded.toml")],
+    [
+        *CONFIG_DIRECTORY.glob("phase5_pilot_*_brief.toml"),
+        *CONFIG_DIRECTORY.glob("phase5_size_*_bounded.toml"),
+        *CONFIG_DIRECTORY.glob("phase5_teacher_*.toml"),
+    ],
     ids=lambda path: path.stem,
 )
 def test_brief_arms_use_the_shared_instruction(path: Path) -> None:
@@ -62,12 +65,22 @@ def test_shortening_configs_load(path: Path) -> None:
     assert from_json_object(ShorteningConfig, tomllib.loads(path.read_text(encoding="utf-8"))).rewrite.model
 
 
-def test_the_bootstrap_data_selection_matches_its_sampling_run() -> None:
-    run = load_reasoning_run_config(CONFIG_DIRECTORY / "phase5_bootstrap_r1.toml")
-    data = from_json_object(
-        ReasoningDataConfig, tomllib.loads((CONFIG_DIRECTORY / "phase5_data_bootstrap_r1.toml").read_text("utf-8"))
-    )
+def data_config(name: str) -> ReasoningDataConfig:
+    return from_json_object(ReasoningDataConfig, tomllib.loads((CONFIG_DIRECTORY / name).read_text("utf-8")))
+
+
+@pytest.mark.parametrize(
+    ("run_name", "data_name"),
+    [("phase5_bootstrap_r1", "phase5_data_bootstrap_r1"), ("phase5_teacher_9b", "phase5_data_teacher_9b")],
+)
+def test_the_data_selection_matches_its_sampling_run(run_name: str, data_name: str) -> None:
+    run = load_reasoning_run_config(CONFIG_DIRECTORY / f"{run_name}.toml")
+    data = data_config(f"{data_name}.toml")
     assert (data.selection, data.max_kept_reasoning_tokens) == (
         run.selection,
         run.shortening.max_kept_reasoning_tokens,
     )
+
+
+def test_the_student_data_drops_the_teacher_instruction() -> None:
+    assert data_config("phase5_data_teacher_9b.toml").thinking_instruction == ""

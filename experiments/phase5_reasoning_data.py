@@ -50,6 +50,7 @@ from lean_search.reasoning.dataset import (
     replay_examples,
     select_samples,
     tokenize_reasoning_example,
+    with_thinking_instruction,
     write_examples,
 )
 from lean_search.reasoning.pipeline import (
@@ -740,6 +741,7 @@ def command_select(arguments: argparse.Namespace) -> None:
                 reasoning_example(record.sampled, sample)
                 for sample in select_samples(record, config.reward, config.selection)
             ]
+        examples = with_thinking_instruction(examples, config.thinking_instruction)
         states_with_examples += bool(examples)
         if is_validation_proof(state.step.proof_identifier, config.validation_fraction, config.seed):
             validation_reasoning += examples

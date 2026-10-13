@@ -43,6 +43,9 @@ class ReasoningDataConfig:
     shortening: str = ""
     tokenizer: str = "Qwen/Qwen3.5-2B"
     seed: str = "reasoning-data"
+    # Set, it replaces the sampling runs' system prompt addition in the reasoning examples, so that a teacher's
+    # brevity instruction does not become part of the student's prompt.
+    thinking_instruction: str | None = None
 
 
 class ReasoningOrigin(StrEnum):
@@ -110,6 +113,12 @@ def reasoning_example(sampled: StateSamples, sample: SampleRecord) -> ReasoningE
         sampled.thinking_instruction,
         ReasoningOrigin.SAMPLED,
     )
+
+
+def with_thinking_instruction(examples: Iterable[ReasoningExample], instruction: str | None) -> list[ReasoningExample]:
+    if instruction is None:
+        return list(examples)
+    return [dataclasses.replace(example, thinking_instruction=instruction) for example in examples]
 
 
 def replay_example(example: SftExample) -> ReasoningExample:

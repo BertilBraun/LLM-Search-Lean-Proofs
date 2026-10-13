@@ -1,6 +1,12 @@
+import pytest
 from reasoning_records import execution, sample_record, state_record
 
-from lean_search.reasoning.dataset import SelectionConfig, reasoning_example, select_samples
+from lean_search.reasoning.dataset import (
+    SelectionConfig,
+    reasoning_example,
+    select_samples,
+    with_thinking_instruction,
+)
 from lean_search.reasoning.reward import RewardConfig, StepOutcome
 
 REWARD = RewardConfig()
@@ -72,3 +78,11 @@ def test_examples_keep_the_instruction_their_reasoning_was_sampled_with() -> Non
     record = state_record([sample_record(0, "omega", 40)], [SUCCESSFUL["omega"]], thinking_instruction="Be brief.")
     (sample,) = select_samples(record, REWARD, SELECTION)
     assert reasoning_example(record.sampled, sample).thinking_instruction == "Be brief."
+
+
+@pytest.mark.parametrize(("instruction", "expected"), [(None, "Be brief."), ("", ""), ("Think.", "Think.")])
+def test_the_data_config_can_replace_the_sampling_instruction(instruction: str | None, expected: str) -> None:
+    record = state_record([sample_record(0, "omega", 40)], [SUCCESSFUL["omega"]], thinking_instruction="Be brief.")
+    (sample,) = select_samples(record, REWARD, SELECTION)
+    (example,) = with_thinking_instruction([reasoning_example(record.sampled, sample)], instruction)
+    assert example.thinking_instruction == expected
