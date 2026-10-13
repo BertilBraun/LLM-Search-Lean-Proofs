@@ -167,7 +167,7 @@ def command_states(arguments: argparse.Namespace, config: ReasoningRunConfig, di
         raise ValueError(f"{directory.states} exists; the state set is fixed once chosen.")
     keep_config(arguments, directory)
     if arguments.states_from:
-        states = read_records(run_directory(arguments.states_from).states, ReasoningState)
+        states = read_records(run_directory(arguments.states_from).states, ReasoningState)[arguments.states_skip :]
         write_records(directory.states, states)
         print(f"{len(states)} states of {arguments.states_from} into {directory.states}")
         return
@@ -795,6 +795,7 @@ def parse_arguments() -> argparse.Namespace:
     states.add_argument("--run-name", required=True)
     states.add_argument("--traced-directory", type=Path, default=DATA_DIRECTORY / "traced")
     states.add_argument("--states-from", help="reuse another run's states instead of choosing them from [states]")
+    states.add_argument("--states-skip", type=int, default=0, help="with --states-from: drop the first N (a shard)")
 
     run = commands.add_parser("run", help="sample, execute and classify, chunk by chunk (resumable)")
     run.add_argument("--config", type=Path, required=True)

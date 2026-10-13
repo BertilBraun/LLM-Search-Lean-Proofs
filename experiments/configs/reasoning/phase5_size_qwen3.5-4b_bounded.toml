@@ -1,0 +1,50 @@
+# Bounded thinking for Qwen3.5-4B: the size probe's first 128 states at cap 1024 with the brevity
+# instruction: does success hold when its reasoning is cut short? Same server as
+# phase5_size_qwen3.5-4b.toml.
+
+[states]
+count = 512
+states_per_proof = 2
+max_goal_characters = 3000
+seed = "bootstrap-eval"
+seen_sft_data = ["v2"]
+unseen_only = true
+# The deferred Goedel SFT v2 tracing is in the shards, not in the snapshot SFT v2 was built from.
+traced = "shards"
+# The sources whose unseen states are not biased: the other sources' few unseen states are mostly those whose
+# reference step SFT dropped as too long.
+sources = ["goedel_sft_v2", "stp_lean_workbook"]
+excluded_runs = []
+split = "validation"
+
+[policy]
+model = "probe-4b"
+tokenizer = "Qwen/Qwen3.5-4B"
+server_urls = ["http://127.0.0.1:8110/v1"]
+sample_count = 8
+temperature = 0.8
+top_p = 1.0
+max_tokens = 1024
+thinking = true
+thinking_instruction = "Think briefly (a few sentences) about which tactic to use; do not restate the goal."
+few_shot = false
+request_timeout_seconds = 1800.0
+
+[execution]
+pool_size = 8
+tactic_timeout_seconds = 10.0
+foreign_header_batch_size = 16
+
+[pipeline]
+chunk_states = 64
+requests_in_flight = 128
+
+[reward]
+accept_later_reference_states = true
+value_progress = false
+value_progress_margin = 1.0
+
+[selection]
+max_per_state = 2
+min_reasoning_tokens = 16
+max_reasoning_tokens = 0

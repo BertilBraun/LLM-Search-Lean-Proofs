@@ -33,7 +33,9 @@ def test_data_configs_load(path: Path) -> None:
     assert from_json_object(ReasoningDataConfig, tomllib.loads(path.read_text(encoding="utf-8"))).runs
 
 
-@pytest.mark.parametrize("path", sorted(CONFIG_DIRECTORY.glob("phase5_search_bootstrap_*.toml")), ids=lambda path: path.stem)
+@pytest.mark.parametrize(
+    "path", sorted(CONFIG_DIRECTORY.glob("phase5_search_bootstrap_*.toml")), ids=lambda path: path.stem
+)
 def test_search_configs_load(path: Path) -> None:
     assert load_run_config(path).search.max_generated_tokens
 
@@ -46,8 +48,12 @@ def test_sft_configs_continue_an_adapter(path: Path) -> None:
     assert from_json_object(SftConfig, tomllib.loads(path.read_text(encoding="utf-8"))).initial_adapter
 
 
-@pytest.mark.parametrize("path", sorted(CONFIG_DIRECTORY.glob("phase5_pilot_*_brief.toml")), ids=lambda path: path.stem)
-def test_brief_pilot_arms_use_the_shared_instruction(path: Path) -> None:
+@pytest.mark.parametrize(
+    "path",
+    [*CONFIG_DIRECTORY.glob("phase5_pilot_*_brief.toml"), *CONFIG_DIRECTORY.glob("phase5_size_*_bounded.toml")],
+    ids=lambda path: path.stem,
+)
+def test_brief_arms_use_the_shared_instruction(path: Path) -> None:
     assert load_reasoning_run_config(path).policy.thinking_instruction == BRIEF_THINKING_INSTRUCTION
 
 
