@@ -1,0 +1,1176 @@
+{
+ "problems": 244,
+ "categories": [
+  "mathd_algebra",
+  "mathd_numbertheory",
+  "amc12",
+  "aime",
+  "imo",
+  "algebra",
+  "numbertheory",
+  "induction"
+ ],
+ "category_sizes": [
+  70,
+  60,
+  45,
+  15,
+  20,
+  18,
+  8,
+  8
+ ],
+ "runs": [
+  {
+   "settings": {
+    "run": "phase3_astar_v0_sft_v2",
+    "priority": "a_star",
+    "value_weight": 0.5,
+    "dead_steps": 16.0,
+    "depth_weight": 1.0,
+    "policy_prior_weight": 0.0,
+    "samples": 16
+   },
+   "solved": 157,
+   "solve_rate": 0.6434426229508197,
+   "mean_expansions": 21.561475409836067,
+   "mean_generated_tokens": 8337.524590163934,
+   "mean_value_prompt_tokens": 18661.29098360656,
+   "mean_wall_seconds": 175.34393035043098,
+   "mean_lean_seconds": 123.48478583023658,
+   "generated_tokens_per_solve": 12957.68152866242,
+   "solved_by_category": [
+    55,
+    49,
+    20,
+    2,
+    4,
+    16,
+    4,
+    7
+   ]
+  },
+  {
+   "settings": {
+    "run": "phase3_search_shape_n8",
+    "priority": "a_star",
+    "value_weight": 1.0,
+    "dead_steps": 16.0,
+    "depth_weight": 0.25,
+    "policy_prior_weight": 0.0,
+    "samples": 8
+   },
+   "solved": 154,
+   "solve_rate": 0.6311475409836066,
+   "mean_expansions": 43.790983606557376,
+   "mean_generated_tokens": 8652.02049180328,
+   "mean_value_prompt_tokens": 30600.774590163935,
+   "mean_wall_seconds": 351.4301809814575,
+   "mean_lean_seconds": 298.0847047888106,
+   "generated_tokens_per_solve": 13708.396103896104,
+   "solved_by_category": [
+    53,
+    49,
+    21,
+    3,
+    2,
+    15,
+    4,
+    7
+   ]
+  },
+  {
+   "settings": {
+    "run": "phase5_search_bootstrap_nothinking",
+    "priority": "a_star",
+    "value_weight": 1.0,
+    "dead_steps": 16.0,
+    "depth_weight": 0.25,
+    "policy_prior_weight": 0.0,
+    "samples": 8
+   },
+   "solved": 156,
+   "solve_rate": 0.639344262295082,
+   "mean_expansions": 51.6844262295082,
+   "mean_generated_tokens": 8884.36475409836,
+   "mean_value_prompt_tokens": 36419.95901639344,
+   "mean_wall_seconds": 307.8441711312606,
+   "mean_lean_seconds": 233.02302050786466,
+   "generated_tokens_per_solve": 13896.057692307691,
+   "solved_by_category": [
+    54,
+    49,
+    22,
+    2,
+    2,
+    16,
+    4,
+    7
+   ]
+  },
+  {
+   "settings": {
+    "run": "phase5_search_bootstrap_nothinking_n16",
+    "priority": "a_star",
+    "value_weight": 1.0,
+    "dead_steps": 16.0,
+    "depth_weight": 0.25,
+    "policy_prior_weight": 0.0,
+    "samples": 16
+   },
+   "solved": 159,
+   "solve_rate": 0.6516393442622951,
+   "mean_expansions": 41.59016393442623,
+   "mean_generated_tokens": 12363.258196721312,
+   "mean_value_prompt_tokens": 35370.64344262295,
+   "mean_wall_seconds": 333.80286712314194,
+   "mean_lean_seconds": 214.0568113573698,
+   "generated_tokens_per_solve": 18972.54716981132,
+   "solved_by_category": [
+    57,
+    48,
+    21,
+    3,
+    2,
+    17,
+    4,
+    7
+   ]
+  },
+  {
+   "settings": {
+    "run": "phase5_search_bootstrap_thinking",
+    "priority": "a_star",
+    "value_weight": 1.0,
+    "dead_steps": 16.0,
+    "depth_weight": 0.25,
+    "policy_prior_weight": 0.0,
+    "samples": 8
+   },
+   "solved": 152,
+   "solve_rate": 0.6229508196721312,
+   "mean_expansions": 12.80327868852459,
+   "mean_generated_tokens": 31184.27049180328,
+   "mean_value_prompt_tokens": 6535.963114754099,
+   "mean_wall_seconds": 252.1123424414617,
+   "mean_lean_seconds": 48.77552826918106,
+   "generated_tokens_per_solve": 50058.96052631579,
+   "solved_by_category": [
+    56,
+    47,
+    19,
+    2,
+    2,
+    15,
+    4,
+    7
+   ]
+  }
+ ],
+ "curves": [
+  {
+   "metric": "expansions",
+   "budgets": [
+    1.0,
+    2.0,
+    4.0,
+    8.0,
+    16.0,
+    32.0,
+    64.0,
+    128.0,
+    256.0,
+    500.0
+   ],
+   "solved": [
+    [
+     89,
+     123,
+     133,
+     138,
+     144,
+     153,
+     157,
+     157,
+     157,
+     157
+    ],
+    [
+     81,
+     110,
+     130,
+     141,
+     146,
+     152,
+     154,
+     154,
+     154,
+     154
+    ],
+    [
+     81,
+     116,
+     138,
+     142,
+     146,
+     149,
+     152,
+     154,
+     156,
+     156
+    ],
+    [
+     86,
+     119,
+     138,
+     145,
+     149,
+     151,
+     155,
+     157,
+     159,
+     159
+    ],
+    [
+     80,
+     112,
+     133,
+     139,
+     148,
+     152,
+     152,
+     152,
+     152,
+     152
+    ]
+   ]
+  },
+  {
+   "metric": "policy_generations",
+   "budgets": [
+    16.0,
+    32.0,
+    64.0,
+    128.0,
+    256.0,
+    512.0,
+    1024.0
+   ],
+   "solved": [
+    [
+     89,
+     123,
+     133,
+     138,
+     144,
+     153,
+     157
+    ],
+    [
+     110,
+     130,
+     141,
+     146,
+     152,
+     154,
+     154
+    ],
+    [
+     116,
+     138,
+     142,
+     146,
+     149,
+     152,
+     154
+    ],
+    [
+     86,
+     119,
+     138,
+     145,
+     149,
+     151,
+     155
+    ],
+    [
+     112,
+     133,
+     139,
+     148,
+     152,
+     152,
+     152
+    ]
+   ]
+  },
+  {
+   "metric": "generated_tokens",
+   "budgets": [
+    500.0,
+    1000.0,
+    2000.0,
+    5000.0,
+    10000.0,
+    20000.0,
+    50000.0,
+    99717.0
+   ],
+   "solved": [
+    [
+     100,
+     121,
+     132,
+     140,
+     150,
+     156,
+     157,
+     157
+    ],
+    [
+     108,
+     134,
+     145,
+     150,
+     153,
+     154,
+     154,
+     154
+    ],
+    [
+     109,
+     134,
+     144,
+     149,
+     152,
+     156,
+     156,
+     156
+    ],
+    [
+     59,
+     124,
+     137,
+     147,
+     155,
+     158,
+     159,
+     159
+    ],
+    [
+     0,
+     7,
+     58,
+     109,
+     133,
+     140,
+     151,
+     152
+    ]
+   ]
+  },
+  {
+   "metric": "wall_seconds",
+   "budgets": [
+    1.0,
+    2.0,
+    5.0,
+    10.0,
+    20.0,
+    30.0,
+    60.0,
+    120.0,
+    180.0,
+    300.0,
+    600.0,
+    1200.0,
+    1800.0,
+    3600.0,
+    3616.0849916429725
+   ],
+   "solved": [
+    [
+     34,
+     52,
+     79,
+     106,
+     124,
+     126,
+     137,
+     145,
+     148,
+     153,
+     157,
+     157,
+     157,
+     157,
+     157
+    ],
+    [
+     18,
+     36,
+     60,
+     91,
+     117,
+     130,
+     140,
+     147,
+     148,
+     151,
+     153,
+     154,
+     154,
+     154,
+     154
+    ],
+    [
+     19,
+     38,
+     61,
+     89,
+     124,
+     128,
+     143,
+     147,
+     149,
+     152,
+     154,
+     156,
+     156,
+     156,
+     156
+    ],
+    [
+     21,
+     38,
+     58,
+     75,
+     107,
+     119,
+     138,
+     146,
+     148,
+     151,
+     156,
+     159,
+     159,
+     159,
+     159
+    ],
+    [
+     20,
+     26,
+     53,
+     56,
+     64,
+     85,
+     115,
+     134,
+     138,
+     146,
+     152,
+     152,
+     152,
+     152,
+     152
+    ]
+   ]
+  },
+  {
+   "metric": "lean_seconds",
+   "budgets": [
+    1.0,
+    2.0,
+    5.0,
+    10.0,
+    20.0,
+    30.0,
+    60.0,
+    120.0,
+    180.0,
+    300.0,
+    600.0,
+    1200.0,
+    1800.0,
+    3595.0390736614354
+   ],
+   "solved": [
+    [
+     64,
+     92,
+     114,
+     125,
+     131,
+     135,
+     142,
+     149,
+     152,
+     156,
+     157,
+     157,
+     157,
+     157
+    ],
+    [
+     56,
+     88,
+     116,
+     136,
+     138,
+     140,
+     145,
+     149,
+     149,
+     152,
+     153,
+     154,
+     154,
+     154
+    ],
+    [
+     57,
+     92,
+     125,
+     133,
+     139,
+     142,
+     145,
+     150,
+     152,
+     153,
+     154,
+     156,
+     156,
+     156
+    ],
+    [
+     62,
+     94,
+     116,
+     129,
+     137,
+     143,
+     145,
+     148,
+     151,
+     155,
+     158,
+     159,
+     159,
+     159
+    ],
+    [
+     65,
+     78,
+     116,
+     133,
+     141,
+     146,
+     150,
+     151,
+     151,
+     152,
+     152,
+     152,
+     152,
+     152
+    ]
+   ]
+  }
+ ],
+ "changes": [
+  {
+   "run": "phase5_search_bootstrap_nothinking",
+   "reference": "phase3_astar_v0_sft_v2",
+   "newly_solved": [
+    "amc12a_2016_p3",
+    "amc12b_2003_p6",
+    "mathd_algebra_323",
+    "mathd_algebra_422",
+    "mathd_algebra_493",
+    "mathd_algebra_59"
+   ],
+   "lost": [
+    "imo_1961_p1",
+    "imo_1974_p5",
+    "mathd_algebra_405",
+    "mathd_algebra_433",
+    "mathd_algebra_437",
+    "mathd_algebra_480",
+    "mathd_algebra_89"
+   ]
+  },
+  {
+   "run": "phase5_search_bootstrap_nothinking",
+   "reference": "phase3_search_shape_n8",
+   "newly_solved": [
+    "algebra_xmysqpymzsqpzmxsqeqxyz_xpypzp6dvdx3y3z3",
+    "amc12b_2003_p6",
+    "imo_1984_p2",
+    "mathd_algebra_323",
+    "mathd_algebra_422"
+   ],
+   "lost": [
+    "aime_1991_p1",
+    "imo_1961_p1",
+    "mathd_algebra_185"
+   ]
+  },
+  {
+   "run": "phase5_search_bootstrap_nothinking_n16",
+   "reference": "phase3_astar_v0_sft_v2",
+   "newly_solved": [
+    "aime_1991_p1",
+    "algebra_amgm_sumasqdivbsqgeqsumbdiva",
+    "amc12a_2016_p3",
+    "amc12b_2003_p6",
+    "mathd_algebra_422",
+    "mathd_algebra_493",
+    "mathd_algebra_59"
+   ],
+   "lost": [
+    "amc12b_2003_p17",
+    "imo_1974_p5",
+    "imo_1984_p2",
+    "mathd_algebra_433",
+    "mathd_numbertheory_32"
+   ]
+  },
+  {
+   "run": "phase5_search_bootstrap_nothinking_n16",
+   "reference": "phase3_search_shape_n8",
+   "newly_solved": [
+    "algebra_amgm_sumasqdivbsqgeqsumbdiva",
+    "algebra_xmysqpymzsqpzmxsqeqxyz_xpypzp6dvdx3y3z3",
+    "amc12b_2003_p6",
+    "mathd_algebra_405",
+    "mathd_algebra_422",
+    "mathd_algebra_437",
+    "mathd_algebra_480",
+    "mathd_algebra_89"
+   ],
+   "lost": [
+    "amc12b_2003_p17",
+    "mathd_algebra_185",
+    "mathd_numbertheory_32"
+   ]
+  },
+  {
+   "run": "phase5_search_bootstrap_thinking",
+   "reference": "phase3_astar_v0_sft_v2",
+   "newly_solved": [
+    "mathd_algebra_323",
+    "mathd_algebra_393",
+    "mathd_algebra_59"
+   ],
+   "lost": [
+    "algebra_2varlineareq_xpeeq7_2xpeeq3_eeq11_xeqn4",
+    "amc12b_2003_p17",
+    "imo_1974_p5",
+    "imo_1984_p2",
+    "mathd_algebra_405",
+    "mathd_algebra_433",
+    "mathd_numbertheory_32",
+    "mathd_numbertheory_35"
+   ]
+  },
+  {
+   "run": "phase5_search_bootstrap_thinking",
+   "reference": "phase3_search_shape_n8",
+   "newly_solved": [
+    "algebra_xmysqpymzsqpzmxsqeqxyz_xpypzp6dvdx3y3z3",
+    "mathd_algebra_323",
+    "mathd_algebra_393",
+    "mathd_algebra_437",
+    "mathd_algebra_480",
+    "mathd_algebra_89"
+   ],
+   "lost": [
+    "aime_1991_p1",
+    "algebra_2varlineareq_xpeeq7_2xpeeq3_eeq11_xeqn4",
+    "amc12a_2016_p3",
+    "amc12b_2003_p17",
+    "mathd_algebra_185",
+    "mathd_algebra_493",
+    "mathd_numbertheory_32",
+    "mathd_numbertheory_35"
+   ]
+  }
+ ],
+ "calibrations": [
+  {
+   "run": "phase3_astar_v0_sft_v2",
+   "nodes_with_estimates": 19824,
+   "by_label": [
+    {
+     "label": "exact 1",
+     "nodes": 157,
+     "mean_h": 1.8057476226554396,
+     "p10_h": 1.2136656183616445,
+     "median_h": 1.6311430963422384,
+     "p90_h": 2.5290129283942018
+    },
+    {
+     "label": "exact 2",
+     "nodes": 68,
+     "mean_h": 3.354915537193673,
+     "p10_h": 2.0094993317635907,
+     "median_h": 2.979686281607441,
+     "p90_h": 5.0852215638651215
+    },
+    {
+     "label": "exact 3",
+     "nodes": 34,
+     "mean_h": 3.692189793439821,
+     "p10_h": 2.4014174931814,
+     "median_h": 3.212164348008044,
+     "p90_h": 5.9451485470247905
+    },
+    {
+     "label": "exact 4",
+     "nodes": 31,
+     "mean_h": 3.7504865854788756,
+     "p10_h": 2.2674640481917954,
+     "median_h": 3.2652902825666072,
+     "p90_h": 6.175641154877188
+    },
+    {
+     "label": "exact 5",
+     "nodes": 15,
+     "mean_h": 3.6401226252917422,
+     "p10_h": 2.0562143514003624,
+     "median_h": 3.3441976570261387,
+     "p90_h": 6.461801463264011
+    },
+    {
+     "label": "exact 6",
+     "nodes": 1,
+     "mean_h": 3.7870917666539583,
+     "p10_h": 3.7870917666539583,
+     "median_h": 3.7870917666539583,
+     "p90_h": 3.7870917666539583
+    },
+    {
+     "label": "dead",
+     "nodes": 254,
+     "mean_h": 2.2849163937508394,
+     "p10_h": 1.3955405321472363,
+     "median_h": 2.0947262491903214,
+     "p90_h": 3.36462551273963
+    },
+    {
+     "label": "at least 2+",
+     "nodes": 4677,
+     "mean_h": 2.8647944315834626,
+     "p10_h": 1.6441031489265094,
+     "median_h": 2.623041988348197,
+     "p90_h": 4.390515957665626
+    },
+    {
+     "label": "at least 1 (open)",
+     "nodes": 14587,
+     "mean_h": 3.19549117698532,
+     "p10_h": 1.8092628355522424,
+     "median_h": 2.904182946109374,
+     "p90_h": 4.927427616221907
+    }
+   ],
+   "spearman_exact": 0.7018049160564893,
+   "dead_auc": 0.46106736657917763,
+   "mean_root_h_solved": 2.786831789747501,
+   "mean_root_h_unsolved": 4.461005554688091
+  },
+  {
+   "run": "phase3_search_shape_n8",
+   "nodes_with_estimates": 23828,
+   "by_label": [
+    {
+     "label": "exact 1",
+     "nodes": 154,
+     "mean_h": 1.7102538330495387,
+     "p10_h": 1.2176482375039674,
+     "median_h": 1.5196029004165326,
+     "p90_h": 2.4778803153271167
+    },
+    {
+     "label": "exact 2",
+     "nodes": 76,
+     "mean_h": 2.7102954859668924,
+     "p10_h": 1.6333547914015432,
+     "median_h": 2.2912629079249696,
+     "p90_h": 4.09689194551708
+    },
+    {
+     "label": "exact 3",
+     "nodes": 43,
+     "mean_h": 3.006615198755186,
+     "p10_h": 1.5846342249726646,
+     "median_h": 2.7171394610703548,
+     "p90_h": 4.716446528571963
+    },
+    {
+     "label": "exact 4",
+     "nodes": 28,
+     "mean_h": 3.1671505566715283,
+     "p10_h": 1.7697124770554054,
+     "median_h": 2.8317333005567935,
+     "p90_h": 5.620947061282962
+    },
+    {
+     "label": "exact 5",
+     "nodes": 17,
+     "mean_h": 3.8265885897124887,
+     "p10_h": 1.8218494707998467,
+     "median_h": 2.5254974636279712,
+     "p90_h": 7.498861685856175
+    },
+    {
+     "label": "exact 6",
+     "nodes": 7,
+     "mean_h": 2.4461704407897957,
+     "p10_h": 1.8337134878433023,
+     "median_h": 2.296952793460325,
+     "p90_h": 3.1356307453440633
+    },
+    {
+     "label": "exact 7",
+     "nodes": 2,
+     "mean_h": 2.181158187176747,
+     "p10_h": 2.0434279883839057,
+     "median_h": 2.3188883859695886,
+     "p90_h": 2.3188883859695886
+    },
+    {
+     "label": "exact 8+",
+     "nodes": 3,
+     "mean_h": 2.0002002977479,
+     "p10_h": 1.806705427112322,
+     "median_h": 2.035473027453492,
+     "p90_h": 2.1584224386778867
+    },
+    {
+     "label": "dead",
+     "nodes": 1876,
+     "mean_h": 1.9624210765166517,
+     "p10_h": 1.2808417855254244,
+     "median_h": 1.8832050879998428,
+     "p90_h": 2.6757206505158906
+    },
+    {
+     "label": "at least 2+",
+     "nodes": 8473,
+     "mean_h": 2.0821280581554205,
+     "p10_h": 1.4741833784855225,
+     "median_h": 1.96179544657879,
+     "p90_h": 2.795575962350299
+    },
+    {
+     "label": "at least 1 (open)",
+     "nodes": 13149,
+     "mean_h": 2.5632403149915604,
+     "p10_h": 1.6388294785596547,
+     "median_h": 2.2877522437468847,
+     "p90_h": 3.735449145396398
+    }
+   ],
+   "spearman_exact": 0.5784561501645602,
+   "dead_auc": 0.4362360276539381,
+   "mean_root_h_solved": 2.7700845137574817,
+   "mean_root_h_unsolved": 4.433613426053869
+  },
+  {
+   "run": "phase5_search_bootstrap_nothinking",
+   "nodes_with_estimates": 28764,
+   "by_label": [
+    {
+     "label": "exact 1",
+     "nodes": 156,
+     "mean_h": 1.688043635147793,
+     "p10_h": 1.1965528945746882,
+     "median_h": 1.502456608100505,
+     "p90_h": 2.4489793968056355
+    },
+    {
+     "label": "exact 2",
+     "nodes": 76,
+     "mean_h": 2.852850057610623,
+     "p10_h": 1.6647283497970586,
+     "median_h": 2.59782050141851,
+     "p90_h": 4.087326989716161
+    },
+    {
+     "label": "exact 3",
+     "nodes": 40,
+     "mean_h": 3.1158629841798335,
+     "p10_h": 1.8563119737481089,
+     "median_h": 2.621901628428572,
+     "p90_h": 4.74497279287738
+    },
+    {
+     "label": "exact 4",
+     "nodes": 29,
+     "mean_h": 2.9803463050992436,
+     "p10_h": 1.6861134978365941,
+     "median_h": 2.4620722175976946,
+     "p90_h": 5.53723248370716
+    },
+    {
+     "label": "exact 5",
+     "nodes": 25,
+     "mean_h": 2.673890431022189,
+     "p10_h": 1.6718995537192933,
+     "median_h": 2.3780313333998944,
+     "p90_h": 3.4514094213781563
+    },
+    {
+     "label": "exact 6",
+     "nodes": 11,
+     "mean_h": 3.012683123066002,
+     "p10_h": 1.8283619930703063,
+     "median_h": 2.912283655424986,
+     "p90_h": 5.028487555639153
+    },
+    {
+     "label": "exact 7",
+     "nodes": 8,
+     "mean_h": 3.61331163964381,
+     "p10_h": 1.872177568337367,
+     "median_h": 3.2837523291255284,
+     "p90_h": 8.536219557659152
+    },
+    {
+     "label": "exact 8+",
+     "nodes": 14,
+     "mean_h": 3.5642595154730725,
+     "p10_h": 2.202483303471411,
+     "median_h": 3.7355705585611854,
+     "p90_h": 5.105224859214579
+    },
+    {
+     "label": "dead",
+     "nodes": 1970,
+     "mean_h": 2.0671360270904224,
+     "p10_h": 1.3178460177306268,
+     "median_h": 1.8899779447257115,
+     "p90_h": 3.0170131636456667
+    },
+    {
+     "label": "at least 2+",
+     "nodes": 10218,
+     "mean_h": 2.2396190130746003,
+     "p10_h": 1.571833246880585,
+     "median_h": 2.10516241611109,
+     "p90_h": 2.9528177172547108
+    },
+    {
+     "label": "at least 1 (open)",
+     "nodes": 16217,
+     "mean_h": 2.681225710198123,
+     "p10_h": 1.7461483242884799,
+     "median_h": 2.457836645950008,
+     "p90_h": 3.7607341156374336
+    }
+   ],
+   "spearman_exact": 0.6043884645522417,
+   "dead_auc": 0.4308866988108536,
+   "mean_root_h_solved": 2.7705095810484894,
+   "mean_root_h_unsolved": 4.471415746492349
+  },
+  {
+   "run": "phase5_search_bootstrap_nothinking_n16",
+   "nodes_with_estimates": 30013,
+   "by_label": [
+    {
+     "label": "exact 1",
+     "nodes": 159,
+     "mean_h": 1.7070613711706557,
+     "p10_h": 1.1993731930697513,
+     "median_h": 1.4617050421435573,
+     "p90_h": 2.505144537347296
+    },
+    {
+     "label": "exact 2",
+     "nodes": 73,
+     "mean_h": 2.8256597412147024,
+     "p10_h": 1.5429063985595288,
+     "median_h": 2.39305178929931,
+     "p90_h": 4.923600324125859
+    },
+    {
+     "label": "exact 3",
+     "nodes": 43,
+     "mean_h": 3.114936283921902,
+     "p10_h": 1.4201536120443667,
+     "median_h": 2.4315322814920775,
+     "p90_h": 6.175641255895452
+    },
+    {
+     "label": "exact 4",
+     "nodes": 23,
+     "mean_h": 2.75357623532281,
+     "p10_h": 1.8356257568955836,
+     "median_h": 2.2674639373659464,
+     "p90_h": 5.1445850653932235
+    },
+    {
+     "label": "exact 5",
+     "nodes": 52,
+     "mean_h": 1.6282840716921285,
+     "p10_h": 1.2523801853169887,
+     "median_h": 1.3556794725876857,
+     "p90_h": 2.3740493295967937
+    },
+    {
+     "label": "exact 6",
+     "nodes": 14,
+     "mean_h": 2.693500119791067,
+     "p10_h": 1.6956567652310468,
+     "median_h": 2.4014173941153705,
+     "p90_h": 4.518596748657017
+    },
+    {
+     "label": "exact 7",
+     "nodes": 9,
+     "mean_h": 3.3423455240718822,
+     "p10_h": 1.7425895099040243,
+     "median_h": 2.9716501072818247,
+     "p90_h": 7.943431609310505
+    },
+    {
+     "label": "exact 8+",
+     "nodes": 9,
+     "mean_h": 4.645496104968217,
+     "p10_h": 1.985769450283203,
+     "median_h": 3.974228970646037,
+     "p90_h": 10.97078137743885
+    },
+    {
+     "label": "dead",
+     "nodes": 1239,
+     "mean_h": 2.0482258232432424,
+     "p10_h": 1.3101594772165484,
+     "median_h": 1.8109393295569232,
+     "p90_h": 3.1607596773055557
+    },
+    {
+     "label": "at least 2+",
+     "nodes": 8459,
+     "mean_h": 2.0612394502994906,
+     "p10_h": 1.461444311110493,
+     "median_h": 1.9516118042878263,
+     "p90_h": 2.680119344213944
+    },
+    {
+     "label": "at least 1 (open)",
+     "nodes": 19933,
+     "mean_h": 2.497084123457868,
+     "p10_h": 1.6616914728222396,
+     "median_h": 2.294330071754621,
+     "p90_h": 3.4628446052027453
+    }
+   ],
+   "spearman_exact": 0.2960142318437587,
+   "dead_auc": 0.4962877510574733,
+   "mean_root_h_solved": 2.821137367833627,
+   "mean_root_h_unsolved": 4.432357846551308
+  },
+  {
+   "run": "phase5_search_bootstrap_thinking",
+   "nodes_with_estimates": 5677,
+   "by_label": [
+    {
+     "label": "exact 1",
+     "nodes": 152,
+     "mean_h": 1.7016042497235178,
+     "p10_h": 1.1981711868896232,
+     "median_h": 1.5328742865054945,
+     "p90_h": 2.4489793968056355
+    },
+    {
+     "label": "exact 2",
+     "nodes": 72,
+     "mean_h": 2.6853417400915216,
+     "p10_h": 1.4789055751701148,
+     "median_h": 2.409109694003508,
+     "p90_h": 4.005186576139001
+    },
+    {
+     "label": "exact 3",
+     "nodes": 40,
+     "mean_h": 3.5018889817387944,
+     "p10_h": 1.9852107308991167,
+     "median_h": 2.872420838795858,
+     "p90_h": 5.982959073925972
+    },
+    {
+     "label": "exact 4",
+     "nodes": 23,
+     "mean_h": 2.9023200003940275,
+     "p10_h": 1.5684322204007368,
+     "median_h": 2.9554444790159358,
+     "p90_h": 4.08325433496816
+    },
+    {
+     "label": "exact 5",
+     "nodes": 11,
+     "mean_h": 2.8458649779188976,
+     "p10_h": 1.7727888919862624,
+     "median_h": 1.933034904638,
+     "p90_h": 4.945121320930063
+    },
+    {
+     "label": "exact 6",
+     "nodes": 9,
+     "mean_h": 3.212286517514544,
+     "p10_h": 1.9605426765855398,
+     "median_h": 2.267463883887092,
+     "p90_h": 8.08690405342825
+    },
+    {
+     "label": "exact 7",
+     "nodes": 5,
+     "mean_h": 4.759526856485854,
+     "p10_h": 1.987339398165586,
+     "median_h": 4.369152138963754,
+     "p90_h": 9.626390461254616
+    },
+    {
+     "label": "exact 8+",
+     "nodes": 4,
+     "mean_h": 5.587665485722215,
+     "p10_h": 2.2469688734899944,
+     "median_h": 7.498861685856175,
+     "p90_h": 8.536219557659152
+    },
+    {
+     "label": "dead",
+     "nodes": 770,
+     "mean_h": 2.377777667345922,
+     "p10_h": 1.3955404986191515,
+     "median_h": 2.04354832999801,
+     "p90_h": 3.7247007646793535
+    },
+    {
+     "label": "at least 2+",
+     "nodes": 2033,
+     "mean_h": 2.535824505612056,
+     "p10_h": 1.558003880874286,
+     "median_h": 2.291289088952158,
+     "p90_h": 3.6567030033616397
+    },
+    {
+     "label": "at least 1 (open)",
+     "nodes": 2558,
+     "mean_h": 3.0953156217638926,
+     "p10_h": 1.7503471479448307,
+     "median_h": 2.7421670119050816,
+     "p90_h": 4.867516555504583
+    }
+   ],
+   "spearman_exact": 0.6094246165699633,
+   "dead_auc": 0.5185023836922571,
+   "mean_root_h_solved": 2.730388500925151,
+   "mean_root_h_unsolved": 4.470030345653603
+  }
+ ]
+}
