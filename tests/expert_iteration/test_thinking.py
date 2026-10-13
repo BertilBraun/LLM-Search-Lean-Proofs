@@ -13,10 +13,18 @@ from lean_search.expert_iteration.digests import (
 )
 from lean_search.expert_iteration.preferences import ValueJumpConfig
 from lean_search.expert_iteration.shards import Decision, ShardWriter, read_attempt_reasoning, read_attempts
-from lean_search.expert_iteration.thinking import StepReasoning, TreeReasoning, edge_reasoning
+from lean_search.expert_iteration.thinking import (
+    StepReasoning,
+    ThinkingContext,
+    ThinkingItem,
+    TreeReasoning,
+    edge_reasoning,
+)
+from lean_search.expert_iteration.thinking_compression import sufficiency_item
 from lean_search.expert_iteration.thinking_expander import ReasoningLog, most_likely_reasoning
 from lean_search.policy.client import Sample
 from lean_search.search import TreeRecord
+from lean_search.training.dpo_data import PreferencePair
 from lean_search.value.labels import TreeLabelConfig
 
 DIGESTS = DigestConfig(PreferenceConfig(), False, ValueJumpConfig(enabled=False), TreeLabelConfig(), 16)
@@ -99,3 +107,10 @@ def test_a_thinking_pair_keeps_the_state_before_its_step(tmp_path: Path) -> None
     (digest,) = digested(tmp_path / "digests")
     (context,) = read_contexts(digest)
     assert (context.previous_steps, context.goals, context.reference_goals) == (("intro x",), ("⊢ s",), ((),))
+
+
+def test_a_sufficiency_state_replays_each_earlier_step_with_a_heartbeat_limit() -> None:
+    pair = PreferencePair("s", "v1/a.t", 1, ("⊢ s",), "linarith", None, "none", "linear")
+    context = ThinkingContext("key", "import Mathlib", "theorem t : True := by", ("intro x", "simp"), ("⊢ s",), ((),))
+    state = sufficiency_item(ThinkingItem(pair, context), "linear").proof_state
+    assert len(state.tactic_heartbeats) == len(state.tactics) == 2

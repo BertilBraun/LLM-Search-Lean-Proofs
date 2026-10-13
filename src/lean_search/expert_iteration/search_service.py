@@ -46,7 +46,7 @@ from lean_search.expert_iteration.scheduler import (
     StatementStatus,
     decide,
 )
-from lean_search.expert_iteration.serving import LoopPaths, read_current, write_json_atomically
+from lean_search.expert_iteration.serving import LoopPaths, ServiceControl, read_current, write_json_atomically
 from lean_search.expert_iteration.shards import (
     AttemptRecord,
     Decision,
@@ -85,14 +85,6 @@ ROOT_VALUE_SECONDS = 30.0
 async def sleep_unless_stopped(stop: asyncio.Event, seconds: float) -> None:
     with contextlib.suppress(TimeoutError):
         await asyncio.wait_for(stop.wait(), seconds)
-
-
-@dataclass(frozen=True)
-class ServiceControl:
-    """Written by phase6_loop.py hold / release; the service follows it within CONTROL_SECONDS."""
-
-    hold: bool
-    requested_at: str
 
 
 @dataclass(frozen=True)

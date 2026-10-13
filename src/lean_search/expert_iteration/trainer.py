@@ -80,6 +80,7 @@ from lean_search.expert_iteration.serving import (
     LoopPaths,
     ModelVersion,
     Publisher,
+    ServiceControl,
     read_current,
     record_published,
     write_json_atomically,
@@ -377,7 +378,8 @@ class PhaseTrainer:
         training = self.config.training
         while not stop.is_set():
             current = read_current(self.paths)
-            progress = progress_since(self.paths.shards, current.published_at, datetime.datetime.now(datetime.UTC))
+            since = max(current.published_at, self.released_at())
+            progress = progress_since(self.paths.shards, since, datetime.datetime.now(datetime.UTC))
             trigger = phase_trigger(progress, training)
             if trigger is None:
                 with contextlib.suppress(TimeoutError):
@@ -388,6 +390,13 @@ class PhaseTrainer:
                 state = PhaseState(current.version + 1, PhaseStage.PAUSE, trigger, now(), "", "", None)
                 write_json_atomically(self.paths.phase_state, state)
                 await self.run_phase(state, searches)
+
+    def released_at(self) -> str:
+        """When an operator last released a hold (held time counts toward no trigger); empty if never."""
+        if not self.paths.control.exists():
+            return ""
+        control = from_json_object(ServiceControl, json.loads(self.paths.control.read_text(encoding="utf-8")))
+        return "" if control.hold else control.requested_at
 
     async def run_phase(self, state: PhaseState, searches: PausableSearches | None) -> None:
         """From the state's stage to the end; without searches (after a restart) pausing and resuming do nothing."""

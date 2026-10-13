@@ -42,6 +42,14 @@ class ModelVersion:
 
 
 @dataclass(frozen=True)
+class ServiceControl:
+    """Written by phase6_loop.py hold / release; the service follows it within CONTROL_SECONDS."""
+
+    hold: bool
+    requested_at: str
+
+
+@dataclass(frozen=True)
 class LoopPaths:
     # $LEAN_SEARCH_RUNS, $LEAN_SEARCH_DATA and the loop's name.
     runs_root: Path

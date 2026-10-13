@@ -11,7 +11,7 @@ from collections import Counter
 from collections.abc import Sequence
 
 from lean_search.expert_iteration.thinking import CompressionConfig, ThinkingItem
-from lean_search.lean import ProofState
+from lean_search.lean import LeanReplConfig, ProofState
 from lean_search.policy.config import PolicyConfig
 from lean_search.reasoning.compression import (
     ReasoningRewriter,
@@ -31,7 +31,11 @@ from lean_search.reasoning.states import goal_key
 def sufficiency_item(item: ThinkingItem, reasoning: str) -> SufficiencyItem:
     context = item.context
     # Session 0 is never live, so the REPL rebuilds the state by replaying the proof's earlier steps.
-    state = ProofState(context.header, context.statement, context.previous_steps, context.goals, -1, 0)
+    # Each earlier step replays under the REPL's default heartbeat limit, at least what the search allowed it.
+    replay_heartbeats = (LeanReplConfig().tactic_heartbeats,) * len(context.previous_steps)
+    state = ProofState(
+        context.header, context.statement, context.previous_steps, context.goals, -1, 0, replay_heartbeats
+    )
     return SufficiencyItem(state, tuple(goal_key(goals) for goals in context.reference_goals), reasoning)
 
 

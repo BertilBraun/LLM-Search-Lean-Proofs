@@ -43,10 +43,11 @@ from lean_search.expert_iteration.loop_metrics import (
     version_metrics,
 )
 from lean_search.expert_iteration.merging import merged_publisher
-from lean_search.expert_iteration.search_service import ServiceControl, ServiceHeartbeat
+from lean_search.expert_iteration.search_service import ServiceHeartbeat
 from lean_search.expert_iteration.serving import (
     LoopPaths,
     ModelVersion,
+    ServiceControl,
     merged_directory,
     read_current,
     record_published,
