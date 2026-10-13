@@ -14,7 +14,8 @@ top_p = 0.95
 max_tokens = 4096
 max_model_length = 8192
 requests_in_flight = 64
-instruction = "Please reason step by step, and put your final answer within \boxed{}."
+# A literal string: in a basic TOML string the backslash of \boxed would start the escape \b (backspace).
+instruction = 'Please reason step by step, and put your final answer within \boxed{}.'
 
 [[models]]
 label = "qwen3.5-2b"

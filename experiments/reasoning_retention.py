@@ -40,6 +40,7 @@ RUN_DIRECTORY = Path(os.environ["LEAN_SEARCH_RUNS"]) / "reasoning_retention"
 LENGTH_FINISH_REASON = "length"
 JUDGED_TRACE_CHARACTERS = 12000
 FORCED_ANSWER_TOKENS = 256
+BOX_INSTRUCTION = "\\boxed{}"
 FORCED_THINK_END = f"\n{THINK_END}\n\n"
 
 
@@ -519,6 +520,8 @@ def parse_arguments() -> argparse.Namespace:
 def main() -> None:
     arguments = parse_arguments()
     config = from_json_object(RetentionConfig, tomllib.loads(arguments.config.read_text(encoding="utf-8")))
+    if BOX_INSTRUCTION not in config.instruction:
+        raise ValueError(f"the instruction must ask for {BOX_INSTRUCTION}: {config.instruction!r}")
     match arguments.command:
         case "problems":
             command_problems(config)
