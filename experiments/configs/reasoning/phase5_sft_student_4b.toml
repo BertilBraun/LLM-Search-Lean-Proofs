@@ -38,5 +38,6 @@ interval_steps = 50
 validation_examples = 2000
 micro_batch_tokens = 16384
 generation_examples = 256
-generation_batch_size = 64
+# 16, not 64: generating with the trained 4B after training ran out of memory at 64.
+generation_batch_size = 16
 max_new_tokens = 256
