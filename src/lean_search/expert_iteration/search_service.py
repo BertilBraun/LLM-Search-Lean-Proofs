@@ -25,7 +25,7 @@ import httpx
 
 from lean_search.corpora.records import StatementRecord, read_statement_records
 from lean_search.expert_iteration.curriculum import Curriculum, CurriculumCounts, CurriculumState
-from lean_search.expert_iteration.known_proofs import read_verified
+from lean_search.expert_iteration.known_proofs import read_index, read_verified
 from lean_search.expert_iteration.loop_config import LoopConfig, SearchStage
 from lean_search.expert_iteration.loop_search import (
     GatedExpander,
@@ -203,6 +203,7 @@ def stage_attempt(
         harvest_expansions=result.harvest_expansions,
         decision=decision,
         tree_file=None,
+        certified=job.certified,
     )
 
 
@@ -235,6 +236,7 @@ def load_failure_attempt(job: Job, start: StageStart, result: SearchResult, max_
         harvest_expansions=0,
         decision=Decision.RETIRED_LOAD_FAILURE,
         tree_file=None,
+        certified=job.certified,
     )
 
 
@@ -287,6 +289,12 @@ class SearchService:
         )
         self.scheduler.add_statements(open_statements)
         curriculum_statements = self.read_new_verified(set())
+        if search.curriculum.unverified:
+            unverified = self.curriculum.add_unverified(
+                read_index(self.paths.data_root / search.curriculum.unverified), set()
+            )
+            self.scheduler.add_statements(unverified, open_pool=False)
+            curriculum_statements += unverified
         replayed = self.scheduler.replay(all_attempts(self.paths.shards))
         if self.paths.curriculum.exists():
             state = json.loads(self.paths.curriculum.read_text(encoding="utf-8"))

@@ -76,6 +76,25 @@ class VerifiedStatement:
         return problem_name(self.statement)
 
 
+@dataclass(frozen=True)
+class IndexedStatement:
+    """A candidate as the curriculum needs it before verification: the statement and its shortest proof's length."""
+
+    statement: StatementRecord
+    proof_tactics: int
+    proof_characters: int
+
+
+def indexed_statement(candidate: KnownProofStatement) -> IndexedStatement:
+    shortest = candidate.proofs[0]
+    return IndexedStatement(candidate.statement, shortest.top_level_tactics, shortest.characters)
+
+
+def read_index(path: Path) -> Iterator[IndexedStatement]:
+    with path.open(encoding="utf-8") as lines:
+        yield from (from_json_object(IndexedStatement, json.loads(line)) for line in lines if line.strip())
+
+
 @dataclass
 class StatementProofs:
     statement: StatementRecord

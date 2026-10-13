@@ -1,7 +1,7 @@
 """Pool v3 for the loop's curriculum: statements with a known formal proof that no training used, verified lazily.
 
     python experiments/phase6_pool_v3.py --config experiments/configs/expert_iteration/pool_v3.toml \
-        --step select | deduplicate | verify [--limit N] [--sample N] [--loop-config LOOP] | report
+        --step select | deduplicate | index | verify [--limit N] [--sample N] [--loop-config LOOP] | report
 
 select: groups the normalized (decontaminated) proof corpora by canonical statement, drops statements whose proofs
 were selected for tracing (SFT v1/v2, the value data and everything derived from traced proofs) and writes the
@@ -12,6 +12,9 @@ deduplicate: clusters near-duplicate statements (the same problem formalized sev
 normalized token 5-grams (near_duplicates.py) and keeps the easiest member of each cluster, without proved
 negations of conjectures (`drop_negations`); the full list moves to candidates_all.jsonl. dedup.json holds the counts
 per source before and after and sample pairs per similarity bin.
+
+index: the candidates as the curriculum feeds them before verification (statement and shortest proof length), without
+those below verification.min_proof_tactics, to index.jsonl.
 
 verify (CPU only; run it niced): compiles each candidate's proofs in our Lean environment, shortest first, until one
 passes, in candidate order and in batches, keeping `verification.lead` usable statements ahead of what the loop
@@ -52,6 +55,7 @@ from lean_search.expert_iteration.known_proofs import (
     VerifiedStatement,
     add_proof,
     easiest_first,
+    indexed_statement,
     is_negation,
     load_known_proof_pool_config,
     read_candidates,
@@ -81,6 +85,7 @@ SAMPLE_SEED = "pool-v3-sample"
 class Step(StrEnum):
     SELECT = "select"
     DEDUPLICATE = "deduplicate"
+    INDEX = "index"
     VERIFY = "verify"
     REPORT = "report"
 
@@ -309,6 +314,17 @@ def deduplicate(config: KnownProofPoolConfig) -> None:
     log(f"{kept:,} of {len(sources):,} candidates kept")
 
 
+def index(config: KnownProofPoolConfig) -> None:
+    minimum = config.verification.min_proof_tactics
+    entries = (
+        indexed_statement(candidate)
+        for candidate in read_candidates(POOL_DIRECTORY / "candidates.jsonl")
+        if candidate.proofs[0].top_level_tactics >= minimum
+    )
+    count = write_records(POOL_DIRECTORY / "index.jsonl", entries)
+    log(f"{count:,} candidates indexed (known proofs of at least {minimum} top-level tactics)")
+
+
 def sample_candidates(path: Path, count: int) -> list[KnownProofStatement]:
     """The `count` candidates with the smallest seeded hashes of their names, in candidate order."""
     # A min-heap of inverted hashes keeps the largest kept hash on top.
@@ -529,6 +545,8 @@ def main() -> None:
             select(config)
         case Step.DEDUPLICATE:
             deduplicate(config)
+        case Step.INDEX:
+            index(config)
         case Step.VERIFY:
             asyncio.run(verify(config, arguments.limit, arguments.sample, arguments.loop_config))
         case Step.REPORT:

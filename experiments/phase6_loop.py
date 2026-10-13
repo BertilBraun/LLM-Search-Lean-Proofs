@@ -23,6 +23,7 @@ import subprocess
 from enum import StrEnum
 from pathlib import Path
 
+from lean_search.expert_iteration.curriculum import KindOutcomes
 from lean_search.expert_iteration.digests import all_values
 from lean_search.expert_iteration.known_proofs import read_verified
 from lean_search.expert_iteration.loop_config import InitialModels, LoopConfig, load_loop_config
@@ -159,6 +160,11 @@ def verifier_line(config: LoopConfig, started: set[str]) -> str:
     )
 
 
+def kind_summary(outcomes: KindOutcomes) -> str:
+    rate = "–" if outcomes.solve_rate is None else f"{outcomes.solve_rate:.0%}"
+    return f"{outcomes.fed:,} fed, {outcomes.solved:,}/{outcomes.finished:,} solved ({rate})"
+
+
 def print_status(config: LoopConfig, paths: LoopPaths) -> None:
     """One block for the watchdog: each line `key: value`, alive/stale states spelled out."""
     current_time = datetime.datetime.now(datetime.UTC)
@@ -211,6 +217,10 @@ def print_status(config: LoopConfig, paths: LoopPaths) -> None:
             f"curriculum: band {curriculum.band_low:.2f}–{curriculum.band_high:.2f} ({curriculum.band_available:,} "
             f"statements, move {curriculum.generation}), solve rate {rate} over {curriculum.outcomes} outcomes, "
             f"{curriculum.available:,} of {curriculum.statements:,} not started"
+        )
+        lines.append(
+            f"fed this session: verified {kind_summary(curriculum.verified_outcomes)}, unverified "
+            f"{kind_summary(curriculum.unverified_outcomes)}"
         )
     else:
         lines.append("curriculum: no band yet")

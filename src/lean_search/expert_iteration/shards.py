@@ -76,6 +76,8 @@ class AttemptRecord:
     # Relative to the shard directory, on a search's last record only; None when the statement did not start.
     tree_file: str | None
     reasoning_file: str | None = None
+    # Whether the curriculum fed the statement with its known proof verified here; None for the open pool.
+    certified: bool | None = None
 
     @property
     def proofs(self) -> int:

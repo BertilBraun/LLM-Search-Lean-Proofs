@@ -32,7 +32,7 @@ def test_rescoring_runs_only_when_the_measured_rate_fits_the_limit(states: int, 
 
 
 async def test_the_searches_wait_for_the_curriculum_minimum(tmp_path: Path) -> None:
-    curriculum = CurriculumConfig(verified="verified.jsonl", minimum_statements=2, reload_seconds=0.01)
+    curriculum = CurriculumConfig(verified="verified.jsonl", unverified="", minimum_statements=2, reload_seconds=0.01)
     servers = (ServerEndpoint("p", 0, "http://p/v1"), ServerEndpoint("v", 0, "http://v/v1"))
     config = LoopConfig(
         "loop",

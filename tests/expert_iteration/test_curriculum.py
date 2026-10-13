@@ -5,6 +5,7 @@ from loop_fixtures import attempt, verified
 
 from lean_search.corpora.records import StatementRecord
 from lean_search.expert_iteration.curriculum import Curriculum, CurriculumConfig, CurriculumState
+from lean_search.expert_iteration.known_proofs import IndexedStatement
 from lean_search.expert_iteration.loop_config import SchedulerConfig
 from lean_search.expert_iteration.pool import problem_name
 from lean_search.expert_iteration.scheduler import Scheduler
@@ -101,7 +102,7 @@ def test_root_values_shift_the_difficulty() -> None:
 def test_roots_nearest_the_band_are_scored_first() -> None:
     curriculum = curriculum_with([1, 9, 2])
     curriculum.next_statement()
-    assert [root.name for root in curriculum.roots_to_score(window=2, limit=2)] == ["s.t2", "s.t1"]
+    assert [root.name for root in curriculum.roots_to_score(window=4, limit=2)] == ["s.t2", "s.t1"]
 
 
 def test_a_new_value_model_makes_every_root_stale_again() -> None:
@@ -141,3 +142,48 @@ def test_a_band_far_above_the_target_moves_in_bigger_steps() -> None:
     curriculum = curriculum_with([1] * 5 + [2] * 8 + [3] * 8, config)
     outcomes(curriculum, [True] * 5)
     assert curriculum.band_low == 2.5
+
+
+def indexed(number: int, tactics: int) -> IndexedStatement:
+    statement = StatementRecord("s", f"t{number}", "", f"theorem t{number} : True := by", "", "")
+    return IndexedStatement(statement, tactics, 10 * tactics)
+
+
+def test_unverified_statements_are_fed_as_such() -> None:
+    curriculum = Curriculum(CONFIG, value_version=0)
+    curriculum.add_unverified([indexed(0, 2)], started=set())
+    curriculum.next_statement()
+    assert curriculum.counts().unverified_outcomes.fed == 1
+
+
+def test_a_failed_verification_takes_an_unverified_statement_out() -> None:
+    curriculum = Curriculum(CONFIG, value_version=0)
+    curriculum.add_unverified([indexed(0, 2), indexed(1, 2)], started=set())
+    curriculum.add([verified(0, 2, is_verified=False)], started=set())
+    assert curriculum.available == {"s.t1"}
+
+
+def test_a_later_verification_certifies_an_unverified_statement() -> None:
+    curriculum = Curriculum(CONFIG, value_version=0)
+    curriculum.add_unverified([indexed(0, 2)], started=set())
+    curriculum.add([verified(0, 3)], started=set())
+    assert (curriculum.is_verified("s.t0"), curriculum.statements["s.t0"].proof_tactics) == (True, 3)
+
+
+def test_outcomes_are_counted_by_verification() -> None:
+    curriculum = Curriculum(CONFIG, value_version=0)
+    curriculum.add([verified(0, 1)], started=set())
+    curriculum.add_unverified([indexed(1, 1), indexed(2, 1)], started=set())
+    for _ in range(3):
+        statement = curriculum.next_statement()
+        assert statement is not None
+        curriculum.record_outcome(problem_name(statement), curriculum.is_verified(problem_name(statement)))
+    counts = curriculum.counts()
+    assert (counts.verified_outcomes.solve_rate, counts.unverified_outcomes.solve_rate) == (1.0, 0.0)
+
+
+def test_only_verified_roots_are_scored() -> None:
+    curriculum = Curriculum(CONFIG, value_version=0)
+    curriculum.add([verified(0, 1)], started=set())
+    curriculum.add_unverified([indexed(1, 1)], started=set())
+    assert [root.name for root in curriculum.roots_to_score(window=10, limit=10)] == ["s.t0"]

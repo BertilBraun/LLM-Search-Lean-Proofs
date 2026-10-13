@@ -37,6 +37,8 @@ class Job:
     statement: StatementRecord
     # The stage the search starts at: 0, or a later stage when a cut-off search starts again.
     stage: int
+    # Whether the curriculum fed it verified; None for the open pool.
+    certified: bool | None = None
 
     @property
     def name(self) -> str:
@@ -72,6 +74,7 @@ class _Entry:
     status: StatementStatus
     stage: int = 0
     priority: float = math.inf
+    certified: bool | None = None
 
 
 def decide(outcome: StageOutcome, stage: int, config: SchedulerConfig) -> Decision:
@@ -146,6 +149,7 @@ class Scheduler:
                     self.fresh_started_by_source[attempt.source] += 1
             if self.curriculum is not None:
                 self.curriculum.mark_started([attempt.problem_name])
+            entry.certified = attempt.certified
             if attempt.decision == Decision.ESCALATED:
                 entry.status = StatementStatus.QUEUED
                 entry.stage = attempt.stage + 1
@@ -170,7 +174,7 @@ class Scheduler:
         entry = self.entries[name]
         assert entry.statement is not None, name
         entry.status = StatementStatus.IN_FLIGHT
-        return Job(entry.statement, entry.stage)
+        return Job(entry.statement, entry.stage, entry.certified)
 
     def record(self, attempt: AttemptRecord) -> None:
         """A stage of a live search ended; an escalated search goes on in place."""
@@ -219,7 +223,8 @@ class Scheduler:
         statement = None if self.curriculum is None else self.curriculum.next_statement()
         if statement is not None:
             name = problem_name(statement)
-            self.entries.setdefault(name, _Entry(statement, StatementStatus.FRESH))
+            entry = self.entries.setdefault(name, _Entry(statement, StatementStatus.FRESH))
+            entry.certified = self.curriculum.is_verified(name)
             return name
         return None if open_source is None else self._take_open(open_source)
 
