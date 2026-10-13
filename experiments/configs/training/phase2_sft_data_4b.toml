@@ -1,0 +1,37 @@
+# Qwen3.5-4B student SFT data: a 20M-token subsample of the SFT v2 mix from the same snapshot
+# (phase2_sft_data.py --snapshot). Weights are v2's per-source tokens in millions, so the shares match v2's; no
+# source runs out at this budget. Completions are capped at the search's policy max_tokens (256).
+token_budget = 20_000_000
+max_prompt_tokens = 2048
+max_completion_tokens = 256
+validation_examples = 2000
+reference_tokenizer = "Qwen/Qwen3.5-2B"
+seed = "sft-4b"
+
+[[sources]]
+name = "goedel_lean_workbook_proofs"
+weight = 14.572437
+
+[[sources]]
+name = "stp_lean_workbook"
+weight = 18.207962
+
+[[sources]]
+name = "deepseek_prover_v1"
+weight = 11.091553
+
+[[sources]]
+name = "lean_workbook"
+weight = 0.347034
+
+[[sources]]
+name = "goedel_sft_v2"
+weight = 2.659005
+
+[[sources]]
+name = "numinamath_lean_kimina"
+weight = 1.996874
+
+[[sources]]
+name = "leanabell_sft"
+weight = 11.125607

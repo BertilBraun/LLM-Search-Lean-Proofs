@@ -1,0 +1,36 @@
+# Qwen3.5-4B student for the reasoning-teacher experiment: the SFT v2 recipe (LoRA rank 64, lr 2e-4, one epoch,
+# non-thinking format) on a 20M-token subsample of the v2 mix, packed with compiled layers, DDP on both GPUs:
+#   torchrun --nproc-per-node 2 experiments/phase2_sft.py --config experiments/configs/training/phase2_sft_4b.toml \
+#       --run-name phase2_sft_4b
+model = "Qwen/Qwen3.5-4B"
+data = "4b"
+merge = false
+
+[lora]
+rank = 64
+alpha = 64
+dropout = 0.0
+
+[optimization]
+method = "lora"
+learning_rate = 2e-4
+warmup_fraction = 0.03
+minimum_learning_rate_ratio = 0.1
+weight_decay = 0.0
+max_gradient_norm = 1.0
+epochs = 1
+micro_batch_tokens = 16384
+micro_batches_per_step = 2
+length_group_examples = 4096
+gradient_checkpointing = true
+packing = true
+compile_layers = true
+seed = 0
+
+[evaluation]
+interval_steps = 100
+validation_examples = 1000
+micro_batch_tokens = 16384
+generation_examples = 128
+generation_batch_size = 64
+max_new_tokens = 256
