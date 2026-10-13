@@ -220,9 +220,10 @@ weight = 1.0
 name = "leanabell_sft"
 weight = 1.0
 
+# Inside every 3rd phase's pause (searches paused): the GPUs and the service's 40 CPUs to itself.
 [evaluation]
 config = "experiments/configs/expert_iteration/loop_evaluation.toml"
 every_versions = 3
 max_expansions = 32
-concurrency = 16
+concurrency = 120
 check_seconds = 120.0

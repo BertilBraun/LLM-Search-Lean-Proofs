@@ -10,7 +10,7 @@ curriculum band, GPU utilization and the verifier's lead. metrics computes per-v
 and value calibration on fresh trees, each budget stage's proofs per GPU-hour (to tune the stage gates), and the
 phases' buffer statistics, into $LEAN_SEARCH_RUNS/<loop>/summary/{metrics.json,README.md}.
 serve-commands prints how to start each vLLM server with the current version (also after a reboot); commands prints
-the launch sequence: init, servers, verifier, service, evaluator, status.
+the launch sequence: init, servers, service (which also evaluates, inside its training pauses), status.
 """
 
 import argparse
@@ -398,15 +398,14 @@ def print_commands(config: LoopConfig, config_path: Path, paths: LoopPaths) -> N
                 *(publisher.serve_command(initial, server) for server in config.serving.servers),
                 f"for port in {ports}; do until curl -sf http://127.0.0.1:$port/v1/models > /dev/null; do sleep 10; "
                 "done; done",
-                "# 3. The verifier at its loop setting (6 Lean processes): stop the faster pre-launch one by its PID",
-                f'kill $(pgrep -f "{VERIFIER_PATTERN}")',
-                f"{background} experiments/phase6_pool_v3.py --config experiments/configs/expert_iteration/pool_v3.toml"
-                f" --step verify --loop-config {config_path.as_posix()} >> {log}/verify.log 2>&1 < /dev/null &",
-                "# 4. The search service with its training phases (searches start at "
-                f"{config.search.curriculum.minimum_statements:,} usable statements), then the evaluator",
+                "# 3. The search service with its training phases, which also evaluate version 0 and every "
+                f"{config.evaluation.every_versions}rd version on miniF2F-valid",
                 f"{background} experiments/phase6_service.py {option} >> {log}/service.log 2>&1 < /dev/null &",
-                f"{background} experiments/phase6_evaluator.py {option} >> {log}/evaluator.log 2>&1 < /dev/null &",
-                "# 5. Watch: one status block (service, version, statements, proofs, phase, band, GPUs, verifier)",
+                "# Optional, not run by default (the curriculum feeds unverified statements): the pool v3 verifier",
+                f"# {background} experiments/phase6_pool_v3.py"
+                " --config experiments/configs/expert_iteration/pool_v3.toml"
+                f" --step verify --loop-config {config_path.as_posix()} >> {log}/verify.log 2>&1 < /dev/null &",
+                "# 4. Watch: one status block (service, version, statements, proofs, phase, band, GPUs, verifier)",
                 f"python experiments/phase6_loop.py {option} status",
                 "# Stop a process with kill (SIGTERM) on its python PID; each resumes from disk.",
             ]

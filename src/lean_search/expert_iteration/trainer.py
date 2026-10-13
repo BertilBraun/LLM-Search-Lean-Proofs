@@ -16,6 +16,8 @@ train    the policy (DPO + NLL, reference = the published policy) and the value 
          from the current adapters, in parallel, one GPU each
 publish  version k + 1 is prepared (e.g. merged) and pointed at by models/current.json
 restore  the servers come back with the new weights
+evaluate (version 0 and every `evaluation.every_versions`-th) miniF2F-valid at the evaluation's reduced budget, with
+         the GPUs and the service's CPUs to itself while the searches stay paused
 resume   the searches continue where they paused; stale frontier states are re-scored as they come up
 """
 
@@ -26,6 +28,7 @@ import datetime
 import json
 import os
 import random
+import time
 import tomllib
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -49,6 +52,13 @@ from lean_search.expert_iteration.digests import (
     write_policy,
 )
 from lean_search.expert_iteration.loop_config import LoopConfig, ThinkingConfig, TrainingConfig, TrainingStage
+from lean_search.expert_iteration.loop_evaluation import (
+    EvaluationRecord,
+    append_evaluation,
+    due_version,
+    evaluation_config_text,
+    read_evaluations,
+)
 from lean_search.expert_iteration.mixing import is_held_out
 from lean_search.expert_iteration.preferences import ValueJumpConfig
 from lean_search.expert_iteration.proofs import identifier_problem
@@ -79,6 +89,7 @@ from lean_search.expert_iteration.thinking import ThinkingItem
 from lean_search.expert_iteration.toml_text import toml_text
 from lean_search.policy.prompts import normalize_tactic_block
 from lean_search.search.records import from_json_object, to_json
+from lean_search.search.summary import RunSummary
 from lean_search.training.dpo_data import PreferencePair, pair_key, write_pairs
 from lean_search.value.labels import LabelKind, ValueExample, merge_duplicates, read_examples, write_examples
 from lean_search.value.metrics import roc_auc, spearman_correlation
@@ -102,6 +113,7 @@ class PhaseStage(StrEnum):
     TRAIN = "train"
     PUBLISH = "publish"
     RESTORE = "restore"
+    EVALUATE = "evaluate"
     RESUME = "resume"
     DONE = "done"
 
@@ -411,6 +423,8 @@ class PhaseTrainer:
             case PhaseStage.RESTORE:
                 version = read_current(self.paths)
                 await asyncio.gather(*(self.gpu_release.restore(server, version) for server in servers))
+            case PhaseStage.EVALUATE:
+                await self.evaluate_if_due()
             case PhaseStage.RESUME:
                 if searches is not None:
                     await searches.resume(self.config.training.rescore_frontier)
@@ -426,6 +440,41 @@ class PhaseTrainer:
         while self.paths.evaluation_lock.exists() and waited < EVALUATION_WAIT_SECONDS:
             await asyncio.sleep(10)
             waited += 10
+
+    async def evaluate_if_due(self) -> None:
+        """The published version on miniF2F-valid when due; a failed evaluation is logged and skipped, not retried."""
+        version = read_current(self.paths)
+        evaluated = {record.version for record in read_evaluations(self.paths.evaluations)}
+        if due_version([version], evaluated, self.config.evaluation) is None:
+            return
+        run_name = f"{self.paths.name}_evaluation_v{version.version:04d}"
+        run_directory = self.paths.runs_root / run_name
+        if run_directory.exists():
+            run_directory.rename(run_directory.with_name(f"{run_name}.incomplete_{int(time.time())}"))
+        template = (REPOSITORY_DIRECTORY / self.config.evaluation.config).read_text(encoding="utf-8")
+        config_path = self.paths.directory / "evaluations" / f"v{version.version:04d}.toml"
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_text = evaluation_config_text(
+            template, self.config.serving, self.config.evaluation, self.config.search.thinking
+        )
+        config_path.write_text(config_text, encoding="utf-8")
+        started_at = now()
+        self.log(f"Evaluating version {version.version} on miniF2F-valid")
+        log_path = self.paths.directory / "training" / f"evaluation_v{version.version:04d}.log"
+        command = f"python experiments/run_search.py --config {config_path} --split valid --run-name {run_name}"
+        with log_path.open("a", encoding="utf-8") as log_file:
+            process = await asyncio.create_subprocess_exec(
+                "bash", "-c", command, cwd=REPOSITORY_DIRECTORY, stdout=log_file, stderr=log_file
+            )
+            if await process.wait():
+                self.log(f"Evaluation of version {version.version} failed; see {log_path}")
+                return
+        summary = from_json_object(
+            RunSummary, json.loads((run_directory / "summary" / "summary.json").read_text(encoding="utf-8"))
+        )
+        record = EvaluationRecord(version.version, run_name, summary.problems, summary.solved, started_at, now())
+        append_evaluation(self.paths.evaluations, record)
+        self.log(f"Version {version.version}: {record.solved}/{record.problems} on miniF2F-valid")
 
     async def compress_reasoning(self) -> None:
         """Shortens the reasoning of the new digests' proof-step pairs, once per digest."""

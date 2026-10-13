@@ -391,3 +391,11 @@ def test_a_phase_trains_on_at_most_its_cap(tmp_path: Path) -> None:
     training = dataclasses.replace(trainer.config.training, max_value_samples=4)
     trainer.config = dataclasses.replace(trainer.config, training=training)
     assert trainer.build_data(1).value.trained == 4
+
+
+async def test_a_version_not_due_is_not_evaluated(tmp_path: Path) -> None:
+    events: list[str] = []
+    paths, trainer = idle_trainer(tmp_path, events)
+    record_published(paths, ModelVersion(1, "/p", "/v", PUBLISHED_AT, "proofs"))
+    await trainer.evaluate_if_due()
+    assert not paths.evaluations.exists()
