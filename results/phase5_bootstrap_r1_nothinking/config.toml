@@ -1,0 +1,78 @@
+# Optional rationalization source for the bootstrap: the SFT v2 policy without thinking on phase5_bootstrap_r1's
+# states (`states --states-from phase5_bootstrap_r1`). Its successful steps on states where thinking found
+# nothing are given a short reasoning by the rewriter (shortening.rationalize_runs of phase5_bootstrap_r1.toml).
+# Lean-heavy: about 8 s per state with 16 processes.
+
+[states]
+count = 8000
+states_per_proof = 2
+max_goal_characters = 3000
+seed = "bootstrap"
+seen_sft_data = ["v2"]
+unseen_only = true
+# The deferred Goedel SFT v2 tracing is in the shards, not in the snapshot SFT v2 was built from.
+traced = "shards"
+# The sources whose unseen states are not biased: the other sources' few unseen states are mostly those whose
+# reference step SFT dropped as too long.
+sources = ["goedel_sft_v2", "stp_lean_workbook"]
+excluded_runs = []
+
+[policy]
+model = "search-qwen3.5-2b"
+tokenizer = "Qwen/Qwen3.5-2B"
+server_urls = ["http://127.0.0.1:8100/v1", "http://127.0.0.1:8101/v1"]
+adapter = "policy-v2"
+# Fewer samples than the thinking run: its Lean cost (~8 s per state at k=8) is what bounds it.
+sample_count = 4
+temperature = 0.8
+top_p = 1.0
+max_tokens = 256
+thinking = false
+few_shot = false
+request_timeout_seconds = 1800.0
+
+[execution]
+pool_size = 16
+tactic_timeout_seconds = 10.0
+foreign_header_batch_size = 16
+
+[pipeline]
+chunk_states = 256
+requests_in_flight = 128
+
+[reward]
+accept_later_reference_states = true
+value_progress = false
+value_progress_margin = 1.0
+
+# The order successes are considered in (shortest reasoning first, distinct blocks first); keep equal to the data
+# config's.
+[selection]
+max_per_state = 2
+min_reasoning_tokens = 16
+max_reasoning_tokens = 0
+
+[shortening]
+max_kept_reasoning_tokens = 256
+candidates_per_state = 3
+# Optional: a run of the SFT v2 policy without thinking on the same states (phase5_bootstrap_r1_nothinking.toml),
+# whose successful steps get a rationalization where thinking found nothing.
+rationalize_runs = []
+
+# The base model without an adapter and without thinking rewrites (the 4B fallback: phase5_shortening_4b.toml).
+[shortening.rewrite]
+model = "search-qwen3.5-2b"
+tokenizer = "Qwen/Qwen3.5-2B"
+server_urls = ["http://127.0.0.1:8100/v1", "http://127.0.0.1:8101/v1"]
+target_tokens = 150
+max_accepted_tokens = 200
+max_tokens = 320
+candidates = 2
+temperature = 0.7
+top_p = 1.0
+
+[shortening.sufficiency]
+sample_count = 4
+temperature = 0.8
+top_p = 1.0
+max_tokens = 256
