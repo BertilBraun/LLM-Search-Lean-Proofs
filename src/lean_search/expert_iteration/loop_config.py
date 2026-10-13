@@ -80,6 +80,17 @@ class SchedulerConfig:
 
 
 @dataclass(frozen=True)
+class ThinkingConfig:
+    """The policy's mode in the loop's searches and its evaluation, and so in its training pairs."""
+
+    enabled: bool = False
+    # Generated tokens per sample, reasoning included (the bootstrap adapter thinks ~234 tokens on average).
+    max_tokens: int = 512
+    # The thinking-mode system prompt addition the adapter was trained with.
+    instruction: str = ""
+
+
+@dataclass(frozen=True)
 class SearchServiceConfig:
     # A run config whose sections are the template for every search; budgets come from the scheduler's stages.
     search_config: str
@@ -91,6 +102,7 @@ class SearchServiceConfig:
     open_share: float = 0.0
     # Stale frontier states (scored by an older value model) re-scored together when one reaches the top; 0 never.
     lazy_rescore_states: int = 32
+    thinking: ThinkingConfig = field(default_factory=ThinkingConfig)
     # Concurrent searches, each holding a REPL; REPLs mostly wait on the GPU, so this may exceed the core count.
     concurrency: int = 128
     shard_attempts: int = 1000
@@ -157,9 +169,9 @@ class TrainingConfig:
     traced_directory: str = "traced"
     traced_sources: tuple[SourceWeight, ...] = ()
     value_dataset: str = "v0"
-    # Thinking mode: shorten long reasoning of proof-step pairs before training, while the servers still run (the
-    # reasoning module's rewrite with its sufficiency check, thinking_compression.py).
-    compress_reasoning: bool = False
+    # In thinking mode (search.thinking), shorten long reasoning of proof-step pairs before training while the
+    # servers still run (the reasoning module's rewrite with its sufficiency check, thinking_compression.py).
+    compress_reasoning: bool = True
     compression: CompressionConfig = field(default_factory=CompressionConfig)
 
 

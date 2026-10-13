@@ -3,7 +3,8 @@
     python experiments/phase6_loop.py --config experiments/configs/expert_iteration/loop.toml init
     python experiments/phase6_loop.py --config ... status | metrics | serve-commands | commands
 
-init writes version 0 (the configured initial adapters, merged into full weights) and refuses an existing loop.
+init writes version 0 (the [initial] adapters, or --policy-adapter / --value-adapter, merged into full weights)
+and refuses an existing loop.
 status prints one block for the watchdog: service alive, version, statements processed, proofs, the last phase, the
 curriculum band, GPU utilization and the verifier's lead. metrics computes per-version solve rates, proofs per hour
 and value calibration on fresh trees, each budget stage's proofs per GPU-hour (to tune the stage gates), and the
@@ -24,7 +25,7 @@ from pathlib import Path
 
 from lean_search.expert_iteration.digests import all_values
 from lean_search.expert_iteration.known_proofs import read_verified
-from lean_search.expert_iteration.loop_config import LoopConfig, load_loop_config
+from lean_search.expert_iteration.loop_config import InitialModels, LoopConfig, load_loop_config
 from lean_search.expert_iteration.loop_evaluation import read_evaluations
 from lean_search.expert_iteration.loop_metrics import (
     Interval,
@@ -82,6 +83,8 @@ def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("command", type=Command, choices=list(Command))
+    parser.add_argument("--policy-adapter", help="init: version 0's policy adapter instead of [initial] policy_adapter")
+    parser.add_argument("--value-adapter", help="init: version 0's value adapter instead of [initial] value_adapter")
     return parser.parse_args()
 
 
@@ -92,12 +95,15 @@ def read_phases(paths: LoopPaths) -> list[PhaseRecord]:
         return [from_json_object(PhaseRecord, json.loads(line)) for line in lines if line.strip()]
 
 
-def initialize(config: LoopConfig, config_path: Path, paths: LoopPaths) -> None:
+def initialize(config: LoopConfig, config_path: Path, paths: LoopPaths, initial: InitialModels) -> None:
     if paths.current.exists():
         raise ValueError(f"{paths.directory} already holds a loop; status shows where it stands.")
+    for adapter in (initial.policy_adapter, initial.value_adapter):
+        if not (Path(adapter) / "adapter_config.json").exists():
+            raise ValueError(f"No adapter at {adapter}.")
     paths.directory.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(config_path, paths.config)
-    version = ModelVersion(0, config.initial.policy_adapter, config.initial.value_adapter, now(), "initial")
+    version = ModelVersion(0, initial.policy_adapter, initial.value_adapter, now(), "initial")
     print("Merging the initial adapters into full weights (CPU, about a minute)")
     record_published(paths, merged_publisher(config, CHECKPOINTS_DIRECTORY).prepare(version))
     print(f"Version 0 published in {paths.directory}; start the servers with:")
@@ -372,7 +378,8 @@ def print_commands(config: LoopConfig, config_path: Path, paths: LoopPaths) -> N
         "\n".join(
             [
                 "# 1. Version 0: merge the initial policy and value adapters into full weights (CPU, about a minute)",
-                f"python experiments/phase6_loop.py {option} init",
+                f"python experiments/phase6_loop.py {option} init --policy-adapter "
+                f"{config.initial.policy_adapter} --value-adapter {config.initial.value_adapter}",
                 "# 2. Servers: per GPU the merged policy and the merged value, in sleep mode for the phases",
                 *(publisher.serve_command(initial, server) for server in config.serving.servers),
                 f"for port in {ports}; do until curl -sf http://127.0.0.1:$port/v1/models > /dev/null; do sleep 10; "
@@ -399,7 +406,11 @@ def main() -> None:
     paths = LoopPaths(RUNS_DIRECTORY, DATA_DIRECTORY, config.name)
     match arguments.command:
         case Command.INIT:
-            initialize(config, arguments.config, paths)
+            initial = InitialModels(
+                arguments.policy_adapter or config.initial.policy_adapter,
+                arguments.value_adapter or config.initial.value_adapter,
+            )
+            initialize(config, arguments.config, paths, initial)
         case Command.STATUS:
             print_status(config, paths)
         case Command.METRICS:

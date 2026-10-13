@@ -28,6 +28,7 @@ from lean_search.expert_iteration.loop_config import (
     SearchServiceConfig,
     ServerEndpoint,
     ServingConfig,
+    ThinkingConfig,
     TrainingConfig,
 )
 from lean_search.expert_iteration.preferences import ValueJumpConfig
@@ -52,6 +53,7 @@ from lean_search.expert_iteration.trainer import (
     Progress,
     next_stage,
     phase_trigger,
+    policy_settings,
     progress_since,
     read_inflows,
     read_phase_state,
@@ -339,9 +341,17 @@ def compressing_trainer(tmp_path: Path, shortener: FirstSentence | None) -> Phas
     return PhaseTrainer(config, paths, publisher, StopStartRelease(publisher), tmp_path, print, True, shortener)
 
 
-def test_reasoning_compression_needs_the_reasoning_module(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="compress_reasoning"):
-        compressing_trainer(tmp_path, None)
+@pytest.mark.parametrize(
+    ("thinking", "settings"),
+    [
+        (ThinkingConfig(), {}),
+        (ThinkingConfig(enabled=True, max_tokens=512), {"thinking_instruction": "", "max_completion_tokens": 576}),
+    ],
+)
+def test_thinking_pairs_train_with_the_searchs_prompt_and_length(
+    thinking: ThinkingConfig, settings: dict[str, object]
+) -> None:
+    assert dict(policy_settings(thinking)) == settings
 
 
 def thinking_shard(paths: LoopPaths) -> None:

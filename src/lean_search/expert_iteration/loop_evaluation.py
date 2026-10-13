@@ -6,7 +6,7 @@ from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from lean_search.expert_iteration.loop_config import EvaluationLoopConfig, ServingConfig
+from lean_search.expert_iteration.loop_config import EvaluationLoopConfig, ServingConfig, ThinkingConfig
 from lean_search.expert_iteration.serving import ModelVersion
 from lean_search.expert_iteration.toml_text import toml_text
 from lean_search.search.records import from_json_object, to_json
@@ -33,8 +33,10 @@ def due_version(
     return current if is_due and current.version not in evaluated else None
 
 
-def evaluation_config_text(template: str, serving: ServingConfig, config: EvaluationLoopConfig) -> str:
-    """The template on the merged policy and value servers at the evaluation's budget and concurrency."""
+def evaluation_config_text(
+    template: str, serving: ServingConfig, config: EvaluationLoopConfig, thinking: ThinkingConfig
+) -> str:
+    """The template on the merged servers, in the loop's thinking mode, at the evaluation's budget and concurrency."""
     table = tomllib.loads(template)
     table["lean"] = table.get("lean", {}) | {"pool_size": config.concurrency, "concurrency": config.concurrency}
     table["search"] = table.get("search", {}) | {"max_expansions": config.max_expansions}
@@ -44,6 +46,12 @@ def evaluation_config_text(template: str, serving: ServingConfig, config: Evalua
     ):
         section_table = {key: value for key, value in table[section].items() if key != "adapter"}
         table[section] = section_table | {"model": model, "server_urls": [server.url for server in servers]}
+    if thinking.enabled:
+        table["policy"] |= {
+            "thinking": True,
+            "max_tokens": thinking.max_tokens,
+            "thinking_instruction": thinking.instruction,
+        }
     return toml_text(table)
 
 

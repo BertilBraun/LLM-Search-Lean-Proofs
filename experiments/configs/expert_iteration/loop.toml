@@ -1,14 +1,16 @@
 # The continuous expert-iteration loop (experiments/phase6_loop.py commands prints how to start it). Many concurrent
 # searches over a curriculum of verified known-proof statements (pool v3) whose difficulty band follows the solve
 # rate, each escalating its budget on the same tree (64, 192, 512 expansions) while its open frontier stays close to
-# a proof; after 400 new proofs (or 60 minutes) they pause in place, both GPUs
-# train the policy (DPO + NLL) and the value model from FIFO replay buffers, the next version is published and the
-# searches continue. Version 0 is the SFT v2 policy with value v0. Every 3rd version (and version 0) is evaluated on
-# miniF2F-valid at 32 expansions.
+# a proof; after 400 new proofs (or 60 minutes) they pause in place, both GPUs train the policy (DPO + NLL) and the
+# value model from FIFO replay buffers, the next version is published and the searches continue. Version 0 is the
+# reasoning bootstrap's policy with value v0. Version 0 and every 3rd version are evaluated on miniF2F-valid at 32
+# expansions.
 name = "phase6_loop"
 
+# The reasoning bootstrap's adapter (thinking 42% per sample at 234 tokens; non-thinking 46%, as SFT v2) and value v0;
+# init --policy-adapter / --value-adapter override them.
 [initial]
-policy_adapter = "/workspace/checkpoints/phase2_sft_v2/adapter"
+policy_adapter = "/workspace/checkpoints/phase5_sft_bootstrap_r1/adapter"
 value_adapter = "/workspace/checkpoints/phase3_value_v0/adapter"
 
 # Per GPU a merged-policy and a merged-value vLLM instance without LoRA, started with SLEEP_MODE=1 so that a phase
@@ -50,12 +52,21 @@ open_candidates = ""
 open_share = 0.0
 # Stale frontier states (scored by an older value model) re-scored together when one reaches the top.
 lazy_rescore_states = 32
+
 # Concurrent searches (one REPL each), the service pinned to 40 CPUs (results/gpu_utilization/: 120 searches keep
 # both GPUs at 95-96% with the merged instances).
 concurrency = 120
 shard_attempts = 1000
 shard_minutes = 10.0
 heartbeat_seconds = 30.0
+
+# The policy's mode in the searches, the evaluation and the training pairs: thinking samples (n = 8 as without) of at
+# most max_tokens tokens with the bootstrap's plain prompt; each phase then shortens long reasoning before training
+# (training.compress_reasoning). The equal-token comparison decides it.
+[search.thinking]
+enabled = false
+max_tokens = 512
+instruction = ""
 
 [search.harvest]
 max_remaining_steps = 1.5
@@ -121,8 +132,8 @@ max_labels_per_tree = 16
 chosen_only_steps = false
 traced_directory = "traced"
 value_dataset = "v0"
-# Thinking mode: shorten long reasoning traces before training (needs the reasoning module; off until it lands).
-compress_reasoning = false
+# In thinking mode, shorten long reasoning of proof-step pairs before training (the reasoning module).
+compress_reasoning = true
 
 [training.policy]
 config = "experiments/configs/expert_iteration/loop_policy.toml"

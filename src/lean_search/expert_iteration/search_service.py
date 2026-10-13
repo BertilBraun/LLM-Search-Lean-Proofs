@@ -132,14 +132,19 @@ class StageStart:
 
 
 def served_run_config(template: RunConfig, config: LoopConfig) -> RunConfig:
-    """The template on the merged policy and value servers; a template without a value model keeps none."""
+    """The template on the merged policy and value servers, in the loop's thinking mode; no value model stays none."""
     serving = config.serving
+    thinking = config.search.thinking
     policy = dataclasses.replace(
         template.policy,
         model=serving.policy_model,
         adapter=None,
         server_urls=tuple(server.url for server in serving.policy_servers),
     )
+    if thinking.enabled:
+        policy = dataclasses.replace(
+            policy, thinking=True, max_tokens=thinking.max_tokens, thinking_instruction=thinking.instruction
+        )
     value = (
         dataclasses.replace(
             template.value,

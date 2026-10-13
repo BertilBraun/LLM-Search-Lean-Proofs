@@ -6,7 +6,7 @@ import pytest
 from loop_fixtures import attempt
 
 from lean_search.expert_iteration.digests import VersionedValueExample
-from lean_search.expert_iteration.loop_config import EvaluationLoopConfig, ServerEndpoint, ServingConfig
+from lean_search.expert_iteration.loop_config import EvaluationLoopConfig, ServerEndpoint, ServingConfig, ThinkingConfig
 from lean_search.expert_iteration.loop_evaluation import due_version, evaluation_config_text
 from lean_search.expert_iteration.loop_metrics import (
     Interval,
@@ -81,7 +81,7 @@ def test_the_evaluation_config_requests_the_merged_servers_at_the_reduced_budget
         '[lean]\npool_size = 40\nconcurrency = 40\n\n[search]\nmax_expansions = 64\n\n[policy]\nmodel = "served"\n'
         'adapter = "old"\n\n[value]\nmodel = "served"\nadapter = "old"\n'
     )
-    table = tomllib.loads(evaluation_config_text(template, SERVING, EVALUATION))
+    table = tomllib.loads(evaluation_config_text(template, SERVING, EVALUATION, ThinkingConfig()))
     assert (
         table["lean"]["concurrency"],
         table["search"]["max_expansions"],
@@ -115,3 +115,10 @@ def test_search_time_leaves_out_the_training_phases() -> None:
     ]
     phase = Interval("2026-10-12T10:00:00+00:00", "2026-10-12T10:30:00+00:00")
     assert search_seconds(records, [phase]) == 2.5 * 3600
+
+
+def test_a_thinking_loop_evaluates_in_thinking_mode() -> None:
+    template = '[policy]\nmodel = "m"\nthinking = false\n\n[value]\nmodel = "v"\n'
+    thinking = ThinkingConfig(enabled=True, max_tokens=512, instruction="")
+    policy = tomllib.loads(evaluation_config_text(template, SERVING, EVALUATION, thinking))["policy"]
+    assert (policy["thinking"], policy["max_tokens"]) == (True, 512)

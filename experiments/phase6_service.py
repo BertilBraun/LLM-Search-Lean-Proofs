@@ -51,7 +51,7 @@ async def run(config_path: Path) -> None:
     publisher = merged_publisher(config, CHECKPOINTS_DIRECTORY)
     shortener = (
         CompressingShortener(config.training.compression, served_run_config(template, config).policy)
-        if config.training.compress_reasoning
+        if config.search.thinking.enabled and config.training.compress_reasoning
         else None
     )
     trainer = PhaseTrainer(

@@ -52,7 +52,9 @@ def evaluate(config: LoopConfig, paths: LoopPaths, version: ModelVersion) -> Non
     template = (REPOSITORY_DIRECTORY / config.evaluation.config).read_text(encoding="utf-8")
     config_path = paths.directory / "evaluations" / f"v{version.version:04d}.toml"
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(evaluation_config_text(template, config.serving, config.evaluation), encoding="utf-8")
+    config_path.write_text(
+        evaluation_config_text(template, config.serving, config.evaluation, config.search.thinking), encoding="utf-8"
+    )
     started_at = now()
     log(f"Evaluating version {version.version}")
     paths.evaluation_lock.write_text(started_at, encoding="utf-8")

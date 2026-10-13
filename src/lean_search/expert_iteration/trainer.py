@@ -4,7 +4,7 @@ A phase starts after `new_proofs` new proofs (at least `min_minutes` after the l
 runs these stages, each recorded in training/state.json so that a crash resumes at the stage it interrupted:
 
 pause    the searches stop sending requests and keep their trees and REPL proof states; the open shard closes
-compress (thinking mode with training.compress_reasoning) new closed shards are digested and the reasoning of their
+compress (thinking mode, with a reasoning shortener) new closed shards are digested and the reasoning of their
          proof-step pairs is shortened on the still-running servers, keeping only versions that still lead the policy
          to a working step
 release  every vLLM server stops (or sleeps), freeing both GPUs
@@ -27,10 +27,11 @@ import json
 import os
 import random
 import tomllib
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+from types import MappingProxyType
 from typing import Protocol
 
 from lean_search.corpora.records import DataSplit, read_traced_steps
@@ -47,7 +48,7 @@ from lean_search.expert_iteration.digests import (
     read_values,
     write_policy,
 )
-from lean_search.expert_iteration.loop_config import LoopConfig, TrainingConfig, TrainingStage
+from lean_search.expert_iteration.loop_config import LoopConfig, ThinkingConfig, TrainingConfig, TrainingStage
 from lean_search.expert_iteration.mixing import is_held_out
 from lean_search.expert_iteration.preferences import ValueJumpConfig
 from lean_search.expert_iteration.proofs import identifier_problem
@@ -83,6 +84,9 @@ from lean_search.value.labels import LabelKind, ValueExample, merge_duplicates, 
 from lean_search.value.metrics import roc_auc, spearman_correlation
 
 REPOSITORY_DIRECTORY = Path(__file__).resolve().parents[3]
+NO_SETTINGS: Mapping[str, object] = MappingProxyType({})
+# Template tokens around a thinking completion (end of thoughts, fences, end of turn).
+THINKING_COMPLETION_MARGIN = 64
 COMPRESSED_MARKER = "compressed"
 # Digests whose samples entered the buffers, one name per line.
 USED_DIGESTS_FILE = "used_digests.txt"
@@ -276,11 +280,24 @@ def dataset_value_samples(path: Path, count: int, seed: str) -> list[ValueSample
     return [ValueSample(SampleOrigin.DATASET, 0, example) for example in chosen]
 
 
-def training_config_text(template: str, data: str, initial_adapter: str) -> str:
-    table = tomllib.loads(template)
+def training_config_text(
+    template: str, data: str, initial_adapter: str, settings: Mapping[str, object] = NO_SETTINGS
+) -> str:
+    """The template with the phase's data and adapter, and `settings` (top-level keys) on top."""
+    table = tomllib.loads(template) | dict(settings)
     table["data"] = data
     table["initial_adapter"] = initial_adapter
     return toml_text(table)
+
+
+def policy_settings(thinking: ThinkingConfig) -> Mapping[str, object]:
+    """Thinking pairs render with the search's instruction, and their completions hold the reasoning too."""
+    if not thinking.enabled:
+        return NO_SETTINGS
+    return {
+        "thinking_instruction": thinking.instruction,
+        "max_completion_tokens": thinking.max_tokens + THINKING_COMPLETION_MARGIN,
+    }
 
 
 def relative_data(directory: Path, root: Path) -> str:
@@ -316,8 +333,6 @@ class PhaseTrainer:
         value_continues: bool,
         reasoning_shortener: ReasoningShortener | None = None,
     ) -> None:
-        if config.training.compress_reasoning and reasoning_shortener is None:
-            raise ValueError("training.compress_reasoning needs a reasoning shortener (the reasoning module).")
         self.config = config
         self.reasoning_shortener = reasoning_shortener
         self.paths = paths
@@ -382,7 +397,7 @@ class PhaseTrainer:
                 if searches is not None:
                     await searches.pause()
             case PhaseStage.COMPRESS:
-                if self.config.training.compress_reasoning:
+                if self.reasoning_shortener is not None:
                     await self.compress_reasoning()
             case PhaseStage.RELEASE:
                 await asyncio.gather(*(self.gpu_release.release(server) for server in servers))
@@ -611,7 +626,8 @@ class PhaseTrainer:
         """The stage's template with the phase's data (relative to where its script reads data) and adapter."""
         path = self.paths.phase_data(phase) / f"{name}.toml"
         template = (REPOSITORY_DIRECTORY / stage.config).read_text(encoding="utf-8")
-        path.write_text(training_config_text(template, data, initial_adapter), encoding="utf-8")
+        settings = policy_settings(self.config.search.thinking) if name == "policy" else NO_SETTINGS
+        path.write_text(training_config_text(template, data, initial_adapter, settings), encoding="utf-8")
         return path
 
     async def run_training(self, phase: int, name: str, stage: TrainingStage, command: str) -> None:
