@@ -20,6 +20,7 @@ CONFIG_DIRECTORY = Path(__file__).resolve().parents[2] / "experiments" / "config
         *CONFIG_DIRECTORY.glob("phase5_pilot_*.toml"),
         *CONFIG_DIRECTORY.glob("phase5_eval_*.toml"),
         *CONFIG_DIRECTORY.glob("phase5_compare_*.toml"),
+        *CONFIG_DIRECTORY.glob("phase5_size_*.toml"),
     ],
     ids=lambda path: path.stem,
 )
