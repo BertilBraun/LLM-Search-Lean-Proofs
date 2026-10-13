@@ -31,6 +31,7 @@ from lean_search.expert_iteration.loop_config import (
     ThinkingConfig,
     TrainingConfig,
 )
+from lean_search.expert_iteration.loop_evaluation import EvaluationRecord, append_evaluation, read_evaluations
 from lean_search.expert_iteration.preferences import ValueJumpConfig
 from lean_search.expert_iteration.replay_buffer import FifoBuffer, ValueSample
 from lean_search.expert_iteration.serving import (
@@ -42,7 +43,7 @@ from lean_search.expert_iteration.serving import (
     record_published,
     write_json_atomically,
 )
-from lean_search.expert_iteration.shards import Decision, ShardWriter
+from lean_search.expert_iteration.shards import Decision, ShardWriter, now
 from lean_search.expert_iteration.thinking import StepReasoning, ThinkingItem, TreeReasoning
 from lean_search.expert_iteration.trainer import (
     BufferInflows,
@@ -294,6 +295,9 @@ def idle_trainer(tmp_path: Path, events: list[str]) -> tuple[LoopPaths, PhaseTra
     write_examples(paths.data_root / "value" / "v0" / "train.jsonl", [])
     write_examples(paths.data_root / "value" / "v0" / "validation.jsonl", [])
     record_published(paths, ModelVersion(0, "/policy", "/value", PUBLISHED_AT, "initial"))
+    # Evaluated just now, so no phase here evaluates.
+    paths.directory.mkdir(parents=True, exist_ok=True)
+    append_evaluation(paths.evaluations, EvaluationRecord(0, "run", 244, 147, now(), now()))
     publisher = MergedPublisher(config.serving, tmp_path / "weights", create_directory)
     return paths, PhaseTrainer(
         config, paths, publisher, RecordingRelease(events), tmp_path / "checkpoints", print, True
@@ -393,9 +397,9 @@ def test_a_phase_trains_on_at_most_its_cap(tmp_path: Path) -> None:
     assert trainer.build_data(1).value.trained == 4
 
 
-async def test_a_version_not_due_is_not_evaluated(tmp_path: Path) -> None:
+async def test_an_evaluation_is_not_repeated_within_its_interval(tmp_path: Path) -> None:
     events: list[str] = []
     paths, trainer = idle_trainer(tmp_path, events)
     record_published(paths, ModelVersion(1, "/p", "/v", PUBLISHED_AT, "proofs"))
     await trainer.evaluate_if_due()
-    assert not paths.evaluations.exists()
+    assert len(read_evaluations(paths.evaluations)) == 1

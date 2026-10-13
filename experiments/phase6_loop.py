@@ -1,7 +1,7 @@
 """Set up, inspect and operate the continuous expert-iteration loop.
 
     python experiments/phase6_loop.py --config experiments/configs/expert_iteration/loop.toml init
-    python experiments/phase6_loop.py --config ... status | metrics | serve-commands | commands
+    python experiments/phase6_loop.py --config ... status | metrics | serve-commands | commands | hold | release
 
 init writes version 0 (the [initial] adapters, or --policy-adapter / --value-adapter, merged into full weights)
 and refuses an existing loop.
@@ -9,6 +9,9 @@ status prints one block for the watchdog: service alive, version, statements pro
 curriculum band, GPU utilization and the verifier's lead. metrics computes per-version solve rates, proofs per hour
 and value calibration on fresh trees, each budget stage's proofs per GPU-hour (to tune the stage gates), and the
 phases' buffer statistics, into $LEAN_SEARCH_RUNS/<loop>/summary/{metrics.json,README.md}.
+hold pauses every search in place (trees and REPL states kept) and puts the vLLM servers to sleep, so both GPUs are
+free for other jobs, without training; release wakes the servers and resumes the searches. Both wait until the running
+service has followed (a running training phase finishes first).
 serve-commands prints how to start each vLLM server with the current version (also after a reboot); commands prints
 the launch sequence: init, servers, service (which also evaluates, inside its training pauses), status.
 """
@@ -20,6 +23,7 @@ import json
 import os
 import shutil
 import subprocess
+import time
 from enum import StrEnum
 from pathlib import Path
 
@@ -39,7 +43,7 @@ from lean_search.expert_iteration.loop_metrics import (
     version_metrics,
 )
 from lean_search.expert_iteration.merging import merged_publisher
-from lean_search.expert_iteration.search_service import ServiceHeartbeat
+from lean_search.expert_iteration.search_service import ServiceControl, ServiceHeartbeat
 from lean_search.expert_iteration.serving import (
     LoopPaths,
     ModelVersion,
@@ -47,6 +51,7 @@ from lean_search.expert_iteration.serving import (
     read_current,
     record_published,
     server_port,
+    write_json_atomically,
 )
 from lean_search.expert_iteration.shards import all_attempts, now
 from lean_search.expert_iteration.trainer import PhaseRecord, PhaseStage, read_phase_state
@@ -58,6 +63,8 @@ RUNS_DIRECTORY = Path(os.environ["LEAN_SEARCH_RUNS"])
 CHECKPOINTS_DIRECTORY = Path(os.environ["LEAN_SEARCH_CHECKPOINTS"])
 # A heartbeat older than this many heartbeat intervals means the service is gone or hung.
 HEARTBEAT_TOLERANCE = 4
+# A hold waits for a running phase (up to ~30 minutes with an evaluation).
+CONTROL_WAIT_SECONDS = 3600
 VERIFIER_PATTERN = "^python experiments/phase6_pool_v3.py .*--step verify"
 
 
@@ -67,6 +74,8 @@ class Command(StrEnum):
     METRICS = "metrics"
     SERVE_COMMANDS = "serve-commands"
     COMMANDS = "commands"
+    HOLD = "hold"
+    RELEASE = "release"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -165,6 +174,19 @@ def kind_summary(outcomes: KindOutcomes) -> str:
     return f"{outcomes.fed:,} fed, {outcomes.solved:,}/{outcomes.finished:,} solved ({rate})"
 
 
+def request_hold(paths: LoopPaths, hold: bool) -> None:
+    write_json_atomically(paths.control, ServiceControl(hold, now()))
+    for _ in range(CONTROL_WAIT_SECONDS // 10):
+        if paths.heartbeat.exists():
+            heartbeat = from_json_object(ServiceHeartbeat, json.loads(paths.heartbeat.read_text(encoding="utf-8")))
+            if heartbeat.held == hold:
+                print(f"{'Held' if hold else 'Released'} at {heartbeat.written_at}")
+                print("\n".join(gpu_lines()))
+                return
+        time.sleep(10)
+    raise RuntimeError(f"The service did not follow within {CONTROL_WAIT_SECONDS} s; status shows where it stands.")
+
+
 def print_status(config: LoopConfig, paths: LoopPaths) -> None:
     """One block for the watchdog: each line `key: value`, alive/stale states spelled out."""
     current_time = datetime.datetime.now(datetime.UTC)
@@ -181,7 +203,9 @@ def print_status(config: LoopConfig, paths: LoopPaths) -> None:
         heartbeat = from_json_object(ServiceHeartbeat, json.loads(paths.heartbeat.read_text(encoding="utf-8")))
         age = age_minutes(heartbeat.written_at)
         alive = age * 60 <= HEARTBEAT_TOLERANCE * config.search.heartbeat_seconds
-        activity = "paused for training" if heartbeat.paused else "searching"
+        activity = (
+            "HELD (servers asleep)" if heartbeat.held else "paused for training" if heartbeat.paused else "searching"
+        )
         stages = "/".join(str(count) for count in heartbeat.live_by_stage)
         lines.append(
             f"service: {'alive' if alive else 'STALE'} (heartbeat {age:.1f} min ago), {activity}, "
@@ -430,6 +454,10 @@ def main() -> None:
             write_metrics(config, paths)
         case Command.SERVE_COMMANDS:
             print_serve_commands(config, paths)
+        case Command.HOLD:
+            request_hold(paths, True)
+        case Command.RELEASE:
+            request_hold(paths, False)
         case Command.COMMANDS:
             print_commands(config, arguments.config, paths)
 

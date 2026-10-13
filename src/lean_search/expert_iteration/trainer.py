@@ -55,8 +55,8 @@ from lean_search.expert_iteration.loop_config import LoopConfig, ThinkingConfig,
 from lean_search.expert_iteration.loop_evaluation import (
     EvaluationRecord,
     append_evaluation,
-    due_version,
     evaluation_config_text,
+    evaluation_due,
     read_evaluations,
 )
 from lean_search.expert_iteration.mixing import is_held_out
@@ -186,6 +186,9 @@ class PhaseRecord:
 
 
 class PausableSearches(Protocol):
+    # Held by a phase and by an operator's hold, so that at most one of them owns the GPUs at a time.
+    gpu_lock: asyncio.Lock
+
     async def pause(self) -> None: ...
 
     async def resume(self, rescore: bool) -> None: ...
@@ -380,10 +383,11 @@ class PhaseTrainer:
                 with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(stop.wait(), training.check_seconds)
                 continue
-            self.log(f"Phase {current.version + 1} ({trigger}): {progress}")
-            state = PhaseState(current.version + 1, PhaseStage.PAUSE, trigger, now(), "", "", None)
-            write_json_atomically(self.paths.phase_state, state)
-            await self.run_phase(state, searches)
+            async with searches.gpu_lock:
+                self.log(f"Phase {current.version + 1} ({trigger}): {progress}")
+                state = PhaseState(current.version + 1, PhaseStage.PAUSE, trigger, now(), "", "", None)
+                write_json_atomically(self.paths.phase_state, state)
+                await self.run_phase(state, searches)
 
     async def run_phase(self, state: PhaseState, searches: PausableSearches | None) -> None:
         """From the state's stage to the end; without searches (after a restart) pausing and resuming do nothing."""
@@ -444,8 +448,8 @@ class PhaseTrainer:
     async def evaluate_if_due(self) -> None:
         """The published version on miniF2F-valid when due; a failed evaluation is logged and skipped, not retried."""
         version = read_current(self.paths)
-        evaluated = {record.version for record in read_evaluations(self.paths.evaluations)}
-        if due_version([version], evaluated, self.config.evaluation) is None:
+        evaluations = read_evaluations(self.paths.evaluations)
+        if not evaluation_due(evaluations, datetime.datetime.now(datetime.UTC), self.config.evaluation):
             return
         run_name = f"{self.paths.name}_evaluation_v{version.version:04d}"
         run_directory = self.paths.runs_root / run_name

@@ -76,6 +76,7 @@ from lean_search.search.records import from_json_object
 from lean_search.value.estimator import ValueModelEstimator, open_value_estimator
 
 IDLE_SECONDS = 30.0
+CONTROL_SECONDS = 5.0
 FAILURE_PAUSE_SECONDS = 5.0
 ROOT_VALUE_BATCH = 256
 ROOT_VALUE_SECONDS = 30.0
@@ -87,10 +88,20 @@ async def sleep_unless_stopped(stop: asyncio.Event, seconds: float) -> None:
 
 
 @dataclass(frozen=True)
+class ServiceControl:
+    """Written by phase6_loop.py hold / release; the service follows it within CONTROL_SECONDS."""
+
+    hold: bool
+    requested_at: str
+
+
+@dataclass(frozen=True)
 class ServiceHeartbeat:
     written_at: str
     version: int
     paused: bool
+    # Held by an operator: searches paused in place, servers asleep, no phase starts.
+    held: bool
     live_searches: int
     # Searches in flight per stage.
     live_by_stage: tuple[int, ...]
@@ -277,6 +288,8 @@ class SearchService:
         # Open states re-scored per second at the last re-scoring; None before the first.
         self.rescore_rate: float | None = None
         self.failure: Exception | None = None
+        self.gpu_lock = asyncio.Lock()
+        self.held = False
 
     def load_state(self) -> list[StatementRecord]:
         for summary in recover_open_shards(self.paths.shards):
@@ -349,6 +362,7 @@ class SearchService:
             self.log(f"Pool of {concurrency} REPLs ready")
             coroutines = [self.work(pool, models, stop) for _ in range(concurrency)]
             coroutines.append(self.heartbeats(stop))
+            coroutines.append(self.follow_control(stop))
             coroutines.append(self.reload_verified(stop))
             if models.root_values is not None:
                 coroutines.append(self.refresh_root_values(models.root_values, stop))
@@ -512,6 +526,33 @@ class SearchService:
             f"{self.session_proofs}/{self.session_attempts} this session"
         )
 
+    async def follow_control(self, stop: asyncio.Event) -> None:
+        """Holds or releases the loop as search/control.json asks; a running phase finishes first."""
+        while not stop.is_set():
+            await sleep_unless_stopped(stop, CONTROL_SECONDS)
+            if not self.paths.control.exists() or self.trainer is None:
+                continue
+            control = from_json_object(ServiceControl, json.loads(self.paths.control.read_text(encoding="utf-8")))
+            if control.hold and not self.held:
+                await self.gpu_lock.acquire()
+                await self.pause()
+                await asyncio.gather(
+                    *(self.trainer.gpu_release.release(server) for server in self.config.serving.servers)
+                )
+                self.held = True
+                self.write_heartbeat()
+                self.log("Held: searches paused in place, servers asleep")
+            elif not control.hold and self.held:
+                version = read_current(self.paths)
+                await asyncio.gather(
+                    *(self.trainer.gpu_release.restore(server, version) for server in self.config.serving.servers)
+                )
+                await self.resume(False)
+                self.held = False
+                self.gpu_lock.release()
+                self.write_heartbeat()
+                self.log("Released: servers awake, searches resumed")
+
     async def pause(self) -> None:
         """No request leaves until resume; searches keep their trees, REPL states and place in the queue."""
         await self.gate.pause()
@@ -567,6 +608,7 @@ class SearchService:
                 written_at=now(),
                 version=self.version,
                 paused=not self.gate.opened.is_set(),
+                held=self.held,
                 live_searches=len(self.live),
                 live_by_stage=tuple(stages[index] for index in range(len(self.scheduler.config.stages))),
                 curriculum=self.curriculum.counts(),

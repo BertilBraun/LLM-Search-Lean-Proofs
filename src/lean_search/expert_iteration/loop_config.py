@@ -184,11 +184,12 @@ class TrainingConfig:
 
 @dataclass(frozen=True)
 class EvaluationLoopConfig:
-    # miniF2F-valid at a reduced budget every `every_versions` versions, inside that phase's pause, from a run config
-    # template; it has the GPUs and the service's CPUs to itself.
+    # miniF2F-valid at a reduced budget inside the first phase pause `every_hours` after the last evaluation, from a run
+    # config template; it has the GPUs and the service's CPUs to itself.
     config: str
     every_versions: int = 3
-    max_expansions: int = 32
+    every_hours: float = 3.0
+    max_expansions: int = 16
     concurrency: int = 120
     check_seconds: float = 120.0
 

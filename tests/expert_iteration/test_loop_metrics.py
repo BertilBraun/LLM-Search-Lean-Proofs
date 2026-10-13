@@ -7,7 +7,12 @@ from loop_fixtures import attempt
 
 from lean_search.expert_iteration.digests import VersionedValueExample
 from lean_search.expert_iteration.loop_config import EvaluationLoopConfig, ServerEndpoint, ServingConfig, ThinkingConfig
-from lean_search.expert_iteration.loop_evaluation import due_version, evaluation_config_text
+from lean_search.expert_iteration.loop_evaluation import (
+    EvaluationRecord,
+    due_version,
+    evaluation_config_text,
+    evaluation_due,
+)
 from lean_search.expert_iteration.loop_metrics import (
     Interval,
     run_totals,
@@ -122,3 +127,13 @@ def test_a_thinking_loop_evaluates_in_thinking_mode() -> None:
     thinking = ThinkingConfig(enabled=True, max_tokens=512, instruction="")
     policy = tomllib.loads(evaluation_config_text(template, SERVING, EVALUATION, thinking))["policy"]
     assert (policy["thinking"], policy["max_tokens"]) == (True, 512)
+
+
+@pytest.mark.parametrize(
+    ("finished_at", "due"),
+    [(None, True), ("2026-10-13T07:30:00+00:00", False), ("2026-10-13T04:59:00+00:00", True)],
+)
+def test_an_evaluation_is_due_every_few_hours(finished_at: str | None, due: bool) -> None:
+    evaluations = [] if finished_at is None else [EvaluationRecord(3, "run", 244, 150, finished_at, finished_at)]
+    current = datetime.datetime.fromisoformat("2026-10-13T08:00:00+00:00")
+    assert evaluation_due(evaluations, current, EvaluationLoopConfig("evaluation.toml", every_hours=3.0)) == due

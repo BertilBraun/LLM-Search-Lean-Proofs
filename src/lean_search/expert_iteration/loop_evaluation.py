@@ -1,5 +1,6 @@
 """The periodic miniF2F-valid evaluation of published versions at a reduced budget."""
 
+import datetime
 import json
 import tomllib
 from collections.abc import Collection, Sequence
@@ -31,6 +32,16 @@ def due_version(
     current = versions[-1]
     is_due = current.version % config.every_versions == 0
     return current if is_due and current.version not in evaluated else None
+
+
+def evaluation_due(
+    evaluations: Sequence[EvaluationRecord], current: datetime.datetime, config: EvaluationLoopConfig
+) -> bool:
+    """No evaluation yet, or the last one finished `every_hours` ago."""
+    if not evaluations:
+        return True
+    finished = datetime.datetime.fromisoformat(evaluations[-1].finished_at)
+    return (current - finished).total_seconds() >= config.every_hours * 3600
 
 
 def evaluation_config_text(
