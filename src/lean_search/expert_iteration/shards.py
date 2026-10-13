@@ -36,6 +36,8 @@ class Decision(StrEnum):
     # Every open state was expanded without a proof.
     RETIRED_DEAD = "retired_dead"
     RETIRED_UNPROMISING = "retired_unpromising"
+    # It qualified for the next stage, but the escalated searches had their share of the concurrency.
+    RETIRED_ESCALATION_FULL = "retired_escalation_full"
 
 
 @dataclass(frozen=True)

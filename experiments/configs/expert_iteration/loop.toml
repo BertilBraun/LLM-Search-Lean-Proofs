@@ -95,6 +95,9 @@ seed = "phase6-curriculum"
 
 [search.scheduler]
 promising_depth = 0
+# At most 30 of the 120 searches run stages 1-2 (near the frontier stage 1 found 3.5x fewer proofs per generated token
+# than stage 0, and the frontier h barely predicts which escalations pay).
+max_escalated_share = 0.25
 
 # Each stage's budget is a total over the statement's search; a stage is entered when the best h on the open frontier
 # is at most max_frontier_value. The stages' proofs per GPU-hour (phase6_loop.py metrics) tune these gates. At n = 8

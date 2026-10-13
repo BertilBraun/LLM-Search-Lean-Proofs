@@ -436,10 +436,15 @@ class SearchService:
         stages = self.scheduler.config.stages
         start = StageStart(self.version, now())
 
+        escalation_full = False
+
         async def continue_search(result: StageResult) -> bool:
-            nonlocal start
+            nonlocal start, escalation_full
             decision = decide(stage_outcome(result), result.stage, self.scheduler.config)
             if decision != Decision.ESCALATED:
+                return False
+            if result.stage == 0 and self.escalated_searches() >= self.escalation_capacity():
+                escalation_full = True
                 return False
             max_expansions = stages[result.stage].max_expansions
             await self.record(stage_attempt(job, start, result, search, decision, max_expansions), None, None)
@@ -469,7 +474,11 @@ class SearchService:
             return
         assert completed.tree is not None, job.name
         last = search.stage_results[-1]
-        decision = decide(stage_outcome(last), last.stage, self.scheduler.config)
+        decision = (
+            Decision.RETIRED_ESCALATION_FULL
+            if escalation_full
+            else decide(stage_outcome(last), last.stage, self.scheduler.config)
+        )
         attempt = dataclasses.replace(
             stage_attempt(job, start, last, search, decision, stages[last.stage].max_expansions),
             proof_steps=len(completed.result.proof_steps),
@@ -478,6 +487,12 @@ class SearchService:
         steps = self.reasoning_log.take(job.name)
         reasoning = TreeReasoning(job.statement.header, tuple(steps)) if steps else None
         await self.record(attempt, tree, reasoning)
+
+    def escalated_searches(self) -> int:
+        return sum(search.stage > 0 for search in self.live)
+
+    def escalation_capacity(self) -> int:
+        return int(self.scheduler.config.max_escalated_share * self.config.search.concurrency)
 
     async def record(self, attempt: AttemptRecord, tree: TreeRecord | None, reasoning: TreeReasoning | None) -> None:
         async with self.write_lock:

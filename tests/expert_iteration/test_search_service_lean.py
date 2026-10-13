@@ -47,7 +47,9 @@ concurrency = 2
 tactics = ["norm_num", "have : (1 : ℕ) = 1 := rfl"]
 """
 SERVERS = (ServerEndpoint("gpu0", 0, "http://127.0.0.1:8100/v1"), ServerEndpoint("gpu1", 1, "http://127.0.0.1:8101/v1"))
-SCHEDULER = SchedulerConfig(stages=(SearchStage(2, 60.0), SearchStage(4, 60.0)), promising_depth=1)
+SCHEDULER = SchedulerConfig(
+    stages=(SearchStage(2, 60.0), SearchStage(4, 60.0)), promising_depth=1, max_escalated_share=1.0
+)
 WAIT_SECONDS = 300
 
 lean_is_installed = (PROJECT_DIRECTORY / REPL_BINARY).exists() and shutil.which("lake") is not None

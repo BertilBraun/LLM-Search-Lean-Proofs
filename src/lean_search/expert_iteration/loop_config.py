@@ -77,6 +77,9 @@ class SchedulerConfig:
     source_weights: tuple[SourceWeight, ...] = ()
     # Without a value model, an unsolved statement enters the next stage when its search got this deep (0 never).
     promising_depth: int = 0
+    # At most this share of the concurrent searches run escalated stages: near the frontier stage 1 found 3.5x fewer
+    # proofs per generated token than stage 0, and the value model's frontier h barely predicts which escalations pay.
+    max_escalated_share: float = 0.25
 
 
 @dataclass(frozen=True)
