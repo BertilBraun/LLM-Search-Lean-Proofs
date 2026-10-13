@@ -39,6 +39,8 @@ REPOSITORY_DIRECTORY = Path(__file__).resolve().parents[1]
 RUN_DIRECTORY = Path(os.environ["LEAN_SEARCH_RUNS"]) / "reasoning_retention"
 LENGTH_FINISH_REASON = "length"
 JUDGED_TRACE_CHARACTERS = 12000
+FORCED_ANSWER_TOKENS = 256
+FORCED_THINK_END = f"\n{THINK_END}\n\n"
 
 
 @dataclass(frozen=True)
@@ -99,6 +101,17 @@ class ScoredSample:
     correct: bool
     reasoning_tokens: int
     total_tokens: int
+
+
+@dataclass(frozen=True)
+class ForcedAnswer:
+    """A truncated sample's thinking closed at the cap and answered in at most FORCED_ANSWER_TOKENS tokens."""
+
+    unique_id: str
+    sample_index: int
+    text: str
+    answer: str | None
+    correct: bool
 
 
 @dataclass(frozen=True)
@@ -273,6 +286,71 @@ def command_run(config: RetentionConfig, labels: Sequence[str], gpu: int, port: 
         print(f"{label}: {run.samples} samples, {generated:,} tokens in {wall_seconds:.0f} s", flush=True)
 
 
+async def force_answers(
+    config: RetentionConfig,
+    model: ModelSpec,
+    problems: Sequence[Problem],
+    results: Sequence[ProblemSamples],
+    tokenizer: transformers.PreTrainedTokenizerBase,
+    server_url: str,
+    served_name: str,
+) -> list[ForcedAnswer]:
+    by_id = {problem.unique_id: problem for problem in problems}
+    semaphore = asyncio.Semaphore(config.requests_in_flight)
+    async with PolicyClient(server_url, served_name) as client:
+        adapter = None
+        if model.adapter:
+            adapter = f"{served_name}-adapter"
+            await client.load_adapter(adapter, model.adapter)
+
+        async def force(problem: Problem, sample_index: int, sample: SolutionSample) -> ForcedAnswer:
+            conversation = [{"role": "user", "content": f"{problem.problem}\n\n{config.instruction}"}]
+            prompt = tokenizer.apply_chat_template(
+                conversation, tokenize=False, add_generation_prompt=True, enable_thinking=True
+            )
+            async with semaphore:
+                generation = await client.generate(
+                    prompt + sample.text + FORCED_THINK_END,
+                    sample_count=1,
+                    max_tokens=FORCED_ANSWER_TOKENS,
+                    temperature=config.temperature,
+                    top_p=config.top_p,
+                    adapter=adapter,
+                )
+            answer_text = generation.samples[0].text
+            answer = last_boxed(answer_text)
+            correct = answer is not None and answers_match(answer, problem.answer)
+            return ForcedAnswer(problem.unique_id, sample_index, answer_text, answer, correct)
+
+        return list(
+            await asyncio.gather(
+                *(
+                    force(by_id[result.unique_id], index, sample)
+                    for result in results
+                    for index, sample in enumerate(result.samples)
+                    if THINK_END not in sample.text
+                )
+            )
+        )
+
+
+def command_force(config: RetentionConfig, labels: Sequence[str], gpu: int, port: int) -> None:
+    problems = read_records(RUN_DIRECTORY / "problems.jsonl", Problem)
+    models = {model.label: model for model in config.models}
+    for label in labels:
+        model = models[label]
+        directory = RUN_DIRECTORY / "models" / label
+        results = read_records(directory / "samples.jsonl", ProblemSamples)
+        tokenizer = transformers.AutoTokenizer.from_pretrained(model.base)
+        served_name = f"retention-{label}"
+        with served(served_name, model, gpu, port, config.max_model_length):
+            forced = asyncio.run(
+                force_answers(config, model, problems, results, tokenizer, f"http://127.0.0.1:{port}/v1", served_name)
+            )
+        write_records(directory / "forced.jsonl", forced)
+        print(f"{label}: {len(forced)} forced answers, {sum(answer.correct for answer in forced)} correct", flush=True)
+
+
 def percent(numerator: float, denominator: float) -> str:
     return f"{numerator / denominator:.1%}" if denominator else "–"
 
@@ -311,11 +389,19 @@ def command_summarize(config: RetentionConfig) -> None:
         for record in records:
             by_problem[record.unique_id].append(record)
         any_correct = sum(any(record.correct for record in group) for group in by_problem.values())
+        forced_path = RUN_DIRECTORY / "models" / label / "forced.jsonl"
+        forced = read_records(forced_path, ForcedAnswer) if forced_path.exists() else []
+        forced_correct = {(answer.unique_id, answer.sample_index) for answer in forced if answer.correct}
+        with_forced = [
+            record.correct or (record.unique_id, record.sample_index) in forced_correct for record in records
+        ]
         accuracy_rows.append(
             [
                 label,
                 percent(sum(record.correct for record in records), len(records)),
                 percent(any_correct, len(by_problem)),
+                percent(sum(with_forced), len(records)) if forced_path.exists() else "–",
+                percent(sum(answer.correct for answer in forced), len(forced)),
                 percent(sum(record.truncated for record in records), len(records)),
                 percent(sum(not record.finished_thinking for record in records), len(records)),
                 percent(sum(record.finished_thinking and record.answer is None for record in records), len(records)),
@@ -347,12 +433,16 @@ def command_summarize(config: RetentionConfig) -> None:
         "# Reasoning retention on MATH-500",
         f"{len(problems)} MATH-500 problems stratified by level and subject (seed `{config.seed}`), thinking on, "
         f"k = {config.sample_count} samples at temperature {config.temperature} (top-p {config.top_p}), at most "
-        f"{config.max_tokens} generated tokens; the answer is the last \\boxed{{}} after the thinking block.",
+        f"{config.max_tokens} generated tokens; the answer is the last \\boxed{{}} after the thinking block. Forced "
+        "answers: a sample whose thinking hit the cap gets `</think>` appended and answers in at most "
+        f"{FORCED_ANSWER_TOKENS} more tokens (budget forcing), which separates reasoning from stopping.",
         markdown_table(
             [
                 "Model",
                 "pass@1 (mean over k)",
                 f"any@{config.sample_count}",
+                "pass@1 with forced answers",
+                "Forced answers correct",
                 "Truncated",
                 "Thinking unfinished",
                 "No boxed answer",
@@ -415,6 +505,10 @@ def parse_arguments() -> argparse.Namespace:
     run.add_argument("--labels", nargs="+", required=True)
     run.add_argument("--gpu", type=int, required=True)
     run.add_argument("--port", type=int, default=8130)
+    force = commands.add_parser("force", help="close truncated thinking at the cap and sample a short answer")
+    force.add_argument("--labels", nargs="+", required=True)
+    force.add_argument("--gpu", type=int, required=True)
+    force.add_argument("--port", type=int, default=8130)
     commands.add_parser("summarize", help="tabulate every scored model")
     return parser.parse_args()
 
@@ -427,6 +521,8 @@ def main() -> None:
             command_problems(config)
         case "run":
             command_run(config, arguments.labels, arguments.gpu, arguments.port)
+        case "force":
+            command_force(config, arguments.labels, arguments.gpu, arguments.port)
         case "summarize":
             command_summarize(config)
 
