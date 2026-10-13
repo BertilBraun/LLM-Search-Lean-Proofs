@@ -1,6 +1,6 @@
 # Qwen/Qwen3.5-9B, post-trained, no adapter, bf16 on one RTX 3090 with a shorter context:
 #   MAX_MODEL_LEN=5120 GPU_MEMORY_UTILIZATION=0.95 deployment/serve_model.sh probe-9b Qwen/Qwen3.5-9B 0 8110 \
-#       --no-enable-lora
+#       --no-enable-lora --max-num-seqs 64   (the default 256 exceeds the 176 state-cache blocks)
 # Model-size probe (results/phase5_model_size_probe/): zero-shot thinking on the bootstrap evaluation's 512 unseen
 # validation states (`states --states-from phase5_eval_bootstrap_sft_v2_thinking`), k=8, temperature 0.8, cap 4096,
 # the reasoning pipeline's success metric. Each model has its own server (one per GPU); 64-state chunks so that a

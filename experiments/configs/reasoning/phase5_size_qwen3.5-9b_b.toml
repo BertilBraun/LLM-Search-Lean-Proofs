@@ -1,6 +1,7 @@
 # Qwen/Qwen3.5-9B probe, second shard on GPU 1 (states 64-127 of phase5_size_qwen3.5-9b's states:
 # `states --states-from phase5_eval_bootstrap_sft_v2_thinking --states-skip 64`, `run --state-limit 64`):
-#   MAX_MODEL_LEN=5120 GPU_MEMORY_UTILIZATION=0.95 deployment/serve_model.sh probe-9b-b Qwen/Qwen3.5-9B 1 8111 \n#       --no-enable-lora
+#   MAX_MODEL_LEN=5120 GPU_MEMORY_UTILIZATION=0.95 deployment/serve_model.sh probe-9b-b Qwen/Qwen3.5-9B 1 8111 \
+#       --no-enable-lora --max-num-seqs 64   (the default 256 exceeds the 176 state-cache blocks)
 
 [states]
 count = 512
