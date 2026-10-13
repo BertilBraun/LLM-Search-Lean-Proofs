@@ -2,7 +2,8 @@
 
 Items are pairs (DPO on the pair plus the chosen step's NLL) or chosen-only steps (the NLL term alone, e.g. dataset
 steps that regularize). A step's loss is the mean DPO loss over its pairs plus `chosen_nll_weight` times the mean
-token NLL over all its chosen completions.
+token NLL over all its chosen completions. With optimization.packing, a micro-batch's chosen and rejected sequences
+share one row without padding (micro_batch_tokens then counts real tokens).
 """
 
 import random
@@ -16,16 +17,19 @@ import torch.nn.functional as functional
 import transformers
 
 from lean_search.training.dpo_data import TokenizedPair
+from lean_search.training.packing import packed_micro_batches
 from lean_search.training.sft import (
     Batch,
     CompletionLoss,
     LoraSettings,
     OptimizationConfig,
-    collate,
     learning_rate_factor,
     length_grouped_micro_batches,
     load_trainable_model,
     trainable_parameters,
+)
+from lean_search.training.sft import (
+    micro_batch as sft_micro_batch,
 )
 
 
@@ -175,16 +179,27 @@ def sequence_log_probabilities(token_losses: torch.Tensor, rows: torch.Tensor, r
     return -totals.index_add(0, rows, token_losses)
 
 
-def pair_batch(pairs: Sequence[TokenizedPair], pad_token_id: int, device: torch.device) -> Batch:
-    """Every chosen completion in the first rows, then the rejected ones of the items that have one."""
+def pair_batch(pairs: Sequence[TokenizedPair], pad_token_id: int, device: torch.device, packing: bool = False) -> Batch:
+    """Every chosen completion in the first rows (packed slots), then the rejected ones of the items that have one."""
     rejected = [pair.rejected for pair in pairs if pair.rejected is not None]
-    return collate([pair.chosen for pair in pairs] + rejected, pad_token_id, device)
+    return sft_micro_batch([pair.chosen for pair in pairs] + rejected, packing, pad_token_id, device)
 
 
-def padded_tokens(pairs: Sequence[TokenizedPair]) -> int:
+def padded_tokens(pairs: Sequence[TokenizedPair], packing: bool = False) -> int:
     rows = [pair.chosen.token_count for pair in pairs]
     rows += [pair.rejected.token_count for pair in pairs if pair.rejected is not None]
-    return len(rows) * max(rows)
+    return sum(rows) if packing else len(rows) * max(rows)
+
+
+def item_lengths(pairs: Sequence[TokenizedPair], packing: bool) -> list[int]:
+    """Tokens an item adds to a micro-batch: its real tokens when packed, else its padded rows."""
+    return [pair.token_count if packing else pair.padded_length for pair in pairs]
+
+
+def packed_item_micro_batches(indices: Sequence[int], lengths: Sequence[int], max_tokens: int) -> list[tuple[int, ...]]:
+    """The items filled into packed rows of at most max_tokens tokens (or one longer item)."""
+    rows = packed_micro_batches([lengths[index] for index in indices], max_tokens, random.Random(0))
+    return [tuple(indices[position] for position in row) for row in rows]
 
 
 def pair_step(pairs: Sequence[TokenizedPair], micro_batches: Sequence[tuple[int, ...]]) -> PairStep:
@@ -214,24 +229,33 @@ def token_micro_batches(indices: Sequence[int], lengths: Sequence[int], max_toke
 def plan_item_steps(pairs: Sequence[TokenizedPair], config: OptimizationConfig, batch_items: int) -> list[PairStep]:
     """Steps of `batch_items` shuffled items each; the last incomplete step of an epoch is dropped."""
     generator = random.Random(config.seed)
-    lengths = [pair.padded_length for pair in pairs]
+    lengths = item_lengths(pairs, config.packing)
     steps = []
     for _ in range(config.epochs):
         order = list(range(len(pairs)))
         generator.shuffle(order)
         for start in range(0, len(order) - batch_items + 1, batch_items):
-            micro_batches = token_micro_batches(order[start : start + batch_items], lengths, config.micro_batch_tokens)
+            items = order[start : start + batch_items]
+            micro_batches = (
+                packed_item_micro_batches(items, lengths, config.micro_batch_tokens)
+                if config.packing
+                else token_micro_batches(items, lengths, config.micro_batch_tokens)
+            )
             steps.append(pair_step(pairs, micro_batches))
     return steps[: config.max_steps] if config.max_steps else steps
 
 
 def plan_pair_steps(pairs: Sequence[TokenizedPair], config: OptimizationConfig) -> list[PairStep]:
     generator = random.Random(config.seed)
-    lengths = [pair.padded_length for pair in pairs]
+    lengths = item_lengths(pairs, config.packing)
     steps: list[PairStep] = []
     for _ in range(config.epochs):
-        micro_batches = length_grouped_micro_batches(
-            lengths, config.micro_batch_tokens, config.length_group_examples, generator
+        micro_batches = (
+            packed_micro_batches(lengths, config.micro_batch_tokens, generator)
+            if config.packing
+            else length_grouped_micro_batches(
+                lengths, config.micro_batch_tokens, config.length_group_examples, generator
+            )
         )
         # The last incomplete step of an epoch is dropped so every step has the same number of micro-batches.
         for start in range(0, len(micro_batches) - config.micro_batches_per_step + 1, config.micro_batches_per_step):
@@ -242,17 +266,22 @@ def plan_pair_steps(pairs: Sequence[TokenizedPair], config: OptimizationConfig) 
 class PairScorer:
     """Completion log-probabilities of chosen and rejected sequences under the model being trained."""
 
-    def __init__(self, causal_model: transformers.PreTrainedModel, pad_token_id: int, device: torch.device) -> None:
+    def __init__(
+        self, causal_model: transformers.PreTrainedModel, pad_token_id: int, device: torch.device, packing: bool
+    ) -> None:
         self.loss_module = CompletionLoss(causal_model)
         self.pad_token_id = pad_token_id
         self.device = device
+        self.packing = packing
 
     def score(self, pairs: Sequence[TokenizedPair]) -> tuple[ItemScores, torch.Tensor]:
         """The log-probabilities, and the chosen completions' summed token negative log-likelihood."""
-        batch = pair_batch(pairs, self.pad_token_id, self.device)
+        batch = pair_batch(pairs, self.pad_token_id, self.device, self.packing)
         has_rejected = torch.tensor([pair.rejected is not None for pair in pairs], device=self.device)
         with torch.autocast(self.device.type, dtype=torch.bfloat16):
-            token_losses, _, rows = self.loss_module(batch.input_ids, batch.attention_mask, batch.labels)
+            token_losses, _, rows = self.loss_module(
+                batch.input_ids, batch.attention_mask, batch.labels, batch.position_ids, batch.sequence_starts
+            )
         row_count = len(pairs) + int(has_rejected.sum().item())
         log_probabilities = sequence_log_probabilities(token_losses, rows, row_count)
         rejected = torch.zeros(len(pairs), dtype=log_probabilities.dtype, device=self.device)
@@ -263,11 +292,14 @@ class PairScorer:
     @torch.no_grad()
     def score_all(self, pairs: Sequence[TokenizedPair], micro_batch_tokens: int) -> tuple[ItemScores, float]:
         """Scores of every item, and the mean token NLL of all chosen completions."""
-        lengths = [pair.padded_length for pair in pairs]
+        lengths = item_lengths(pairs, self.packing)
         # A phase without held-out pairs has nothing to validate on.
-        micro_batches = (
-            length_grouped_micro_batches(lengths, micro_batch_tokens, len(pairs), random.Random(0)) if pairs else []
-        )
+        if not pairs:
+            micro_batches = []
+        elif self.packing:
+            micro_batches = packed_micro_batches(lengths, micro_batch_tokens, random.Random(0))
+        else:
+            micro_batches = length_grouped_micro_batches(lengths, micro_batch_tokens, len(pairs), random.Random(0))
         chosen = torch.zeros(len(pairs))
         rejected = torch.zeros(len(pairs))
         nll = 0.0
@@ -305,7 +337,7 @@ def train_dpo(
     saved_module, causal_model = load_trainable_model(
         config.model, optimization, LoraSettings(), device, config.initial_adapter
     )
-    scorer = PairScorer(causal_model, tokenizer.pad_token_id, device)
+    scorer = PairScorer(causal_model, tokenizer.pad_token_id, device, optimization.packing)
     validation = validation_pairs[: config.evaluation.validation_pairs]
     reference_started = time.perf_counter()
     causal_model.eval()
@@ -370,7 +402,7 @@ def train_dpo(
             step_reference.append(reference)
             chosen_nll_sum += chosen_nll.item()
             tokens += sum(pair.token_count for pair in batch_pairs)
-            step_padded_tokens += padded_tokens(batch_pairs)
+            step_padded_tokens += padded_tokens(batch_pairs, optimization.packing)
         gradient_norm = torch.nn.utils.clip_grad_norm_(parameters, optimization.max_gradient_norm).item()
         optimizer.step()
         scheduler.step()

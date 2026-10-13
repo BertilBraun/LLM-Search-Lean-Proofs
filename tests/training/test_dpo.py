@@ -183,6 +183,23 @@ def test_item_steps_hold_the_requested_number_of_items() -> None:
     assert [step.items for step in steps] == [4, 4]
 
 
+def test_packed_pair_batches_hold_every_sequence_in_one_row() -> None:
+    batch = pair_batch([tokenized(3, 2, 2), chosen_only(3, 1)], 0, torch.device("cpu"), packing=True)
+    assert batch.sequence_starts == (0, 5, 9, 14)
+
+
+def test_packed_pair_batches_list_the_chosen_sequences_before_the_rejected_ones() -> None:
+    batch = pair_batch([tokenized(3, 2, 2), chosen_only(3, 1)], 0, torch.device("cpu"), packing=True)
+    assert [batch.input_ids[0, start].item() for start in batch.sequence_starts[:-1]] == [1, 3, 2]
+
+
+def test_packed_item_steps_fill_micro_batches_up_to_the_real_token_budget() -> None:
+    items = [tokenized(5, 2, 2, number) for number in range(8)]
+    config = OptimizationConfig(micro_batch_tokens=30, epochs=1, packing=True)
+    (step,) = plan_item_steps(items, config, batch_items=8)
+    assert [len(batch) for batch in step.micro_batches] == [2, 2, 2, 2]
+
+
 def test_item_steps_split_into_micro_batches_within_the_token_budget() -> None:
     items = [tokenized(5, 2, 2, number) for number in range(8)]
     (step,) = plan_item_steps(items, OptimizationConfig(micro_batch_tokens=30, epochs=1), batch_items=8)
