@@ -83,8 +83,11 @@ root_value_weight = 0.5
 characters_weight = 0.0
 band_width = 1.0
 band_step = 0.5
-window = 100
+window = 50
 raise_solve_rate = 0.5
+# At 80% solved or more the band moves 1.5 at once.
+fast_raise_solve_rate = 0.8
+fast_band_step = 1.5
 lower_solve_rate = 0.3
 root_value_refresh = 4096
 reload_seconds = 300.0
@@ -129,6 +132,9 @@ rescore_max_seconds = 60.0
 seed = "phase6-loop"
 held_out_fraction = 0.02
 max_labels_per_tree = 16
+# Per-phase training caps (~10 minutes of training).
+max_policy_samples = 4096
+max_value_samples = 9600
 chosen_only_steps = false
 traced_directory = "traced"
 value_dataset = "v0"

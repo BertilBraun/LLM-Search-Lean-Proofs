@@ -33,8 +33,11 @@ class CurriculumConfig:
     characters_weight: float = 0.0
     band_width: float = 1.0
     band_step: float = 0.5
-    window: int = 100
+    window: int = 50
     raise_solve_rate: float = 0.5
+    # Far above the target the band moves in bigger steps, so compute goes to statements near the 50% frontier.
+    fast_raise_solve_rate: float = 0.8
+    fast_band_step: float = 1.5
     lower_solve_rate: float = 0.3
     # Roots nearest the band re-scored by each new value model (one prefill each).
     root_value_refresh: int = 4096
@@ -142,7 +145,9 @@ class Curriculum:
         if len(self.outcomes) < self.config.window or self.band_low is None:
             return
         rate = statistics.fmean(self.outcomes)
-        if rate >= self.config.raise_solve_rate:
+        if rate >= self.config.fast_raise_solve_rate:
+            self._move(self.band_low + self.config.fast_band_step, f"raised fast (solve rate {rate:.0%})")
+        elif rate >= self.config.raise_solve_rate:
             self._move(self.band_low + self.config.band_step, f"raised (solve rate {rate:.0%})")
         elif rate < self.config.lower_solve_rate:
             ordered = self._ordered()

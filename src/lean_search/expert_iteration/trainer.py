@@ -419,7 +419,10 @@ class PhaseTrainer:
         return state
 
     async def wait_for_evaluation(self) -> None:
+        """The searches keep running meanwhile; the phase pauses them once the evaluation is done."""
         waited = 0.0
+        if self.paths.evaluation_lock.exists():
+            self.log("Waiting for the running evaluation before pausing the searches")
         while self.paths.evaluation_lock.exists() and waited < EVALUATION_WAIT_SECONDS:
             await asyncio.sleep(10)
             waited += 10
@@ -483,7 +486,8 @@ class PhaseTrainer:
         self.top_up_policy_dataset(policy_buffer, phase)
         policy_evicted = policy_buffer.add(new_policy)
         policy_trained = policy_buffer.sample(
-            trained_count(len(new_policy), training.policy_buffer.reuse), random.Random(f"{training.seed}/{phase}")
+            min(trained_count(len(new_policy), training.policy_buffer.reuse), training.max_policy_samples),
+            random.Random(f"{training.seed}/{phase}"),
         )
 
         value_buffer = self.load_value_buffer()
@@ -496,7 +500,8 @@ class PhaseTrainer:
         self.top_up_value_dataset(value_buffer, phase)
         value_evicted = value_buffer.add(new_value)
         value_trained = value_buffer.sample(
-            trained_count(len(new_value), training.value_buffer.reuse), random.Random(f"{training.seed}/{phase}")
+            min(trained_count(len(new_value), training.value_buffer.reuse), training.max_value_samples),
+            random.Random(f"{training.seed}/{phase}"),
         )
 
         directory = self.paths.phase_data(phase)

@@ -23,6 +23,7 @@ from lean_search.lean import LeanError, LeanRepl, LeanTimeout, ProofState, ReplF
 from lean_search.search.records import from_json_object, to_json
 
 MAX_FAILURE_CHARACTERS = 300
+FIRST_PROOF_TACTICS = re.compile(rb'"top_level_tactics": (\d+)')
 DECLARED_NAME = re.compile(r"\s*(?:theorem|lemma)\s+(\S+)")
 
 
@@ -219,6 +220,36 @@ def read_candidates(path: Path) -> Iterator[KnownProofStatement]:
         yield from (from_json_object(KnownProofStatement, json.loads(line)) for line in lines if line.strip())
 
 
+def length_buckets(path: Path, minimum_tactics: int, last_bucket: int) -> list[list[int]]:
+    """Byte offsets of the candidates by their shortest proof's top-level tactics (the last bucket open-ended)."""
+    buckets: list[list[int]] = [[] for _ in range(last_bucket - minimum_tactics + 1)]
+    with path.open("rb") as lines:
+        offset = 0
+        for line in lines:
+            # The shortest proof comes first, so the first count in the line is its.
+            match = FIRST_PROOF_TACTICS.search(line)
+            if match is not None and int(match.group(1)) >= minimum_tactics:
+                buckets[min(int(match.group(1)), last_bucket) - minimum_tactics].append(offset)
+            offset += len(line)
+    return buckets
+
+
+def stratified_candidates(path: Path, minimum_tactics: int, last_bucket: int) -> Iterator[KnownProofStatement]:
+    """Round-robin over proof-length buckets, each easiest first, so verified statements span every difficulty."""
+    queues = [iter(bucket) for bucket in length_buckets(path, minimum_tactics, last_bucket) if bucket]
+    with path.open("rb") as lines:
+        while queues:
+            remaining = []
+            for queue in queues:
+                offset = next(queue, None)
+                if offset is None:
+                    continue
+                remaining.append(queue)
+                lines.seek(offset)
+                yield from_json_object(KnownProofStatement, json.loads(lines.readline()))
+            queues = remaining
+
+
 def read_verified(path: Path, offset: int = 0) -> tuple[list[VerifiedStatement], int]:
     """The complete records from a byte offset on, and the offset after them (a line being written waits)."""
     if not path.exists():
@@ -252,6 +283,9 @@ class VerificationConfig:
     # Statements whose shortest known proof has fewer top-level tactics are recorded as skipped, not checked: the
     # automation sweep closes almost all one-tactic ones.
     min_proof_tactics: int = 2
+    # Candidates in round-robin over proof-length buckets (min_proof_tactics up to this, the last open-ended), so
+    # verified statements span every difficulty and the curriculum's band can rise; 0 verifies easiest first.
+    stratified_last_bucket: int = 12
     check_seconds: float = 300.0
     command_timeout_seconds: float = 60.0
     # The automation probe: the loop search template's automation tactics, each with this time limit.

@@ -156,6 +156,10 @@ class TrainingConfig:
     value: TrainingStage = field(default_factory=lambda: TrainingStage("", 1))
     policy_buffer: BufferConfig = field(default_factory=lambda: BufferConfig(10000, 2000))
     value_buffer: BufferConfig = field(default_factory=lambda: BufferConfig(80000, 16000))
+    # Samples trained per phase at most, so that a phase's training stays within ~10 minutes (phase 1: 64-item
+    # policy steps and ~150-label value steps took ~8 s each on one GPU).
+    max_policy_samples: int = 4096
+    max_value_samples: int = 9600
     # Value labels per statement attempt at most: every exact and dead label first, then censored ones sampled.
     max_labels_per_tree: int = 16
     # Policy samples: the policy's steps on found proofs (also harvested ones) against dead or failed siblings;

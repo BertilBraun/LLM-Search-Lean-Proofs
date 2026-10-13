@@ -1,3 +1,5 @@
+import dataclasses
+
 import pytest
 from loop_fixtures import attempt, verified
 
@@ -16,6 +18,7 @@ CONFIG = CurriculumConfig(
     window=5,
     raise_solve_rate=0.5,
     lower_solve_rate=0.3,
+    fast_raise_solve_rate=2.0,
 )
 
 
@@ -131,3 +134,10 @@ def test_replayed_attempts_leave_the_curriculum() -> None:
     scheduler = Scheduler(SchedulerConfig(), curriculum)
     scheduler.replay([attempt("s.t0", decision=Decision.RETIRED_UNPROMISING)])
     assert [job.name for job in (scheduler.next_job(), scheduler.next_job()) if job] == ["s.t1"]
+
+
+def test_a_band_far_above_the_target_moves_in_bigger_steps() -> None:
+    config = dataclasses.replace(CONFIG, fast_raise_solve_rate=0.8, fast_band_step=1.5)
+    curriculum = curriculum_with([1] * 5 + [2] * 8 + [3] * 8, config)
+    outcomes(curriculum, [True] * 5)
+    assert curriculum.band_low == 2.5

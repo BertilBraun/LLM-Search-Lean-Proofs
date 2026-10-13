@@ -12,6 +12,8 @@ from lean_search.expert_iteration.known_proofs import (
     known_proof,
     read_verified,
     skipped_statement,
+    stratified_candidates,
+    write_records,
 )
 from lean_search.search.records import to_json
 
@@ -78,3 +80,14 @@ def test_a_skipped_statement_is_recorded_but_not_usable() -> None:
     (candidate,) = easiest_first(groups)
     record = skipped_statement(candidate)
     assert (record.skipped, record.verified, record.proof_tactics) == (True, False, 1)
+
+
+def test_stratified_candidates_take_turns_across_proof_lengths(tmp_path: Path) -> None:
+    groups: dict[str, StatementProofs] = {}
+    lengths = {"a": 2, "b": 2, "c": 3, "d": 5, "e": 1}
+    for key, tactics in lengths.items():
+        add_proof(groups, key, proof("\n".join(["simp"] * tactics), statement=f"theorem {key} : True := by"), 3)
+    path = tmp_path / "candidates.jsonl"
+    write_records(path, easiest_first(groups))
+    order = [candidate.statement_key for candidate in stratified_candidates(path, 2, 4)]
+    assert order == ["a", "c", "d", "b"]

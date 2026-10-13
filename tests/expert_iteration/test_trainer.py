@@ -384,3 +384,10 @@ def test_the_value_dataset_is_topped_up_to_its_floor(tmp_path: Path) -> None:
     buffer: FifoBuffer[ValueSample] = FifoBuffer(50, [], minimum_dataset_share=0.1)
     trainer.top_up_value_dataset(buffer, 1)
     assert len(buffer.dataset) == 5
+
+
+def test_a_phase_trains_on_at_most_its_cap(tmp_path: Path) -> None:
+    _, trainer = phase_trainer(tmp_path)
+    training = dataclasses.replace(trainer.config.training, max_value_samples=4)
+    trainer.config = dataclasses.replace(trainer.config, training=training)
+    assert trainer.build_data(1).value.trained == 4

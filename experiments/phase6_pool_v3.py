@@ -57,6 +57,7 @@ from lean_search.expert_iteration.known_proofs import (
     read_candidates,
     read_verified,
     skipped_statement,
+    stratified_candidates,
     verify_statement,
     write_records,
 )
@@ -354,11 +355,13 @@ async def verify(config: KnownProofPoolConfig, limit: int | None, sample: int | 
     output = POOL_DIRECTORY / ("sample_verified.jsonl" if sample else "verified.jsonl")
     verified, _ = read_verified(output)
     done = {record.name for record in verified}
-    candidates = (
-        iter(sample_candidates(POOL_DIRECTORY / "candidates.jsonl", sample))
-        if sample
-        else read_candidates(POOL_DIRECTORY / "candidates.jsonl")
-    )
+    path = POOL_DIRECTORY / "candidates.jsonl"
+    if sample:
+        candidates = iter(sample_candidates(path, sample))
+    elif settings.stratified_last_bucket:
+        candidates = stratified_candidates(path, settings.min_proof_tactics, settings.stratified_last_bucket)
+    else:
+        candidates = read_candidates(path)
     automation = load_run_config(REPOSITORY_DIRECTORY / settings.automation_config).automation.tactics
     repl_config = LeanReplConfig(command_timeout_seconds=settings.command_timeout_seconds)
     remaining = limit if limit is not None else sample
