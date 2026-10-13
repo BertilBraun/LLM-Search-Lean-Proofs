@@ -195,6 +195,11 @@ allows.
     but each expansion costs ~11× the tokens, so at equal compute short reasoning does not pay yet. The loop runs
     non-thinking from the bootstrap policy.
 - [ ] **Phase 6** — Expert iteration rounds (row 6).
+  - [x] Continuous actor–learner loop launched 2026-10-13 ~01:40 UTC: non-thinking, n = 8, stages 64/192/512,
+    curriculum over 720k known-proof statements (unverified allowed), pause–train–publish phases (~5–8 min),
+    lazy re-scoring, evaluation at 32 expansions inside training pauses. By 06:00 UTC: versions 0–4, 3,098
+    statements processed, 2,696 proofs; miniF2F-valid (32 expansions) v0 147 → v3 152; band ~8.5–9.5 at ~44%
+    solve rate.
 - [ ] **Phase 7** — Final ladder on miniF2F-test, write-up in `results/README.md`.
 
 Results of each phase are committed under `results/` as small JSON summaries plus a markdown table; large
