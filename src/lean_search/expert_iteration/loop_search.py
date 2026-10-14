@@ -190,9 +190,11 @@ class LoopSearch(_TheoremSearch):
         self.harvest_expansions = 0
         self.stage_results: list[StageResult] = []
         self.stage = first_stage
+        # Time spent in continue_search outside the gate's pauses, e.g. waiting for a later stage's slot.
+        self.waited_seconds = 0.0
 
     def wall_seconds(self) -> float:
-        return super().wall_seconds() - (self.gate.paused_seconds() - self.paused_at_start)
+        return super().wall_seconds() - (self.gate.paused_seconds() - self.paused_at_start) - self.waited_seconds
 
     async def run(self) -> CompletedSearch:
         self.paused_at_start = self.gate.paused_seconds()
@@ -218,9 +220,16 @@ class LoopSearch(_TheoremSearch):
                 self.solved_at = first_proof_cost
             result = self._stage_result(stage, stop_reason, proved, before)
             self.stage_results.append(result)
-            if proved is not None or stage + 1 >= len(self.stages) or not await self.continue_search(result):
+            if proved is not None or stage + 1 >= len(self.stages) or not await self.decide_continue(result):
                 return stop_reason, proved
             stage += 1
+
+    async def decide_continue(self, result: StageResult) -> bool:
+        started, paused_before = time.monotonic(), self.gate.paused_seconds()
+        try:
+            return await self.continue_search(result)
+        finally:
+            self.waited_seconds += time.monotonic() - started - (self.gate.paused_seconds() - paused_before)
 
     def _stage_result(
         self, stage: int, stop_reason: StopReason, proved: Node | None, before: Accounting

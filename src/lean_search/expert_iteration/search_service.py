@@ -46,6 +46,7 @@ from lean_search.expert_iteration.scheduler import (
     StatementStatus,
     decide,
 )
+from lean_search.expert_iteration.search_slots import SearchSlots, SlotLease
 from lean_search.expert_iteration.serving import LoopPaths, ServiceControl, read_current, write_json_atomically
 from lean_search.expert_iteration.shards import (
     AttemptRecord,
@@ -117,6 +118,8 @@ class ServiceHeartbeat:
     session_failures: int
     scheduler: SchedulerCounts
     sampling: SamplingCounts | None = None
+    # Searches waiting for a later stage's slot (counted in live_searches, not in the concurrency).
+    waiting_searches: int = 0
 
 
 @dataclass(frozen=True)
@@ -255,6 +258,13 @@ def load_failure_attempt(job: Job, start: StageStart, result: SearchResult, max_
     )
 
 
+def waiting_priority(outcome: StageOutcome) -> float:
+    """Lower waits less: the best frontier h; without a value model, the deepest search."""
+    if outcome.best_frontier_value is not None:
+        return outcome.best_frontier_value
+    return -float(outcome.max_depth)
+
+
 def started_in_loops(paths: LoopPaths, loops: Sequence[str]) -> set[str]:
     """The statements earlier loops (next to this one) started."""
     earlier = [LoopPaths(paths.runs_root, paths.data_root, loop) for loop in loops]
@@ -289,6 +299,12 @@ class SearchService:
         self.reasoning_log = ReasoningLog()
         self.write_lock = asyncio.Lock()
         self.live: set[LoopSearch] = set()
+        scheduler_config = self.scheduler.config
+        self.slots = SearchSlots(
+            config.search.concurrency,
+            int(scheduler_config.max_escalated_share * config.search.concurrency),
+            scheduler_config.max_waiting_escalations,
+        )
         self.version = 0
         self.session_attempts = 0
         self.session_proofs = 0
@@ -364,15 +380,16 @@ class SearchService:
             await self.trainer.run_phase(state, None)
             self.version = read_current(self.paths).version
         headers = common_headers([pool_problem(statement) for statement in statements], PRELOADED_HEADER_SHARE)
-        concurrency = self.config.search.concurrency
+        # Waiting searches keep their REPLs, so the pool and the workers cover them too.
+        workers = self.config.search.concurrency + self.scheduler.config.max_waiting_escalations
         async with contextlib.AsyncExitStack() as stack:
             models = await self.open_models(stack)
             pool = await stack.enter_async_context(
-                LeanReplPool(concurrency, LeanReplConfig(), self.template.lean.restart_fraction)
+                LeanReplPool(workers, LeanReplConfig(), self.template.lean.restart_fraction)
             )
             await pool.start(headers)
-            self.log(f"Pool of {concurrency} REPLs ready")
-            coroutines = [self.work(pool, models, stop) for _ in range(concurrency)]
+            self.log(f"Pool of {workers} REPLs ready")
+            coroutines = [self.work(pool, models, stop) for _ in range(workers)]
             coroutines.append(self.heartbeats(stop))
             coroutines.append(self.follow_control(stop))
             coroutines.append(self.reload_verified(stop))
@@ -443,13 +460,15 @@ class SearchService:
 
     async def work(self, pool: LeanReplPool, models: Models, stop: asyncio.Event) -> None:
         while not stop.is_set():
+            lease = await self.slots.start()
             job = self.scheduler.next_job()
             if job is None:
+                self.slots.finish(lease)
                 await asyncio.sleep(IDLE_SECONDS)
                 continue
             try:
                 async with pool.acquire() as repl:
-                    await self.search(job, repl, models)
+                    await self.search(job, repl, models, lease)
             except httpx.HTTPError as error:
                 # A server failed: the statement starts again at the stage it had reached.
                 self.scheduler.release(job)
@@ -457,9 +476,10 @@ class SearchService:
                 self.log(f"{job.name} stage {job.stage}: {type(error).__name__}: {error}; requeued")
                 await asyncio.sleep(FAILURE_PAUSE_SECONDS)
             finally:
+                self.slots.finish(lease)
                 self.reasoning_log.take(job.name)
 
-    async def search(self, job: Job, repl: LeanRepl, models: Models) -> None:
+    async def search(self, job: Job, repl: LeanRepl, models: Models, lease: SlotLease) -> None:
         stages = self.scheduler.config.stages
         start = StageStart(self.version, now())
 
@@ -467,10 +487,11 @@ class SearchService:
 
         async def continue_search(result: StageResult) -> bool:
             nonlocal start, escalation_full
-            decision = decide(stage_outcome(result), result.stage, self.scheduler.config)
+            outcome = stage_outcome(result)
+            decision = decide(outcome, result.stage, self.scheduler.config)
             if decision != Decision.ESCALATED:
                 return False
-            if result.stage == 0 and self.escalated_searches() >= self.escalation_capacity():
+            if not await self.slots.escalate(lease, waiting_priority(outcome)):
                 escalation_full = True
                 return False
             max_expansions = stages[result.stage].max_expansions
@@ -514,12 +535,6 @@ class SearchService:
         steps = self.reasoning_log.take(job.name)
         reasoning = TreeReasoning(job.statement.header, tuple(steps)) if steps else None
         await self.record(attempt, tree, reasoning)
-
-    def escalated_searches(self) -> int:
-        return sum(search.stage > 0 for search in self.live)
-
-    def escalation_capacity(self) -> int:
-        return int(self.scheduler.config.max_escalated_share * self.config.search.concurrency)
 
     async def record(self, attempt: AttemptRecord, tree: TreeRecord | None, reasoning: TreeReasoning | None) -> None:
         async with self.write_lock:
@@ -628,6 +643,7 @@ class SearchService:
                 session_failures=self.session_failures,
                 scheduler=self.scheduler.counts(),
                 sampling=self.sampling_counts(),
+                waiting_searches=self.slots.waiting,
             ),
         )
 

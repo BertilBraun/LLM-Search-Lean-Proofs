@@ -237,6 +237,7 @@ def print_status(config: LoopConfig, paths: LoopPaths) -> None:
             f"service: {'alive' if alive else 'STALE'} (heartbeat {age:.1f} min ago), {activity}, "
             f"{heartbeat.live_searches} searches in flight (by stage {stages}), {heartbeat.session_failures} server "
             f"errors and {heartbeat.session_rescored_states:,} lazily re-scored states this session"
+            + (f", {heartbeat.waiting_searches} waiting for a later stage" if heartbeat.waiting_searches else "")
         )
         if heartbeat.sampling is not None and heartbeat.sampling.samples:
             sampling = heartbeat.sampling

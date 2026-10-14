@@ -85,6 +85,10 @@ class SchedulerConfig:
     # At most this share of the concurrent searches run escalated stages: near the frontier stage 1 found 3.5x fewer
     # proofs per generated token than stage 0, and the value model's frontier h barely predicts which escalations pay.
     max_escalated_share: float = 0.25
+    # A statement that qualifies for the next stage while those slots are taken waits (tree and REPL kept, outside
+    # the concurrency) for one, most promising first; past this many waiters the least promising is retired. 0
+    # retires it at once.
+    max_waiting_escalations: int = 0
 
 
 @dataclass(frozen=True)

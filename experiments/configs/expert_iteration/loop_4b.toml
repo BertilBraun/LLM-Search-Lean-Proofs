@@ -105,20 +105,22 @@ seed = "phase6-curriculum"
 
 [search.scheduler]
 promising_depth = 0
-# At most 30 of the 120 searches run stages 1-2 (near the frontier stage 1 found 3.5x fewer proofs per generated token
-# than stage 0, and the frontier h barely predicts which escalations pay).
-max_escalated_share = 0.25
+# Up to 60 of the 120 searches run stages 1-2 (Lean stopped being the bottleneck with the 25k-heartbeat limit). A
+# statement that qualifies for the next stage while those are taken waits with its tree and REPL, outside the 120,
+# most promising first; past 60 waiters the least promising is retired.
+max_escalated_share = 0.5
+max_waiting_escalations = 60
 
-# Each stage's budget is a total over the statement's search, in expansions only: the wall caps (4 h a stage) only
-# catch hung searches. A stage is entered when the best h on the open frontier is at most max_frontier_value; the
-# stages' proofs per GPU-hour (phase6_loop.py metrics) tune these gates. At n = 8 (loop_search.toml) an expansion
-# costs about half of one at n = 16: 64 / 192 / 512 expansions are 512 / 1,536 / 4,096 generations.
+# Each stage's budget is a total over the statement's search, in expansions only: the wall caps (4 h a stage, waiting
+# for a slot not counted) only catch hung searches. A stage is entered when the best h on the open frontier is at most
+# max_frontier_value. Stage 0 at 32: of the 4B loop's first 138 proofs, 122 came within 32 expansions and 11 more
+# passed the 3.0 gate at 32 (96%); at 16 it would have kept 120 (87%). The 2B loop: 98.5% at 32, 96% at 16.
 [[search.scheduler.stages]]
-max_expansions = 64
+max_expansions = 32
 max_wall_seconds = 14400.0
 
 [[search.scheduler.stages]]
-max_expansions = 192
+max_expansions = 128
 max_wall_seconds = 14400.0
 max_frontier_value = 3.0
 
