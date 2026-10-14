@@ -25,6 +25,7 @@ import transformers
 from lean_search.reasoning.dataset import read_examples, tokenize_reasoning_example
 from lean_search.search.records import from_json_object
 from lean_search.search.summary import markdown_table
+from lean_search.training.math_data import read_solutions, tokenize_math_solution
 from lean_search.training.sft import (
     EvaluationRecord,
     SftConfig,
@@ -125,6 +126,10 @@ def main() -> None:
     train_examples = [
         tokenize_reasoning_example(tokenizer, example) for example in read_examples(data_directory / "train.jsonl")
     ]
+    if (data_directory / "math.jsonl").exists():
+        train_examples += [
+            tokenize_math_solution(tokenizer, solution) for solution in read_solutions(data_directory / "math.jsonl")
+        ]
     validation_examples = [
         tokenize_reasoning_example(tokenizer, example) for example in read_examples(data_directory / "validation.jsonl")
     ]

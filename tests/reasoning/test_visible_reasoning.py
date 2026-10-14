@@ -23,6 +23,7 @@ from lean_search.reasoning.dataset import (
     ReasoningExample,
     ReasoningOrigin,
     SelectionConfig,
+    math_replay,
     reasoning_example,
     select_samples,
     tokenize_reasoning_example,
@@ -31,6 +32,7 @@ from lean_search.reasoning.pipeline import sample_record as record_of
 from lean_search.reasoning.records import StateSamples
 from lean_search.reasoning.reward import RewardConfig, StepOutcome
 from lean_search.search.config import parse_run_config
+from lean_search.training.math_data import MathSolution
 from lean_search.training.sft_data import IGNORE_INDEX
 
 EXPLANATION = "Adding the two hypotheses gives 2a = 4, so a linear combination closes the goal."
@@ -154,3 +156,17 @@ def test_visible_rendering_is_the_chat_template_with_thinking_off(qwen_tokenizer
     rendered = qwen_tokenizer.apply_chat_template(conversation, tokenize=False, enable_thinking=False)
     prompt = render_prompt(qwen_tokenizer, GOALS, visible=True)
     assert prompt + render_visible_completion(EXPLANATION, BLOCK) + "\n" == rendered
+
+
+SOLUTIONS = [
+    MathSolution("math_train", f"math_train/{index}", f"What is {index} + 1?", f"$\boxed{{{index + 1}}}$")
+    for index in range(20)
+]
+
+
+def test_math_replay_takes_the_requested_count() -> None:
+    assert len(math_replay(SOLUTIONS, 7, "seed")) == 7
+
+
+def test_math_replay_is_a_fixed_choice_for_a_seed() -> None:
+    assert math_replay(list(reversed(SOLUTIONS)), 7, "seed") == math_replay(SOLUTIONS, 7, "seed")

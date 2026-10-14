@@ -46,6 +46,7 @@ from lean_search.reasoning.dataset import (
     ReasoningOrigin,
     interleaved,
     is_validation_proof,
+    math_replay,
     reasoning_example,
     replay_examples,
     select_samples,
@@ -82,6 +83,7 @@ from lean_search.reasoning.states import (
 from lean_search.reasoning.statistics import RunStatistics, SampleGroup, run_statistics
 from lean_search.search.records import from_json_object, to_json
 from lean_search.search.summary import markdown_table
+from lean_search.training.math_data import MathSolution, read_solutions
 from lean_search.training.sft_data import LengthStatistics, length_statistics, read_examples, shard_step_files
 from lean_search.value.estimator import open_value_estimator
 
@@ -148,6 +150,8 @@ class DataSummary:
     validation_replay: ExampleStatistics
     train_reasoning_by_source: tuple[SourceCount, ...]
     train_reasoning_by_origin: tuple[OriginCount, ...]
+    # Math worked solutions in math.jsonl.
+    train_math_replay: int = 0
 
 
 def git_revision() -> str:
@@ -768,6 +772,14 @@ def command_select(arguments: argparse.Namespace) -> None:
         read_examples(replay_directory / "validation.jsonl"), config.validation_replay_examples, config.seed
     )
     write_examples(output / "train.jsonl", interleaved([*train_reasoning, *train_replay], config.seed))
+    math_solutions: list[MathSolution] = []
+    if config.math_replay_data:
+        math_solutions = math_replay(
+            read_solutions(DATA_DIRECTORY / "math_sft" / config.math_replay_data / "train.jsonl"),
+            round(config.math_replay_ratio * len(train_reasoning)),
+            config.seed,
+        )
+        write_records(output / "math.jsonl", math_solutions)
     # The trainer's greedy-generation check reads the first validation examples: those measure the non-thinking mode.
     write_examples(output / "validation.jsonl", [*validation_replay, *validation_reasoning])
     tokenizer = transformers.AutoTokenizer.from_pretrained(config.tokenizer)
@@ -789,6 +801,7 @@ def command_select(arguments: argparse.Namespace) -> None:
             for source, count in sorted(Counter(example.source for example in train_reasoning).items())
         ),
         train_reasoning_by_origin=origin_counts(train_reasoning),
+        train_math_replay=len(math_solutions),
     )
     summary_directory = run_directory(arguments.run_name or f"phase5_data_{arguments.name}").summary
     summary_directory.mkdir(parents=True, exist_ok=True)

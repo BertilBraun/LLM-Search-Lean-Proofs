@@ -12,6 +12,7 @@ from lean_search.policy.prompts import render_prompt, render_thinking_completion
 from lean_search.reasoning.records import SampleRecord, StateRecord, StateSamples, scored_samples
 from lean_search.reasoning.reward import RewardConfig
 from lean_search.reasoning.thinking import is_trainable_reasoning
+from lean_search.training.math_data import MathSolution
 from lean_search.training.sft_data import SftExample, TokenizedExample, Tokenizer, ordering_key, tokenize_example
 
 
@@ -46,6 +47,10 @@ class ReasoningDataConfig:
     # Set, it replaces the sampling runs' system prompt addition in the reasoning examples, so that a teacher's
     # brevity instruction does not become part of the student's prompt.
     thinking_instruction: str | None = None
+    # General math worked solutions (name under $LEAN_SEARCH_DATA/math_sft) replayed alongside, this many per
+    # reasoning example in train (written to math.jsonl next to train.jsonl).
+    math_replay_data: str = ""
+    math_replay_ratio: float = 0.0
 
 
 class ReasoningOrigin(StrEnum):
@@ -140,6 +145,11 @@ def replay_example(example: SftExample) -> ReasoningExample:
 
 def is_validation_proof(proof_identifier: str, fraction: float, seed: str) -> bool:
     return stable_fraction(proof_identifier, f"{seed} validation") < fraction
+
+
+def math_replay(solutions: Iterable[MathSolution], count: int, seed: str) -> list[MathSolution]:
+    ordered = sorted(solutions, key=lambda solution: stable_fraction(solution.identifier, f"{seed} math"))
+    return ordered[:count]
 
 
 def replay_examples(examples: Iterable[SftExample], count: int, seed: str) -> list[ReasoningExample]:
