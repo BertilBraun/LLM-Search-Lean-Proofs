@@ -11,15 +11,19 @@ import httpx
 from transformers import AutoTokenizer
 
 from lean_search.lean.text import FORBIDDEN_TOKENS
-from lean_search.policy.client import Generation, PolicyClient
+from lean_search.policy.client import Generation, PolicyClient, Sample
 from lean_search.policy.config import PolicyConfig
 from lean_search.policy.prompts import (
+    FENCE,
     ChatTemplate,
     ParsedSamples,
     ParseFailure,
+    forced_answer_prompt,
+    forced_sample,
     parse_samples,
     render_prompt,
     stop_sequences,
+    truncated_in_thinking,
 )
 from lean_search.retrieval.provider import LemmaProvider, load_lemma_provider
 from lean_search.retrieval.statistics import LemmaStatistics
@@ -27,10 +31,21 @@ from lean_search.search.expanders import Candidate, CandidateBatch, CandidateBat
 from lean_search.search.tree import Node, StepSource
 
 MINIMUM_GENERATED_TOKENS = 32
+# Room for the closing of the thoughts and the opened block, and for re-tokenizing the thoughts as prompt text.
+FORCED_ANSWER_PROMPT_SLACK = 64
 
 
 class PolicyTokenizer(ChatTemplate, Protocol):
     def encode(self, text: str, *, add_special_tokens: bool) -> list[int]: ...
+
+
+@dataclass(frozen=True)
+class ForcedAnswers:
+    """The samples of a request whose answers were forced, and what the forcing request cost."""
+
+    sample_indices: frozenset[int] = frozenset()
+    prompt_tokens: int = 0
+    generated_tokens: int = 0
 
 
 @dataclass
@@ -54,8 +69,17 @@ class PolicyStatistics:
     # From the first request's start to the latest response, for samples per second under the search's load.
     window_seconds: float = 0.0
     lemmas: LemmaStatistics | None = None
+    # Budget forcing: samples cut off inside their thoughts that were continued with closed thoughts, the forced
+    # samples that gave a usable block, and the forcing requests' tokens (also counted in the totals above).
+    forced_samples: int = 0
+    forced_blocks: int = 0
+    forced_prompt_tokens: int = 0
+    forced_generated_tokens: int = 0
 
-    def record(self, generation: Generation, parsed: ParsedSamples, seconds: float) -> None:
+    def record(
+        self, generation: Generation, parsed: ParsedSamples, seconds: float, forced: ForcedAnswers | None = None
+    ) -> None:
+        forced = forced or ForcedAnswers()
         self.requests += 1
         self.samples += len(generation.samples)
         self.candidates += len(parsed.candidates)
@@ -72,15 +96,22 @@ class PolicyStatistics:
                     self.forbidden_samples += 1
         if not parsed.candidates:
             self.requests_without_candidates += 1
-            self.unattributed_generated_tokens += generation.completion_token_count
-        self.prompt_tokens += generation.prompt_token_count
+            self.unattributed_generated_tokens += generation.completion_token_count + forced.generated_tokens
+        self.prompt_tokens += generation.prompt_token_count + forced.prompt_tokens
         self.cached_prompt_tokens += generation.cached_prompt_token_count
-        self.generated_tokens += generation.completion_token_count
+        self.generated_tokens += generation.completion_token_count + forced.generated_tokens
         self.request_seconds += seconds
+        self.forced_samples += len(forced.sample_indices)
+        self.forced_blocks += sum(candidate.forced_sample_count for candidate in parsed.candidates)
+        self.forced_prompt_tokens += forced.prompt_tokens
+        self.forced_generated_tokens += forced.generated_tokens
 
 
-def candidate_batch(parsed: ParsedSamples, generation: Generation) -> CandidateBatch:
-    """The whole request's cost, failed samples included; each candidate logs the prompt and its own samples."""
+def candidate_batch(
+    parsed: ParsedSamples, generation: Generation, forced: ForcedAnswers | None = None
+) -> CandidateBatch:
+    """The whole request's cost, failed samples and forcing included; each candidate logs its own samples."""
+    forced = forced or ForcedAnswers()
     candidates = tuple(
         Candidate(
             candidate.tactic_block,
@@ -88,10 +119,15 @@ def candidate_batch(parsed: ParsedSamples, generation: Generation) -> CandidateB
             log_probability=candidate.log_probability,
             prompt_tokens=generation.prompt_token_count,
             generated_tokens=candidate.generated_tokens,
+            forced=candidate.forced,
         )
         for candidate in parsed.candidates
     )
-    return CandidateBatch(candidates, generation.prompt_token_count, generation.completion_token_count)
+    return CandidateBatch(
+        candidates,
+        generation.prompt_token_count + forced.prompt_tokens,
+        generation.completion_token_count + forced.generated_tokens,
+    )
 
 
 class PolicyExpander:
@@ -129,11 +165,46 @@ class PolicyExpander:
             self.statistics.prompts_too_long += 1
             return
         generation, seconds = await self._generate(prompt, max_tokens)
+        samples, forced, forcing_seconds = await self.force_answers(prompt, prompt_tokens, generation.samples)
         parsed = parse_samples(
-            generation.samples, thinking=self.config.thinking, forbidden_tokens=self.forbidden_tokens
+            samples,
+            thinking=self.config.thinking,
+            forbidden_tokens=self.forbidden_tokens,
+            forced_indices=forced.sample_indices,
         )
-        self.statistics.record(generation, parsed, seconds)
-        yield candidate_batch(parsed, generation)
+        self.statistics.record(generation, parsed, seconds + forcing_seconds, forced)
+        yield candidate_batch(parsed, generation, forced)
+
+    async def force_answers(
+        self, prompt: str, prompt_tokens: int, samples: Sequence[Sample]
+    ) -> tuple[list[Sample], ForcedAnswers, float]:
+        """Budget forcing: one request continues every sample cut off inside its thoughts after closing them."""
+        truncated = [index for index, sample in enumerate(samples) if truncated_in_thinking(sample)]
+        if not (self.config.thinking and self.config.force_answer_on_truncation and truncated):
+            return list(samples), ForcedAnswers(), 0.0
+        longest = max(samples[index].token_count for index in truncated)
+        max_tokens = min(
+            self.config.forced_answer_tokens,
+            self.max_model_length - prompt_tokens - longest - FORCED_ANSWER_PROMPT_SLACK,
+        )
+        if max_tokens < MINIMUM_GENERATED_TOKENS:
+            return list(samples), ForcedAnswers(), 0.0
+        started = time.monotonic()
+        continuations = await next(self._clients).generate_each(
+            [forced_answer_prompt(prompt, samples[index]) for index in truncated],
+            max_tokens=max_tokens,
+            temperature=self.config.temperature,
+            top_p=self.config.top_p,
+            stop=(FENCE,),
+            adapter=self.config.adapter,
+        )
+        forced = list(samples)
+        for index, continuation in zip(truncated, continuations.samples, strict=True):
+            forced[index] = forced_sample(samples[index], continuation)
+        answers = ForcedAnswers(
+            frozenset(truncated), continuations.prompt_token_count, continuations.completion_token_count
+        )
+        return forced, answers, time.monotonic() - started
 
     async def _generate(self, prompt: str, max_tokens: int) -> tuple[Generation, float]:
         started = time.monotonic()

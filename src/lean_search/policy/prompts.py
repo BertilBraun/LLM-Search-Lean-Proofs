@@ -132,6 +132,25 @@ def stop_sequences(thinking: bool) -> tuple[str, ...]:
     return () if thinking else (FENCE,)
 
 
+def truncated_in_thinking(sample: Sample) -> bool:
+    return sample.finish_reason == LENGTH_FINISH_REASON and THINK_END not in sample.text
+
+
+def forced_answer_prompt(prompt: str, truncated: Sample) -> str:
+    """The thinking prompt and the cut-off thoughts, closed, up to the opened block."""
+    return prompt + thinking_prefill(truncated.text)
+
+
+def forced_sample(truncated: Sample, continuation: Sample) -> Sample:
+    """The cut-off sample with its thoughts closed and the forced block: it parses like any other sample."""
+    return Sample(
+        text=f"{thinking_prefill(truncated.text)}{continuation.text}\n{FENCE}",
+        cumulative_logprob=truncated.cumulative_logprob + continuation.cumulative_logprob,
+        token_count=truncated.token_count + continuation.token_count,
+        finish_reason=continuation.finish_reason,
+    )
+
+
 class ParseFailure(Enum):
     TRUNCATED = "truncated"
     NO_BLOCK = "no_block"
@@ -184,6 +203,12 @@ class TacticCandidate:
     log_probability: float
     generated_tokens: int
     sample_count: int
+    # Samples behind the block whose answer was forced after their thoughts were cut off.
+    forced_sample_count: int = 0
+
+    @property
+    def forced(self) -> bool:
+        return self.forced_sample_count == self.sample_count
 
 
 @dataclass(frozen=True)
@@ -198,13 +223,18 @@ class ParsedSamples:
 
 
 def parse_samples(
-    samples: Sequence[Sample], *, thinking: bool, forbidden_tokens: frozenset[str] = FORBIDDEN_TOKENS
+    samples: Sequence[Sample],
+    *,
+    thinking: bool,
+    forbidden_tokens: frozenset[str] = FORBIDDEN_TOKENS,
+    forced_indices: frozenset[int] = frozenset(),
 ) -> ParsedSamples:
     """Distinct usable tactic blocks, most likely first; identical blocks merge and keep the best log-probability."""
     candidates: dict[str, TacticCandidate] = {}
     failures: list[ParseFailure] = []
     failed_generated_tokens = 0
-    for sample in samples:
+    for index, sample in enumerate(samples):
+        forced = int(index in forced_indices)
         match parse_sample(sample, thinking=thinking, forbidden_tokens=forbidden_tokens):
             case ParseFailure() as failure:
                 failures.append(failure)
@@ -216,8 +246,9 @@ def parse_samples(
                     max(earlier.log_probability, sample.cumulative_logprob),
                     earlier.generated_tokens + sample.token_count,
                     earlier.sample_count + 1,
+                    earlier.forced_sample_count + forced,
                 )
             case str() as block:
-                candidates[block] = TacticCandidate(block, sample.cumulative_logprob, sample.token_count, 1)
+                candidates[block] = TacticCandidate(block, sample.cumulative_logprob, sample.token_count, 1, forced)
     ordered = sorted(candidates.values(), key=lambda candidate: -candidate.log_probability)
     return ParsedSamples(tuple(ordered), tuple(failures), failed_generated_tokens)

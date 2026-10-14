@@ -466,6 +466,7 @@ class _TheoremSearch:
             failure=execution.failure,
             lean_seconds=execution.lean_seconds,
             repeat_of=repeat_of,
+            forced=candidate.forced,
         )
 
     async def _verify(self, node: Node) -> bool:

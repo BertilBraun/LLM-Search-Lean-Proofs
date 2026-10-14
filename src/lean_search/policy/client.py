@@ -100,6 +100,29 @@ class PolicyClient:
         ]
         return _generation(samples, response["usage"])
 
+    async def generate_each(
+        self,
+        prompts: Sequence[str],
+        *,
+        max_tokens: int,
+        temperature: float = 1.0,
+        top_p: float = 1.0,
+        stop: Sequence[str] = (),
+        adapter: str | None = None,
+    ) -> Generation:
+        """One sample per prompt, in the prompts' order, from a single request."""
+        body = {
+            "prompt": list(prompts),
+            "logprobs": 0,
+            **_sampling_fields(1, max_tokens, temperature, top_p, stop, None, False),
+        }
+        response = await self._post("/completions", body, adapter)
+        samples = [
+            _sample(choice["text"], choice["logprobs"]["token_logprobs"], choice["finish_reason"])
+            for choice in sorted(response["choices"], key=lambda choice: choice["index"])
+        ]
+        return _generation(samples, response["usage"])
+
     async def generate_chat(
         self,
         messages: Sequence[ChatMessage],

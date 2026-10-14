@@ -19,6 +19,10 @@ class PolicyConfig:
     thinking: bool = False
     # Appended to the system prompt in thinking mode only, e.g. prompts.BRIEF_THINKING_INSTRUCTION; empty adds nothing.
     thinking_instruction: str = ""
+    # Thinking only: a sample cut off by max_tokens inside its thoughts gets the thoughts closed and the block opened,
+    # and up to forced_answer_tokens more tokens to write the block (budget forcing).
+    force_answer_on_truncation: bool = True
+    forced_answer_tokens: int = 256
     few_shot: bool = True
     request_timeout_seconds: float = 900.0
     retrieval: RetrievalConfig = field(default_factory=RetrievalConfig)

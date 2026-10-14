@@ -92,3 +92,14 @@ def test_the_light_data_keeps_what_the_light_shortening_leaves_uncompressed() ->
     )
     data = data_config("phase5_data_teacher_9b_light.toml")
     assert (data.shortening, data.max_kept_reasoning_tokens) == ("9b_light", shortening.max_kept_reasoning_tokens)
+
+
+@pytest.mark.parametrize("path", sorted(CONFIG_DIRECTORY.glob("phase5_expansions_*.toml")), ids=lambda path: path.stem)
+def test_equal_expansion_configs_have_no_token_cap(path: Path) -> None:
+    search = load_run_config(path).search
+    assert (search.max_expansions, search.max_generated_tokens) == (64, None)
+
+
+def test_the_equal_expansion_thinking_arm_forces_answers() -> None:
+    policy = load_run_config(CONFIG_DIRECTORY / "phase5_expansions_student_4b_light_thinking.toml").policy
+    assert (policy.thinking, policy.force_answer_on_truncation, policy.sample_count) == (True, True, 16)

@@ -37,6 +37,8 @@ class Candidate:
     generated_tokens: int = 0
     heartbeats: int | None = None
     timeout_seconds: float | None = None
+    # Written after the policy's thoughts were cut off and closed (budget forcing).
+    forced: bool = False
 
 
 @dataclass(frozen=True)

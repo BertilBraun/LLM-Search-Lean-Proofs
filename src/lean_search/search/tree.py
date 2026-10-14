@@ -113,6 +113,8 @@ class Edge:
     failure: Failure | None
     lean_seconds: float
     repeat_of: int | None
+    # The policy's answer was forced after its thoughts were cut off.
+    forced: bool = False
 
 
 class SearchTree:
@@ -166,6 +168,7 @@ class SearchTree:
         failure: Failure | None = None,
         lean_seconds: float = 0.0,
         repeat_of: int | None = None,
+        forced: bool = False,
     ) -> Edge:
         assert parent.expansion_index is not None, parent.node_id
         edge = Edge(
@@ -184,6 +187,7 @@ class SearchTree:
             failure=failure,
             lean_seconds=lean_seconds,
             repeat_of=repeat_of,
+            forced=forced,
         )
         self.edges.append(edge)
         if failure is not None and failure.kind == FailureKind.WALL_CLOCK_TIMEOUT:
