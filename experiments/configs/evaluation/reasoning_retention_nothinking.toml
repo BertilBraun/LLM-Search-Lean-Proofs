@@ -1,0 +1,46 @@
+# Reasoning retention without thinking: the same problems, prompt, sampling, cap and forced-answer rule as
+# reasoning_retention.toml, with enable_thinking = false (the chat template's empty think block).
+dataset = "/workspace/data/math500/test.jsonl"
+problem_count = 200
+judged_problem_count = 20
+seed = "reasoning-retention"
+sample_count = 4
+temperature = 0.6
+# Qwen's recommended sampling for thinking mode; temperature is the owner's.
+top_p = 0.95
+max_tokens = 4096
+max_model_length = 8192
+requests_in_flight = 64
+# A literal string: in a basic TOML string the backslash of \boxed would start the escape \b (backspace).
+instruction = 'Please reason step by step, and put your final answer within \boxed{}.'
+
+thinking = false
+
+[[models]]
+label = "qwen3.5-2b"
+base = "Qwen/Qwen3.5-2B"
+
+[[models]]
+label = "qwen3.5-2b-sft-v2"
+base = "Qwen/Qwen3.5-2B"
+adapter = "/workspace/checkpoints/phase2_sft_v2/adapter"
+
+[[models]]
+label = "qwen3.5-2b-bootstrap-r1"
+base = "Qwen/Qwen3.5-2B"
+adapter = "/workspace/checkpoints/phase5_sft_bootstrap_r1/adapter"
+
+[[models]]
+label = "qwen3.5-4b"
+base = "Qwen/Qwen3.5-4B"
+
+[[models]]
+label = "qwen3.5-4b-sft"
+base = "Qwen/Qwen3.5-4B"
+adapter = "/workspace/checkpoints/phase2_sft_4b/adapter"
+
+[[models]]
+label = "qwen3.5-4b-student"
+base = "Qwen/Qwen3.5-4B"
+# The reasoning agent's student run; skipped until the adapter exists.
+adapter = "/workspace/checkpoints/phase5_sft_student_4b/adapter"

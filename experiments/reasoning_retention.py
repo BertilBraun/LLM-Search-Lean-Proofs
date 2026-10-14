@@ -67,6 +67,7 @@ class RetentionConfig:
     requests_in_flight: int
     instruction: str
     models: tuple[ModelSpec, ...] = field(default_factory=tuple)
+    thinking: bool = True
 
 
 @dataclass(frozen=True)
@@ -128,6 +129,14 @@ class SamplingRun:
     wall_seconds: float
     generated_tokens_per_second: float
     git_revision: str
+
+
+def models_directory(config: RetentionConfig) -> Path:
+    return RUN_DIRECTORY / ("models" if config.thinking else "models_nothinking")
+
+
+def summary_directory(config: RetentionConfig) -> Path:
+    return RUN_DIRECTORY / ("summary" if config.thinking else "summary_nothinking")
 
 
 def stable_order(seed: str, key: str) -> bytes:
@@ -204,7 +213,7 @@ async def sample_problems(
                 started = time.monotonic()
                 generation = await client.generate_chat(
                     [message],
-                    enable_thinking=True,
+                    enable_thinking=config.thinking,
                     sample_count=config.sample_count,
                     max_tokens=config.max_tokens,
                     temperature=config.temperature,
@@ -220,11 +229,15 @@ async def sample_problems(
 
 
 def score(
-    problem: Problem, samples: ProblemSamples, tokenizer: transformers.PreTrainedTokenizerBase
+    problem: Problem, samples: ProblemSamples, tokenizer: transformers.PreTrainedTokenizerBase, thinking: bool
 ) -> list[ScoredSample]:
     scored = []
     for index, sample in enumerate(samples.samples):
-        reasoning, think_end, after = sample.text.partition(THINK_END)
+        # Without thinking the whole reply is the solution and counts as reasoning.
+        if thinking:
+            reasoning, think_end, after = sample.text.partition(THINK_END)
+        else:
+            reasoning, think_end, after = sample.text, THINK_END, sample.text
         answer = last_boxed(after) if think_end else None
         scored.append(
             ScoredSample(
@@ -260,7 +273,7 @@ def command_run(config: RetentionConfig, labels: Sequence[str], gpu: int, port: 
         if model.adapter and not Path(model.adapter).exists():
             print(f"{label}: adapter {model.adapter} does not exist, skipped", flush=True)
             continue
-        directory = RUN_DIRECTORY / "models" / label
+        directory = models_directory(config) / label
         served_name = f"retention-{label}"
         started = time.monotonic()
         with served(served_name, model, gpu, port, config.max_model_length):
@@ -284,7 +297,11 @@ def command_run(config: RetentionConfig, labels: Sequence[str], gpu: int, port: 
         by_id = {problem.unique_id: problem for problem in problems}
         write_records(
             directory / "scores.jsonl",
-            (scored for result in results for scored in score(by_id[result.unique_id], result, tokenizer)),
+            (
+                scored
+                for result in results
+                for scored in score(by_id[result.unique_id], result, tokenizer, config.thinking)
+            ),
         )
         print(f"{label}: {run.samples} samples, {generated:,} tokens in {wall_seconds:.0f} s", flush=True)
 
@@ -309,13 +326,13 @@ async def force_answers(
         async def force(problem: Problem, sample_index: int, sample: SolutionSample) -> ForcedAnswer:
             conversation = [{"role": "user", "content": f"{problem.problem}\n\n{config.instruction}"}]
             prompt = tokenizer.apply_chat_template(
-                conversation, tokenize=False, add_generation_prompt=True, enable_thinking=True
+                conversation, tokenize=False, add_generation_prompt=True, enable_thinking=config.thinking
             )
             async with semaphore:
                 generation = await client.generate(
                     prompt
                     + sample.text
-                    + ("\n\n" if THINK_END in sample.text else FORCED_THINK_END)
+                    + ("\n\n" if THINK_END in sample.text or not config.thinking else FORCED_THINK_END)
                     + FORCED_ANSWER_PREFIX,
                     sample_count=1,
                     max_tokens=FORCED_ANSWER_TOKENS,
@@ -345,7 +362,7 @@ def command_force(config: RetentionConfig, labels: Sequence[str], gpu: int, port
     models = {model.label: model for model in config.models}
     for label in labels:
         model = models[label]
-        directory = RUN_DIRECTORY / "models" / label
+        directory = models_directory(config) / label
         results = read_records(directory / "samples.jsonl", ProblemSamples)
         tokenizer = transformers.AutoTokenizer.from_pretrained(model.base)
         served_name = f"retention-{label}"
@@ -376,17 +393,17 @@ def quantiles(values: Sequence[int]) -> list[str]:
 def command_summarize(config: RetentionConfig) -> None:
     problems = read_records(RUN_DIRECTORY / "problems.jsonl", Problem)
     labels = [
-        model.label for model in config.models if (RUN_DIRECTORY / "models" / model.label / "scores.jsonl").exists()
+        model.label for model in config.models if (models_directory(config) / model.label / "scores.jsonl").exists()
     ]
-    scores = {label: read_records(RUN_DIRECTORY / "models" / label / "scores.jsonl", ScoredSample) for label in labels}
+    scores = {label: read_records(models_directory(config) / label / "scores.jsonl", ScoredSample) for label in labels}
     samples = {
         label: {
             record.unique_id: record
-            for record in read_records(RUN_DIRECTORY / "models" / label / "samples.jsonl", ProblemSamples)
+            for record in read_records(models_directory(config) / label / "samples.jsonl", ProblemSamples)
         }
         for label in labels
     }
-    accuracy_rows, length_rows, level_rows = [], [], []
+    accuracy_rows, length_rows, level_rows, forced_level_rows = [], [], [], []
     levels = sorted({problem.level for problem in problems})
     level_of = {problem.unique_id: problem.level for problem in problems}
     for label in labels:
@@ -395,7 +412,7 @@ def command_summarize(config: RetentionConfig) -> None:
         for record in records:
             by_problem[record.unique_id].append(record)
         any_correct = sum(any(record.correct for record in group) for group in by_problem.values())
-        forced_path = RUN_DIRECTORY / "models" / label / "forced.jsonl"
+        forced_path = models_directory(config) / label / "forced.jsonl"
         forced = read_records(forced_path, ForcedAnswer) if forced_path.exists() else []
         forced_correct = {(answer.unique_id, answer.sample_index) for answer in forced if answer.correct}
         with_forced = [
@@ -406,6 +423,7 @@ def command_summarize(config: RetentionConfig) -> None:
                 label,
                 percent(sum(record.correct for record in records), len(records)),
                 percent(any_correct, len(by_problem)),
+                f"{statistics.mean(record.total_tokens for record in records):,.0f}",
                 percent(sum(with_forced), len(records)) if forced_path.exists() else "–",
                 percent(sum(answer.correct for answer in forced), len(forced)),
                 percent(sum(record.truncated for record in records), len(records)),
@@ -435,9 +453,26 @@ def command_summarize(config: RetentionConfig) -> None:
                 ),
             ]
         )
+        forced_level_rows.append(
+            [
+                label,
+                *(
+                    percent(
+                        sum(
+                            correct
+                            for correct, record in zip(with_forced, records, strict=True)
+                            if level_of[record.unique_id] == level
+                        ),
+                        sum(level_of[record.unique_id] == level for record in records),
+                    )
+                    for level in levels
+                ),
+            ]
+        )
+    mode = "thinking on" if config.thinking else "thinking off (empty think block)"
     sections = [
         "# Reasoning retention on MATH-500",
-        f"{len(problems)} MATH-500 problems stratified by level and subject (seed `{config.seed}`), thinking on, "
+        f"{len(problems)} MATH-500 problems stratified by level and subject (seed `{config.seed}`), {mode}, "
         f"k = {config.sample_count} samples at temperature {config.temperature} (top-p {config.top_p}), at most "
         f"{config.max_tokens} generated tokens; the answer is the last \\boxed{{}} after the thinking block. Forced "
         "answers: a sample cut off at the cap gets its thinking closed with `</think>` (if still open) and "
@@ -448,6 +483,7 @@ def command_summarize(config: RetentionConfig) -> None:
                 "Model",
                 "pass@1 (mean over k)",
                 f"any@{config.sample_count}",
+                "Mean generated tokens",
                 "pass@1 with forced answers",
                 "Forced answers correct",
                 "Truncated",
@@ -458,6 +494,8 @@ def command_summarize(config: RetentionConfig) -> None:
         ),
         "## Accuracy by level (pass@1)",
         markdown_table(["Model", *(f"Level {level}" for level in levels)], level_rows),
+        "## Accuracy by level (pass@1 with forced answers)",
+        markdown_table(["Model", *(f"Level {level}" for level in levels)], forced_level_rows),
         "## Reasoning length (tokens before </think>)",
         markdown_table(
             [
@@ -478,9 +516,9 @@ def command_summarize(config: RetentionConfig) -> None:
             length_rows,
         ),
     ]
-    summary_directory = RUN_DIRECTORY / "summary"
-    summary_directory.mkdir(parents=True, exist_ok=True)
-    (summary_directory / "summary.md").write_text("\n\n".join(sections) + "\n", encoding="utf-8")
+    output_directory = summary_directory(config)
+    output_directory.mkdir(parents=True, exist_ok=True)
+    (output_directory / "summary.md").write_text("\n\n".join(sections) + "\n", encoding="utf-8")
     judged = [problem for problem in problems if problem.judged]
     for label in labels:
         scored = {(record.unique_id, record.sample_index): record for record in scores[label]}
@@ -498,8 +536,8 @@ def command_summarize(config: RetentionConfig) -> None:
                 + ("\n[...]" if len(text) > JUDGED_TRACE_CHARACTERS else "")
                 + "\n```",
             ]
-        (summary_directory / "judged").mkdir(exist_ok=True)
-        (summary_directory / "judged" / f"{label}.md").write_text("\n\n".join(lines) + "\n", encoding="utf-8")
+        (output_directory / "judged").mkdir(exist_ok=True)
+        (output_directory / "judged" / f"{label}.md").write_text("\n\n".join(lines) + "\n", encoding="utf-8")
     print("\n\n".join(sections))
 
 
