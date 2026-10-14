@@ -58,13 +58,20 @@ class ReasoningExpander:
             inner.statistics.prompts_too_long += 1
             return
         generation, seconds = await inner._generate(prompt, max_tokens)
-        parsed = parse_samples(generation.samples, thinking=config.thinking, forbidden_tokens=inner.forbidden_tokens)
-        inner.statistics.record(generation, parsed, seconds)
+        # Samples cut off inside their thoughts get them closed and their block forced (budget forcing).
+        samples, forced, forcing_seconds = await inner.force_answers(prompt, prompt_tokens, generation.samples)
+        parsed = parse_samples(
+            samples,
+            thinking=config.thinking,
+            forbidden_tokens=inner.forbidden_tokens,
+            forced_indices=forced.sample_indices,
+        )
+        inner.statistics.record(generation, parsed, seconds + forcing_seconds, forced)
         sample_blocks = [
             block
             if isinstance(block := parse_sample(sample, thinking=True, forbidden_tokens=inner.forbidden_tokens), str)
             else None
-            for sample in generation.samples
+            for sample in samples
         ]
-        self.log.add(context.problem.name, node.node_id, most_likely_reasoning(generation.samples, sample_blocks))
-        yield candidate_batch(parsed, generation)
+        self.log.add(context.problem.name, node.node_id, most_likely_reasoning(samples, sample_blocks))
+        yield candidate_batch(parsed, generation, forced)

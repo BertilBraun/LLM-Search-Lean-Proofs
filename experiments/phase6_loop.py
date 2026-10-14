@@ -238,6 +238,14 @@ def print_status(config: LoopConfig, paths: LoopPaths) -> None:
             f"{heartbeat.live_searches} searches in flight (by stage {stages}), {heartbeat.session_failures} server "
             f"errors and {heartbeat.session_rescored_states:,} lazily re-scored states this session"
         )
+        if heartbeat.sampling is not None and heartbeat.sampling.samples:
+            sampling = heartbeat.sampling
+            lines.append(
+                f"sampling: {sampling.samples:,} policy samples this session "
+                f"({sampling.generated_tokens / sampling.samples:.0f} tokens each), "
+                f"{sampling.forced_samples:,} forced ({sampling.forced_samples / sampling.samples:.1%}) "
+                f"giving {sampling.forced_blocks:,} usable blocks"
+            )
     else:
         heartbeat = None
         lines.append("service: no heartbeat (not started)")

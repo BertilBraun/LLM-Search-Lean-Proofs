@@ -59,7 +59,7 @@ from lean_search.expert_iteration.thinking import TreeReasoning
 from lean_search.expert_iteration.thinking_expander import ReasoningExpander, ReasoningLog
 from lean_search.expert_iteration.trainer import PhaseStage, PhaseTrainer, read_phase_state
 from lean_search.lean import LeanRepl, LeanReplConfig, LeanReplPool
-from lean_search.policy.expander import open_policy_expander
+from lean_search.policy.expander import PolicyStatistics, open_policy_expander
 from lean_search.search import (
     Expander,
     PriorityFunction,
@@ -88,6 +88,17 @@ async def sleep_unless_stopped(stop: asyncio.Event, seconds: float) -> None:
 
 
 @dataclass(frozen=True)
+class SamplingCounts:
+    """The policy's samples this session; forced ones were cut off in their thoughts and made to answer."""
+
+    samples: int
+    generated_tokens: int
+    forced_samples: int
+    # Forced samples that gave a usable block.
+    forced_blocks: int
+
+
+@dataclass(frozen=True)
 class ServiceHeartbeat:
     written_at: str
     version: int
@@ -105,6 +116,7 @@ class ServiceHeartbeat:
     session_rescored_states: int
     session_failures: int
     scheduler: SchedulerCounts
+    sampling: SamplingCounts | None = None
 
 
 @dataclass(frozen=True)
@@ -283,6 +295,7 @@ class SearchService:
         self.session_harvested_proofs = 0
         self.session_rescored_states = 0
         self.session_failures = 0
+        self.policy_statistics: PolicyStatistics | None = None
         # Open states re-scored per second at the last re-scoring; None before the first.
         self.rescore_rate: float | None = None
         self.failure: Exception | None = None
@@ -394,6 +407,7 @@ class SearchService:
         policy = None
         if config.expander.kind.uses_policy:
             opened = await stack.enter_async_context(open_policy_expander(config.policy, config.search.forbidden_steps))
+            self.policy_statistics = opened.statistics
             inner: Expander = ReasoningExpander(opened, self.reasoning_log) if config.policy.thinking else opened
             policy = GatedExpander(inner, self.gate)
         value_estimator = None
@@ -613,7 +627,16 @@ class SearchService:
                 + sum(search.lazily_rescored for search in self.live),
                 session_failures=self.session_failures,
                 scheduler=self.scheduler.counts(),
+                sampling=self.sampling_counts(),
             ),
+        )
+
+    def sampling_counts(self) -> SamplingCounts | None:
+        statistics = self.policy_statistics
+        if statistics is None:
+            return None
+        return SamplingCounts(
+            statistics.samples, statistics.generated_tokens, statistics.forced_samples, statistics.forced_blocks
         )
 
     async def heartbeats(self, stop: asyncio.Event) -> None:
