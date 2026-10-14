@@ -1,0 +1,11 @@
+{
+ "label": "qwen3.5-4b-sft",
+ "base": "Qwen/Qwen3.5-4B",
+ "adapter": "/workspace/checkpoints/phase2_sft_4b/adapter",
+ "problems": 200,
+ "samples": 800,
+ "generated_tokens": 2842577,
+ "wall_seconds": 2241.7559293159284,
+ "generated_tokens_per_second": 1268.0135972105634,
+ "git_revision": "f9e2911576c9deb1b2ed9cf7b07251d3e3d57db6"
+}

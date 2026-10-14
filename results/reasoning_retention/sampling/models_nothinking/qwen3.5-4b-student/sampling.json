@@ -1,0 +1,11 @@
+{
+ "label": "qwen3.5-4b-student",
+ "base": "Qwen/Qwen3.5-4B",
+ "adapter": "/workspace/checkpoints/phase5_sft_student_4b/adapter",
+ "problems": 200,
+ "samples": 800,
+ "generated_tokens": 872458,
+ "wall_seconds": 614.2933444660157,
+ "generated_tokens_per_second": 1420.262823713967,
+ "git_revision": "64a35c10553dab61e8c2523f06cd053f2a92d8c7"
+}

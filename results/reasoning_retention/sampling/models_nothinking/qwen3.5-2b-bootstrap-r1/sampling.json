@@ -1,0 +1,11 @@
+{
+ "label": "qwen3.5-2b-bootstrap-r1",
+ "base": "Qwen/Qwen3.5-2B",
+ "adapter": "/workspace/checkpoints/phase5_sft_bootstrap_r1/adapter",
+ "problems": 200,
+ "samples": 800,
+ "generated_tokens": 944136,
+ "wall_seconds": 317.7646652820986,
+ "generated_tokens_per_second": 2971.179942747361,
+ "git_revision": "64a35c10553dab61e8c2523f06cd053f2a92d8c7"
+}

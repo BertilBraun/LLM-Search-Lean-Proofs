@@ -1,0 +1,11 @@
+{
+ "label": "qwen3.5-4b",
+ "base": "Qwen/Qwen3.5-4B",
+ "adapter": "",
+ "problems": 200,
+ "samples": 800,
+ "generated_tokens": 2946276,
+ "wall_seconds": 2031.9146894819569,
+ "generated_tokens_per_second": 1449.999852479615,
+ "git_revision": "f9e2911576c9deb1b2ed9cf7b07251d3e3d57db6"
+}
