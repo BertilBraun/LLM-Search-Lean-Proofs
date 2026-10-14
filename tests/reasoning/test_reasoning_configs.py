@@ -22,6 +22,7 @@ CONFIG_DIRECTORY = Path(__file__).resolve().parents[2] / "experiments" / "config
         *CONFIG_DIRECTORY.glob("phase5_compare_*.toml"),
         *CONFIG_DIRECTORY.glob("phase5_size_*.toml"),
         *CONFIG_DIRECTORY.glob("phase5_teacher_*.toml"),
+        *CONFIG_DIRECTORY.glob("phase5_visible_*.toml"),
     ],
     ids=lambda path: path.stem,
 )
@@ -103,3 +104,11 @@ def test_equal_expansion_configs_have_no_token_cap(path: Path) -> None:
 def test_the_equal_expansion_thinking_arm_forces_answers() -> None:
     policy = load_run_config(CONFIG_DIRECTORY / "phase5_expansions_student_4b_light_thinking.toml").policy
     assert (policy.thinking, policy.force_answer_on_truncation, policy.sample_count) == (True, True, 16)
+
+
+@pytest.mark.parametrize(
+    "path", sorted(CONFIG_DIRECTORY.glob("phase5_visible_probe_*.toml")), ids=lambda path: path.stem
+)
+def test_visible_probes_reason_visibly(path: Path) -> None:
+    policy = load_reasoning_run_config(path).policy
+    assert (policy.visible_reasoning, policy.thinking, policy.max_tokens) == (True, False, 1024)
