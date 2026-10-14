@@ -1,0 +1,20 @@
+[
+ {
+  "source": "math_train",
+  "candidates": 7500,
+  "contaminated": 280,
+  "over_length": 81,
+  "selected": 6924,
+  "tokens": 2250008,
+  "completion_tokens_mean": 221.43515309069903
+ },
+ {
+  "source": "numinamath_cot",
+  "candidates": 121035,
+  "contaminated": 1045,
+  "over_length": 670,
+  "selected": 5232,
+  "tokens": 2250614,
+  "completion_tokens_mean": 325.841743119266
+ }
+]
