@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
-from lean_search.policy.config import PolicyConfig
+from lean_search.policy.config import PolicyConfig, policy_config_problem
 from lean_search.search.expanders import AutomationConfig, AutomationExpander, CompositeExpander, Expander
 from lean_search.search.priority import PriorityConfig, PriorityKind
 from lean_search.search.records import from_json_object
@@ -58,8 +58,8 @@ def parse_run_config(text: str) -> RunConfig:
         raise ValueError("A policy expander needs policy.model and policy.tokenizer.")
     if config.policy.sample_count < 1 or not config.policy.server_urls:
         raise ValueError("policy.sample_count must be positive and policy.server_urls not empty.")
-    if config.policy.thinking_instruction and not config.policy.thinking:
-        raise ValueError("policy.thinking_instruction is only used with policy.thinking = true.")
+    if (problem := policy_config_problem(config.policy)) is not None:
+        raise ValueError(problem)
     if config.value.model and not (config.priority.kind == PriorityKind.A_STAR and config.value.tokenizer):
         raise ValueError('A value model needs priority.kind = "a_star" and value.tokenizer.')
     if not config.value.server_urls or config.value.top_k < 1:

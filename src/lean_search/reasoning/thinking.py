@@ -4,7 +4,15 @@ from dataclasses import dataclass
 
 from lean_search.lean.text import FORBIDDEN_TOKENS, find_forbidden_tokens
 from lean_search.policy.client import Sample
-from lean_search.policy.prompts import FENCE, THINK_END, THINK_START, ParseFailure, normalize_tactic_block, parse_sample
+from lean_search.policy.prompts import (
+    FENCE,
+    THINK_END,
+    THINK_START,
+    ParseFailure,
+    normalize_tactic_block,
+    parse_sample,
+    visible_explanation,
+)
 
 
 @dataclass(frozen=True)
@@ -44,12 +52,18 @@ def recovered_sample(text: str, reasoning: str, forbidden_tokens: frozenset[str]
     return ThinkingSample(reasoning, block, None, recovered_format=True)
 
 
+def sample_reasoning(text: str, *, thinking: bool, visible: bool) -> str:
+    if thinking:
+        return reasoning_text(text)
+    return visible_explanation(text) if visible else ""
+
+
 def parse_thinking_sample(
-    sample: Sample, *, thinking: bool, forbidden_tokens: frozenset[str] = FORBIDDEN_TOKENS
+    sample: Sample, *, thinking: bool, forbidden_tokens: frozenset[str] = FORBIDDEN_TOKENS, visible: bool = False
 ) -> ThinkingSample:
     """The search's parse, plus blocks a thinking sample wrote without the opening fence (SFT-format leakage)."""
-    reasoning = reasoning_text(sample.text) if thinking else ""
-    match parse_sample(sample, thinking=thinking, forbidden_tokens=forbidden_tokens):
+    reasoning = sample_reasoning(sample.text, thinking=thinking, visible=visible)
+    match parse_sample(sample, thinking=thinking, forbidden_tokens=forbidden_tokens, visible=visible):
         case ParseFailure.EMPTY if thinking and (
             recovered := recovered_sample(sample.text, reasoning, forbidden_tokens)
         ):

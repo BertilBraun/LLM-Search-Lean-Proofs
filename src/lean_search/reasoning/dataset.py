@@ -8,7 +8,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from lean_search.corpora.tracing import stable_fraction
-from lean_search.policy.prompts import render_prompt, render_thinking_completion
+from lean_search.policy.prompts import render_prompt, render_thinking_completion, render_visible_completion
 from lean_search.reasoning.records import SampleRecord, StateRecord, StateSamples, scored_samples
 from lean_search.reasoning.reward import RewardConfig
 from lean_search.reasoning.thinking import is_trainable_reasoning
@@ -68,6 +68,8 @@ class ReasoningExample:
     # The thinking-mode system prompt addition the reasoning was sampled with.
     thinking_instruction: str
     origin: ReasoningOrigin
+    # The reasoning is written visibly before the block, with thinking off (PolicyConfig.visible_reasoning).
+    visible: bool = False
 
 
 def trainable_successes(record: StateRecord, reward: RewardConfig, selection: SelectionConfig) -> list[SampleRecord]:
@@ -75,6 +77,7 @@ def trainable_successes(record: StateRecord, reward: RewardConfig, selection: Se
         scored.sample
         for scored in scored_samples(record, reward)
         if scored.success
+        and not scored.sample.forced
         and is_trainable_reasoning(scored.sample.reasoning)
         and scored.sample.reasoning_tokens >= selection.min_reasoning_tokens
         and (not selection.max_reasoning_tokens or scored.sample.reasoning_tokens <= selection.max_reasoning_tokens)
@@ -112,6 +115,7 @@ def reasoning_example(sampled: StateSamples, sample: SampleRecord) -> ReasoningE
         sample.reasoning,
         sampled.thinking_instruction,
         ReasoningOrigin.SAMPLED,
+        sampled.visible,
     )
 
 
@@ -151,6 +155,13 @@ def tokenize_reasoning_example(tokenizer: Tokenizer, example: ReasoningExample) 
     match example.reasoning:
         case None:
             return tokenize_example(tokenizer, sft_example)
+        case str() as reasoning if example.visible:
+            prompt_ids = tokenizer.encode(
+                render_prompt(tokenizer, example.goals, visible=True), add_special_tokens=False
+            )
+            completion = render_visible_completion(reasoning, example.tactic_block)
+            completion_ids = tokenizer.encode(completion, add_special_tokens=False)
+            return TokenizedExample(sft_example, tuple(prompt_ids + completion_ids), len(prompt_ids))
         case str() as reasoning:
             prompt = render_prompt(
                 tokenizer, example.goals, thinking=True, thinking_instruction=example.thinking_instruction

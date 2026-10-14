@@ -203,3 +203,26 @@ def test_edges_without_a_forced_field_read_as_unforced() -> None:
     record = json.loads(to_json(edge))
     del record["forced"]
     assert not from_json_object(Edge, record).forced
+
+
+VISIBLE = PolicyConfig(model="policy", visible_reasoning=True, few_shot=False, sample_count=2, max_tokens=40)
+VISIBLE_RESPONSE = [
+    choice("Both sides are linear in x, so", "length", 40),
+    choice("Close it with simp.\n\n```lean\nsimp\n```", "stop", 10),
+]
+
+
+async def test_visible_reasoning_forces_samples_cut_off_before_their_block() -> None:
+    server, (batch,), _ = await expand(VISIBLE, [VISIBLE_RESPONSE, [choice("linarith\n", "stop", 3)]])
+    assert (server.bodies[0]["stop"], [prompt[-10:] for prompt in server.bodies[1]["prompt"]]) == (
+        [],
+        ["\n\n```lean\n"],
+    )
+
+
+async def test_visible_forced_blocks_become_marked_candidates() -> None:
+    _, (batch,), _ = await expand(VISIBLE, [VISIBLE_RESPONSE, [choice("linarith\n", "stop", 3)]])
+    assert sorted((candidate.text, candidate.forced) for candidate in batch.candidates) == [
+        ("linarith", True),
+        ("simp", False),
+    ]

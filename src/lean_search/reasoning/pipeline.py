@@ -18,6 +18,7 @@ from lean_search.policy.config import PolicyConfig
 from lean_search.policy.expander import (
     MINIMUM_GENERATED_TOKENS,
     PolicyTokenizer,
+    force_answers,
     load_tokenizer,
     served_max_model_length,
 )
@@ -85,6 +86,7 @@ class ReasoningSampler:
             few_shot=self.config.few_shot,
             thinking=self.config.thinking,
             thinking_instruction=self.config.thinking_instruction,
+            visible=self.config.visible_reasoning,
         )
         prompt_tokens = len(self.tokenizer.encode(prompt, add_special_tokens=False))
         max_tokens = min(self.config.max_tokens, self.max_model_length - prompt_tokens)
@@ -98,6 +100,7 @@ class ReasoningSampler:
                 max_tokens,
                 0.0,
                 (),
+                self.config.visible_reasoning,
             )
         async with self._semaphore:
             started = time.monotonic()
@@ -107,13 +110,24 @@ class ReasoningSampler:
                 max_tokens=max_tokens,
                 temperature=self.config.temperature,
                 top_p=self.config.top_p,
-                stop=stop_sequences(self.config.thinking),
+                stop=stop_sequences(self.config.thinking, self.config.visible_reasoning),
                 adapter=self.config.adapter,
+            )
+            room = self.max_model_length - prompt_tokens
+            forced_samples, forced = await force_answers(
+                next(self._clients), self.config, prompt, room, generation.samples
             )
             seconds = time.monotonic() - started
         samples = tuple(
-            sample_record(index, sample, self.config.thinking, self.tokenizer)
-            for index, sample in enumerate(generation.samples)
+            sample_record(
+                index,
+                sample,
+                self.config.thinking,
+                self.tokenizer,
+                visible=self.config.visible_reasoning,
+                forced=index in forced.sample_indices,
+            )
+            for index, sample in enumerate(forced_samples)
         )
         return StateSamples(
             state,
@@ -124,11 +138,20 @@ class ReasoningSampler:
             max_tokens,
             seconds,
             samples,
+            self.config.visible_reasoning,
         )
 
 
-def sample_record(index: int, sample: Sample, thinking: bool, tokenizer: PolicyTokenizer) -> SampleRecord:
-    parsed = parse_thinking_sample(sample, thinking=thinking, forbidden_tokens=FORBIDDEN)
+def sample_record(
+    index: int,
+    sample: Sample,
+    thinking: bool,
+    tokenizer: PolicyTokenizer,
+    *,
+    visible: bool = False,
+    forced: bool = False,
+) -> SampleRecord:
+    parsed = parse_thinking_sample(sample, thinking=thinking, forbidden_tokens=FORBIDDEN, visible=visible)
     reasoning_tokens = len(tokenizer.encode(parsed.reasoning, add_special_tokens=False)) if parsed.reasoning else 0
     return SampleRecord(
         index=index,
@@ -141,6 +164,7 @@ def sample_record(index: int, sample: Sample, thinking: bool, tokenizer: PolicyT
         tactic_block=parsed.tactic_block,
         parse_failure=None if parsed.parse_failure is None else parse_failure_outcome(parsed.parse_failure),
         recovered_format=parsed.recovered_format,
+        forced=forced,
     )
 
 

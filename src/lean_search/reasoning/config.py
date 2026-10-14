@@ -4,7 +4,7 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from lean_search.policy.config import PolicyConfig
+from lean_search.policy.config import PolicyConfig, policy_config_problem
 from lean_search.reasoning.dataset import SelectionConfig
 from lean_search.reasoning.pipeline import ExecutionConfig, PipelineConfig
 from lean_search.reasoning.reward import RewardConfig
@@ -33,8 +33,8 @@ def parse_reasoning_run_config(text: str) -> ReasoningRunConfig:
     config = from_json_object(ReasoningRunConfig, tomllib.loads(text))
     if not (config.policy.model and config.policy.tokenizer):
         raise ValueError("A reasoning run needs policy.model and policy.tokenizer.")
-    if config.policy.thinking_instruction and not config.policy.thinking:
-        raise ValueError("policy.thinking_instruction is only used with policy.thinking = true.")
+    if (problem := policy_config_problem(config.policy)) is not None:
+        raise ValueError(problem)
     if config.reward.value_progress and not (config.value.model and config.value.tokenizer):
         raise ValueError("reward.value_progress needs value.model and value.tokenizer.")
     return config

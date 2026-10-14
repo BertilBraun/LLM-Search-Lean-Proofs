@@ -209,6 +209,7 @@ def short_reasoning_examples(
             rewrite.text,
             record.sampled.thinking_instruction,
             ReasoningOrigin.RATIONALIZED,
+            record.sampled.visible,
         )
         for entry in shortened
         if entry.mode == RewriteMode.RATIONALIZE and (rewrite := entry.shortest_sufficient()) is not None

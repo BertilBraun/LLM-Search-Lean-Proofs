@@ -21,6 +21,7 @@ from lean_search.policy.prompts import (
     render_prompt,
     thinking_prefill,
     user_message,
+    visible_prefill,
 )
 from lean_search.reasoning.pipeline import FORBIDDEN, LeanExecutor, LeanTask, LeanTaskResult
 from lean_search.reasoning.reward import RewardConfig, is_success
@@ -294,13 +295,17 @@ class SufficiencyChecker:
         self._semaphore = asyncio.Semaphore(requests_in_flight)
 
     async def sample_blocks(self, item: SufficiencyItem) -> tuple[str | None, ...]:
-        prompt = render_prompt(
-            self.tokenizer,
-            item.proof_state.goals,
-            few_shot=self.policy.few_shot,
-            thinking=True,
-            thinking_instruction=self.policy.thinking_instruction,
-        ) + thinking_prefill(item.reasoning)
+        if self.policy.visible_reasoning:
+            prompt = render_prompt(self.tokenizer, item.proof_state.goals, visible=True)
+            prompt += visible_prefill(item.reasoning)
+        else:
+            prompt = render_prompt(
+                self.tokenizer,
+                item.proof_state.goals,
+                few_shot=self.policy.few_shot,
+                thinking=True,
+                thinking_instruction=self.policy.thinking_instruction,
+            ) + thinking_prefill(item.reasoning)
         async with self._semaphore:
             generation = await next(self._clients).generate(
                 prompt,

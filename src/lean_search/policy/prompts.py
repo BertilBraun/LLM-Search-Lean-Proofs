@@ -13,6 +13,12 @@ SYSTEM_PROMPT = (
     "You are a Lean 4 and Mathlib expert. Given the current proof state, write the next tactic or tactics that make "
     "progress on it. Reply with a single ```lean code block that contains only tactics."
 )
+# Visible reasoning: thinking off, a short explanation in the reply itself, then the block.
+VISIBLE_SYSTEM_PROMPT = (
+    "You are a Lean 4 and Mathlib expert. Given the current proof state, briefly explain the key idea (a few "
+    "sentences), then give the next tactic or tactics that make progress on it in a single ```lean code block that "
+    "contains only tactics."
+)
 # Optionally appended to the system prompt in thinking mode to keep the thoughts short.
 BRIEF_THINKING_INSTRUCTION = "Think briefly (a few sentences) about which tactic to use; do not restate the goal."
 ASSISTANT_PREFILL = "```lean\n"
@@ -98,8 +104,18 @@ def render_prompt(
     few_shot: bool = False,
     thinking: bool = False,
     thinking_instruction: str = "",
+    visible: bool = False,
 ) -> str:
     """`thinking_instruction` extends the system prompt in thinking mode only."""
+    if visible:
+        assert not thinking and not few_shot
+        conversation = [
+            {"role": "system", "content": VISIBLE_SYSTEM_PROMPT},
+            {"role": "user", "content": user_message(goals, lemmas)},
+        ]
+        return template.apply_chat_template(
+            conversation, tokenize=False, add_generation_prompt=True, enable_thinking=False
+        )
     instruction = thinking_instruction if thinking else ""
     conversation = [
         {"role": message.role, "content": message.content}
@@ -127,24 +143,49 @@ def render_thinking_completion(reasoning: str, tactic_block: str) -> str:
     return f"{thinking_prefill(reasoning)}{tactic_block}\n{FENCE}{END_OF_TURN}"
 
 
-def stop_sequences(thinking: bool) -> tuple[str, ...]:
-    # A thinking model may write fences while it thinks, so it runs to its end of turn instead.
-    return () if thinking else (FENCE,)
+def visible_prefill(explanation: str) -> str:
+    """Given an explanation after a visible-reasoning prompt, up to the opened block."""
+    return f"{explanation.strip()}\n\n{ASSISTANT_PREFILL}"
+
+
+def render_visible_completion(explanation: str, tactic_block: str) -> str:
+    """SFT target after a visible-reasoning prompt: the explanation, the block, end of turn (loss on all of it)."""
+    return f"{visible_prefill(explanation)}{tactic_block}\n{FENCE}{END_OF_TURN}"
+
+
+def visible_explanation(text: str) -> str:
+    return text.partition(FENCE)[0].strip()
+
+
+def stop_sequences(thinking: bool, visible: bool = False) -> tuple[str, ...]:
+    # A model that reasons may write fences before its answer, so it runs to its end of turn instead.
+    return () if thinking or visible else (FENCE,)
 
 
 def truncated_in_thinking(sample: Sample) -> bool:
     return sample.finish_reason == LENGTH_FINISH_REASON and THINK_END not in sample.text
 
 
-def forced_answer_prompt(prompt: str, truncated: Sample) -> str:
-    """The thinking prompt and the cut-off thoughts, closed, up to the opened block."""
-    return prompt + thinking_prefill(truncated.text)
+def truncated_before_answer(sample: Sample, *, visible: bool) -> bool:
+    """Cut off inside the thoughts, or (visible reasoning) inside the explanation before any block opened."""
+    if visible:
+        return sample.finish_reason == LENGTH_FINISH_REASON and FENCE not in sample.text
+    return truncated_in_thinking(sample)
 
 
-def forced_sample(truncated: Sample, continuation: Sample) -> Sample:
-    """The cut-off sample with its thoughts closed and the forced block: it parses like any other sample."""
+def answer_prefix(truncated: Sample, *, visible: bool) -> str:
+    return visible_prefill(truncated.text) if visible else thinking_prefill(truncated.text)
+
+
+def forced_answer_prompt(prompt: str, truncated: Sample, *, visible: bool = False) -> str:
+    """The prompt and the cut-off reasoning, closed, up to the opened block."""
+    return prompt + answer_prefix(truncated, visible=visible)
+
+
+def forced_sample(truncated: Sample, continuation: Sample, *, visible: bool = False) -> Sample:
+    """The cut-off sample with its reasoning closed and the forced block: it parses like any other sample."""
     return Sample(
-        text=f"{thinking_prefill(truncated.text)}{continuation.text}\n{FENCE}",
+        text=f"{answer_prefix(truncated, visible=visible)}{continuation.text}\n{FENCE}",
         cumulative_logprob=truncated.cumulative_logprob + continuation.cumulative_logprob,
         token_count=truncated.token_count + continuation.token_count,
         finish_reason=continuation.finish_reason,
@@ -166,12 +207,15 @@ def normalize_tactic_block(text: str) -> str:
     return textwrap.dedent("\n".join(lines)).strip("\n")
 
 
-def generated_block(text: str, thinking: bool) -> str | None:
-    if not thinking:
+def generated_block(text: str, thinking: bool, visible: bool = False) -> str | None:
+    if not thinking and not visible:
         return text
-    _, think_end, answer = text.rpartition(THINK_END)
-    if not think_end:
-        return None
+    if thinking:
+        _, think_end, answer = text.rpartition(THINK_END)
+        if not think_end:
+            return None
+    else:
+        answer = text
     _, fence, after_fence = answer.partition(FENCE)
     if not fence:
         return None
@@ -179,13 +223,24 @@ def generated_block(text: str, thinking: bool) -> str | None:
     return after_fence.partition("\n")[2].partition(FENCE)[0]
 
 
+def closed_visible_block(text: str) -> bool:
+    _, fence, after_fence = text.partition(FENCE)
+    return bool(fence) and FENCE in after_fence
+
+
 def parse_sample(
-    sample: Sample, *, thinking: bool, forbidden_tokens: frozenset[str] = FORBIDDEN_TOKENS
+    sample: Sample,
+    *,
+    thinking: bool,
+    forbidden_tokens: frozenset[str] = FORBIDDEN_TOKENS,
+    visible: bool = False,
 ) -> str | ParseFailure:
     """The normalized tactic block of one sample, or why it cannot be used."""
-    if sample.finish_reason == LENGTH_FINISH_REASON:
+    # A visible-reasoning sample cannot stop at the fence that opens its block, so it may run on after closing it.
+    complete_visible = visible and closed_visible_block(sample.text)
+    if sample.finish_reason == LENGTH_FINISH_REASON and not complete_visible:
         return ParseFailure.TRUNCATED
-    block = generated_block(sample.text, thinking)
+    block = generated_block(sample.text, thinking, visible)
     if block is None:
         return ParseFailure.NO_BLOCK
     block = normalize_tactic_block(block)
@@ -228,6 +283,7 @@ def parse_samples(
     thinking: bool,
     forbidden_tokens: frozenset[str] = FORBIDDEN_TOKENS,
     forced_indices: frozenset[int] = frozenset(),
+    visible: bool = False,
 ) -> ParsedSamples:
     """Distinct usable tactic blocks, most likely first; identical blocks merge and keep the best log-probability."""
     candidates: dict[str, TacticCandidate] = {}
@@ -235,7 +291,7 @@ def parse_samples(
     failed_generated_tokens = 0
     for index, sample in enumerate(samples):
         forced = int(index in forced_indices)
-        match parse_sample(sample, thinking=thinking, forbidden_tokens=forbidden_tokens):
+        match parse_sample(sample, thinking=thinking, forbidden_tokens=forbidden_tokens, visible=visible):
             case ParseFailure() as failure:
                 failures.append(failure)
                 failed_generated_tokens += sample.token_count

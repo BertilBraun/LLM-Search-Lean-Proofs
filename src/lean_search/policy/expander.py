@@ -23,7 +23,7 @@ from lean_search.policy.prompts import (
     parse_samples,
     render_prompt,
     stop_sequences,
-    truncated_in_thinking,
+    truncated_before_answer,
 )
 from lean_search.retrieval.provider import LemmaProvider, load_lemma_provider
 from lean_search.retrieval.statistics import LemmaStatistics
@@ -158,6 +158,7 @@ class PolicyExpander:
             few_shot=self.config.few_shot,
             thinking=self.config.thinking,
             thinking_instruction=self.config.thinking_instruction,
+            visible=self.config.visible_reasoning,
         )
         prompt_tokens = len(self.tokenizer.encode(prompt, add_special_tokens=False))
         max_tokens = min(self.config.max_tokens, self.max_model_length - prompt_tokens)
@@ -171,6 +172,7 @@ class PolicyExpander:
             thinking=self.config.thinking,
             forbidden_tokens=self.forbidden_tokens,
             forced_indices=forced.sample_indices,
+            visible=self.config.visible_reasoning,
         )
         self.statistics.record(generation, parsed, seconds + forcing_seconds, forced)
         yield candidate_batch(parsed, generation, forced)
@@ -178,33 +180,10 @@ class PolicyExpander:
     async def force_answers(
         self, prompt: str, prompt_tokens: int, samples: Sequence[Sample]
     ) -> tuple[list[Sample], ForcedAnswers, float]:
-        """Budget forcing: one request continues every sample cut off inside its thoughts after closing them."""
-        truncated = [index for index, sample in enumerate(samples) if truncated_in_thinking(sample)]
-        if not (self.config.thinking and self.config.force_answer_on_truncation and truncated):
-            return list(samples), ForcedAnswers(), 0.0
-        longest = max(samples[index].token_count for index in truncated)
-        max_tokens = min(
-            self.config.forced_answer_tokens,
-            self.max_model_length - prompt_tokens - longest - FORCED_ANSWER_PROMPT_SLACK,
-        )
-        if max_tokens < MINIMUM_GENERATED_TOKENS:
-            return list(samples), ForcedAnswers(), 0.0
         started = time.monotonic()
-        continuations = await next(self._clients).generate_each(
-            [forced_answer_prompt(prompt, samples[index]) for index in truncated],
-            max_tokens=max_tokens,
-            temperature=self.config.temperature,
-            top_p=self.config.top_p,
-            stop=(FENCE,),
-            adapter=self.config.adapter,
-        )
-        forced = list(samples)
-        for index, continuation in zip(truncated, continuations.samples, strict=True):
-            forced[index] = forced_sample(samples[index], continuation)
-        answers = ForcedAnswers(
-            frozenset(truncated), continuations.prompt_token_count, continuations.completion_token_count
-        )
-        return forced, answers, time.monotonic() - started
+        room = self.max_model_length - prompt_tokens
+        forced_samples, forced = await force_answers(next(self._clients), self.config, prompt, room, samples)
+        return forced_samples, forced, time.monotonic() - started if forced.sample_indices else 0.0
 
     async def _generate(self, prompt: str, max_tokens: int) -> tuple[Generation, float]:
         started = time.monotonic()
@@ -216,12 +195,40 @@ class PolicyExpander:
             max_tokens=max_tokens,
             temperature=self.config.temperature,
             top_p=self.config.top_p,
-            stop=stop_sequences(self.config.thinking),
+            stop=stop_sequences(self.config.thinking, self.config.visible_reasoning),
             adapter=self.config.adapter,
         )
         finished = time.monotonic()
         self.statistics.window_seconds = finished - self._first_request_started
         return generation, finished - started
+
+
+async def force_answers(
+    client: PolicyClient, config: PolicyConfig, prompt: str, room: int, samples: Sequence[Sample]
+) -> tuple[list[Sample], ForcedAnswers]:
+    """Budget forcing: one request continues every sample cut off before its block, its reasoning closed."""
+    visible = config.visible_reasoning
+    truncated = [index for index, sample in enumerate(samples) if truncated_before_answer(sample, visible=visible)]
+    if not (config.reasons and config.force_answer_on_truncation and truncated):
+        return list(samples), ForcedAnswers()
+    longest = max(samples[index].token_count for index in truncated)
+    max_tokens = min(config.forced_answer_tokens, room - longest - FORCED_ANSWER_PROMPT_SLACK)
+    if max_tokens < MINIMUM_GENERATED_TOKENS:
+        return list(samples), ForcedAnswers()
+    continuations = await client.generate_each(
+        [forced_answer_prompt(prompt, samples[index], visible=visible) for index in truncated],
+        max_tokens=max_tokens,
+        temperature=config.temperature,
+        top_p=config.top_p,
+        stop=(FENCE,),
+        adapter=config.adapter,
+    )
+    forced = list(samples)
+    for index, continuation in zip(truncated, continuations.samples, strict=True):
+        forced[index] = forced_sample(samples[index], continuation, visible=visible)
+    return forced, ForcedAnswers(
+        frozenset(truncated), continuations.prompt_token_count, continuations.completion_token_count
+    )
 
 
 def load_tokenizer(name_or_path: str) -> PolicyTokenizer:

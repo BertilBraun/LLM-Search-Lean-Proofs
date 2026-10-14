@@ -24,6 +24,8 @@ class SampleRecord:
     parse_failure: StepOutcome | None
     # The block was written without its opening fence; the search's parser would reject the sample.
     recovered_format: bool = False
+    # Cut off before its block and continued with the reasoning closed (budget forcing): the reasoning is incomplete.
+    forced: bool = False
 
 
 @dataclass(frozen=True)
@@ -38,6 +40,8 @@ class StateSamples:
     seconds: float
     # Empty when the prompt leaves too little of the context for a completion.
     samples: tuple[SampleRecord, ...]
+    # Thinking off, the reasoning written visibly before the block (PolicyConfig.visible_reasoning).
+    visible: bool = False
 
 
 @dataclass(frozen=True)
