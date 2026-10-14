@@ -1,0 +1,27 @@
+# Visible-reasoning student data (phase5_reasoning_data.py select --name visible_student): per state at most two
+# visible successes of the 9B teacher (step 2) and of the gentle-SFT 4B itself (step 4), explanations up to 350 tokens
+# as sampled or through a sufficient light condensation (shortening `9b_light`, teacher only), forced samples never.
+# Mix: 70% visible reasoning, 30% replay split evenly between Lean non-thinking steps of the gentle SFT's Lean data
+# (`4b`) and general math worked solutions of its math data (`math_v1`, written to math.jsonl): 15/70 of each per
+# reasoning example.
+runs = ["phase5_visible_teacher_9b", "phase5_visible_self_4b"]
+replay_data = "4b"
+replay_ratio = 0.2143
+math_replay_data = "math_v1"
+math_replay_ratio = 0.2143
+validation_fraction = 0.03
+validation_replay_examples = 500
+tokenizer = "Qwen/Qwen3.5-4B"
+seed = "visible-student"
+max_kept_reasoning_tokens = 350
+shortening = "9b_light"
+
+[reward]
+accept_later_reference_states = true
+value_progress = false
+value_progress_margin = 1.0
+
+[selection]
+max_per_state = 2
+min_reasoning_tokens = 16
+max_reasoning_tokens = 0

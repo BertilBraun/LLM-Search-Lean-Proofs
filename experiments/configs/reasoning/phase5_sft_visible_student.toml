@@ -1,0 +1,43 @@
+# Visible-reasoning student: continue the gentle-SFT 4B adapter (phase2_sft_4b_gentle) on the visible_student data
+# (70% visible reasoning, 15% Lean replay, 15% math worked solutions), two epochs, both GPUs, packing on:
+#   torchrun --nproc-per-node 2 experiments/phase5_reasoning_sft.py \
+#       --config experiments/configs/reasoning/phase5_sft_visible_student.toml --run-name phase5_sft_visible_student
+model = "Qwen/Qwen3.5-4B"
+data = "visible_student"
+merge = false
+initial_adapter = "/workspace/checkpoints/phase2_sft_4b_gentle/adapter"
+
+# Unused with initial_adapter (the adapter keeps its own rank and alpha).
+[lora]
+rank = 64
+alpha = 64
+dropout = 0.0
+
+[optimization]
+method = "lora"
+learning_rate = 1e-4
+warmup_fraction = 0.03
+minimum_learning_rate_ratio = 0.1
+weight_decay = 0.0
+max_gradient_norm = 1.0
+epochs = 2
+# Half the 2B's rows, twice as many per step: the 4B's activations on a 24 GB card.
+micro_batch_tokens = 16384
+micro_batches_per_step = 2
+length_group_examples = 4096
+gradient_checkpointing = true
+# The SFT throughput work's settings: packed rows without padding, compiled element-wise layers.
+packing = true
+compile_layers = true
+seed = 0
+
+# Validation lists 500 replay examples first (greedy exact match on them tracks the non-thinking mode), then the
+# held-out reasoning examples; the loss covers all of them.
+[evaluation]
+interval_steps = 50
+validation_examples = 2000
+micro_batch_tokens = 16384
+generation_examples = 256
+# 16, not 64: generating with the trained 4B after training ran out of memory at 64.
+generation_batch_size = 16
+max_new_tokens = 256

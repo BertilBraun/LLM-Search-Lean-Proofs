@@ -1,0 +1,55 @@
+# Visible-reasoning series, step 4: the gentle-SFT 4B (phase2_sft_4b_gentle) in visible mode on further SFT-unseen
+# traced train states (none of rounds 1-2 or of the visible teacher's), k = 8, cap 1024. Both servers serve the base
+# with the gentle adapter:
+#   deployment/serve_model.sh visible-self-gpu<gpu> Qwen/Qwen3.5-4B <gpu> 810<gpu> --served-model-name base-4b \
+#       --lora-modules gentle-4b=/workspace/checkpoints/phase2_sft_4b_gentle/adapter
+
+[states]
+count = 10240
+states_per_proof = 2
+max_goal_characters = 3000
+seed = "visible-self"
+# The 4B student's SFT data (and the gentle SFT's, the same Lean data) and SFT v2's.
+seen_sft_data = ["v2", "4b"]
+unseen_only = true
+traced = "shards"
+sources = ["goedel_sft_v2", "stp_lean_workbook"]
+# Rounds 1-2 drew from the bootstrap's pool; their and the visible teacher's states are excluded.
+excluded_runs = ["phase5_bootstrap_r1", "phase5_teacher_9b", "phase5_visible_teacher_9b"]
+
+[policy]
+model = "base-4b"
+tokenizer = "Qwen/Qwen3.5-4B"
+server_urls = ["http://127.0.0.1:8100/v1", "http://127.0.0.1:8101/v1"]
+adapter = "gentle-4b"
+sample_count = 8
+temperature = 0.8
+top_p = 1.0
+max_tokens = 1024
+thinking = false
+visible_reasoning = true
+few_shot = false
+# Forced samples are recorded but never selected for training (their explanation is cut off).
+force_answer_on_truncation = true
+forced_answer_tokens = 256
+request_timeout_seconds = 1800.0
+
+[execution]
+pool_size = 16
+tactic_timeout_seconds = 10.0
+foreign_header_batch_size = 16
+
+[pipeline]
+chunk_states = 256
+requests_in_flight = 128
+
+[reward]
+accept_later_reference_states = true
+value_progress = false
+value_progress_margin = 1.0
+
+[selection]
+max_per_state = 2
+min_reasoning_tokens = 16
+max_reasoning_tokens = 0
+
