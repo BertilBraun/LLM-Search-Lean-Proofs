@@ -44,6 +44,17 @@ def test_merged_weights_are_not_merged_again(tmp_path: Path) -> None:
     assert merge.merged == ["/policy1", "/value1"]
 
 
+def test_pruning_keeps_only_the_current_versions_weights(tmp_path: Path) -> None:
+    publisher = MergedPublisher(CONFIG, tmp_path, RecordingMerge())
+    publisher.prepare(ModelVersion(1, "/policy1", "/value1", "now", "proofs"))
+    current = publisher.prepare(ModelVersion(2, "/policy2", "/value1", "now", "proofs"))
+    publisher.prune(current)
+    assert sorted(path.relative_to(tmp_path).as_posix() for path in tmp_path.glob("v*/*")) == [
+        "v0001/value",
+        "v0002/policy",
+    ]
+
+
 def test_each_instance_serves_its_kind_of_weights(tmp_path: Path) -> None:
     publisher = MergedPublisher(CONFIG, tmp_path, RecordingMerge())
     version = publisher.prepare(ModelVersion(2, "/policy2", "/value2", "now", "proofs"))

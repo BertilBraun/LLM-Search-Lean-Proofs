@@ -171,6 +171,10 @@ class Publisher(Protocol):
         """Starts a server that serves the version (after a phase or a reboot)."""
         ...
 
+    def prune(self, current: ModelVersion) -> None:
+        """Frees what older versions left once `current` is published."""
+        ...
+
 
 class GpuRelease(Protocol):
     """Frees a server's GPU for training and brings the server back with a version."""
@@ -220,6 +224,17 @@ class MergedPublisher:
             os.replace(temporary, directory)
         self.merged[adapter] = directory
         return directory
+
+    def prune(self, current: ModelVersion) -> None:
+        """Deletes merged weights the current version does not serve (~13 GB a version with a 4B policy)."""
+        kept = {Path(current.policy_weights), Path(current.value_weights)}
+        for version_directory in sorted(self.weights_root.glob("v*")):
+            for directory in version_directory.iterdir():
+                if directory not in kept:
+                    shutil.rmtree(directory)
+            if not any(version_directory.iterdir()):
+                version_directory.rmdir()
+        self.merged = {adapter: directory for adapter, directory in self.merged.items() if directory in kept}
 
     def weights(self, version: ModelVersion, server: ServerEndpoint) -> str:
         return version.policy_weights if server in self.config.policy_servers else version.value_weights

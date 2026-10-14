@@ -752,3 +752,4 @@ class PhaseTrainer:
             ModelVersion(state.phase, state.policy_adapter, state.value_adapter, now(), state.trigger)
         )
         record_published(self.paths, version)
+        self.publisher.prune(version)
