@@ -45,3 +45,9 @@ label = "qwen3.5-4b-student"
 base = "Qwen/Qwen3.5-4B"
 # The reasoning agent's student run; skipped until the adapter exists.
 adapter = "/workspace/checkpoints/phase5_sft_student_4b/adapter"
+
+[[models]]
+label = "qwen3.5-4b-sft-gentle"
+base = "Qwen/Qwen3.5-4B"
+# The 4B Lean SFT with 18% general math worked solutions mixed in (phase2_sft_4b_gentle).
+adapter = "/workspace/checkpoints/phase2_sft_4b_gentle/adapter"
