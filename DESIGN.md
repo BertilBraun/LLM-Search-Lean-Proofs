@@ -225,6 +225,14 @@ per-theorem logs, datasets and checkpoints stay on the node.
   4B student non-thinking 156, 2B thinking 152, 4B thinking 147 (the 4B's thinking arm hit the 900 s wall clock,
   ~1.9k tokens/s on a 3090).
 
+- **Round 2 student, light compression** (9B rewrites to ~50% length, ≥ 100 tokens): equal-token search on
+  miniF2F-valid without a binding wall clock: 4B student non-thinking n=16 **162** (best so far; 2B 159),
+  thinking n=8 150 (2B 152). The expert-iteration loop continues with this student in thinking mode.
+- **Reasoning retention on MATH-500** (`results/reasoning_retention/`, 200 problems, thinking, 4,096 cap, forced
+  answers at the cap): our training did not damage general reasoning. Forced-answer pass@1: 2B base 66.6%, SFT v2
+  67.8%, bootstrap 69.2%; 4B base 80.9%, 4B SFT 80.1%, student 83.4%. Unforced pass@1 rises most (2B 9.0% → 47.0%,
+  4B 22.1% → 40.8%) because trained models finish their thinking.
+
 ## Known issues (backlog)
 - Resolved: search generation cost is charged per batch (`CandidateBatch`), when the expander yields it. Runs before
   the fix did not charge requests whose samples all failed to parse (in `PolicyStatistics.unattributed_generated_tokens`
