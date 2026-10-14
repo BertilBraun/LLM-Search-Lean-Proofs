@@ -233,6 +233,14 @@ per-theorem logs, datasets and checkpoints stay on the node.
   67.8%, bootstrap 69.2%; 4B base 80.9%, 4B SFT 80.1%, student 83.4%. Unforced pass@1 rises most (2B 9.0% → 47.0%,
   4B 22.1% → 40.8%) because trained models finish their thinking.
 
+- **MATH-500 without thinking** (`results/reasoning_retention/`): base models do better with visible
+  chain-of-thought than with a 4,096-capped think block (2B 71.0% vs 66.6% forced; 4B 87.2% vs 80.9%); our
+  reasoning training closes that gap (4B student 83.4% thinking vs 83.2%). Lean SFT costs 2.5–3.4 points of
+  non-thinking accuracy, mostly at levels 4–5; reasoning training adds no further loss.
+- **Equal expansions** (round-2 4B student, n = 16, 64 expansions, no token cap, forced answers on truncated
+  thoughts): **thinking 160 vs non-thinking 154** on miniF2F-valid. Per expansion thinking is the stronger policy;
+  per token non-thinking remains cheaper. The loop runs the 4B student in thinking mode with forced answers.
+
 ## Known issues (backlog)
 - Resolved: search generation cost is charged per batch (`CandidateBatch`), when the expander yields it. Runs before
   the fix did not charge requests whose samples all failed to parse (in `PolicyStatistics.unattributed_generated_tokens`
