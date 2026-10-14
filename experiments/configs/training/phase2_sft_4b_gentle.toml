@@ -1,0 +1,37 @@
+# Gentle Qwen3.5-4B SFT: the phase2_sft_4b recipe and Lean data (20M tokens) plus 4.5M tokens (18%) of general math
+# worked solutions in the visible non-thinking format (`math_v1`, phase2_sft_math_data.py), to keep the visible
+# reasoning the plain Lean SFT costs (MATH-500 forced pass@1 87.2 -> 84.4). DDP, packed, compiled:
+#   torchrun --nproc-per-node 2 experiments/phase2_sft.py --config experiments/configs/training/phase2_sft_4b_gentle.toml \n#       --run-name phase2_sft_4b_gentle
+model = "Qwen/Qwen3.5-4B"
+data = "4b"
+merge = false
+math_data = "math_v1"
+
+[lora]
+rank = 64
+alpha = 64
+dropout = 0.0
+
+[optimization]
+method = "lora"
+learning_rate = 2e-4
+warmup_fraction = 0.03
+minimum_learning_rate_ratio = 0.1
+weight_decay = 0.0
+max_gradient_norm = 1.0
+epochs = 1
+micro_batch_tokens = 16384
+micro_batches_per_step = 2
+length_group_examples = 4096
+gradient_checkpointing = true
+packing = true
+compile_layers = true
+seed = 0
+
+[evaluation]
+interval_steps = 1000
+validation_examples = 1000
+micro_batch_tokens = 16384
+generation_examples = 128
+generation_batch_size = 16
+max_new_tokens = 256

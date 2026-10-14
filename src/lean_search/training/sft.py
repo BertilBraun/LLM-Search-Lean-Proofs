@@ -95,6 +95,8 @@ class SftConfig:
     merge: bool = True
     # A LoRA adapter to continue training (its own rank and alpha replace `lora`); empty starts a new one.
     initial_adapter: str = ""
+    # General math worked solutions (name under $LEAN_SEARCH_DATA/math_sft) mixed into the training examples.
+    math_data: str = ""
 
 
 @dataclass(frozen=True)

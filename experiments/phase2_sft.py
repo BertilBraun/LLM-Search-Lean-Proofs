@@ -16,6 +16,7 @@ import transformers
 from lean_search.policy.adapters import merge_adapter
 from lean_search.search.records import from_json_object
 from lean_search.search.summary import markdown_table
+from lean_search.training.math_data import read_solutions, tokenize_math_solution
 from lean_search.training.sft import (
     DistributedContext,
     EvaluationRecord,
@@ -159,6 +160,9 @@ def main() -> None:
     tokenization_start = time.perf_counter()
     data_directory = DATA_DIRECTORY / config.data
     train_examples = [tokenize_example(tokenizer, example) for example in read_examples(data_directory / "train.jsonl")]
+    if config.math_data:
+        math_path = DATA_DIRECTORY.parent / "math_sft" / config.math_data / "train.jsonl"
+        train_examples += [tokenize_math_solution(tokenizer, solution) for solution in read_solutions(math_path)]
     validation_examples = [
         tokenize_example(tokenizer, example) for example in read_examples(data_directory / "validation.jsonl")
     ]
