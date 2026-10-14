@@ -242,3 +242,62 @@ student's successful reasoning stays sound (14 of 18 non-trivial steps correct),
 sample the student is slightly worse than in round 1, and in the search thinking stays behind not thinking at every
 token budget. The round-2 student without thinking is the best policy so far when the search may run to its token
 budget (162 against 159), at a much larger wall-clock and Lean cost.
+
+# Equal-expansion test with budget forcing (2026-10-14, 08:12–11:59 UTC)
+
+The round-2 student (merged) with value v0 on miniF2F-valid, n = 16 in both arms and 64 expansions per theorem as the
+budget, with no token cap and a 2 h safety cap per theorem: (A) thinking, cap 1024, with budget forcing; (B) no
+thinking. Otherwise the search protocol and serving of round 2. Configs
+`experiments/configs/reasoning/phase5_expansions_student_4b_light_*.toml`; report, node-monitor windows and the policy
+statistics in `expansions/`.
+
+**Budget forcing** (`PolicyConfig.force_answer_on_truncation`, on by default in thinking mode): a sample that hits
+max_tokens inside its thoughts gets them closed (`</think>`, the opened `lean` block) and one completion request per
+expansion continues all such samples for up to 256 tokens, stopping at the closing fence; the result parses like any
+other sample. The forcing request's tokens are charged to the expansion, and candidates and tree edges carry `forced`.
+
+| Arm | Solved | Mean expansions | Mean generated tokens | Tokens / solve | Wall s / theorem | Lean s / theorem | Unsolved: 2 h cap / 64 expansions / frontier | Arm wall time |
+|---|---|---|---|---|---|---|---|---|
+| A: thinking, n = 16, cap 1024, forcing | **160 (65.6%)** | 16.3 | 113,546 | 173,158 | 2,480 | 125 | 69 / 2 / 13 | 128 min |
+| B: no thinking, n = 16 | 154 (63.1%) | 24.8 | 12,201 | 19,332 | 509 | 234 | 0 / 86 / 4 | 99 min |
+| Round 2, no thinking, n = 16, 96k tokens (reference) | 162 (66.4%) | 66.9 | 28,010 | 42,188 | 1,503 | 1,028 | 23 / 54 tokens / 5 | 129 min |
+
+Solved within k expansions:
+
+| Expansions ≤ | 1 | 2 | 4 | 8 | 16 | 32 | 64 |
+|---|---|---|---|---|---|---|---|
+| A: thinking | **120** | **130** | **143** | **145** | **150** | **157** | **160** |
+| B: no thinking | 86 | 114 | 129 | 139 | 147 | 152 | 154 |
+| Reference (96k tokens) | 81 | 116 | 132 | 139 | 150 | 154 | 156 |
+
+- **Per expansion, thinking is ahead at every budget**: 120 against 86 after one expansion, 160 against 154 after 64.
+  A solves 12 theorems B does not (among them `imo_1964_p1_2`, `amc12a_2016_p3`, `amc12b_2002_p6`, five
+  `mathd_algebra`) and loses 6 (`aime_1991_p1`, `imo_1984_p2`, `algebra_amgm_sumasqdivbsqgeqsumbdiva`,
+  `mathd_algebra_433`, `mathd_algebra_536`, `numbertheory_nckeqnm1ckpnm1ckm1`).
+- **The comparison is not quite equal-expansion for A's unsolved theorems**: 69 of its 84 failures stopped at the 2 h
+  safety cap after a mean of 16.3 expansions per theorem, not at 64. The 4B serves ~80 running sequences per GPU,
+  and with 120 concurrent searches each requesting 16 thinking samples the queue stretches every expansion (2,100
+  generated tokens/s on GPU 0, 98% GPU utilization, 5.5 CPU cores). A's 160 is therefore a lower bound on what 64
+  thinking expansions reach.
+- **Against the best non-thinking run (162 at 96k tokens, 67 expansions on average)**: A solves 5 it does not
+  (`imo_1961_p1`, `mathd_algebra_149`, `_185`, `_323`, `_509`) and loses 7, with a quarter of its expansions but 4 times
+  its generated tokens and 1.7 times its wall time per theorem.
+- **Cost**: thinking spends 9.3 times B's generated tokens per theorem (~7,000 per expansion at n = 16) and 5 times its
+  wall time, but half its Lean time (125 against 234 s), so per expansion it is GPU-bound where B is Lean-bound.
+
+**Forcing statistics (arm A)**: of 63,472 policy samples, 2,085 (3.3%) were cut off inside their thoughts and forced;
+1,811 of them (87%) yielded a usable block (the others ran past 256 tokens or wrote no block). The forcing requests
+generated 140,737 tokens, 0.5% of the arm's 27.7M. 1,543 samples remained truncated after forcing, mostly samples cut
+off after `</think>` inside their answer, which this forcing leaves alone. In the trees, 1,341 distinct forced steps
+were tried: 21.5% gave a new node (unforced policy steps: 18.5%), 62% failed in Lean, the rest were duplicates; 2 of
+the 160 proofs use a forced step. Forcing salvages a few percent of the samples at negligible cost and the salvaged
+steps are as good as the others, but it changes little at a 1024-token cap where the student rarely runs out.
+
+## Answer (equal-expansion test)
+
+Measured per expansion, thinking helps the round-2 student: it solves more theorems at every expansion budget (160
+against 154 at 64, and 120 against 86 at 1), even though most of its unsolved theorems ran out of wall-clock time
+before using their 64 expansions. Measured per generated token or per wall-clock second it does not (the round-2
+results above): each thinking expansion costs ~9 times the tokens of a non-thinking one on this node. Thinking is the
+better policy where expansions (Lean calls and value scoring) are the scarce resource and generation is cheap, which
+on two RTX 3090s with a 4B policy it is not.
