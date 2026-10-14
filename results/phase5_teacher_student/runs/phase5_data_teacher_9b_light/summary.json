@@ -1,0 +1,173 @@
+{
+ "name": "teacher_9b_light",
+ "built": "2026-10-14T00:23:06+00:00",
+ "git_revision": "62c1d7a90a29a6d68c4be069fe18951b84beaa47",
+ "config": {
+  "runs": [
+   "phase5_teacher_9b"
+  ],
+  "reward": {
+   "accept_later_reference_states": true,
+   "value_progress": false,
+   "value_progress_margin": 1.0
+  },
+  "selection": {
+   "max_per_state": 2,
+   "min_reasoning_tokens": 16,
+   "max_reasoning_tokens": 0
+  },
+  "replay_data": "4b",
+  "replay_ratio": 1.0,
+  "validation_fraction": 0.03,
+  "validation_replay_examples": 500,
+  "max_kept_reasoning_tokens": 350,
+  "shortening": "9b_light",
+  "tokenizer": "Qwen/Qwen3.5-4B",
+  "seed": "teacher-9b-light",
+  "thinking_instruction": ""
+ },
+ "states": 3072,
+ "usable_states": 3072,
+ "states_with_examples": 1143,
+ "validation_states_with_examples": 23,
+ "train_reasoning": {
+  "examples": 1983,
+  "prompt_tokens": {
+   "count": 1983,
+   "total": 409705,
+   "mean": 206.60867372667676,
+   "p50": 175,
+   "p90": 317,
+   "p99": 663,
+   "maximum": 1675
+  },
+  "completion_tokens": {
+   "count": 1983,
+   "total": 418004,
+   "mean": 210.7937468482098,
+   "p50": 200,
+   "p90": 328,
+   "p99": 440,
+   "maximum": 623
+  },
+  "total_tokens": {
+   "count": 1983,
+   "total": 827709,
+   "mean": 417.40242057488655,
+   "p50": 394,
+   "p90": 582,
+   "p99": 918,
+   "maximum": 1886
+  }
+ },
+ "train_replay": {
+  "examples": 1983,
+  "prompt_tokens": {
+   "count": 1983,
+   "total": 356838,
+   "mean": 179.94856278366112,
+   "p50": 159,
+   "p90": 263,
+   "p99": 532,
+   "maximum": 1760
+  },
+  "completion_tokens": {
+   "count": 1983,
+   "total": 54179,
+   "mean": 27.321734745335352,
+   "p50": 15,
+   "p90": 71,
+   "p99": 199,
+   "maximum": 240
+  },
+  "total_tokens": {
+   "count": 1983,
+   "total": 411017,
+   "mean": 207.27029752899648,
+   "p50": 182,
+   "p90": 315,
+   "p99": 579,
+   "maximum": 1773
+  }
+ },
+ "validation_reasoning": {
+  "examples": 40,
+  "prompt_tokens": {
+   "count": 40,
+   "total": 8551,
+   "mean": 213.775,
+   "p50": 185,
+   "p90": 425,
+   "p99": 502,
+   "maximum": 502
+  },
+  "completion_tokens": {
+   "count": 40,
+   "total": 8710,
+   "mean": 217.75,
+   "p50": 222,
+   "p90": 345,
+   "p99": 444,
+   "maximum": 444
+  },
+  "total_tokens": {
+   "count": 40,
+   "total": 17261,
+   "mean": 431.525,
+   "p50": 421,
+   "p90": 634,
+   "p99": 722,
+   "maximum": 722
+  }
+ },
+ "validation_replay": {
+  "examples": 500,
+  "prompt_tokens": {
+   "count": 500,
+   "total": 90154,
+   "mean": 180.308,
+   "p50": 160,
+   "p90": 276,
+   "p99": 501,
+   "maximum": 883
+  },
+  "completion_tokens": {
+   "count": 500,
+   "total": 13859,
+   "mean": 27.718,
+   "p50": 16,
+   "p90": 77,
+   "p99": 173,
+   "maximum": 255
+  },
+  "total_tokens": {
+   "count": 500,
+   "total": 104013,
+   "mean": 208.026,
+   "p50": 185,
+   "p90": 313,
+   "p99": 575,
+   "maximum": 888
+  }
+ },
+ "train_reasoning_by_source": [
+  {
+   "source": "goedel_sft_v2",
+   "examples": 1306
+  },
+  {
+   "source": "stp_lean_workbook",
+   "examples": 677
+  }
+ ],
+ "train_reasoning_by_origin": [
+  {
+   "origin": "sampled",
+   "examples": 1327
+  },
+  {
+   "origin": "compressed",
+   "examples": 656
+  }
+ ]
+}

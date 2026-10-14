@@ -122,3 +122,123 @@ the 2B in both modes on the validation states, and in the search its thinking ar
 budget binds. Better reasoning has not bought more solved theorems at this scale; the loop's recommendation (no
 thinking, n = 16) stands. Open: the 4B SFT adapter without teacher data as a control, and whether a 2B student of the
 same teacher data (same cost as the current policy) keeps the soundness gain.
+
+# Round 2: lightly compressed teacher reasoning (2026-10-14, 23:57–04:01 UTC)
+
+The same 9B teacher successes, re-compressed lightly; the student retrained from the 4B SFT adapter, evaluated on the
+same 512 states and searched with the token budget as the only stop. Configs: `phase5_shortening_9b_light.toml`,
+`phase5_data_teacher_9b_light.toml`, `phase5_sft_student_4b_light.toml`, `phase5_eval_student_4b_light_*.toml`,
+`phase5_search_student_4b_light_*.toml`; the search report in `search_r2/`.
+
+## Light compression (23:58–00:23 UTC)
+
+Successes over 350 reasoning tokens (the first 3 per state in selection order) are condensed by the 9B without
+thinking: asked for half the original's tokens, to remove restatements of the goal, dead ends and repetition, and to
+keep every mathematical step, equation and the reason for the tactic. Rewrites under 100 tokens or outside 30–80% of
+the original are rejected, plus the usual defects; the 9B checks sufficiency as in round 1. (The run summary's "asked
+for at most 150 tokens" is the config's unused fixed target; each request asked for half its original.)
+
+| | Round 1 (`9b`) | Round 2 (`9b_light`) |
+|---|---|---|
+| Targets | 1,733 (over 256 tokens) | 1,311 (over 350 tokens) |
+| Targets with a sufficient rewrite | 1,646 (95.0%) | 822 (62.7%) |
+| Original tokens of the targets, p10 / 25 / 50 / 75 / 90 | 292 / 354 / 422 / 474 / 554 | 381 / 410 / 442 / 495 / 576 |
+| Shortest sufficient rewrite, p10 / 25 / 50 / 75 / 90 | 35 / 44 / 57 / 72 / 89 | 133 / 148 / 172 / 204 / 242 |
+| Rewrite / original, p10 / 50 / 90 | 0.09 / 0.14 / 0.21 | 0.31 / 0.37 / 0.51 |
+| Rejected rewrites (2 per target) | 63 defective, 357 insufficient | 1,227 defective (772 too short, 188 restating the goal, 172 code blocks), 175 insufficient |
+| Train reasoning examples (sampled + compressed) | 2,134 (1,017 + 1,117) | 1,983 (1,327 + 656) |
+| Reasoning tokens of the train examples, p10 / 25 / 50 / 75 / 90 | 43 / 56 / 83 / 149 / 211 | 96 / 135 / 175 / 234 / 292 |
+
+The 9B overshoots the request: asked for half, it wrote a median 37% of the original, and 772 of its 2,622 rewrites
+fell under the 30% / 100-token floor. The pass rate drops from 95% to 63% for that reason, not because rewrites became
+insufficient (175 of 1,395 checked). Four examples (`runs/phase5_teacher_9b/shortening_9b_light.md` has more):
+
+- **`constructor` for −1/2 ≤ x/(x²+1) ≤ 1/2** (original: paragraphs restating the hypotheses and doing the algebra
+  twice). Rewrite: "the first subgoal −1/2 ≤ x/(x²+1) is equivalent to 0 ≤ (x+1)² after cross-multiplying by the
+  positive denominator x²+1 …; similarly the second is equivalent to 0 ≤ (x−1)² …; `constructor` is chosen to handle
+  the logical structure of the goal before applying algebraic simplifications."
+- **(x + a).log < x.log + a** from h₁ (the log splits) and h₂ ((1 + a/x).log < a/x). Rewrite: "Given `h₁` … it
+  suffices to show (1 + a/x).log < a. From `h₂`, (1 + a/x).log < a/x. Since x > 1 and a > 0, a/x < a. By
+  transitivity … via `linarith`": every step of the original without its restatement of the four hypotheses.
+- **`simp [Finset.sum_mul, Finset.mul_sum, mul_assoc]`** on (∑ a·(a·a))^(1/3) ≤ (∑ a·a)^(1/2). Rewrite: the
+  simplification of the summands to a³ and a² and that it prepares a power-mean or Hölder argument; the original's
+  exploration of both inequalities is gone.
+- **Insufficient**: `have h₃ : (x − 3)(x² + 3x + 1) = 0` for the cubic x³ − 8x − 3 = 0. The rewrite kept the root
+  check (3³ − 8·3 − 3 = 0), but the 9B, given it as its thoughts, wrote no working step in 4 samples.
+
+## Training (00:26–00:46 UTC)
+
+The 4B SFT adapter continued on `teacher_9b_light` (1,983 reasoning and 1,983 replay examples): 2 epochs, 38 steps,
+2.5M tokens, 10.7 minutes. Validation loss 0.392 → 0.310; non-thinking greedy exact match on replay prompts 24.6% →
+18.8% (round 1: 27.3% → 26.2%).
+
+## Evaluation (00:50–01:08 UTC)
+
+| Policy | Mode | Success / sample | Any success @8 | Truncated | Tokens / sample | Tokens / success | Median reasoning |
+|---|---|---|---|---|---|---|---|
+| Round-2 student | thinking, cap 1024 | 36.0% | 59.8% | 2.1% | 333 | 925 | 236 |
+| Round-2 student | thinking, cap 512 (simulated) | 34.4% | 57.2% | | | 891 | |
+| Round-2 student | no thinking | 43.4% | 61.7% | 1.7% | 34 | 78 | |
+| Round-1 student | thinking, cap 1024 | 37.8% | 59.0% | 1.0% | 202 | 535 | 94 |
+| Round-1 student | no thinking | 43.9% | 63.5% | 1.4% | 33 | 75 | |
+| 2B bootstrap | thinking, cap 512 | 42.1% | 62.9% | 14.9% | 234 | 557 | 125 |
+| 2B bootstrap | no thinking | **46.0%** | **64.6%** | 2.9% | 41 | 90 | |
+
+The round-2 student reasons 2.5 times longer (median 236 against 94 reasoning tokens) and succeeds slightly less often
+per sample (36.0% against 37.8%) at 1.7 times the tokens per success; per state it is level (59.8% against 59.0%).
+Its thinking reaches 83% of its non-thinking success per sample.
+
+## Reasoning quality (read by hand)
+
+30 successful and 15 failed samples of the round-2 thinking run, fixed seed, the same rubric
+(`trace_sample_student2.jsonl`, numbered 1–45).
+
+| Model | Traces | Correct | Minor slip | Wrong | Irrelevant |
+|---|---|---|---|---|---|
+| Round-2 student, successful step | 30 | 25 (83%) | 2 (7%) | 3 (10%) | 0 |
+| Round-2 student, failed step | 15 | 5 (33%) | 3 (20%) | 5 (33%) | 2 (13%) |
+| Round-1 student, successful step | 30 | 25 (83%) | 3 (10%) | 2 (7%) | 0 |
+| Round-1 student, failed step | 15 | 9 (60%) | 2 (13%) | 1 (7%) | 3 (20%) |
+
+12 of the 30 successes close a goal that a hypothesis states. **On the 18 non-trivial successes the reasoning is
+correct in 14, has a minor slip in 1 and is wrong in 3** (round 1: 12, 3 and 2 of 17; the 2B bootstrap: 6 correct and
+8 wrong of 17). The longer traces carry more derivation, and more of it can be wrong: "(a³ + b³ + c³)/(abc) simplifies
+to a² + b² + c² using abc = 1", an arithmetic check that declares "the equation is arithmetically false" for an
+identity `norm_num` then proves, and an expansion that loses terms. Among the failures the wrong traces grow (5 against
+1): the sum 111 + … + 999 given as 5550 (it is 4,995), `apply h` justified by a lemma `h` that does not exist,
+affirming the consequent for a + b ≤ 2, and an `rpow_nat_cast` rewrite for the exponent 1/11.
+
+Judgments: 1 C, 2 C, 3 W, 4 C, 5 C, 6 W, 7–12 C, 13 M, 14–21 C, 22 W, 23 C, 24 C, 25 M, 26–30 C | 31 M, 32 I, 33 C,
+34 W, 35 C, 36 C, 37 W, 38 I, 39 C, 40 W, 41 W, 42 M, 43 W, 44 C, 45 M.
+
+## Search: 96k tokens per theorem as the only stop (01:13–04:00 UTC)
+
+The round-1 protocol except for the wall clock (a 2 h safety cap per theorem) and the thinking cap (1024). Report:
+`search_r2/README.md`.
+
+| Arm | Solved | Mean expansions | Mean generated tokens | Wall s / theorem | Lean s / theorem | Unsolved: token budget / wall clock / frontier | Arm wall time |
+|---|---|---|---|---|---|---|---|
+| 2B bootstrap, no thinking, n = 16 (900 s) | 159 | 41.6 | 12,363 | 334 | 214 | 0 / 79 / 6 | 17 min |
+| Round-1 student, no thinking, n = 16 (900 s) | 156 | 22.0 | 7,792 | 363 | 147 | 0 / 86 / 2 | 23 min |
+| **Round-2 student, no thinking, n = 16** | **162 (66.4%)** | 66.9 | 28,010 | 1,503 | 1,028 | 54 / 23 / 5 | 129 min |
+| 2B bootstrap, thinking, n = 8, cap 512 (900 s) | 152 | 12.8 | 31,184 | 252 | 49 | 61 / 5 / 26 | 17 min |
+| Round-1 student, thinking, n = 8, cap 512 (900 s) | 147 | 8.4 | 15,321 | 328 | 34 | 0 / 66 / 31 | 18 min |
+| Round-2 student, thinking, n = 8, cap 1024 | 150 (61.5%) | 9.6 | 32,686 | 680 | 40 | 64 / 0 / 30 | 38 min |
+
+- **Without the wall clock the round-2 student's non-thinking search proves 162**, 3 more than the 2B's 159 and 6
+  more than its round-1 predecessor; but it takes 4.5 times the wall time and 5 times the Lean time per theorem, and
+  at the 2B's budgets it is level (solved within 20k / 50k tokens: 156 / 158 against 158 / 159; within 600 s: 156
+  against 156). The extra theorems come from running long, not from a better policy per token.
+- **Thinking still loses at equal tokens**: 150 against 162 for the same student, 145 against 158 within 50k tokens.
+  The longer round-2 reasoning makes a thinking expansion cost ~3,400 tokens (round 1: ~1,800), so it is behind round
+  1 at small budgets (within 2k / 5k tokens: 50 / 106 against 96 / 128).
+- Per expansion thinking is no better than not thinking (within 8 / 16 / 32 expansions: 139 / 145 / 149 against
+  139 / 150 / 154).
+
+## Answer (round 2)
+
+Lighter compression kept more of the teacher's reasoning (median 175 against 83 tokens in the training data) and the
+student's successful reasoning stays sound (14 of 18 non-trivial steps correct), but it does not make thinking pay: per
+sample the student is slightly worse than in round 1, and in the search thinking stays behind not thinking at every
+token budget. The round-2 student without thinking is the best policy so far when the search may run to its token
+budget (162 against 159), at a much larger wall-clock and Lean cost.

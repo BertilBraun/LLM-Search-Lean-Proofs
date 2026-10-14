@@ -1,0 +1,199 @@
+{
+ "run_name": "phase5_sft_student_4b_light",
+ "started": "2026-10-14T00:26:20+00:00",
+ "git_revision": "62c1d7a90a29a6d68c4be069fe18951b84beaa47",
+ "config": {
+  "model": "Qwen/Qwen3.5-4B",
+  "data": "teacher_9b_light",
+  "lora": {
+   "rank": 64,
+   "alpha": 64,
+   "dropout": 0.0
+  },
+  "optimization": {
+   "method": "lora",
+   "learning_rate": 0.0001,
+   "warmup_fraction": 0.03,
+   "minimum_learning_rate_ratio": 0.1,
+   "weight_decay": 0.0,
+   "max_gradient_norm": 1.0,
+   "epochs": 2,
+   "max_steps": 0,
+   "micro_batch_tokens": 16384,
+   "micro_batches_per_step": 2,
+   "length_group_examples": 4096,
+   "gradient_checkpointing": true,
+   "packing": true,
+   "compile_layers": true,
+   "seed": 0
+  },
+  "evaluation": {
+   "interval_steps": 50,
+   "validation_examples": 2000,
+   "micro_batch_tokens": 16384,
+   "generation_examples": 256,
+   "generation_batch_size": 16,
+   "max_new_tokens": 256
+  },
+  "merge": false,
+  "initial_adapter": "/workspace/checkpoints/phase2_sft_4b/adapter"
+ },
+ "world_size": 2,
+ "flash_linear_attention": true,
+ "train_examples": 3966,
+ "train_tokens": 1238726,
+ "validation_examples": 540,
+ "tokenization_seconds": 3.171375247882679,
+ "result": {
+  "steps": 38,
+  "examples": 7874,
+  "tokens": 2460828,
+  "padded_tokens": 2460828,
+  "completion_tokens": 938445,
+  "training_seconds": 639.3683262153063,
+  "tokens_per_second": 3848.842520189716,
+  "peak_memory_gib": 17.720835208892822,
+  "trainable_parameters": 129859584,
+  "evaluations": [
+   {
+    "step": 0,
+    "validation_loss": 0.3918399806565422,
+    "validation_examples": 540,
+    "teacher_forced_exact_match": 0.2037037037037037,
+    "generation_exact_match": 0.24609375,
+    "generation_examples": 256,
+    "evaluation_seconds": 312.7028991091065,
+    "mismatches": [
+     {
+      "goals": [
+       "A B C : ℤ → ℝ\nh₀ : ∀ (k : ℤ), A k = (A (k - 1) + A (k + 1)) / 2 + (A (k - 1) - A (k + 1)) ^ 2 / 4\nh₁ : ∀ (k : ℤ), B k = (B (k - 1) + B (k + 1)) / 2 + (B (k - 1) - B (k + 1)) ^ 2 / 4\nh₂ : ∀ (k : ℤ), C k = (C (k - 1) + C (k + 1)) / 2 + (C (k - 1) - C (k + 1)) ^ 2 / 4\n⊢ (∀ (k : ℤ), A k = B k ∧ B k = C k ∧ C k = A k) → ∀ (k : ℤ), A k = B k ∧ B k = C k ∧ C k = A k"
+      ],
+      "target": "intro h₃ k",
+      "generated": "intro h"
+     },
+     {
+      "goals": [
+       "y a b c x : ℝ\nh₀ : a ≠ 0\nh₁ : y = a * x ^ 2 + b * x + c\nh₂ : y = -3 * x ^ 2 + 12 * x - 16\nh₃ : x = 1\nh₄ : y = -75\nh₅ : x = -4\nh₆ : y = 0\n⊢ a = -3"
+      ],
+      "target": "simp_all only [eq_self_iff_true, and_self_iff, eq_mpr_eq_cast, heq_iff_eq, true_and_iff]",
+      "generated": "simp_all only [h₃, h₅, h₆, h₁, h₂, h₄]"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : a ≥ 0\nhb : b ≥ 0\nhc : c ≥ 0\nhabc : a + b + c = 3\nh₁ : 0 ≤ a ^ 2\nh₂ : 0 ≤ b ^ 2\nh₃ : 0 ≤ c ^ 2\n⊢ a ^ 2 / (b ^ 2 + 2) + b ^ 2 / (c ^ 2 + 2) + c ^ 2 / (a ^ 2 + 2) ≥ 1"
+      ],
+      "target": "have h₄ : 0 ≤ a^2 * b^2 := by positivity",
+      "generated": "have h₄ : 0 ≤ a * b := by positivity"
+     },
+     {
+      "goals": [
+       "a b c d : ℕ\nh₀ : a + b = c + d\nh₁ : a ≠ b\nh₂ : c ≠ d\n⊢ a + b = 33 ∨ a + b = 45 ∨ a + b = 49 ∨ a + b = 54 → a + b ≠ 55"
+      ],
+      "target": "intro h₃; cases h₃ <;> intro h₄\n<;> simp_all\n<;> omega",
+      "generated": "rintro (h | h | h | h) <;> simp_all"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : a > 0\nhb : b > 0\nhc : c > 0\nhabc : a * b * c = 1\nthis✝ : 0 < a * b\nthis : 0 < b * c\n⊢ a * (c + 1) / b ^ 2 + b * (a + 1) / c ^ 2 + c * (b + 1) / a ^ 2 ≥ 6"
+      ],
+      "target": "have : 0 < c * a := mul_pos hc ha",
+      "generated": "have : 0 < c * a := by positivity"
+     },
+     {
+      "goals": [
+       "m : ℕ\nhm : Odd m\nh : 5 ^ m + 6 ^ m ≡ 0 [ZMOD 11]\n⊢ 5 ^ m ≡ -6 ^ m [ZMOD 11]"
+      ],
+      "target": "simp [Int.ModEq] at h ⊢",
+      "generated": "simp only [Int.ModEq, Int.ModEq] at h ⊢"
+     },
+     {
+      "goals": [
+       "case mp\nx : ℝ\nh : x ^ 2 - 12 * x + 35 = 0\n⊢ x = 5 ∨ x = 7",
+       "case mpr\nx : ℝ\n⊢ x = 5 ∨ x = 7 → x ^ 2 - 12 * x + 35 = 0"
+      ],
+      "target": "have : (x - 5) * (x - 7) = 0 := by linarith",
+      "generated": "have h' : (x - 5) * (x - 7) = 0 := by linarith"
+     },
+     {
+      "goals": [
+       "n : ℕ\na b : ℕ → ℝ\nh₀ : 5 * a (n + 2) - 2 * a (n + 1) = b (n + 1)\nh₁ : 5 * a (n + 1) - 2 * a n = b n\nh₂ : b (n + 1) = 3 / 5 * b n + 2 / 5 * a (n + 1)\n⊢ 5 * a (n + 2) - 27 / 5 * a (n + 1) + 6 / 5 * a n = 0"
+      ],
+      "target": "rw [eq_comm] at h₂",
+      "generated": "linarith"
+     }
+    ]
+   },
+   {
+    "step": 38,
+    "validation_loss": 0.30996391069556833,
+    "validation_examples": 540,
+    "teacher_forced_exact_match": 0.17222222222222222,
+    "generation_exact_match": 0.1875,
+    "generation_examples": 256,
+    "evaluation_seconds": 248.85324787790887,
+    "mismatches": [
+     {
+      "goals": [
+       "A B C : ℤ → ℝ\nh₀ : ∀ (k : ℤ), A k = (A (k - 1) + A (k + 1)) / 2 + (A (k - 1) - A (k + 1)) ^ 2 / 4\nh₁ : ∀ (k : ℤ), B k = (B (k - 1) + B (k + 1)) / 2 + (B (k - 1) - B (k + 1)) ^ 2 / 4\nh₂ : ∀ (k : ℤ), C k = (C (k - 1) + C (k + 1)) / 2 + (C (k - 1) - C (k + 1)) ^ 2 / 4\n⊢ (∀ (k : ℤ), A k = B k ∧ B k = C k ∧ C k = A k) → ∀ (k : ℤ), A k = B k ∧ B k = C k ∧ C k = A k"
+      ],
+      "target": "intro h₃ k",
+      "generated": "intro h"
+     },
+     {
+      "goals": [
+       "y a b c x : ℝ\nh₀ : a ≠ 0\nh₁ : y = a * x ^ 2 + b * x + c\nh₂ : y = -3 * x ^ 2 + 12 * x - 16\nh₃ : x = 1\nh₄ : y = -75\nh₅ : x = -4\nh₆ : y = 0\n⊢ a = -3"
+      ],
+      "target": "simp_all only [eq_self_iff_true, and_self_iff, eq_mpr_eq_cast, heq_iff_eq, true_and_iff]",
+      "generated": "simp_all only [h₃, h₅, h₆, h₁, h₂, h₄]"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : a ≥ 0\nhb : b ≥ 0\nhc : c ≥ 0\nhabc : a + b + c = 3\nh₁ : 0 ≤ a ^ 2\nh₂ : 0 ≤ b ^ 2\nh₃ : 0 ≤ c ^ 2\n⊢ a ^ 2 / (b ^ 2 + 2) + b ^ 2 / (c ^ 2 + 2) + c ^ 2 / (a ^ 2 + 2) ≥ 1"
+      ],
+      "target": "have h₄ : 0 ≤ a^2 * b^2 := by positivity",
+      "generated": "have h₄ : 0 ≤ a ^ 2 * b ^ 2 := by positivity"
+     },
+     {
+      "goals": [
+       "a b c d : ℕ\nh₀ : a + b = c + d\nh₁ : a ≠ b\nh₂ : c ≠ d\n⊢ a + b = 33 ∨ a + b = 45 ∨ a + b = 49 ∨ a + b = 54 → a + b ≠ 55"
+      ],
+      "target": "intro h₃; cases h₃ <;> intro h₄\n<;> simp_all\n<;> omega",
+      "generated": "rintro (h | h | h | h) <;> omega"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : a > 0\nhb : b > 0\nhc : c > 0\nhabc : a * b * c = 1\nthis✝ : 0 < a * b\nthis : 0 < b * c\n⊢ a * (c + 1) / b ^ 2 + b * (a + 1) / c ^ 2 + c * (b + 1) / a ^ 2 ≥ 6"
+      ],
+      "target": "have : 0 < c * a := mul_pos hc ha",
+      "generated": "have : 0 < c * a := by positivity"
+     },
+     {
+      "goals": [
+       "m : ℕ\nhm : Odd m\nh : 5 ^ m + 6 ^ m ≡ 0 [ZMOD 11]\n⊢ 5 ^ m ≡ -6 ^ m [ZMOD 11]"
+      ],
+      "target": "simp [Int.ModEq] at h ⊢",
+      "generated": "simp only [Int.ModEq, Int.emod_eq_of_lt] at h ⊢"
+     },
+     {
+      "goals": [
+       "case mp\nx : ℝ\nh : x ^ 2 - 12 * x + 35 = 0\n⊢ x = 5 ∨ x = 7",
+       "case mpr\nx : ℝ\n⊢ x = 5 ∨ x = 7 → x ^ 2 - 12 * x + 35 = 0"
+      ],
+      "target": "have : (x - 5) * (x - 7) = 0 := by linarith",
+      "generated": "have h' : (x - 5) * (x - 7) = 0 := by linarith"
+     },
+     {
+      "goals": [
+       "n : ℕ\na b : ℕ → ℝ\nh₀ : 5 * a (n + 2) - 2 * a (n + 1) = b (n + 1)\nh₁ : 5 * a (n + 1) - 2 * a n = b n\nh₂ : b (n + 1) = 3 / 5 * b n + 2 / 5 * a (n + 1)\n⊢ 5 * a (n + 2) - 27 / 5 * a (n + 1) + 6 / 5 * a n = 0"
+      ],
+      "target": "rw [eq_comm] at h₂",
+      "generated": "linarith"
+     }
+    ]
+   }
+  ]
+ },
+ "trained_model_directory": "/workspace/checkpoints/phase5_sft_student_4b_light/adapter",
+ "merged_directory": "",
+ "merge_seconds": 0.0
+}
