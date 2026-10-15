@@ -1,0 +1,399 @@
+{
+ "run_name": "phase5_sft_visible_student",
+ "started": "2026-10-15T01:02:12+00:00",
+ "git_revision": "dece5b565c18fc84ab9a4e4e8afbf8d1f4f52733",
+ "config": {
+  "model": "Qwen/Qwen3.5-4B",
+  "data": "visible_student",
+  "lora": {
+   "rank": 64,
+   "alpha": 64,
+   "dropout": 0.0
+  },
+  "optimization": {
+   "method": "lora",
+   "learning_rate": 0.0001,
+   "warmup_fraction": 0.03,
+   "minimum_learning_rate_ratio": 0.1,
+   "weight_decay": 0.0,
+   "max_gradient_norm": 1.0,
+   "epochs": 2,
+   "max_steps": 0,
+   "micro_batch_tokens": 16384,
+   "micro_batches_per_step": 2,
+   "length_group_examples": 4096,
+   "gradient_checkpointing": true,
+   "packing": true,
+   "compile_layers": true,
+   "seed": 0
+  },
+  "evaluation": {
+   "interval_steps": 50,
+   "validation_examples": 2000,
+   "micro_batch_tokens": 16384,
+   "generation_examples": 256,
+   "generation_batch_size": 16,
+   "max_new_tokens": 256
+  },
+  "merge": false,
+  "initial_adapter": "/workspace/checkpoints/phase2_sft_4b_gentle/adapter",
+  "math_data": ""
+ },
+ "world_size": 2,
+ "flash_linear_attention": true,
+ "train_examples": 16753,
+ "train_tokens": 5140373,
+ "validation_examples": 865,
+ "tokenization_seconds": 12.3755727710668,
+ "result": {
+  "steps": 158,
+  "examples": 33363,
+  "tokens": 10239508,
+  "padded_tokens": 10239508,
+  "completion_tokens": 3812663,
+  "training_seconds": 2630.447626975132,
+  "tokens_per_second": 3892.6865127418873,
+  "peak_memory_gib": 17.720834255218506,
+  "trainable_parameters": 129859584,
+  "evaluations": [
+   {
+    "step": 0,
+    "validation_loss": 0.497942140947786,
+    "validation_examples": 865,
+    "teacher_forced_exact_match": 0.14450867052023122,
+    "generation_exact_match": 0.23828125,
+    "generation_examples": 256,
+    "evaluation_seconds": 294.92890424095094,
+    "mismatches": [
+     {
+      "goals": [
+       "x y z t : ℝ\nhx : x > 0\nhy : y > 0\nhz : z > 0\nht : t > 0\nh₀ : 0 < x * y * z * t\nh₁ : 0 < x ^ 2 * y ^ 2\nh₂ : 0 < x ^ 2 * z ^ 2\nh₃ : 0 < x ^ 2 * t ^ 2\nh₄ : 0 < y ^ 2 * z ^ 2\nh₅ : 0 < y ^ 2 * t ^ 2\nh₆ : 0 < z ^ 2 * t ^ 2\n⊢ x ^ 4 + y ^ 4 + z ^ 4 + t ^ 4 + 2 * x * y * z * t ≥\n    x ^ 2 * y ^ 2 + x ^ 2 * z ^ 2 + x ^ 2 * t ^ 2 + y ^ 2 * z ^ 2 + y ^ 2 * t ^ 2 + z ^ 2 * t ^ 2"
+      ],
+      "target": "nlinarith [sq_nonneg (x ^ 2 - y ^ 2), sq_nonneg (x ^ 2 - z ^ 2), sq_nonneg (x ^ 2 - t ^ 2),\n  sq_nonneg (y ^ 2 - z ^ 2), sq_nonneg (y ^ 2 - t ^ 2), sq_nonneg (z ^ 2 - t ^ 2)]\n<;> linarith\n<;> assumption\n<;> assumption\n<;> assumption",
+      "generated": "nlinarith [sq_nonneg (x ^ 2 - y ^ 2), sq_nonneg (x ^ 2 - z ^ 2), sq_nonneg (x ^ 2 - t ^ 2),\n  sq_nonneg (y ^ 2 - z ^ 2), sq_nonneg (y ^ 2 - t ^ 2), sq_nonneg (z ^ 2 - t ^ 2),\n  sq_nonneg (x * y - x * z), sq_nonneg (x * y - x * t), sq_nonneg (x * z - x * t),\n  sq_nonneg (y * z - y * t), sq_nonneg (z * t - x * t)]"
+     },
+     {
+      "goals": [
+       "⊢ ∀ (a b c : ℝ), a ≥ c ∧ c ≥ b → (a - b) * (b - c) * (c - a) ≥ 0"
+      ],
+      "target": "rintro a b c ⟨h1, h2⟩",
+      "generated": "intro a b c h"
+     },
+     {
+      "goals": [
+       "k a b : ℕ\nh₀ : 0 < a ∧ 0 < b\nc : ℕ → ℕ := fun n => a + (n - 1) * a + b * (n - 1) * a\nh1 : c (k - 1) = 100\nh2 : c (k + 1) = 1000\nh3 : c k = 262\nh4 : k - 1 = 3\nh5 : k + 1 = 10\n⊢ c k = 262"
+      ],
+      "target": "simp [h3, h4, h5]",
+      "generated": "simp_all"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : a ≥ 0\nhb : b ≥ 0\nhc : c ≥ 0\nhabc : a + b + c + a * b + b * c + c * a = 6\n⊢ 4 * (a + b + c) + a * b * c ≥ 13"
+      ],
+      "target": "nlinarith [mul_self_nonneg (a + b + c - 3), mul_self_nonneg (a + b - 2), mul_self_nonneg (b + c - 2), mul_self_nonneg (c + a - 2), mul_self_nonneg (a - b), mul_self_nonneg (b - c), mul_self_nonneg (c - a)]",
+      "generated": "nlinarith [sq_nonneg (a - 1), sq_nonneg (b - 1), sq_nonneg (c - 1),\n  sq_nonneg (a - b), sq_nonneg (b - c), sq_nonneg (c - a),\n  sq_nonneg (a + b + c - 3)]"
+     },
+     {
+      "goals": [
+       "case e_f.h\nn : ℕ\nhn : 0 < n\na : Fin n → ℝ\nha : ∀ (i : Fin n), 0 < a i\nd : Fin n → ℝ\nhd : ∀ (i : Fin n), 0 < d i\nh : ∀ (i : Fin n), a i = d i\ni : Fin n\n⊢ a i * d i = d i * a i"
+      ],
+      "target": "rw [mul_comm]",
+      "generated": "simp [h]"
+     },
+     {
+      "goals": [
+       "case right.right.right.right.right.right\n⊢ 11 ≠ 13"
+      ],
+      "target": "·\n  norm_num",
+      "generated": "norm_num"
+     },
+     {
+      "goals": [
+       "a b : ℤ\nh : a + b = 32\nh₂ : a = -36\n⊢ b = 68"
+      ],
+      "target": "simp [h₂] at h",
+      "generated": "rw [h₂] at h"
+     },
+     {
+      "goals": [
+       "⊢ ∃ a b,\n    a > 0 ∧\n      b > 0 ∧\n        a + b = 2 ∧\n          (∀ (a' b' : ℝ), a' > 0 ∧ b' > 0 ∧ a' + b' = 2 → 1 / a + 4 / b ≤ 1 / a' + 4 / b') ∧ 1 / a + 4 / b = 9 / 2"
+      ],
+      "target": "use 2/3, 4/3",
+      "generated": "use 2 / 3, 4 / 3"
+     }
+    ]
+   },
+   {
+    "step": 50,
+    "validation_loss": 0.3782859249365967,
+    "validation_examples": 865,
+    "teacher_forced_exact_match": 0.14450867052023122,
+    "generation_exact_match": 0.21484375,
+    "generation_examples": 256,
+    "evaluation_seconds": 291.692588577047,
+    "mismatches": [
+     {
+      "goals": [
+       "case h\nN : ℤ\nhN : N > 0\n⊢ ∃ v, N = N * 1 + 0 * v ∧ 0 - v = 2 * (N - 1)"
+      ],
+      "target": "use -2 * (N - 1)",
+      "generated": "use 1 - N"
+     },
+     {
+      "goals": [
+       "x y z t : ℝ\nhx : x > 0\nhy : y > 0\nhz : z > 0\nht : t > 0\nh₀ : 0 < x * y * z * t\nh₁ : 0 < x ^ 2 * y ^ 2\nh₂ : 0 < x ^ 2 * z ^ 2\nh₃ : 0 < x ^ 2 * t ^ 2\nh₄ : 0 < y ^ 2 * z ^ 2\nh₅ : 0 < y ^ 2 * t ^ 2\nh₆ : 0 < z ^ 2 * t ^ 2\n⊢ x ^ 4 + y ^ 4 + z ^ 4 + t ^ 4 + 2 * x * y * z * t ≥\n    x ^ 2 * y ^ 2 + x ^ 2 * z ^ 2 + x ^ 2 * t ^ 2 + y ^ 2 * z ^ 2 + y ^ 2 * t ^ 2 + z ^ 2 * t ^ 2"
+      ],
+      "target": "nlinarith [sq_nonneg (x ^ 2 - y ^ 2), sq_nonneg (x ^ 2 - z ^ 2), sq_nonneg (x ^ 2 - t ^ 2),\n  sq_nonneg (y ^ 2 - z ^ 2), sq_nonneg (y ^ 2 - t ^ 2), sq_nonneg (z ^ 2 - t ^ 2)]\n<;> linarith\n<;> assumption\n<;> assumption\n<;> assumption",
+      "generated": "nlinarith [sq_nonneg (x ^ 2 - y ^ 2), sq_nonneg (x ^ 2 - z ^ 2), sq_nonneg (x ^ 2 - t ^ 2),\n  sq_nonneg (y ^ 2 - z ^ 2), sq_nonneg (y ^ 2 - t ^ 2), sq_nonneg (z ^ 2 - t ^ 2),\n  sq_nonneg (x ^ 2 + y ^ 2 - z ^ 2 - t ^ 2), sq_nonneg (x ^ 2 + z ^ 2 - y ^ 2 - t ^ 2),\n  sq_nonneg (x ^ 2 + t ^ 2 - y ^ 2 - z ^ 2), sq_nonneg (y ^ 2 + z ^ 2 - x ^ 2 - t ^ 2),\n  sq_nonneg (y ^ 2 + t ^ 2 - x ^ 2 - z ^ 2), sq_nonneg (z ^ 2 + t ^ 2 - x ^ 2 - y ^ 2)]"
+     },
+     {
+      "goals": [
+       "⊢ ∀ (a b c : ℝ), a ≥ c ∧ c ≥ b → (a - b) * (b - c) * (c - a) ≥ 0"
+      ],
+      "target": "rintro a b c ⟨h1, h2⟩",
+      "generated": "intro a b c h"
+     },
+     {
+      "goals": [
+       "k a b : ℕ\nh₀ : 0 < a ∧ 0 < b\nc : ℕ → ℕ := fun n => a + (n - 1) * a + b * (n - 1) * a\nh1 : c (k - 1) = 100\nh2 : c (k + 1) = 1000\nh3 : c k = 262\nh4 : k - 1 = 3\nh5 : k + 1 = 10\n⊢ c k = 262"
+      ],
+      "target": "simp [h3, h4, h5]",
+      "generated": "simp_all"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : a ≥ 0\nhb : b ≥ 0\nhc : c ≥ 0\nhabc : a + b + c + a * b + b * c + c * a = 6\n⊢ 4 * (a + b + c) + a * b * c ≥ 13"
+      ],
+      "target": "nlinarith [mul_self_nonneg (a + b + c - 3), mul_self_nonneg (a + b - 2), mul_self_nonneg (b + c - 2), mul_self_nonneg (c + a - 2), mul_self_nonneg (a - b), mul_self_nonneg (b - c), mul_self_nonneg (c - a)]",
+      "generated": "nlinarith [sq_nonneg (a - 1), sq_nonneg (b - 1), sq_nonneg (c - 1),\n  sq_nonneg (a - b), sq_nonneg (b - c), sq_nonneg (c - a),\n  sq_nonneg (a + b + c - 3)]"
+     },
+     {
+      "goals": [
+       "case e_f.h\nn : ℕ\nhn : 0 < n\na : Fin n → ℝ\nha : ∀ (i : Fin n), 0 < a i\nd : Fin n → ℝ\nhd : ∀ (i : Fin n), 0 < d i\nh : ∀ (i : Fin n), a i = d i\ni : Fin n\n⊢ a i * d i = d i * a i"
+      ],
+      "target": "rw [mul_comm]",
+      "generated": "rw [h]"
+     },
+     {
+      "goals": [
+       "case right.right.right.right.right.right\n⊢ 11 ≠ 13"
+      ],
+      "target": "·\n  norm_num",
+      "generated": "norm_num"
+     },
+     {
+      "goals": [
+       "a b : ℤ\nh : a + b = 32\nh₂ : a = -36\n⊢ b = 68"
+      ],
+      "target": "simp [h₂] at h",
+      "generated": "linarith"
+     }
+    ]
+   },
+   {
+    "step": 100,
+    "validation_loss": 0.373905565447183,
+    "validation_examples": 865,
+    "teacher_forced_exact_match": 0.13872832369942195,
+    "generation_exact_match": 0.22265625,
+    "generation_examples": 256,
+    "evaluation_seconds": 292.9588998518884,
+    "mismatches": [
+     {
+      "goals": [
+       "case h\nN : ℤ\nhN : N > 0\n⊢ ∃ v, N = N * 1 + 0 * v ∧ 0 - v = 2 * (N - 1)"
+      ],
+      "target": "use -2 * (N - 1)",
+      "generated": "use 1 - N"
+     },
+     {
+      "goals": [
+       "x y z t : ℝ\nhx : x > 0\nhy : y > 0\nhz : z > 0\nht : t > 0\nh₀ : 0 < x * y * z * t\nh₁ : 0 < x ^ 2 * y ^ 2\nh₂ : 0 < x ^ 2 * z ^ 2\nh₃ : 0 < x ^ 2 * t ^ 2\nh₄ : 0 < y ^ 2 * z ^ 2\nh₅ : 0 < y ^ 2 * t ^ 2\nh₆ : 0 < z ^ 2 * t ^ 2\n⊢ x ^ 4 + y ^ 4 + z ^ 4 + t ^ 4 + 2 * x * y * z * t ≥\n    x ^ 2 * y ^ 2 + x ^ 2 * z ^ 2 + x ^ 2 * t ^ 2 + y ^ 2 * z ^ 2 + y ^ 2 * t ^ 2 + z ^ 2 * t ^ 2"
+      ],
+      "target": "nlinarith [sq_nonneg (x ^ 2 - y ^ 2), sq_nonneg (x ^ 2 - z ^ 2), sq_nonneg (x ^ 2 - t ^ 2),\n  sq_nonneg (y ^ 2 - z ^ 2), sq_nonneg (y ^ 2 - t ^ 2), sq_nonneg (z ^ 2 - t ^ 2)]\n<;> linarith\n<;> assumption\n<;> assumption\n<;> assumption",
+      "generated": "nlinarith [sq_nonneg (x ^ 2 - y ^ 2), sq_nonneg (x ^ 2 - z ^ 2), sq_nonneg (x ^ 2 - t ^ 2), sq_nonneg (y ^ 2 - z ^ 2), sq_nonneg (y ^ 2 - t ^ 2), sq_nonneg (z ^ 2 - t ^ 2),\n  sq_nonneg (x * y - x * z), sq_nonneg (x * y - x * t), sq_nonneg (x * z - x * t), sq_nonneg (y * z - y * t), sq_nonneg (z * t - x * t)]"
+     },
+     {
+      "goals": [
+       "⊢ ∀ (a b c : ℝ), a ≥ c ∧ c ≥ b → (a - b) * (b - c) * (c - a) ≥ 0"
+      ],
+      "target": "rintro a b c ⟨h1, h2⟩",
+      "generated": "intro a b c h"
+     },
+     {
+      "goals": [
+       "k a b : ℕ\nh₀ : 0 < a ∧ 0 < b\nc : ℕ → ℕ := fun n => a + (n - 1) * a + b * (n - 1) * a\nh1 : c (k - 1) = 100\nh2 : c (k + 1) = 1000\nh3 : c k = 262\nh4 : k - 1 = 3\nh5 : k + 1 = 10\n⊢ c k = 262"
+      ],
+      "target": "simp [h3, h4, h5]",
+      "generated": "simp_all"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : a ≥ 0\nhb : b ≥ 0\nhc : c ≥ 0\nhabc : a + b + c + a * b + b * c + c * a = 6\n⊢ 4 * (a + b + c) + a * b * c ≥ 13"
+      ],
+      "target": "nlinarith [mul_self_nonneg (a + b + c - 3), mul_self_nonneg (a + b - 2), mul_self_nonneg (b + c - 2), mul_self_nonneg (c + a - 2), mul_self_nonneg (a - b), mul_self_nonneg (b - c), mul_self_nonneg (c - a)]",
+      "generated": "nlinarith [sq_nonneg (a - 1), sq_nonneg (b - 1), sq_nonneg (c - 1),\n  sq_nonneg (a - b), sq_nonneg (b - c), sq_nonneg (c - a),\n  sq_nonneg (a + b + c - 3)]"
+     },
+     {
+      "goals": [
+       "case e_f.h\nn : ℕ\nhn : 0 < n\na : Fin n → ℝ\nha : ∀ (i : Fin n), 0 < a i\nd : Fin n → ℝ\nhd : ∀ (i : Fin n), 0 < d i\nh : ∀ (i : Fin n), a i = d i\ni : Fin n\n⊢ a i * d i = d i * a i"
+      ],
+      "target": "rw [mul_comm]",
+      "generated": "simp [h]"
+     },
+     {
+      "goals": [
+       "case right.right.right.right.right.right\n⊢ 11 ≠ 13"
+      ],
+      "target": "·\n  norm_num",
+      "generated": "norm_num"
+     },
+     {
+      "goals": [
+       "a b : ℤ\nh : a + b = 32\nh₂ : a = -36\n⊢ b = 68"
+      ],
+      "target": "simp [h₂] at h",
+      "generated": "rw [h₂] at h"
+     }
+    ]
+   },
+   {
+    "step": 150,
+    "validation_loss": 0.37100071160150405,
+    "validation_examples": 865,
+    "teacher_forced_exact_match": 0.13872832369942195,
+    "generation_exact_match": 0.21875,
+    "generation_examples": 256,
+    "evaluation_seconds": 261.3929066390265,
+    "mismatches": [
+     {
+      "goals": [
+       "case h\nN : ℤ\nhN : N > 0\n⊢ ∃ v, N = N * 1 + 0 * v ∧ 0 - v = 2 * (N - 1)"
+      ],
+      "target": "use -2 * (N - 1)",
+      "generated": "use 1 - N"
+     },
+     {
+      "goals": [
+       "x y z t : ℝ\nhx : x > 0\nhy : y > 0\nhz : z > 0\nht : t > 0\nh₀ : 0 < x * y * z * t\nh₁ : 0 < x ^ 2 * y ^ 2\nh₂ : 0 < x ^ 2 * z ^ 2\nh₃ : 0 < x ^ 2 * t ^ 2\nh₄ : 0 < y ^ 2 * z ^ 2\nh₅ : 0 < y ^ 2 * t ^ 2\nh₆ : 0 < z ^ 2 * t ^ 2\n⊢ x ^ 4 + y ^ 4 + z ^ 4 + t ^ 4 + 2 * x * y * z * t ≥\n    x ^ 2 * y ^ 2 + x ^ 2 * z ^ 2 + x ^ 2 * t ^ 2 + y ^ 2 * z ^ 2 + y ^ 2 * t ^ 2 + z ^ 2 * t ^ 2"
+      ],
+      "target": "nlinarith [sq_nonneg (x ^ 2 - y ^ 2), sq_nonneg (x ^ 2 - z ^ 2), sq_nonneg (x ^ 2 - t ^ 2),\n  sq_nonneg (y ^ 2 - z ^ 2), sq_nonneg (y ^ 2 - t ^ 2), sq_nonneg (z ^ 2 - t ^ 2)]\n<;> linarith\n<;> assumption\n<;> assumption\n<;> assumption",
+      "generated": "nlinarith [sq_nonneg (x ^ 2 - y ^ 2), sq_nonneg (x ^ 2 - z ^ 2), sq_nonneg (x ^ 2 - t ^ 2),\n  sq_nonneg (y ^ 2 - z ^ 2), sq_nonneg (y ^ 2 - t ^ 2), sq_nonneg (z ^ 2 - t ^ 2),\n  sq_nonneg (x * y - x * z), sq_nonneg (x * y - x * t), sq_nonneg (x * z - x * t),\n  sq_nonneg (y * z - y * t), sq_nonneg (z * t - x * t)]"
+     },
+     {
+      "goals": [
+       "⊢ ∀ (a b c : ℝ), a ≥ c ∧ c ≥ b → (a - b) * (b - c) * (c - a) ≥ 0"
+      ],
+      "target": "rintro a b c ⟨h1, h2⟩",
+      "generated": "intro a b c h"
+     },
+     {
+      "goals": [
+       "k a b : ℕ\nh₀ : 0 < a ∧ 0 < b\nc : ℕ → ℕ := fun n => a + (n - 1) * a + b * (n - 1) * a\nh1 : c (k - 1) = 100\nh2 : c (k + 1) = 1000\nh3 : c k = 262\nh4 : k - 1 = 3\nh5 : k + 1 = 10\n⊢ c k = 262"
+      ],
+      "target": "simp [h3, h4, h5]",
+      "generated": "simp_all"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : a ≥ 0\nhb : b ≥ 0\nhc : c ≥ 0\nhabc : a + b + c + a * b + b * c + c * a = 6\n⊢ 4 * (a + b + c) + a * b * c ≥ 13"
+      ],
+      "target": "nlinarith [mul_self_nonneg (a + b + c - 3), mul_self_nonneg (a + b - 2), mul_self_nonneg (b + c - 2), mul_self_nonneg (c + a - 2), mul_self_nonneg (a - b), mul_self_nonneg (b - c), mul_self_nonneg (c - a)]",
+      "generated": "nlinarith [sq_nonneg (a - 1), sq_nonneg (b - 1), sq_nonneg (c - 1),\n  sq_nonneg (a - b), sq_nonneg (b - c), sq_nonneg (c - a),\n  sq_nonneg (a + b + c - 3)]"
+     },
+     {
+      "goals": [
+       "case e_f.h\nn : ℕ\nhn : 0 < n\na : Fin n → ℝ\nha : ∀ (i : Fin n), 0 < a i\nd : Fin n → ℝ\nhd : ∀ (i : Fin n), 0 < d i\nh : ∀ (i : Fin n), a i = d i\ni : Fin n\n⊢ a i * d i = d i * a i"
+      ],
+      "target": "rw [mul_comm]",
+      "generated": "rw [h]"
+     },
+     {
+      "goals": [
+       "case right.right.right.right.right.right\n⊢ 11 ≠ 13"
+      ],
+      "target": "·\n  norm_num",
+      "generated": "norm_num"
+     },
+     {
+      "goals": [
+       "a b : ℤ\nh : a + b = 32\nh₂ : a = -36\n⊢ b = 68"
+      ],
+      "target": "simp [h₂] at h",
+      "generated": "rw [h₂] at h"
+     }
+    ]
+   },
+   {
+    "step": 158,
+    "validation_loss": 0.3704428289191524,
+    "validation_examples": 865,
+    "teacher_forced_exact_match": 0.14219653179190753,
+    "generation_exact_match": 0.23046875,
+    "generation_examples": 256,
+    "evaluation_seconds": 229.27204135316424,
+    "mismatches": [
+     {
+      "goals": [
+       "case h\nN : ℤ\nhN : N > 0\n⊢ ∃ v, N = N * 1 + 0 * v ∧ 0 - v = 2 * (N - 1)"
+      ],
+      "target": "use -2 * (N - 1)",
+      "generated": "use 1 - N"
+     },
+     {
+      "goals": [
+       "x y z t : ℝ\nhx : x > 0\nhy : y > 0\nhz : z > 0\nht : t > 0\nh₀ : 0 < x * y * z * t\nh₁ : 0 < x ^ 2 * y ^ 2\nh₂ : 0 < x ^ 2 * z ^ 2\nh₃ : 0 < x ^ 2 * t ^ 2\nh₄ : 0 < y ^ 2 * z ^ 2\nh₅ : 0 < y ^ 2 * t ^ 2\nh₆ : 0 < z ^ 2 * t ^ 2\n⊢ x ^ 4 + y ^ 4 + z ^ 4 + t ^ 4 + 2 * x * y * z * t ≥\n    x ^ 2 * y ^ 2 + x ^ 2 * z ^ 2 + x ^ 2 * t ^ 2 + y ^ 2 * z ^ 2 + y ^ 2 * t ^ 2 + z ^ 2 * t ^ 2"
+      ],
+      "target": "nlinarith [sq_nonneg (x ^ 2 - y ^ 2), sq_nonneg (x ^ 2 - z ^ 2), sq_nonneg (x ^ 2 - t ^ 2),\n  sq_nonneg (y ^ 2 - z ^ 2), sq_nonneg (y ^ 2 - t ^ 2), sq_nonneg (z ^ 2 - t ^ 2)]\n<;> linarith\n<;> assumption\n<;> assumption\n<;> assumption",
+      "generated": "nlinarith [sq_nonneg (x ^ 2 - y ^ 2), sq_nonneg (x ^ 2 - z ^ 2), sq_nonneg (x ^ 2 - t ^ 2),\n  sq_nonneg (y ^ 2 - z ^ 2), sq_nonneg (y ^ 2 - t ^ 2), sq_nonneg (z ^ 2 - t ^ 2),\n  sq_nonneg (x * y - x * z), sq_nonneg (x * y - x * t), sq_nonneg (x * z - x * t),\n  sq_nonneg (y * z - y * t), sq_nonneg (z * t - x * t)]"
+     },
+     {
+      "goals": [
+       "⊢ ∀ (a b c : ℝ), a ≥ c ∧ c ≥ b → (a - b) * (b - c) * (c - a) ≥ 0"
+      ],
+      "target": "rintro a b c ⟨h1, h2⟩",
+      "generated": "intro a b c h"
+     },
+     {
+      "goals": [
+       "k a b : ℕ\nh₀ : 0 < a ∧ 0 < b\nc : ℕ → ℕ := fun n => a + (n - 1) * a + b * (n - 1) * a\nh1 : c (k - 1) = 100\nh2 : c (k + 1) = 1000\nh3 : c k = 262\nh4 : k - 1 = 3\nh5 : k + 1 = 10\n⊢ c k = 262"
+      ],
+      "target": "simp [h3, h4, h5]",
+      "generated": "simp_all"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : a ≥ 0\nhb : b ≥ 0\nhc : c ≥ 0\nhabc : a + b + c + a * b + b * c + c * a = 6\n⊢ 4 * (a + b + c) + a * b * c ≥ 13"
+      ],
+      "target": "nlinarith [mul_self_nonneg (a + b + c - 3), mul_self_nonneg (a + b - 2), mul_self_nonneg (b + c - 2), mul_self_nonneg (c + a - 2), mul_self_nonneg (a - b), mul_self_nonneg (b - c), mul_self_nonneg (c - a)]",
+      "generated": "nlinarith [sq_nonneg (a - 1), sq_nonneg (b - 1), sq_nonneg (c - 1),\n  sq_nonneg (a - b), sq_nonneg (b - c), sq_nonneg (c - a),\n  sq_nonneg (a + b + c - 3)]"
+     },
+     {
+      "goals": [
+       "case e_f.h\nn : ℕ\nhn : 0 < n\na : Fin n → ℝ\nha : ∀ (i : Fin n), 0 < a i\nd : Fin n → ℝ\nhd : ∀ (i : Fin n), 0 < d i\nh : ∀ (i : Fin n), a i = d i\ni : Fin n\n⊢ a i * d i = d i * a i"
+      ],
+      "target": "rw [mul_comm]",
+      "generated": "rw [h]"
+     },
+     {
+      "goals": [
+       "case right.right.right.right.right.right\n⊢ 11 ≠ 13"
+      ],
+      "target": "·\n  norm_num",
+      "generated": "norm_num"
+     },
+     {
+      "goals": [
+       "a b : ℤ\nh : a + b = 32\nh₂ : a = -36\n⊢ b = 68"
+      ],
+      "target": "simp [h₂] at h",
+      "generated": "rw [h₂] at h"
+     }
+    ]
+   }
+  ]
+ },
+ "trained_model_directory": "/workspace/checkpoints/phase5_sft_visible_student/adapter",
+ "merged_directory": "",
+ "merge_seconds": 0.0
+}
