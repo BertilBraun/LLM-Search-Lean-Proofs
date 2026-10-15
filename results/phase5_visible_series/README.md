@@ -173,6 +173,30 @@ exact proof step (the search's steps are single draws of n = 16), but they show 
   the goal is x = 3, which suggests the hypotheses might be inconsistent" — it misreads the literal 1000000000000000
   (10^15) as 10^14; long numerals remain a source of wrong arithmetic in the explanations.
 
+### Control: the same student without explanations (05:28–06:52 UTC)
+
+The visible student's own non-thinking mode at the same 64 expansions, n = 16, 2 h cap and serving
+(`phase5_expansions_visible_student_nothinking.toml`, `experiments/phase5_visible_control.sh`; report in `control/`).
+
+| Arm | Solved | Mean expansions | Mean generated tokens | Wall s / theorem | Lean s / theorem | Unsolved: 64 expansions / frontier |
+|---|---|---|---|---|---|---|
+| Visible student, visible | **171** | 19.8 | 93,685 | 1,820 | 343 | 61 / 5 (7 at the 2 h cap) |
+| **Visible student, no thinking** | **157 (64.3%)** | 24.1 | 9,573 | 420 | 223 | 80 / 7 |
+| Round-2 student, no thinking | 154 | 24.8 | 12,201 | 509 | 234 | 86 / 4 |
+
+| Expansions ≤ | 1 | 2 | 4 | 8 | 16 | 32 | 64 |
+|---|---|---|---|---|---|---|---|
+| Visible student, visible | 124 | 141 | 153 | 158 | 163 | 169 | 171 |
+| Visible student, no thinking | 93 | 114 | 131 | 137 | 148 | 154 | 157 |
+| Round-2 student, no thinking | 86 | 114 | 129 | 139 | 147 | 152 | 154 |
+
+**Of the 17 theorems between 171 and 154, 14 come from the explanations and 3 from the stronger student**: without
+explanations the visible student solves 157, three more than the round-2 student's non-thinking mode, and with them
+171 (18 new, 4 lost: `aime_1991_p1`, `amc12a_2016_p3`, `imo_1974_p5`, `induction_seq_mul2pnp1`). The explanations
+cost ~10 times the generated tokens and 4.3 times the wall time per theorem; at equal generated tokens the
+non-thinking mode leads up to ~10k tokens per theorem (152 against 142 within 10k) and the visible mode from ~20k on
+(153 against 156 within 20k, 165 against 157 within 50k).
+
 ## Answer
 
 Visible reasoning is the first reasoning mode that pays off in the search. The visible student, trained on 70%
@@ -182,8 +206,10 @@ mode, and 162 for that non-thinking mode run to 96k tokens. It is ahead at every
 generated tokens per theorem, at every token budget too. Per step it is the strongest 4B in both modes (44.6% visible,
 47.4% without thinking), though per sample its non-thinking mode is still better than its visible one.
 
-Open: (1) the visible student's own non-thinking search at 64 expansions is missing, and its non-thinking mode is 4
-points stronger per step than the round-2 student's, so part of 171 against 154 may come from the better base rather
-than from the explanations; that arm (~1.5 h) separates the two. (2) Its self-generated explanations are short and
+The control separates the two sources of the gain: without explanations the same student solves 157 at 64
+expansions, so the explanations add 14 theorems and the stronger student 3. Open: (1) MATH-500 retention fell for the
+gentle SFT and this student (47–52% against 84–87% for the base), traced to terse math replay; the v2 student
+(gentle SFT v2 with the base model's own math solutions, capped short explanations, a share of thinking traces) is
+queued (`experiments/phase5_visible_v2_chain.sh`). (2) Its self-generated explanations are short and
 partly formulaic (median 33 tokens; 61% of the reasoning examples); a 9B-only variant would show what they add.
 (3) The search should log each step's explanation, as the loop's thinking expander does, for training and for reading.

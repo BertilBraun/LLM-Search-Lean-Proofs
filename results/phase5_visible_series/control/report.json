@@ -1,0 +1,994 @@
+{
+ "problems": 244,
+ "categories": [
+  "mathd_algebra",
+  "mathd_numbertheory",
+  "amc12",
+  "aime",
+  "imo",
+  "algebra",
+  "numbertheory",
+  "induction"
+ ],
+ "category_sizes": [
+  70,
+  60,
+  45,
+  15,
+  20,
+  18,
+  8,
+  8
+ ],
+ "runs": [
+  {
+   "settings": {
+    "run": "phase5_expansions_visible_student",
+    "priority": "a_star",
+    "value_weight": 1.0,
+    "dead_steps": 16.0,
+    "depth_weight": 0.25,
+    "policy_prior_weight": 0.0,
+    "samples": 16
+   },
+   "solved": 171,
+   "solve_rate": 0.7008196721311475,
+   "mean_expansions": 19.762295081967213,
+   "mean_generated_tokens": 93685.37704918033,
+   "mean_value_prompt_tokens": 22993.41393442623,
+   "mean_wall_seconds": 1819.9031936004892,
+   "mean_lean_seconds": 343.1008010805016,
+   "generated_tokens_per_solve": 133679.71929824562,
+   "solved_by_category": [
+    65,
+    50,
+    23,
+    2,
+    3,
+    17,
+    5,
+    6
+   ]
+  },
+  {
+   "settings": {
+    "run": "phase5_expansions_visible_student_nothinking",
+    "priority": "a_star",
+    "value_weight": 1.0,
+    "dead_steps": 16.0,
+    "depth_weight": 0.25,
+    "policy_prior_weight": 0.0,
+    "samples": 16
+   },
+   "solved": 157,
+   "solve_rate": 0.6434426229508197,
+   "mean_expansions": 24.077868852459016,
+   "mean_generated_tokens": 9572.704918032787,
+   "mean_value_prompt_tokens": 19315.225409836065,
+   "mean_wall_seconds": 419.55462108813055,
+   "mean_lean_seconds": 222.93858576179042,
+   "generated_tokens_per_solve": 14877.324840764331,
+   "solved_by_category": [
+    55,
+    49,
+    21,
+    3,
+    2,
+    15,
+    5,
+    7
+   ]
+  },
+  {
+   "settings": {
+    "run": "phase5_expansions_student_4b_light_nothinking",
+    "priority": "a_star",
+    "value_weight": 1.0,
+    "dead_steps": 16.0,
+    "depth_weight": 0.25,
+    "policy_prior_weight": 0.0,
+    "samples": 16
+   },
+   "solved": 154,
+   "solve_rate": 0.6311475409836066,
+   "mean_expansions": 24.770491803278688,
+   "mean_generated_tokens": 12201.20081967213,
+   "mean_value_prompt_tokens": 25896.983606557376,
+   "mean_wall_seconds": 508.7726052283256,
+   "mean_lean_seconds": 233.95006575392554,
+   "generated_tokens_per_solve": 19331.772727272728,
+   "solved_by_category": [
+    55,
+    49,
+    20,
+    3,
+    2,
+    14,
+    4,
+    7
+   ]
+  },
+  {
+   "settings": {
+    "run": "phase5_expansions_student_4b_light_thinking",
+    "priority": "a_star",
+    "value_weight": 1.0,
+    "dead_steps": 16.0,
+    "depth_weight": 0.25,
+    "policy_prior_weight": 0.0,
+    "samples": 16
+   },
+   "solved": 160,
+   "solve_rate": 0.6557377049180327,
+   "mean_expansions": 16.258196721311474,
+   "mean_generated_tokens": 113546.2868852459,
+   "mean_value_prompt_tokens": 20545.377049180326,
+   "mean_wall_seconds": 2479.9335815205036,
+   "mean_lean_seconds": 124.50122800994413,
+   "generated_tokens_per_solve": 173158.0875,
+   "solved_by_category": [
+    60,
+    49,
+    22,
+    2,
+    2,
+    15,
+    3,
+    7
+   ]
+  }
+ ],
+ "curves": [
+  {
+   "metric": "expansions",
+   "budgets": [
+    1.0,
+    2.0,
+    4.0,
+    8.0,
+    16.0,
+    32.0,
+    64.0
+   ],
+   "solved": [
+    [
+     124,
+     141,
+     153,
+     158,
+     163,
+     169,
+     171
+    ],
+    [
+     93,
+     114,
+     131,
+     137,
+     148,
+     154,
+     157
+    ],
+    [
+     86,
+     114,
+     129,
+     139,
+     147,
+     152,
+     154
+    ],
+    [
+     120,
+     130,
+     143,
+     145,
+     150,
+     157,
+     160
+    ]
+   ]
+  },
+  {
+   "metric": "policy_generations",
+   "budgets": [
+    16.0,
+    32.0,
+    64.0,
+    128.0,
+    256.0,
+    512.0,
+    1024.0
+   ],
+   "solved": [
+    [
+     124,
+     141,
+     153,
+     158,
+     163,
+     169,
+     171
+    ],
+    [
+     93,
+     114,
+     131,
+     137,
+     148,
+     154,
+     157
+    ],
+    [
+     86,
+     114,
+     129,
+     139,
+     147,
+     152,
+     154
+    ],
+    [
+     120,
+     130,
+     143,
+     145,
+     150,
+     157,
+     160
+    ]
+   ]
+  },
+  {
+   "metric": "generated_tokens",
+   "budgets": [
+    500.0,
+    1000.0,
+    2000.0,
+    5000.0,
+    10000.0,
+    20000.0,
+    50000.0,
+    100000.0,
+    200000.0,
+    532372.0
+   ],
+   "solved": [
+    [
+     0,
+     2,
+     39,
+     122,
+     142,
+     153,
+     165,
+     168,
+     170,
+     171
+    ],
+    [
+     75,
+     117,
+     132,
+     143,
+     152,
+     156,
+     157,
+     157,
+     157,
+     157
+    ],
+    [
+     73,
+     113,
+     132,
+     143,
+     150,
+     153,
+     154,
+     154,
+     154,
+     154
+    ],
+    [
+     0,
+     0,
+     5,
+     79,
+     120,
+     133,
+     145,
+     150,
+     157,
+     160
+    ]
+   ]
+  },
+  {
+   "metric": "wall_seconds",
+   "budgets": [
+    1.0,
+    2.0,
+    5.0,
+    10.0,
+    20.0,
+    30.0,
+    60.0,
+    120.0,
+    180.0,
+    300.0,
+    600.0,
+    1200.0,
+    1800.0,
+    3600.0,
+    7366.244970328873
+   ],
+   "solved": [
+    [
+     20,
+     26,
+     53,
+     56,
+     59,
+     62,
+     72,
+     121,
+     135,
+     143,
+     154,
+     164,
+     167,
+     169,
+     171
+    ],
+    [
+     20,
+     26,
+     54,
+     59,
+     85,
+     103,
+     123,
+     133,
+     135,
+     144,
+     153,
+     156,
+     157,
+     157,
+     157
+    ],
+    [
+     22,
+     37,
+     55,
+     61,
+     81,
+     105,
+     120,
+     131,
+     136,
+     145,
+     151,
+     154,
+     154,
+     154,
+     154
+    ],
+    [
+     20,
+     26,
+     53,
+     56,
+     56,
+     58,
+     66,
+     74,
+     114,
+     127,
+     139,
+     145,
+     146,
+     153,
+     160
+    ]
+   ]
+  },
+  {
+   "metric": "lean_seconds",
+   "budgets": [
+    1.0,
+    2.0,
+    5.0,
+    10.0,
+    20.0,
+    30.0,
+    60.0,
+    120.0,
+    180.0,
+    300.0,
+    600.0,
+    1200.0,
+    1800.0,
+    3600.0,
+    5839.731988879852
+   ],
+   "solved": [
+    [
+     71,
+     84,
+     131,
+     137,
+     153,
+     156,
+     161,
+     166,
+     167,
+     169,
+     170,
+     170,
+     170,
+     171,
+     171
+    ],
+    [
+     64,
+     79,
+     112,
+     131,
+     133,
+     139,
+     145,
+     149,
+     153,
+     154,
+     155,
+     157,
+     157,
+     157,
+     157
+    ],
+    [
+     63,
+     92,
+     115,
+     128,
+     136,
+     139,
+     144,
+     148,
+     150,
+     152,
+     153,
+     154,
+     154,
+     154,
+     154
+    ],
+    [
+     70,
+     82,
+     120,
+     134,
+     144,
+     148,
+     153,
+     156,
+     156,
+     158,
+     160,
+     160,
+     160,
+     160,
+     160
+    ]
+   ]
+  }
+ ],
+ "changes": [
+  {
+   "run": "phase5_expansions_visible_student",
+   "reference": "phase5_expansions_visible_student_nothinking",
+   "newly_solved": [
+    "algebra_2varlineareq_xpeeq7_2xpeeq3_eeq11_xeqn4",
+    "algebra_xmysqpymzsqpzmxsqeqxyz_xpypzp6dvdx3y3z3",
+    "amc12a_2003_p24",
+    "amc12a_2016_p2",
+    "amc12b_2003_p6",
+    "imo_1964_p1_2",
+    "imo_1984_p2",
+    "mathd_algebra_149",
+    "mathd_algebra_151",
+    "mathd_algebra_185",
+    "mathd_algebra_323",
+    "mathd_algebra_405",
+    "mathd_algebra_422",
+    "mathd_algebra_480",
+    "mathd_algebra_509",
+    "mathd_algebra_69",
+    "mathd_algebra_89",
+    "mathd_numbertheory_156"
+   ],
+   "lost": [
+    "aime_1991_p1",
+    "amc12a_2016_p3",
+    "imo_1974_p5",
+    "induction_seq_mul2pnp1"
+   ]
+  },
+  {
+   "run": "phase5_expansions_visible_student",
+   "reference": "phase5_expansions_student_4b_light_nothinking",
+   "newly_solved": [
+    "algebra_2varlineareq_xpeeq7_2xpeeq3_eeq11_xeqn4",
+    "algebra_amgm_faxinrrp2msqrt2geq2mxm1div2x",
+    "algebra_xmysqpymzsqpzmxsqeqxyz_xpypzp6dvdx3y3z3",
+    "amc12a_2003_p24",
+    "amc12a_2016_p2",
+    "amc12b_2002_p6",
+    "imo_1964_p1_2",
+    "mathd_algebra_149",
+    "mathd_algebra_151",
+    "mathd_algebra_185",
+    "mathd_algebra_267",
+    "mathd_algebra_323",
+    "mathd_algebra_405",
+    "mathd_algebra_422",
+    "mathd_algebra_509",
+    "mathd_algebra_69",
+    "mathd_algebra_89",
+    "mathd_numbertheory_156",
+    "numbertheory_prmdvsneqnsqmodpeq0"
+   ],
+   "lost": [
+    "aime_1991_p1",
+    "induction_seq_mul2pnp1"
+   ]
+  },
+  {
+   "run": "phase5_expansions_student_4b_light_thinking",
+   "reference": "phase5_expansions_visible_student_nothinking",
+   "newly_solved": [
+    "algebra_2varlineareq_xpeeq7_2xpeeq3_eeq11_xeqn4",
+    "amc12b_2003_p6",
+    "imo_1964_p1_2",
+    "mathd_algebra_149",
+    "mathd_algebra_185",
+    "mathd_algebra_323",
+    "mathd_algebra_480",
+    "mathd_algebra_509",
+    "mathd_algebra_69",
+    "mathd_algebra_89"
+   ],
+   "lost": [
+    "aime_1991_p1",
+    "algebra_amgm_sumasqdivbsqgeqsumbdiva",
+    "imo_1974_p5",
+    "mathd_algebra_433",
+    "mathd_algebra_536",
+    "numbertheory_nckeqnm1ckpnm1ckm1",
+    "numbertheory_prmdvsneqnsqmodpeq0"
+   ]
+  },
+  {
+   "run": "phase5_expansions_student_4b_light_thinking",
+   "reference": "phase5_expansions_student_4b_light_nothinking",
+   "newly_solved": [
+    "algebra_2varlineareq_xpeeq7_2xpeeq3_eeq11_xeqn4",
+    "algebra_amgm_faxinrrp2msqrt2geq2mxm1div2x",
+    "amc12a_2016_p3",
+    "amc12b_2002_p6",
+    "imo_1964_p1_2",
+    "mathd_algebra_149",
+    "mathd_algebra_185",
+    "mathd_algebra_267",
+    "mathd_algebra_323",
+    "mathd_algebra_509",
+    "mathd_algebra_69",
+    "mathd_algebra_89"
+   ],
+   "lost": [
+    "aime_1991_p1",
+    "algebra_amgm_sumasqdivbsqgeqsumbdiva",
+    "imo_1984_p2",
+    "mathd_algebra_433",
+    "mathd_algebra_536",
+    "numbertheory_nckeqnm1ckpnm1ckm1"
+   ]
+  }
+ ],
+ "calibrations": [
+  {
+   "run": "phase5_expansions_visible_student",
+   "nodes_with_estimates": 14230,
+   "by_label": [
+    {
+     "label": "exact 1",
+     "nodes": 171,
+     "mean_h": 2.2830520658613405,
+     "p10_h": 1.233524005122269,
+     "median_h": 1.828778384855566,
+     "p90_h": 3.430290980622726
+    },
+    {
+     "label": "exact 2",
+     "nodes": 48,
+     "mean_h": 2.903124432067694,
+     "p10_h": 1.4191990869797642,
+     "median_h": 2.298406716044094,
+     "p90_h": 5.596152055335909
+    },
+    {
+     "label": "exact 3",
+     "nodes": 30,
+     "mean_h": 2.9677996069163877,
+     "p10_h": 1.7082702982991795,
+     "median_h": 2.2024685043658723,
+     "p90_h": 6.769269266690199
+    },
+    {
+     "label": "exact 4",
+     "nodes": 18,
+     "mean_h": 3.3377577831780942,
+     "p10_h": 1.4657389640532783,
+     "median_h": 2.869810725613163,
+     "p90_h": 5.939496402183727
+    },
+    {
+     "label": "exact 5",
+     "nodes": 7,
+     "mean_h": 2.7916102621895873,
+     "p10_h": 1.3276772684359157,
+     "median_h": 2.5603766863758404,
+     "p90_h": 5.292140041072489
+    },
+    {
+     "label": "exact 6",
+     "nodes": 7,
+     "mean_h": 2.293201590101559,
+     "p10_h": 1.35747214317174,
+     "median_h": 2.5105981750853914,
+     "p90_h": 3.340252491574058
+    },
+    {
+     "label": "exact 7",
+     "nodes": 5,
+     "mean_h": 2.2716314345722246,
+     "p10_h": 1.311868984264748,
+     "median_h": 2.180603115079601,
+     "p90_h": 3.5766845846899415
+    },
+    {
+     "label": "exact 8+",
+     "nodes": 11,
+     "mean_h": 2.227637499108732,
+     "p10_h": 2.109352819223276,
+     "median_h": 2.215211890053138,
+     "p90_h": 2.6544190301842736
+    },
+    {
+     "label": "dead",
+     "nodes": 488,
+     "mean_h": 1.9072519062059907,
+     "p10_h": 1.2707067182140515,
+     "median_h": 1.677010360842201,
+     "p90_h": 2.825331977588802
+    },
+    {
+     "label": "at least 2+",
+     "nodes": 4030,
+     "mean_h": 1.887630625318172,
+     "p10_h": 1.336059285881623,
+     "median_h": 1.750306108676121,
+     "p90_h": 2.485724259406979
+    },
+    {
+     "label": "at least 1 (open)",
+     "nodes": 9415,
+     "mean_h": 2.3307494594311233,
+     "p10_h": 1.4450401146307656,
+     "median_h": 2.0628462347162264,
+     "p90_h": 3.3777965043655427
+    }
+   ],
+   "spearman_exact": 0.237632713628726,
+   "dead_auc": 0.3697149086493349,
+   "mean_root_h_solved": 2.948895683514759,
+   "mean_root_h_unsolved": 4.408159243578839
+  },
+  {
+   "run": "phase5_expansions_visible_student_nothinking",
+   "nodes_with_estimates": 18328,
+   "by_label": [
+    {
+     "label": "exact 1",
+     "nodes": 157,
+     "mean_h": 1.755049876740014,
+     "p10_h": 1.2209093871200498,
+     "median_h": 1.5278683812610943,
+     "p90_h": 2.5322677120115427
+    },
+    {
+     "label": "exact 2",
+     "nodes": 65,
+     "mean_h": 2.588979686899208,
+     "p10_h": 1.511470883575536,
+     "median_h": 2.2024685043658723,
+     "p90_h": 3.9819897334803063
+    },
+    {
+     "label": "exact 3",
+     "nodes": 48,
+     "mean_h": 2.9886897735744316,
+     "p10_h": 1.4607426039738143,
+     "median_h": 2.4063811081697,
+     "p90_h": 5.713079012945785
+    },
+    {
+     "label": "exact 4",
+     "nodes": 32,
+     "mean_h": 2.5094090743016535,
+     "p10_h": 1.384623347057969,
+     "median_h": 2.1735954065179457,
+     "p90_h": 4.005186576139001
+    },
+    {
+     "label": "exact 5",
+     "nodes": 22,
+     "mean_h": 3.0807152943461507,
+     "p10_h": 1.63090316243407,
+     "median_h": 2.3676358908206785,
+     "p90_h": 6.939655949440744
+    },
+    {
+     "label": "exact 6",
+     "nodes": 20,
+     "mean_h": 2.974540678709902,
+     "p10_h": 1.8806162415518966,
+     "median_h": 2.3335376185381955,
+     "p90_h": 6.177486225961927
+    },
+    {
+     "label": "exact 7",
+     "nodes": 16,
+     "mean_h": 3.273982297290308,
+     "p10_h": 1.6915827772341356,
+     "median_h": 2.1859203193101093,
+     "p90_h": 6.832667043353532
+    },
+    {
+     "label": "exact 8+",
+     "nodes": 7,
+     "mean_h": 5.850280595530371,
+     "p10_h": 2.201434192789159,
+     "median_h": 5.11640059347108,
+     "p90_h": 11.007128573955336
+    },
+    {
+     "label": "dead",
+     "nodes": 532,
+     "mean_h": 1.7211414351885828,
+     "p10_h": 1.2585267257987398,
+     "median_h": 1.573493899763669,
+     "p90_h": 2.2944170130096797
+    },
+    {
+     "label": "at least 2+",
+     "nodes": 4976,
+     "mean_h": 1.921644684622971,
+     "p10_h": 1.3691662392009256,
+     "median_h": 1.7843711941623952,
+     "p90_h": 2.5585793668635137
+    },
+    {
+     "label": "at least 1 (open)",
+     "nodes": 12453,
+     "mean_h": 2.393754262441988,
+     "p10_h": 1.4866593604899438,
+     "median_h": 2.0875214178690737,
+     "p90_h": 3.541580948225647
+    }
+   ],
+   "spearman_exact": 0.4639271174040487,
+   "dead_auc": 0.3411218782651452,
+   "mean_root_h_solved": 2.8816387299148793,
+   "mean_root_h_unsolved": 4.294768134785504
+  },
+  {
+   "run": "phase5_expansions_student_4b_light_nothinking",
+   "nodes_with_estimates": 22581,
+   "by_label": [
+    {
+     "label": "exact 1",
+     "nodes": 154,
+     "mean_h": 1.6937896183866838,
+     "p10_h": 1.208538125905442,
+     "median_h": 1.4617050421435573,
+     "p90_h": 2.4489793968056355
+    },
+    {
+     "label": "exact 2",
+     "nodes": 70,
+     "mean_h": 2.47041156893615,
+     "p10_h": 1.4212721586099601,
+     "median_h": 2.113243384536342,
+     "p90_h": 3.7713889254515927
+    },
+    {
+     "label": "exact 3",
+     "nodes": 46,
+     "mean_h": 2.4411500082652497,
+     "p10_h": 1.300792192970115,
+     "median_h": 2.067094646171941,
+     "p90_h": 3.6607384274717067
+    },
+    {
+     "label": "exact 4",
+     "nodes": 33,
+     "mean_h": 2.9388606835179933,
+     "p10_h": 1.6211669207567239,
+     "median_h": 2.4332605737144233,
+     "p90_h": 5.002153522041534
+    },
+    {
+     "label": "exact 5",
+     "nodes": 19,
+     "mean_h": 3.184688596743709,
+     "p10_h": 1.597145781494449,
+     "median_h": 3.0299685196628423,
+     "p90_h": 6.324022642572715
+    },
+    {
+     "label": "exact 6",
+     "nodes": 11,
+     "mean_h": 5.000790978537851,
+     "p10_h": 2.145515007578322,
+     "median_h": 3.86128164050367,
+     "p90_h": 8.536219557659152
+    },
+    {
+     "label": "exact 7",
+     "nodes": 4,
+     "mean_h": 4.525549633938621,
+     "p10_h": 2.267463883887092,
+     "median_h": 5.11640059347108,
+     "p90_h": 7.843450170587728
+    },
+    {
+     "label": "exact 8+",
+     "nodes": 1,
+     "mean_h": 10.97078143973869,
+     "p10_h": 10.97078143973869,
+     "median_h": 10.97078143973869,
+     "p90_h": 10.97078143973869
+    },
+    {
+     "label": "dead",
+     "nodes": 368,
+     "mean_h": 1.708196514323367,
+     "p10_h": 1.2476009664392036,
+     "median_h": 1.552652501104298,
+     "p90_h": 2.3314668517954877
+    },
+    {
+     "label": "at least 2+",
+     "nodes": 5338,
+     "mean_h": 1.8922704509226869,
+     "p10_h": 1.3412640954775596,
+     "median_h": 1.7285959125061958,
+     "p90_h": 2.5553174023486864
+    },
+    {
+     "label": "at least 1 (open)",
+     "nodes": 16537,
+     "mean_h": 2.3618242618162255,
+     "p10_h": 1.4391553729675755,
+     "median_h": 2.06223445036445,
+     "p90_h": 3.5122232055918055
+    }
+   ],
+   "spearman_exact": 0.5429376784422363,
+   "dead_auc": 0.370361139696424,
+   "mean_root_h_solved": 2.7842097161079753,
+   "mean_root_h_unsolved": 4.409236371806763
+  },
+  {
+   "run": "phase5_expansions_student_4b_light_thinking",
+   "nodes_with_estimates": 11486,
+   "by_label": [
+    {
+     "label": "exact 1",
+     "nodes": 160,
+     "mean_h": 2.288835805782356,
+     "p10_h": 1.22629436610885,
+     "median_h": 1.8963240535872066,
+     "p90_h": 3.743308293321385
+    },
+    {
+     "label": "exact 2",
+     "nodes": 41,
+     "mean_h": 2.7469866308535917,
+     "p10_h": 1.4550151157461895,
+     "median_h": 2.046942090103603,
+     "p90_h": 5.596152055335909
+    },
+    {
+     "label": "exact 3",
+     "nodes": 29,
+     "mean_h": 2.5169089898762924,
+     "p10_h": 1.3550165368361742,
+     "median_h": 2.1184684682836448,
+     "p90_h": 5.105224802435863
+    },
+    {
+     "label": "exact 4",
+     "nodes": 16,
+     "mean_h": 2.5637502943851014,
+     "p10_h": 1.5175720186472406,
+     "median_h": 2.1865115895550984,
+     "p90_h": 4.518596748657017
+    },
+    {
+     "label": "exact 5",
+     "nodes": 13,
+     "mean_h": 2.3511916513727558,
+     "p10_h": 1.553234024490114,
+     "median_h": 2.132357459441818,
+     "p90_h": 3.0774431754218736
+    },
+    {
+     "label": "exact 6",
+     "nodes": 17,
+     "mean_h": 2.321623422239338,
+     "p10_h": 1.509356710366539,
+     "median_h": 2.215409530805752,
+     "p90_h": 3.161716750065792
+    },
+    {
+     "label": "exact 7",
+     "nodes": 7,
+     "mean_h": 3.4906468132693953,
+     "p10_h": 1.8827028237953625,
+     "median_h": 2.869810725613163,
+     "p90_h": 6.769269266690199
+    },
+    {
+     "label": "exact 8+",
+     "nodes": 6,
+     "mean_h": 4.6440671900736055,
+     "p10_h": 2.5305029737413136,
+     "median_h": 3.188624778035168,
+     "p90_h": 8.715312707333824
+    },
+    {
+     "label": "dead",
+     "nodes": 369,
+     "mean_h": 1.9126087051033889,
+     "p10_h": 1.3197632624921907,
+     "median_h": 1.7136450416247917,
+     "p90_h": 2.6027815665025824
+    },
+    {
+     "label": "at least 2+",
+     "nodes": 3241,
+     "mean_h": 1.9442554373598164,
+     "p10_h": 1.3536672269096055,
+     "median_h": 1.7704823677831896,
+     "p90_h": 2.6733425215775832
+    },
+    {
+     "label": "at least 1 (open)",
+     "nodes": 7587,
+     "mean_h": 2.361467359464366,
+     "p10_h": 1.4024350667744625,
+     "median_h": 2.1030001421575393,
+     "p90_h": 3.4806548582618477
+    }
+   ],
+   "spearman_exact": 0.21863557066065592,
+   "dead_auc": 0.385686555827496,
+   "mean_root_h_solved": 2.898164772147453,
+   "mean_root_h_unsolved": 4.314581646777298
+  }
+ ]
+}
