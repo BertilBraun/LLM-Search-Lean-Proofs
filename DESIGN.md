@@ -241,6 +241,15 @@ per-theorem logs, datasets and checkpoints stay on the node.
   thoughts): **thinking 160 vs non-thinking 154** on miniF2F-valid. Per expansion thinking is the stronger policy;
   per token non-thinking remains cheaper. The loop runs the 4B student in thinking mode with forced answers.
 
+- **Visible-reasoning series** (2026-10-14/15): the policy writes a short visible explanation, then the Lean block
+  (no think block). Probe: round-2 student 37.5% per sample / 64.5% any@8 / 408 tokens per success in visible mode
+  vs 36.0% / 59.8% / 925 thinking; plain Lean SFT destroys the visible mode (6.9%). 9B teacher in visible mode:
+  26.1% / 43.4% on 6,143 unseen states, median explanation 95 tokens, 4,677 examples. Gentle 4B SFT (Lean +
+  18% general math worked solutions) keeps Lean validation loss (0.221 vs 0.218) and the visible mode (self-
+  generation 22.6% / 43.7% on 10,240 states). Student: 11,727 visible-reasoning examples, 70 / 15 Lean replay /
+  15 math. **Equal-expansion search on miniF2F-valid (n = 16, 64 expansions): 171/244 (70.1%)** vs 160 thinking,
+  154 non-thinking; 124 solved after one expansion; 94k tokens per theorem (thinking 114k).
+
 ## Known issues (backlog)
 - Resolved: search generation cost is charged per batch (`CandidateBatch`), when the expander yields it. Runs before
   the fix did not charge requests whose samples all failed to parse (in `PolicyStatistics.unattributed_generated_tokens`
