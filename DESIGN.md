@@ -250,6 +250,13 @@ per-theorem logs, datasets and checkpoints stay on the node.
   15 math. **Equal-expansion search on miniF2F-valid (n = 16, 64 expansions): 171/244 (70.1%)** vs 160 thinking,
   154 non-thinking; 124 solved after one expansion; 94k tokens per theorem (thinking 114k).
 
+- **MATH collapse after the gentle SFT** (`results/phase2_sft_4b_gentle/README.md`): visible-mode MATH-500
+  (forced) fell to 47.0% (gentle SFT) and 52.0% (visible student) from 84–87%, with answers ~4× shorter. Cause:
+  MATH-train reference solutions are terse (median 162 tokens vs the base model's own 860), and they were trained
+  under the exact evaluation prompt. The student's think block now just answers. Fix in progress: gentle SFT v2
+  with the base model's own full-length, answer-checked solutions plus some thinking-mode examples, then a
+  student v2, and a control search of the visible student without explanations.
+
 ## Known issues (backlog)
 - Resolved: search generation cost is charged per batch (`CandidateBatch`), when the expander yields it. Runs before
   the fix did not charge requests whose samples all failed to parse (in `PolicyStatistics.unattributed_generated_tokens`
