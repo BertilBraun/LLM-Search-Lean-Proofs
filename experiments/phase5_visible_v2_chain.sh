@@ -50,11 +50,13 @@ until [[ -f "${runs}/phase2_sft_4b_gentle_v2/DONE" && -f "${checkpoints}/phase2_
 done
 log "gentle SFT v2 done"
 
-data select --config ${configs}/phase5_data_visible_student_v2.toml --name visible_student_v2 \
-    > "${runs}/phase5_visible_v2/select.txt" 2>&1
-status=$?
-log "data selection exit ${status}"
-(( status == 0 )) || exit 1
+if [[ ! -f "${LEAN_SEARCH_DATA}/reasoning/visible_student_v2/train.jsonl" ]]; then
+    data select --config ${configs}/phase5_data_visible_student_v2.toml --name visible_student_v2 \
+        > "${runs}/phase5_visible_v2/select.txt" 2>&1
+    status=$?
+    log "data selection exit ${status}"
+    (( status == 0 )) || exit 1
+fi
 
 until gpus_stay_free; do sleep 60; done
 mkdir -p "${runs}/${student}"
