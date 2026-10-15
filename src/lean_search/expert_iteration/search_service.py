@@ -27,6 +27,7 @@ from lean_search.corpora.records import StatementRecord, read_statement_records
 from lean_search.expert_iteration.curriculum import Curriculum, CurriculumCounts, CurriculumState
 from lean_search.expert_iteration.known_proofs import read_index, read_verified
 from lean_search.expert_iteration.loop_config import LoopConfig, SearchStage
+from lean_search.expert_iteration.loop_evaluation import reasoning_settings
 from lean_search.expert_iteration.loop_search import (
     GatedExpander,
     GatedValueEstimator,
@@ -162,9 +163,7 @@ def served_run_config(template: RunConfig, config: LoopConfig) -> RunConfig:
         server_urls=tuple(server.url for server in serving.policy_servers),
     )
     if thinking.enabled:
-        policy = dataclasses.replace(
-            policy, thinking=True, max_tokens=thinking.max_tokens, thinking_instruction=thinking.instruction
-        )
+        policy = dataclasses.replace(policy, max_tokens=thinking.max_tokens, **reasoning_settings(thinking))
     value = (
         dataclasses.replace(
             template.value,
@@ -425,7 +424,7 @@ class SearchService:
         if config.expander.kind.uses_policy:
             opened = await stack.enter_async_context(open_policy_expander(config.policy, config.search.forbidden_steps))
             self.policy_statistics = opened.statistics
-            inner: Expander = ReasoningExpander(opened, self.reasoning_log) if config.policy.thinking else opened
+            inner: Expander = ReasoningExpander(opened, self.reasoning_log) if config.policy.reasons else opened
             policy = GatedExpander(inner, self.gate)
         value_estimator = None
         root_values = None

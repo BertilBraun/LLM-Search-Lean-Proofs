@@ -172,6 +172,24 @@ def test_a_chosen_only_item_tokenizes_without_a_rejected_completion() -> None:
     assert tokenize_pair(CharacterTokenizer(), pair(rejected=None)).rejected is None
 
 
+def visible_pair() -> PreferencePair:
+    return PreferencePair(
+        "expert_iteration", "round_0/p", 0, GOALS, "simp", "exact foo", "error", "Both sides agree.", "Try foo."
+    )
+
+
+def test_a_visible_pair_renders_its_explanation_before_the_block() -> None:
+    tokenized = tokenize_pair(CharacterTokenizer(), visible_pair(), visible=True)
+    completion = "".join(chr(token) for token in tokenized.chosen.input_ids[tokenized.chosen.prompt_token_count :])
+    assert completion.startswith("Both sides agree.\n\n```lean\nsimp")
+
+
+def test_a_visible_pair_renders_without_thinking() -> None:
+    tokenized = tokenize_pair(CharacterTokenizer(), visible_pair(), visible=True)
+    prompt = "".join(chr(token) for token in tokenized.chosen.input_ids[: tokenized.chosen.prompt_token_count])
+    assert "briefly explain" in prompt
+
+
 def test_a_chosen_only_item_differs_from_a_pair_in_deduplication() -> None:
     assert len(deduplicate_pairs([pair(), pair(rejected=None)])) == 2
 

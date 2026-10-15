@@ -79,6 +79,21 @@ def test_a_thinking_loop_samples_in_thinking_mode() -> None:
     )
 
 
+def test_a_visible_reasoning_loop_samples_visibly_without_thinking() -> None:
+    servers = (ServerEndpoint("p", 0, "http://p/v1"), ServerEndpoint("v", 0, "http://v/v1"))
+    thinking = ThinkingConfig(enabled=True, visible=True, max_tokens=1024)
+    config = LoopConfig(
+        "loop",
+        InitialModels("/p", "/v"),
+        ServingConfig("base", "base", servers[:1], servers[1:]),
+        SearchServiceConfig("search.toml", thinking=thinking),
+        TrainingConfig(),
+        EvaluationLoopConfig("evaluation.toml"),
+    )
+    policy = served_run_config(RunConfig(), config).policy
+    assert (policy.visible_reasoning, policy.thinking, policy.few_shot, policy.max_tokens) == (True, False, False, 1024)
+
+
 def test_statements_started_by_earlier_loops_are_collected(tmp_path: Path) -> None:
     paths = LoopPaths(tmp_path, tmp_path, "loop")
     write_shard(LoopPaths(tmp_path, tmp_path, "earlier").shards, 0, ["a.1", "a.2"], solved={"a.1"})

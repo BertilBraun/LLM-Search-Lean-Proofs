@@ -7,7 +7,7 @@ from lean_search.lean import LeanRepl, ProofState
 from lean_search.policy.client import Generation, Sample
 from lean_search.policy.config import PolicyConfig
 from lean_search.policy.expander import PolicyExpander
-from lean_search.policy.prompts import THINK_END
+from lean_search.policy.prompts import FENCE, THINK_END
 from lean_search.search import CandidateBatch, SearchContext, SearchTree
 
 CUT_OFF_THOUGHTS = "The goal is linear, so I will try"
@@ -41,11 +41,13 @@ class PlainTemplate:
         return [0] * len(text.split())
 
 
-async def expand(config: PolicyConfig) -> tuple[list[CandidateBatch], ReasoningLog, PolicyExpander]:
+async def expand(
+    config: PolicyConfig, samples: tuple[Sample, ...] = (FINISHED, CUT_OFF)
+) -> tuple[list[CandidateBatch], ReasoningLog, PolicyExpander]:
     state = ProofState("", "theorem t : True := by\n", (), ("⊢ True",), 0, 0)
     tree = SearchTree("t", state, 0.0)
     context = SearchContext(Problem("t", Split.VALID, "", state.statement, "", ""), tree, LeanRepl())
-    inner = PolicyExpander(config, PlainTemplate(), [ScriptedClient([FINISHED, CUT_OFF])], max_model_length=4096)
+    inner = PolicyExpander(config, PlainTemplate(), [ScriptedClient(list(samples))], max_model_length=4096)
     log = ReasoningLog()
     batches = [batch async for batch in ReasoningExpander(inner, log).expand(tree.root, context)]
     return batches, log, inner
@@ -71,6 +73,25 @@ async def test_a_forced_block_keeps_its_cut_off_reasoning() -> None:
 async def test_forcing_is_counted_in_the_policy_statistics() -> None:
     _, _, inner = await expand(THINKING)
     assert (inner.statistics.forced_samples, inner.statistics.forced_blocks) == (1, 1)
+
+
+VISIBLE = PolicyConfig(model="policy", visible_reasoning=True, few_shot=False, sample_count=2, max_tokens=40)
+EXPLAINED = Sample(f"Both sides are equal.\n\n{FENCE}lean\nsimp\n{FENCE}", -2.0, 12, "stop")
+CUT_OFF_EXPLANATION = Sample("The goal is linear, so", -20.0, 40, "length")
+
+
+async def test_a_visible_block_keeps_its_explanation() -> None:
+    _, log, _ = await expand(VISIBLE, (EXPLAINED, CUT_OFF_EXPLANATION))
+    reasoning = {entry.step: entry.reasoning for entry in log.take("t")}
+    assert reasoning["simp"] == "Both sides are equal."
+
+
+async def test_a_cut_off_explanation_still_gives_a_forced_candidate() -> None:
+    (batch,), _, _ = await expand(VISIBLE, (EXPLAINED, CUT_OFF_EXPLANATION))
+    assert sorted((candidate.text, candidate.forced) for candidate in batch.candidates) == [
+        ("linarith", True),
+        ("simp", False),
+    ]
 
 
 async def test_without_forcing_a_cut_off_thought_gives_nothing() -> None:

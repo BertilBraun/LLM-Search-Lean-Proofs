@@ -19,7 +19,7 @@ from lean_search.search.records import from_json_object
 REPOSITORY_DIRECTORY = Path(__file__).resolve().parents[2]
 CONFIG_DIRECTORY = REPOSITORY_DIRECTORY / "experiments" / "configs" / "expert_iteration"
 ROUND_CONFIGS = sorted(path for path in CONFIG_DIRECTORY.glob("*.toml") if re.fullmatch(r"round_\d+\.toml", path.name))
-LOOP_CONFIGS = [CONFIG_DIRECTORY / "loop.toml", CONFIG_DIRECTORY / "loop_4b.toml"]
+LOOP_CONFIGS = [CONFIG_DIRECTORY / name for name in ("loop.toml", "loop_4b.toml", "loop_visible.toml")]
 
 
 def test_the_pool_config_loads() -> None:

@@ -1,22 +1,26 @@
-"""The policy expander in thinking mode, keeping the reasoning behind each block for training (thinking.py)."""
+"""The policy expander with reasoning (thinking or visible), keeping the reasoning behind each block for training."""
 
 from collections.abc import Sequence
 
 from lean_search.expert_iteration.thinking import StepReasoning
 from lean_search.policy.client import Sample
-from lean_search.policy.expander import MINIMUM_GENERATED_TOKENS, PolicyExpander, candidate_batch
-from lean_search.policy.prompts import parse_sample, parse_samples, render_prompt
-from lean_search.reasoning.thinking import reasoning_text
+from lean_search.policy.expander import PolicyExpander, candidate_batch
+from lean_search.policy.prompts import parse_sample
+from lean_search.reasoning.thinking import sample_reasoning
 from lean_search.search import CandidateBatches, Node, SearchContext
 
 
-def most_likely_reasoning(samples: Sequence[Sample], sample_blocks: Sequence[str | None]) -> dict[str, str]:
-    """Per block, the reasoning of the most likely sample that wrote it."""
+def most_likely_reasoning(
+    samples: Sequence[Sample], sample_blocks: Sequence[str | None], *, visible: bool = False
+) -> dict[str, str]:
+    """Per block, the reasoning (thoughts, or the visible explanation) of the most likely sample that wrote it."""
     best: dict[str, Sample] = {}
     for sample, block in zip(samples, sample_blocks, strict=True):
         if block is not None and (block not in best or sample.cumulative_logprob > best[block].cumulative_logprob):
             best[block] = sample
-    return {block: reasoning_text(sample.text) for block, sample in best.items()}
+    return {
+        block: sample_reasoning(sample.text, thinking=not visible, visible=visible) for block, sample in best.items()
+    }
 
 
 class ReasoningLog:
@@ -34,7 +38,7 @@ class ReasoningLog:
 
 
 class ReasoningExpander:
-    """PolicyExpander.expand that also logs each block's reasoning; belongs in the policy expander once it keeps it."""
+    """PolicyExpander.expand (forced answers included) that also logs each block's reasoning."""
 
     def __init__(self, inner: PolicyExpander, log: ReasoningLog) -> None:
         self.inner = inner
@@ -42,36 +46,21 @@ class ReasoningExpander:
 
     async def expand(self, node: Node, context: SearchContext) -> CandidateBatches:
         inner = self.inner
-        config = inner.config
-        lemmas = await inner.lemma_provider.lemma_lines(node.state, context.repl) if inner.lemma_provider else ()
-        prompt = render_prompt(
-            inner.tokenizer,
-            node.goals,
-            lemmas,
-            few_shot=config.few_shot,
-            thinking=config.thinking,
-            thinking_instruction=config.thinking_instruction,
-        )
-        prompt_tokens = len(inner.tokenizer.encode(prompt, add_special_tokens=False))
-        max_tokens = min(config.max_tokens, inner.max_model_length - prompt_tokens)
-        if max_tokens < MINIMUM_GENERATED_TOKENS:
-            inner.statistics.prompts_too_long += 1
+        sampled = await inner.sample(node, context)
+        if sampled is None:
             return
-        generation, seconds = await inner._generate(prompt, max_tokens)
-        # Samples cut off inside their thoughts get them closed and their block forced (budget forcing).
-        samples, forced, forcing_seconds = await inner.force_answers(prompt, prompt_tokens, generation.samples)
-        parsed = parse_samples(
-            samples,
-            thinking=config.thinking,
-            forbidden_tokens=inner.forbidden_tokens,
-            forced_indices=forced.sample_indices,
-        )
-        inner.statistics.record(generation, parsed, seconds + forcing_seconds, forced)
+        thinking, visible = inner.config.thinking, inner.config.visible_reasoning
         sample_blocks = [
             block
-            if isinstance(block := parse_sample(sample, thinking=True, forbidden_tokens=inner.forbidden_tokens), str)
+            if isinstance(
+                block := parse_sample(
+                    sample, thinking=thinking, forbidden_tokens=inner.forbidden_tokens, visible=visible
+                ),
+                str,
+            )
             else None
-            for sample in samples
+            for sample in sampled.samples
         ]
-        self.log.add(context.problem.name, node.node_id, most_likely_reasoning(samples, sample_blocks))
-        yield candidate_batch(parsed, generation, forced)
+        reasoning = most_likely_reasoning(sampled.samples, sample_blocks, visible=visible)
+        self.log.add(context.problem.name, node.node_id, reasoning)
+        yield candidate_batch(sampled.parsed, sampled.generation, sampled.forced)

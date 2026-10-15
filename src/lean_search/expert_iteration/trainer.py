@@ -333,11 +333,12 @@ def training_config_text(
 
 
 def policy_settings(thinking: ThinkingConfig) -> Mapping[str, object]:
-    """Thinking pairs render with the search's instruction, and their completions hold the reasoning too."""
+    """Pairs with reasoning render in the search's mode, and their completions hold the reasoning too."""
     if not thinking.enabled:
         return NO_SETTINGS
     return {
-        "thinking_instruction": thinking.instruction,
+        "thinking_instruction": "" if thinking.visible else thinking.instruction,
+        "visible_reasoning": thinking.visible,
         "max_completion_tokens": thinking.max_tokens + THINKING_COMPLETION_MARGIN,
     }
 

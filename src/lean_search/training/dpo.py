@@ -59,6 +59,8 @@ class DpoConfig:
     max_completion_tokens: int = 512
     # The thinking-mode system prompt addition the search used (policy.thinking_instruction), for thinking pairs.
     thinking_instruction: str = ""
+    # Pairs with reasoning render in visible-reasoning format instead (policy.visible_reasoning).
+    visible_reasoning: bool = False
     optimization: OptimizationConfig = field(default_factory=OptimizationConfig)
     evaluation: DpoEvaluationConfig = field(default_factory=DpoEvaluationConfig)
 

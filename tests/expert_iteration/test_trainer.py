@@ -381,8 +381,16 @@ def compressing_trainer(tmp_path: Path, shortener: FirstSentence | None) -> Phas
     ("thinking", "settings"),
     [
         (ThinkingConfig(), {}),
-        (ThinkingConfig(enabled=True, max_tokens=512), {"thinking_instruction": "", "max_completion_tokens": 576}),
+        (
+            ThinkingConfig(enabled=True, max_tokens=512),
+            {"thinking_instruction": "", "visible_reasoning": False, "max_completion_tokens": 576},
+        ),
+        (
+            ThinkingConfig(enabled=True, visible=True, max_tokens=1024),
+            {"thinking_instruction": "", "visible_reasoning": True, "max_completion_tokens": 1088},
+        ),
     ],
+    ids=["off", "thinking", "visible"],
 )
 def test_thinking_pairs_train_with_the_searchs_prompt_and_length(
     thinking: ThinkingConfig, settings: dict[str, object]

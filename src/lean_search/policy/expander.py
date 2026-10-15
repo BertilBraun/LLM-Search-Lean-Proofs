@@ -130,6 +130,15 @@ def candidate_batch(
     )
 
 
+@dataclass(frozen=True)
+class SampledExpansion:
+    generation: Generation
+    # The generation's samples with forced answers in place of the ones cut off before their block.
+    samples: list[Sample]
+    parsed: ParsedSamples
+    forced: ForcedAnswers
+
+
 class PolicyExpander:
     def __init__(
         self,
@@ -150,6 +159,12 @@ class PolicyExpander:
         self._first_request_started: float | None = None
 
     async def expand(self, node: Node, context: SearchContext) -> CandidateBatches:
+        sampled = await self.sample(node, context)
+        if sampled is not None:
+            yield candidate_batch(sampled.parsed, sampled.generation, sampled.forced)
+
+    async def sample(self, node: Node, context: SearchContext) -> SampledExpansion | None:
+        """The node's samples (forced answers in place) and their candidates; None when the prompt is too long."""
         lemmas = await self.lemma_provider.lemma_lines(node.state, context.repl) if self.lemma_provider else ()
         prompt = render_prompt(
             self.tokenizer,
@@ -164,7 +179,7 @@ class PolicyExpander:
         max_tokens = min(self.config.max_tokens, self.max_model_length - prompt_tokens)
         if max_tokens < MINIMUM_GENERATED_TOKENS:
             self.statistics.prompts_too_long += 1
-            return
+            return None
         generation, seconds = await self._generate(prompt, max_tokens)
         samples, forced, forcing_seconds = await self.force_answers(prompt, prompt_tokens, generation.samples)
         parsed = parse_samples(
@@ -175,7 +190,7 @@ class PolicyExpander:
             visible=self.config.visible_reasoning,
         )
         self.statistics.record(generation, parsed, seconds + forcing_seconds, forced)
-        yield candidate_batch(parsed, generation, forced)
+        return SampledExpansion(generation, samples, parsed, forced)
 
     async def force_answers(
         self, prompt: str, prompt_tokens: int, samples: Sequence[Sample]

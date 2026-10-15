@@ -58,12 +58,15 @@ def evaluation_config_text(
         section_table = {key: value for key, value in table[section].items() if key != "adapter"}
         table[section] = section_table | {"model": model, "server_urls": [server.url for server in servers]}
     if thinking.enabled:
-        table["policy"] |= {
-            "thinking": True,
-            "max_tokens": thinking.max_tokens,
-            "thinking_instruction": thinking.instruction,
-        }
+        table["policy"] |= {"max_tokens": thinking.max_tokens, **reasoning_settings(thinking)}
     return toml_text(table)
+
+
+def reasoning_settings(thinking: ThinkingConfig) -> dict[str, object]:
+    """The policy fields of the loop's reasoning mode: thinking, or a visible explanation with thinking off."""
+    if thinking.visible:
+        return {"thinking": False, "visible_reasoning": True, "few_shot": False, "thinking_instruction": ""}
+    return {"thinking": True, "visible_reasoning": False, "thinking_instruction": thinking.instruction}
 
 
 def read_evaluations(path: Path) -> list[EvaluationRecord]:

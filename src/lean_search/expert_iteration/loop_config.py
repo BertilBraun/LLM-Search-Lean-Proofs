@@ -95,7 +95,9 @@ class SchedulerConfig:
 class ThinkingConfig:
     """The policy's mode in the loop's searches and its evaluation, and so in its training pairs."""
 
+    # Reasoning before each step: in thinking mode, or written visibly with thinking off (policy.visible_reasoning).
     enabled: bool = False
+    visible: bool = False
     # Generated tokens per sample, reasoning included (the bootstrap adapter thinks ~234 tokens on average).
     max_tokens: int = 512
     # The thinking-mode system prompt addition the adapter was trained with.
