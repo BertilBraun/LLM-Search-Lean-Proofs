@@ -1,0 +1,25 @@
+# MATH-500 retention of the visible-reasoning student v2 (thinking off, the visible worked solution), the settings of
+# experiments/configs/evaluation/reasoning_retention_nothinking.toml on its fixed problems:
+#   python experiments/reasoning_retention.py \
+#       --config experiments/configs/reasoning/phase5_retention_visible_student_v2_nothinking.toml \
+#       run --gpu <gpu> --port <port> --labels qwen3.5-4b-visible-student-v2-visible   (then `force`, same arguments)
+dataset = "/workspace/data/math500/test.jsonl"
+problem_count = 200
+judged_problem_count = 20
+seed = "reasoning-retention"
+sample_count = 4
+temperature = 0.6
+# Qwen's recommended sampling for thinking mode; temperature is the owner's.
+top_p = 0.95
+max_tokens = 4096
+max_model_length = 8192
+requests_in_flight = 64
+# A literal string: in a basic TOML string the backslash of \boxed would start the escape \b (backspace).
+instruction = 'Please reason step by step, and put your final answer within \boxed{}.'
+
+thinking = false
+
+[[models]]
+label = "qwen3.5-4b-visible-student-v2-visible"
+base = "Qwen/Qwen3.5-4B"
+adapter = "/workspace/checkpoints/phase5_sft_visible_student_v2/adapter"

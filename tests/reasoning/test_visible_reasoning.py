@@ -20,9 +20,12 @@ from lean_search.policy.prompts import (
     visible_explanation,
 )
 from lean_search.reasoning.dataset import (
+    RankedExample,
     ReasoningExample,
     ReasoningOrigin,
     SelectionConfig,
+    capped_short_examples,
+    extra_reasoning,
     math_replay,
     reasoning_example,
     select_samples,
@@ -170,3 +173,33 @@ def test_math_replay_takes_the_requested_count() -> None:
 
 def test_math_replay_is_a_fixed_choice_for_a_seed() -> None:
     assert math_replay(list(reversed(SOLUTIONS)), 7, "seed") == math_replay(SOLUTIONS, 7, "seed")
+
+
+def ranked(run_index: int, tokens: int, number: int) -> RankedExample:
+    example = ReasoningExample(
+        "test", f"test/{run_index}/{number}", 0, GOALS, BLOCK, f"r{number}", "", ReasoningOrigin.SAMPLED, visible=True
+    )
+    return RankedExample(run_index, tokens, example)
+
+
+MIXED = [ranked(0, 90, index) for index in range(6)] + [ranked(1, 20, index) for index in range(10)]
+
+
+def test_short_examples_are_capped_to_their_share() -> None:
+    kept = capped_short_examples(MIXED, 40, 0.25, "seed")
+    assert sum(example.proof_identifier.startswith("test/1/") for example in kept) == 2
+
+
+def test_the_earlier_runs_short_examples_are_kept_first() -> None:
+    examples = [ranked(0, 90, index) for index in range(3)] + [ranked(1, 20, 0), ranked(0, 20, 99)]
+    kept = capped_short_examples(examples, 40, 0.25, "seed")
+    assert [example.proof_identifier for example in kept][-1] == "test/0/99"
+
+
+def test_without_a_threshold_every_example_is_kept() -> None:
+    assert len(capped_short_examples(MIXED, 0, 0.25, "seed")) == len(MIXED)
+
+
+def test_extra_reasoning_skips_replay_examples() -> None:
+    replay = ReasoningExample("test", "test/r", 0, GOALS, BLOCK, None, "", ReasoningOrigin.REPLAY)
+    assert extra_reasoning([replay, MIXED[0].example], 5, "seed") == [MIXED[0].example]

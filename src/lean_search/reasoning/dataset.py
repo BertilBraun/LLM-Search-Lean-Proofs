@@ -2,6 +2,7 @@
 
 import dataclasses
 import json
+import math
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -51,6 +52,14 @@ class ReasoningDataConfig:
     # reasoning example in train (written to math.jsonl next to train.jsonl).
     math_replay_data: str = ""
     math_replay_ratio: float = 0.0
+    # Train reasoning examples with fewer reasoning tokens than this make up at most max_short_share of them; the
+    # earlier runs' are kept first (list a teacher before the policy's own samples).
+    short_reasoning_tokens: int = 0
+    max_short_share: float = 1.0
+    # Reasoning examples of another data set (name under $LEAN_SEARCH_DATA/reasoning, e.g. thinking-format traces so
+    # that a think block keeps working), this many per train reasoning example.
+    extra_reasoning_data: str = ""
+    extra_reasoning_ratio: float = 0.0
 
 
 class ReasoningOrigin(StrEnum):
@@ -145,6 +154,38 @@ def replay_example(example: SftExample) -> ReasoningExample:
 
 def is_validation_proof(proof_identifier: str, fraction: float, seed: str) -> bool:
     return stable_fraction(proof_identifier, f"{seed} validation") < fraction
+
+
+@dataclass(frozen=True)
+class RankedExample:
+    # Position of the example's run in ReasoningDataConfig.runs.
+    run_index: int
+    reasoning_tokens: int
+    example: ReasoningExample
+
+
+def example_key(example: ReasoningExample) -> str:
+    return f"{example.proof_identifier}#{example.step_index}#{example.reasoning}"
+
+
+def capped_short_examples(
+    ranked: Sequence[RankedExample], short_tokens: int, max_share: float, seed: str
+) -> list[ReasoningExample]:
+    """All long examples and at most max_share of the result short ones, earlier runs first."""
+    if not short_tokens or max_share >= 1:
+        return [entry.example for entry in ranked]
+    long = [entry.example for entry in ranked if entry.reasoning_tokens >= short_tokens]
+    short = sorted(
+        (entry for entry in ranked if entry.reasoning_tokens < short_tokens),
+        key=lambda entry: (entry.run_index, stable_fraction(example_key(entry.example), f"{seed} short")),
+    )
+    kept = math.floor(max_share * len(long) / (1 - max_share))
+    return long + [entry.example for entry in short[:kept]]
+
+
+def extra_reasoning(examples: Iterable[ReasoningExample], count: int, seed: str) -> list[ReasoningExample]:
+    reasoning = [example for example in examples if example.reasoning is not None]
+    return sorted(reasoning, key=lambda example: stable_fraction(example_key(example), f"{seed} extra"))[:count]
 
 
 def math_replay(solutions: Iterable[MathSolution], count: int, seed: str) -> list[MathSolution]:

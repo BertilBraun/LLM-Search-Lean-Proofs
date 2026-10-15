@@ -41,9 +41,12 @@ from lean_search.corpora.tracing import stable_fraction
 from lean_search.reasoning.compression import RewriteMode, open_rewriter, open_sufficiency_checker
 from lean_search.reasoning.config import ReasoningRunConfig, load_reasoning_run_config
 from lean_search.reasoning.dataset import (
+    RankedExample,
     ReasoningDataConfig,
     ReasoningExample,
     ReasoningOrigin,
+    capped_short_examples,
+    extra_reasoning,
     interleaved,
     is_validation_proof,
     math_replay,
@@ -152,6 +155,13 @@ class DataSummary:
     train_reasoning_by_origin: tuple[OriginCount, ...]
     # Math worked solutions in math.jsonl.
     train_math_replay: int = 0
+    # Short reasoning examples left out by the share cap, and examples of extra_reasoning_data mixed in.
+    train_short_dropped: int = 0
+    train_extra_reasoning: int = 0
+
+
+def reasoning_token_count(tokenizer: transformers.PreTrainedTokenizerBase, example: ReasoningExample) -> int:
+    return len(tokenizer.encode(example.reasoning or "", add_special_tokens=False))
 
 
 def git_revision() -> str:
@@ -735,14 +745,20 @@ def command_select(arguments: argparse.Namespace) -> None:
     output = DATA_DIRECTORY / "reasoning" / arguments.name
     if output.exists():
         raise ValueError(f"{output} exists; data sets are built once.")
-    records = [record for run in config.runs for record in run_directory(run).read_all_records()]
-    usable = [record for record in records if record.usable]
+    tokenizer = transformers.AutoTokenizer.from_pretrained(config.tokenizer)
+    indexed = [
+        (run_index, record)
+        for run_index, run in enumerate(config.runs)
+        for record in run_directory(run).read_all_records()
+    ]
+    records = [record for _, record in indexed]
+    usable = [(run_index, record) for run_index, record in indexed if record.usable]
     shortened_by_state = shortened_records(config.runs, config.shortening) if config.max_kept_reasoning_tokens else {}
-    train_reasoning: list[ReasoningExample] = []
+    ranked_train: list[RankedExample] = []
     validation_reasoning: list[ReasoningExample] = []
     validation_states = 0
     states_with_examples = 0
-    for record in usable:
+    for run_index, record in usable:
         state = record.sampled.state
         if config.max_kept_reasoning_tokens:
             examples = short_reasoning_examples(
@@ -763,7 +779,19 @@ def command_select(arguments: argparse.Namespace) -> None:
             validation_reasoning += examples
             validation_states += bool(examples)
         else:
-            train_reasoning += examples
+            ranked_train += [
+                RankedExample(run_index, reasoning_token_count(tokenizer, example), example) for example in examples
+            ]
+    train_reasoning = capped_short_examples(
+        ranked_train, config.short_reasoning_tokens, config.max_short_share, config.seed
+    )
+    extra: list[ReasoningExample] = []
+    if config.extra_reasoning_data:
+        extra = extra_reasoning(
+            read_examples(DATA_DIRECTORY / "reasoning" / config.extra_reasoning_data / "train.jsonl"),
+            round(config.extra_reasoning_ratio * len(train_reasoning)),
+            config.seed,
+        )
     replay_directory = DATA_DIRECTORY / "sft" / config.replay_data
     train_replay = replay_examples(
         read_examples(replay_directory / "train.jsonl"), round(config.replay_ratio * len(train_reasoning)), config.seed
@@ -771,7 +799,7 @@ def command_select(arguments: argparse.Namespace) -> None:
     validation_replay = replay_examples(
         read_examples(replay_directory / "validation.jsonl"), config.validation_replay_examples, config.seed
     )
-    write_examples(output / "train.jsonl", interleaved([*train_reasoning, *train_replay], config.seed))
+    write_examples(output / "train.jsonl", interleaved([*train_reasoning, *extra, *train_replay], config.seed))
     math_solutions: list[MathSolution] = []
     if config.math_replay_data:
         math_solutions = math_replay(
@@ -782,7 +810,6 @@ def command_select(arguments: argparse.Namespace) -> None:
         write_records(output / "math.jsonl", math_solutions)
     # The trainer's greedy-generation check reads the first validation examples: those measure the non-thinking mode.
     write_examples(output / "validation.jsonl", [*validation_replay, *validation_reasoning])
-    tokenizer = transformers.AutoTokenizer.from_pretrained(config.tokenizer)
     summary = DataSummary(
         name=arguments.name,
         built=datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds"),
@@ -802,6 +829,8 @@ def command_select(arguments: argparse.Namespace) -> None:
         ),
         train_reasoning_by_origin=origin_counts(train_reasoning),
         train_math_replay=len(math_solutions),
+        train_short_dropped=len(ranked_train) - len(train_reasoning),
+        train_extra_reasoning=len(extra),
     )
     summary_directory = run_directory(arguments.run_name or f"phase5_data_{arguments.name}").summary
     summary_directory.mkdir(parents=True, exist_ok=True)

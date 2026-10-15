@@ -112,3 +112,15 @@ def test_the_equal_expansion_thinking_arm_forces_answers() -> None:
 def test_visible_probes_reason_visibly(path: Path) -> None:
     policy = load_reasoning_run_config(path).policy
     assert (policy.visible_reasoning, policy.thinking, policy.max_tokens) == (True, False, 1024)
+
+
+@pytest.mark.parametrize(
+    ("name", "label"),
+    [
+        ("phase5_retention_visible_student_v2.toml", "qwen3.5-4b-visible-student-v2"),
+        ("phase5_retention_visible_student_v2_nothinking.toml", "qwen3.5-4b-visible-student-v2-visible"),
+    ],
+)
+def test_the_student_retention_configs_name_one_model(name: str, label: str) -> None:
+    config = tomllib.loads((CONFIG_DIRECTORY / name).read_text("utf-8"))
+    assert [model["label"] for model in config["models"]] == [label]
