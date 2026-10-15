@@ -57,6 +57,9 @@ from lean_search.reasoning.dataset import (
     with_thinking_instruction,
     write_examples,
 )
+from lean_search.reasoning.dataset import (
+    read_examples as read_reasoning_examples,
+)
 from lean_search.reasoning.pipeline import (
     ChunkProgress,
     open_executor,
@@ -788,7 +791,7 @@ def command_select(arguments: argparse.Namespace) -> None:
     extra: list[ReasoningExample] = []
     if config.extra_reasoning_data:
         extra = extra_reasoning(
-            read_examples(DATA_DIRECTORY / "reasoning" / config.extra_reasoning_data / "train.jsonl"),
+            read_reasoning_examples(DATA_DIRECTORY / "reasoning" / config.extra_reasoning_data / "train.jsonl"),
             round(config.extra_reasoning_ratio * len(train_reasoning)),
             config.seed,
         )

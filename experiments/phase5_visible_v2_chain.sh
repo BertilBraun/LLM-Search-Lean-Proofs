@@ -52,13 +52,17 @@ log "gentle SFT v2 done"
 
 data select --config ${configs}/phase5_data_visible_student_v2.toml --name visible_student_v2 \
     > "${runs}/phase5_visible_v2/select.txt" 2>&1
-log "data selection exit $?"
+status=$?
+log "data selection exit ${status}"
+(( status == 0 )) || exit 1
 
 until gpus_stay_free; do sleep 60; done
 mkdir -p "${runs}/${student}"
 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True torchrun --nproc-per-node 2 experiments/phase5_reasoning_sft.py \
     --config ${configs}/${student}.toml --run-name ${student} > "${runs}/${student}/log.txt" 2>&1
-log "training exit $?"
+status=$?
+log "training exit ${status}"
+(( status == 0 )) || exit 1
 CUDA_VISIBLE_DEVICES= python experiments/publish_weights.py merge --base-model Qwen/Qwen3.5-4B \
     --adapter "${checkpoints}/${student}/adapter" --output "${merged}" > "${runs}/${student}/merge.txt" 2>&1
 log "merge exit $?"
