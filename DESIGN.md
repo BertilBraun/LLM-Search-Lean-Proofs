@@ -257,6 +257,13 @@ per-theorem logs, datasets and checkpoints stay on the node.
   with the base model's own full-length, answer-checked solutions plus some thinking-mode examples, then a
   student v2, and a control search of the visible student without explanations.
 
+- **MATH collapse fixed; small Lean cost** (`results/phase2_sft_4b_gentle_v2`, `results/phase5_visible_v2`).
+  Gentle SFT v2 (5,354 self-solutions, median 673 tokens, plus 306 thinking-mode ones): MATH-500 visible forced
+  87.5% (base 87.3%), thinking mode alive again. Student v2 from it (visible examples with short ones capped,
+  10% thinking traces, full-length math replay): MATH-500 visible 87.6%, thinking forced 84.5% (base 80.9%), but
+  miniF2F-valid equal-expansion search 166/244 vs 171 for student v1 (2 new, 7 lost; one run each) and 42.1% vs
+  44.6% per sample on the 512 states. Control without explanations (v1): 157/244.
+
 ## Known issues (backlog)
 - Resolved: search generation cost is charged per batch (`CandidateBatch`), when the expander yields it. Runs before
   the fix did not charge requests whose samples all failed to parse (in `PolicyStatistics.unattributed_generated_tokens`

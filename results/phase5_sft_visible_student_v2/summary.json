@@ -1,0 +1,404 @@
+{
+ "run_name": "phase5_sft_visible_student_v2",
+ "started": "2026-10-15T16:35:06+00:00",
+ "git_revision": "131b69ffd84c4d6a99ad7f0aad69103ff1ddffe1",
+ "config": {
+  "model": "Qwen/Qwen3.5-4B",
+  "data": "visible_student_v2",
+  "lora": {
+   "rank": 64,
+   "alpha": 64,
+   "dropout": 0.0
+  },
+  "optimization": {
+   "method": "lora",
+   "learning_rate": 0.0001,
+   "warmup_fraction": 0.03,
+   "minimum_learning_rate_ratio": 0.1,
+   "weight_decay": 0.0,
+   "max_gradient_norm": 1.0,
+   "epochs": 2,
+   "max_steps": 0,
+   "micro_batch_tokens": 16384,
+   "micro_batches_per_step": 2,
+   "length_group_examples": 4096,
+   "gradient_checkpointing": true,
+   "packing": true,
+   "compile_layers": true,
+   "seed": 0
+  },
+  "evaluation": {
+   "interval_steps": 50,
+   "validation_examples": 2000,
+   "micro_batch_tokens": 16384,
+   "generation_examples": 256,
+   "generation_batch_size": 16,
+   "max_new_tokens": 256
+  },
+  "merge": false,
+  "initial_adapter": "/workspace/checkpoints/phase2_sft_4b_gentle_v2/adapter",
+  "math_data": ""
+ },
+ "world_size": 2,
+ "flash_linear_attention": true,
+ "train_examples": 13461,
+ "train_tokens": 5483999,
+ "validation_examples": 850,
+ "tokenization_seconds": 12.151845767861232,
+ "result": {
+  "steps": 170,
+  "examples": 26819,
+  "tokens": 10922076,
+  "padded_tokens": 10922076,
+  "completion_tokens": 5801023,
+  "training_seconds": 2876.869608706329,
+  "tokens_per_second": 3796.5140884196835,
+  "peak_memory_gib": 17.720447063446045,
+  "trainable_parameters": 129859584,
+  "evaluations": [
+   {
+    "step": 0,
+    "validation_loss": 0.4733925400202886,
+    "validation_examples": 850,
+    "teacher_forced_exact_match": 0.12941176470588237,
+    "generation_exact_match": 0.22265625,
+    "generation_examples": 256,
+    "evaluation_seconds": 292.2871609539725,
+    "mismatches": [
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\nhabc : a + b + c = 1\n⊢ 0 ≤\n    ((1 + a) ^ 2 * (c + a) + (1 + b) ^ 2 * (b + c)) * (a + b) + (1 + c) ^ 2 * ((b + c) * (c + a)) -\n      8 * ((b + c) * (c + a) * (a + b))"
+      ],
+      "target": "nlinarith [sq_nonneg (a - b), sq_nonneg (b - c), sq_nonneg (c - a),\n  mul_pos ha hb, mul_pos hb hc, mul_pos hc ha, habc,\n  mul_self_nonneg (a + b + c - 1)]",
+      "generated": "nlinarith [sq_nonneg (a - b), sq_nonneg (b - c), sq_nonneg (c - a),\n  mul_nonneg ha.le hb.le, mul_nonneg hb.le hc.le, mul_nonneg hc.le ha.le,\n  mul_nonneg (sq_nonneg (a - b)) ha.le, mul_nonneg (sq_nonneg (b - c)) hb.le,\n  mul_nonneg (sq_nonneg (c - a)) hc.le, mul_nonneg (sq_nonneg (a - b)) hb.le,\n  mul_nonneg (sq_nonneg (b - c)) hc.le, mul_nonneg (sq_nonneg (c - a)) ha.le]"
+     },
+     {
+      "goals": [
+       "P Q : ℝ × ℝ\nh₁ : P.2 = P.1 ^ 2 - 3 * P.1 + 2\nh₂ : Q.2 = Q.1 ^ 2 - 3 * Q.1 + 2\nh₃ : √((Q.1 - P.1) ^ 2 + (Q.2 - P.2) ^ 2) = 2 * √2\n⊢ ∃ p q, p.1 = P.1 ∧ p.2 = P.2 ∧ q.1 = Q.1 ∧ q.2 = Q.2"
+      ],
+      "target": "refine' ⟨P, Q, _⟩",
+      "generated": "refine' ⟨P, Q, rfl, rfl, rfl, rfl⟩"
+     },
+     {
+      "goals": [
+       "f : ℕ → ℕ\nh₀ : f 0 = 2013\nh₁ : ∀ (x : ℕ), f (x + 1) + f x = 2 ^ x\nh₄ : f 3 + f 2 = 4\nh₅ : f 4 + f 3 = 8\nh₂ : f 1 + f 0 = 1\nh₃ : f 2 + f 1 = 2\n⊢ ↑(f 2013) % 100 = 18 ∧ ↑(f 2014) % 100 = 66"
+      ],
+      "target": "omega",
+      "generated": "have h₆ := h₁ 2013"
+     },
+     {
+      "goals": [
+       "case intro.intro.intro\nc : ℝ\nh : ∀ (m n : ℕ), ∃ x, (↑m * x).sin + (↑n * x).sin ≥ c\nx : ℝ\nhx : (↑0 * x).sin + (↑0 * x).sin ≥ c\ny : ℝ\nhy : (↑0 * y).sin + (↑1 * y).sin ≥ c\nz : ℝ\nhz : (↑1 * z).sin + (↑0 * z).sin ≥ c\n⊢ c ≤ 1"
+      ],
+      "target": "have h₄ := h 1 1",
+      "generated": "simp at hx hy hz"
+     },
+     {
+      "goals": [
+       "case zero\np n : ℕ\nhp : p.Prime\nhk : 0 < 0\nhn : (2 * 0 - 1) * (p - 1) < 2 * 0 * n ∧ 2 * 0 * n < p\n⊢ p ∣ ∑ j ∈ Finset.range (n + 1), n.choose j ^ (2 * 0)",
+       "case succ\np n : ℕ\nhp : p.Prime\nk : ℕ\nhk : 0 < k + 1\nhn : (2 * (k + 1) - 1) * (p - 1) < 2 * (k + 1) * n ∧ 2 * (k + 1) * n < p\n⊢ p ∣ ∑ j ∈ Finset.range (n + 1), n.choose j ^ (2 * (k + 1))"
+      ],
+      "target": "exfalso",
+      "generated": "simp_all [Nat.Prime]"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : a > 0\nhb : b > 0\nhc : c > 0\n⊢ (a ^ 2 + b * c) / (b + c) ^ 2 + (b ^ 2 + c * a) / (c + a) ^ 2 + (c ^ 2 + a * b) / (a + b) ^ 2 ≥ 3 / 2"
+      ],
+      "target": "have h₁ := mul_pos ha hb",
+      "generated": "have h₁ : 0 < b + c := by linarith"
+     },
+     {
+      "goals": [
+       "case intro\nh : ∀ (n : ℕ), n.Prime → ∃ p, p.Prime ∧ p < n ∧ p ∣ n\np : ℕ\nhp : p.Prime ∧ p < 2 ∧ p ∣ 2\n⊢ False"
+      ],
+      "target": "cases' hp with hp₁ hp₂",
+      "generated": "have h₁ := h 2 (by decide)"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : a > 0 ∧ b > 0 ∧ c > 0 ∧ a * b * c = 1\nh₀ : 0 < a * b\nh₁ : 0 < b * c\n⊢ 3 ≤ a * b + b * c + c * a"
+      ],
+      "target": "have h₂ : 0 < c * a := mul_pos ha.2.2.1 ha.1",
+      "generated": "have h₂ : 0 < c * a := by\n  exact mul_pos ha.2.2.1 ha.1"
+     }
+    ]
+   },
+   {
+    "step": 50,
+    "validation_loss": 0.38008200830961136,
+    "validation_examples": 850,
+    "teacher_forced_exact_match": 0.11176470588235295,
+    "generation_exact_match": 0.17578125,
+    "generation_examples": 256,
+    "evaluation_seconds": 328.34884404507466,
+    "mismatches": [
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\nhabc : a + b + c = 1\n⊢ 0 ≤\n    ((1 + a) ^ 2 * (c + a) + (1 + b) ^ 2 * (b + c)) * (a + b) + (1 + c) ^ 2 * ((b + c) * (c + a)) -\n      8 * ((b + c) * (c + a) * (a + b))"
+      ],
+      "target": "nlinarith [sq_nonneg (a - b), sq_nonneg (b - c), sq_nonneg (c - a),\n  mul_pos ha hb, mul_pos hb hc, mul_pos hc ha, habc,\n  mul_self_nonneg (a + b + c - 1)]",
+      "generated": "nlinarith [sq_nonneg (a - b), sq_nonneg (b - c), sq_nonneg (c - a),\n  mul_nonneg ha.le hb.le, mul_nonneg hb.le hc.le, mul_nonneg hc.le ha.le,\n  mul_nonneg (sq_nonneg (a - b)) hc.le, mul_nonneg (sq_nonneg (b - c)) ha.le,\n  mul_nonneg (sq_nonneg (c - a)) hb.le]"
+     },
+     {
+      "goals": [
+       "P Q : ℝ × ℝ\nh₁ : P.2 = P.1 ^ 2 - 3 * P.1 + 2\nh₂ : Q.2 = Q.1 ^ 2 - 3 * Q.1 + 2\nh₃ : √((Q.1 - P.1) ^ 2 + (Q.2 - P.2) ^ 2) = 2 * √2\n⊢ ∃ p q, p.1 = P.1 ∧ p.2 = P.2 ∧ q.1 = Q.1 ∧ q.2 = Q.2"
+      ],
+      "target": "refine' ⟨P, Q, _⟩",
+      "generated": "refine' ⟨P, Q, rfl, rfl, rfl, rfl⟩"
+     },
+     {
+      "goals": [
+       "f : ℕ → ℕ\nh₀ : f 0 = 2013\nh₁ : ∀ (x : ℕ), f (x + 1) + f x = 2 ^ x\nh₄ : f 3 + f 2 = 4\nh₅ : f 4 + f 3 = 8\nh₂ : f 1 + f 0 = 1\nh₃ : f 2 + f 1 = 2\n⊢ ↑(f 2013) % 100 = 18 ∧ ↑(f 2014) % 100 = 66"
+      ],
+      "target": "omega",
+      "generated": "have h₆ := h₁ 0"
+     },
+     {
+      "goals": [
+       "case intro.intro.intro\nc : ℝ\nh : ∀ (m n : ℕ), ∃ x, (↑m * x).sin + (↑n * x).sin ≥ c\nx : ℝ\nhx : (↑0 * x).sin + (↑0 * x).sin ≥ c\ny : ℝ\nhy : (↑0 * y).sin + (↑1 * y).sin ≥ c\nz : ℝ\nhz : (↑1 * z).sin + (↑0 * z).sin ≥ c\n⊢ c ≤ 1"
+      ],
+      "target": "have h₄ := h 1 1",
+      "generated": "have h₁ := h 1 1"
+     },
+     {
+      "goals": [
+       "case zero\np n : ℕ\nhp : p.Prime\nhk : 0 < 0\nhn : (2 * 0 - 1) * (p - 1) < 2 * 0 * n ∧ 2 * 0 * n < p\n⊢ p ∣ ∑ j ∈ Finset.range (n + 1), n.choose j ^ (2 * 0)",
+       "case succ\np n : ℕ\nhp : p.Prime\nk : ℕ\nhk : 0 < k + 1\nhn : (2 * (k + 1) - 1) * (p - 1) < 2 * (k + 1) * n ∧ 2 * (k + 1) * n < p\n⊢ p ∣ ∑ j ∈ Finset.range (n + 1), n.choose j ^ (2 * (k + 1))"
+      ],
+      "target": "exfalso",
+      "generated": "all_goals\n  simp_all [Nat.Prime, Nat.succ_le_iff, Nat.zero_le, Nat.zero_lt_succ, Nat.lt_succ_iff]\n  <;>\n  omega"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : a > 0\nhb : b > 0\nhc : c > 0\n⊢ (a ^ 2 + b * c) / (b + c) ^ 2 + (b ^ 2 + c * a) / (c + a) ^ 2 + (c ^ 2 + a * b) / (a + b) ^ 2 ≥ 3 / 2"
+      ],
+      "target": "have h₁ := mul_pos ha hb",
+      "generated": "have h₁ : 0 < b + c := by linarith"
+     },
+     {
+      "goals": [
+       "case intro\nh : ∀ (n : ℕ), n.Prime → ∃ p, p.Prime ∧ p < n ∧ p ∣ n\np : ℕ\nhp : p.Prime ∧ p < 2 ∧ p ∣ 2\n⊢ False"
+      ],
+      "target": "cases' hp with hp₁ hp₂",
+      "generated": "cases' hp with hp1 hp2"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : a > 0 ∧ b > 0 ∧ c > 0 ∧ a * b * c = 1\nh₀ : 0 < a * b\nh₁ : 0 < b * c\n⊢ 3 ≤ a * b + b * c + c * a"
+      ],
+      "target": "have h₂ : 0 < c * a := mul_pos ha.2.2.1 ha.1",
+      "generated": "have h₂ : 0 < c * a := by nlinarith"
+     }
+    ]
+   },
+   {
+    "step": 100,
+    "validation_loss": 0.3722424573951142,
+    "validation_examples": 850,
+    "teacher_forced_exact_match": 0.11529411764705882,
+    "generation_exact_match": 0.19921875,
+    "generation_examples": 256,
+    "evaluation_seconds": 302.7735991741065,
+    "mismatches": [
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\nhabc : a + b + c = 1\n⊢ 0 ≤\n    ((1 + a) ^ 2 * (c + a) + (1 + b) ^ 2 * (b + c)) * (a + b) + (1 + c) ^ 2 * ((b + c) * (c + a)) -\n      8 * ((b + c) * (c + a) * (a + b))"
+      ],
+      "target": "nlinarith [sq_nonneg (a - b), sq_nonneg (b - c), sq_nonneg (c - a),\n  mul_pos ha hb, mul_pos hb hc, mul_pos hc ha, habc,\n  mul_self_nonneg (a + b + c - 1)]",
+      "generated": "nlinarith [sq_nonneg (a - b), sq_nonneg (b - c), sq_nonneg (c - a),\n  mul_nonneg ha.le hb.le, mul_nonneg hb.le hc.le, mul_nonneg hc.le ha.le,\n  mul_nonneg (sq_nonneg (a - b)) ha.le, mul_nonneg (sq_nonneg (b - c)) hb.le,\n  mul_nonneg (sq_nonneg (c - a)) hc.le, mul_nonneg (sq_nonneg (a - b)) hb.le,\n  mul_nonneg (sq_nonneg (b - c)) hc.le, mul_nonneg (sq_nonneg (c - a)) ha.le]"
+     },
+     {
+      "goals": [
+       "P Q : ℝ × ℝ\nh₁ : P.2 = P.1 ^ 2 - 3 * P.1 + 2\nh₂ : Q.2 = Q.1 ^ 2 - 3 * Q.1 + 2\nh₃ : √((Q.1 - P.1) ^ 2 + (Q.2 - P.2) ^ 2) = 2 * √2\n⊢ ∃ p q, p.1 = P.1 ∧ p.2 = P.2 ∧ q.1 = Q.1 ∧ q.2 = Q.2"
+      ],
+      "target": "refine' ⟨P, Q, _⟩",
+      "generated": "refine' ⟨P, Q, by simp [h₁, h₂], by simp [h₁, h₂], by simp [h₁, h₂], by simp [h₁, h₂]⟩"
+     },
+     {
+      "goals": [
+       "f : ℕ → ℕ\nh₀ : f 0 = 2013\nh₁ : ∀ (x : ℕ), f (x + 1) + f x = 2 ^ x\nh₄ : f 3 + f 2 = 4\nh₅ : f 4 + f 3 = 8\nh₂ : f 1 + f 0 = 1\nh₃ : f 2 + f 1 = 2\n⊢ ↑(f 2013) % 100 = 18 ∧ ↑(f 2014) % 100 = 66"
+      ],
+      "target": "omega",
+      "generated": "have h₆ := h₁ 0"
+     },
+     {
+      "goals": [
+       "case intro.intro.intro\nc : ℝ\nh : ∀ (m n : ℕ), ∃ x, (↑m * x).sin + (↑n * x).sin ≥ c\nx : ℝ\nhx : (↑0 * x).sin + (↑0 * x).sin ≥ c\ny : ℝ\nhy : (↑0 * y).sin + (↑1 * y).sin ≥ c\nz : ℝ\nhz : (↑1 * z).sin + (↑0 * z).sin ≥ c\n⊢ c ≤ 1"
+      ],
+      "target": "have h₄ := h 1 1",
+      "generated": "have h₁ := h 1 1"
+     },
+     {
+      "goals": [
+       "case zero\np n : ℕ\nhp : p.Prime\nhk : 0 < 0\nhn : (2 * 0 - 1) * (p - 1) < 2 * 0 * n ∧ 2 * 0 * n < p\n⊢ p ∣ ∑ j ∈ Finset.range (n + 1), n.choose j ^ (2 * 0)",
+       "case succ\np n : ℕ\nhp : p.Prime\nk : ℕ\nhk : 0 < k + 1\nhn : (2 * (k + 1) - 1) * (p - 1) < 2 * (k + 1) * n ∧ 2 * (k + 1) * n < p\n⊢ p ∣ ∑ j ∈ Finset.range (n + 1), n.choose j ^ (2 * (k + 1))"
+      ],
+      "target": "exfalso",
+      "generated": "all_goals simp_all [Nat.Prime, Nat.succ_le_iff, Nat.zero_le, Nat.zero_lt_succ]"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : a > 0\nhb : b > 0\nhc : c > 0\n⊢ (a ^ 2 + b * c) / (b + c) ^ 2 + (b ^ 2 + c * a) / (c + a) ^ 2 + (c ^ 2 + a * b) / (a + b) ^ 2 ≥ 3 / 2"
+      ],
+      "target": "have h₁ := mul_pos ha hb",
+      "generated": "have h₁ : 0 < b + c := by linarith"
+     },
+     {
+      "goals": [
+       "case intro\nh : ∀ (n : ℕ), n.Prime → ∃ p, p.Prime ∧ p < n ∧ p ∣ n\np : ℕ\nhp : p.Prime ∧ p < 2 ∧ p ∣ 2\n⊢ False"
+      ],
+      "target": "cases' hp with hp₁ hp₂",
+      "generated": "have h₁ := h 2 (by decide)"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : a > 0 ∧ b > 0 ∧ c > 0 ∧ a * b * c = 1\nh₀ : 0 < a * b\nh₁ : 0 < b * c\n⊢ 3 ≤ a * b + b * c + c * a"
+      ],
+      "target": "have h₂ : 0 < c * a := mul_pos ha.2.2.1 ha.1",
+      "generated": "have h₂ : 0 < c * a := by nlinarith"
+     }
+    ]
+   },
+   {
+    "step": 150,
+    "validation_loss": 0.3692090359834166,
+    "validation_examples": 850,
+    "teacher_forced_exact_match": 0.12588235294117647,
+    "generation_exact_match": 0.21484375,
+    "generation_examples": 256,
+    "evaluation_seconds": 311.52113769808784,
+    "mismatches": [
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\nhabc : a + b + c = 1\n⊢ 0 ≤\n    ((1 + a) ^ 2 * (c + a) + (1 + b) ^ 2 * (b + c)) * (a + b) + (1 + c) ^ 2 * ((b + c) * (c + a)) -\n      8 * ((b + c) * (c + a) * (a + b))"
+      ],
+      "target": "nlinarith [sq_nonneg (a - b), sq_nonneg (b - c), sq_nonneg (c - a),\n  mul_pos ha hb, mul_pos hb hc, mul_pos hc ha, habc,\n  mul_self_nonneg (a + b + c - 1)]",
+      "generated": "nlinarith [sq_nonneg (a - b), sq_nonneg (b - c), sq_nonneg (c - a),\n  mul_nonneg ha.le hb.le, mul_nonneg hb.le hc.le, mul_nonneg hc.le ha.le,\n  mul_nonneg (sq_nonneg (a - b)) ha.le, mul_nonneg (sq_nonneg (b - c)) hb.le,\n  mul_nonneg (sq_nonneg (c - a)) hc.le, mul_nonneg (sq_nonneg (a - b)) hb.le,\n  mul_nonneg (sq_nonneg (b - c)) hc.le, mul_nonneg (sq_nonneg (c - a)) ha.le]"
+     },
+     {
+      "goals": [
+       "P Q : ℝ × ℝ\nh₁ : P.2 = P.1 ^ 2 - 3 * P.1 + 2\nh₂ : Q.2 = Q.1 ^ 2 - 3 * Q.1 + 2\nh₃ : √((Q.1 - P.1) ^ 2 + (Q.2 - P.2) ^ 2) = 2 * √2\n⊢ ∃ p q, p.1 = P.1 ∧ p.2 = P.2 ∧ q.1 = Q.1 ∧ q.2 = Q.2"
+      ],
+      "target": "refine' ⟨P, Q, _⟩",
+      "generated": "refine' ⟨P, Q, by simp [h₁, h₂], by simp [h₁, h₂], by simp [h₁, h₂], by simp [h₁, h₂]⟩"
+     },
+     {
+      "goals": [
+       "f : ℕ → ℕ\nh₀ : f 0 = 2013\nh₁ : ∀ (x : ℕ), f (x + 1) + f x = 2 ^ x\nh₄ : f 3 + f 2 = 4\nh₅ : f 4 + f 3 = 8\nh₂ : f 1 + f 0 = 1\nh₃ : f 2 + f 1 = 2\n⊢ ↑(f 2013) % 100 = 18 ∧ ↑(f 2014) % 100 = 66"
+      ],
+      "target": "omega",
+      "generated": "have h₆ := h₁ 0"
+     },
+     {
+      "goals": [
+       "case intro.intro.intro\nc : ℝ\nh : ∀ (m n : ℕ), ∃ x, (↑m * x).sin + (↑n * x).sin ≥ c\nx : ℝ\nhx : (↑0 * x).sin + (↑0 * x).sin ≥ c\ny : ℝ\nhy : (↑0 * y).sin + (↑1 * y).sin ≥ c\nz : ℝ\nhz : (↑1 * z).sin + (↑0 * z).sin ≥ c\n⊢ c ≤ 1"
+      ],
+      "target": "have h₄ := h 1 1",
+      "generated": "have h₁ := h 1 1"
+     },
+     {
+      "goals": [
+       "case zero\np n : ℕ\nhp : p.Prime\nhk : 0 < 0\nhn : (2 * 0 - 1) * (p - 1) < 2 * 0 * n ∧ 2 * 0 * n < p\n⊢ p ∣ ∑ j ∈ Finset.range (n + 1), n.choose j ^ (2 * 0)",
+       "case succ\np n : ℕ\nhp : p.Prime\nk : ℕ\nhk : 0 < k + 1\nhn : (2 * (k + 1) - 1) * (p - 1) < 2 * (k + 1) * n ∧ 2 * (k + 1) * n < p\n⊢ p ∣ ∑ j ∈ Finset.range (n + 1), n.choose j ^ (2 * (k + 1))"
+      ],
+      "target": "exfalso",
+      "generated": "all_goals simp_all [Nat.Prime, Nat.succ_le_iff, Nat.zero_le, Nat.lt_succ_iff]"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : a > 0\nhb : b > 0\nhc : c > 0\n⊢ (a ^ 2 + b * c) / (b + c) ^ 2 + (b ^ 2 + c * a) / (c + a) ^ 2 + (c ^ 2 + a * b) / (a + b) ^ 2 ≥ 3 / 2"
+      ],
+      "target": "have h₁ := mul_pos ha hb",
+      "generated": "have h₁ : 0 < b + c := by linarith"
+     },
+     {
+      "goals": [
+       "case intro\nh : ∀ (n : ℕ), n.Prime → ∃ p, p.Prime ∧ p < n ∧ p ∣ n\np : ℕ\nhp : p.Prime ∧ p < 2 ∧ p ∣ 2\n⊢ False"
+      ],
+      "target": "cases' hp with hp₁ hp₂",
+      "generated": "have h₁ := h 2 (by decide)"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : a > 0 ∧ b > 0 ∧ c > 0 ∧ a * b * c = 1\nh₀ : 0 < a * b\nh₁ : 0 < b * c\n⊢ 3 ≤ a * b + b * c + c * a"
+      ],
+      "target": "have h₂ : 0 < c * a := mul_pos ha.2.2.1 ha.1",
+      "generated": "have h₂ : 0 < c * a := by nlinarith"
+     }
+    ]
+   },
+   {
+    "step": 170,
+    "validation_loss": 0.36997071257162734,
+    "validation_examples": 850,
+    "teacher_forced_exact_match": 0.12823529411764706,
+    "generation_exact_match": 0.21484375,
+    "generation_examples": 256,
+    "evaluation_seconds": 304.15079770307057,
+    "mismatches": [
+     {
+      "goals": [
+       "a b c : ℝ\nha : 0 < a\nhb : 0 < b\nhc : 0 < c\nhabc : a + b + c = 1\n⊢ 0 ≤\n    ((1 + a) ^ 2 * (c + a) + (1 + b) ^ 2 * (b + c)) * (a + b) + (1 + c) ^ 2 * ((b + c) * (c + a)) -\n      8 * ((b + c) * (c + a) * (a + b))"
+      ],
+      "target": "nlinarith [sq_nonneg (a - b), sq_nonneg (b - c), sq_nonneg (c - a),\n  mul_pos ha hb, mul_pos hb hc, mul_pos hc ha, habc,\n  mul_self_nonneg (a + b + c - 1)]",
+      "generated": "nlinarith [sq_nonneg (a - b), sq_nonneg (b - c), sq_nonneg (c - a),\n  mul_nonneg ha.le hb.le, mul_nonneg hb.le hc.le, mul_nonneg hc.le ha.le,\n  mul_nonneg (sq_nonneg (a - b)) ha.le, mul_nonneg (sq_nonneg (b - c)) hb.le,\n  mul_nonneg (sq_nonneg (c - a)) hc.le, mul_nonneg (sq_nonneg (a - b)) hb.le,\n  mul_nonneg (sq_nonneg (b - c)) hc.le, mul_nonneg (sq_nonneg (c - a)) ha.le]"
+     },
+     {
+      "goals": [
+       "P Q : ℝ × ℝ\nh₁ : P.2 = P.1 ^ 2 - 3 * P.1 + 2\nh₂ : Q.2 = Q.1 ^ 2 - 3 * Q.1 + 2\nh₃ : √((Q.1 - P.1) ^ 2 + (Q.2 - P.2) ^ 2) = 2 * √2\n⊢ ∃ p q, p.1 = P.1 ∧ p.2 = P.2 ∧ q.1 = Q.1 ∧ q.2 = Q.2"
+      ],
+      "target": "refine' ⟨P, Q, _⟩",
+      "generated": "refine' ⟨P, Q, by simp [h₁, h₂, h₃], by simp [h₁, h₂, h₃], by simp [h₁, h₂, h₃], by simp [h₁, h₂, h₃]⟩"
+     },
+     {
+      "goals": [
+       "f : ℕ → ℕ\nh₀ : f 0 = 2013\nh₁ : ∀ (x : ℕ), f (x + 1) + f x = 2 ^ x\nh₄ : f 3 + f 2 = 4\nh₅ : f 4 + f 3 = 8\nh₂ : f 1 + f 0 = 1\nh₃ : f 2 + f 1 = 2\n⊢ ↑(f 2013) % 100 = 18 ∧ ↑(f 2014) % 100 = 66"
+      ],
+      "target": "omega",
+      "generated": "have h₆ := h₁ 0"
+     },
+     {
+      "goals": [
+       "case intro.intro.intro\nc : ℝ\nh : ∀ (m n : ℕ), ∃ x, (↑m * x).sin + (↑n * x).sin ≥ c\nx : ℝ\nhx : (↑0 * x).sin + (↑0 * x).sin ≥ c\ny : ℝ\nhy : (↑0 * y).sin + (↑1 * y).sin ≥ c\nz : ℝ\nhz : (↑1 * z).sin + (↑0 * z).sin ≥ c\n⊢ c ≤ 1"
+      ],
+      "target": "have h₄ := h 1 1",
+      "generated": "have h₁ := h 1 1"
+     },
+     {
+      "goals": [
+       "case zero\np n : ℕ\nhp : p.Prime\nhk : 0 < 0\nhn : (2 * 0 - 1) * (p - 1) < 2 * 0 * n ∧ 2 * 0 * n < p\n⊢ p ∣ ∑ j ∈ Finset.range (n + 1), n.choose j ^ (2 * 0)",
+       "case succ\np n : ℕ\nhp : p.Prime\nk : ℕ\nhk : 0 < k + 1\nhn : (2 * (k + 1) - 1) * (p - 1) < 2 * (k + 1) * n ∧ 2 * (k + 1) * n < p\n⊢ p ∣ ∑ j ∈ Finset.range (n + 1), n.choose j ^ (2 * (k + 1))"
+      ],
+      "target": "exfalso",
+      "generated": "all_goals simp_all [Nat.Prime, Nat.succ_le_iff, Nat.zero_le, Nat.lt_succ_iff]"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : a > 0\nhb : b > 0\nhc : c > 0\n⊢ (a ^ 2 + b * c) / (b + c) ^ 2 + (b ^ 2 + c * a) / (c + a) ^ 2 + (c ^ 2 + a * b) / (a + b) ^ 2 ≥ 3 / 2"
+      ],
+      "target": "have h₁ := mul_pos ha hb",
+      "generated": "have h₁ : 0 < b + c := by linarith"
+     },
+     {
+      "goals": [
+       "case intro\nh : ∀ (n : ℕ), n.Prime → ∃ p, p.Prime ∧ p < n ∧ p ∣ n\np : ℕ\nhp : p.Prime ∧ p < 2 ∧ p ∣ 2\n⊢ False"
+      ],
+      "target": "cases' hp with hp₁ hp₂",
+      "generated": "have h₁ := h 2 (by decide)"
+     },
+     {
+      "goals": [
+       "a b c : ℝ\nha : a > 0 ∧ b > 0 ∧ c > 0 ∧ a * b * c = 1\nh₀ : 0 < a * b\nh₁ : 0 < b * c\n⊢ 3 ≤ a * b + b * c + c * a"
+      ],
+      "target": "have h₂ : 0 < c * a := mul_pos ha.2.2.1 ha.1",
+      "generated": "have h₂ : 0 < c * a := by nlinarith"
+     }
+    ]
+   }
+  ]
+ },
+ "trained_model_directory": "/workspace/checkpoints/phase5_sft_visible_student_v2/adapter",
+ "merged_directory": "",
+ "merge_seconds": 0.0
+}

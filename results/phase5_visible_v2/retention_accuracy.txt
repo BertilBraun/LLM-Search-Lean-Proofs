@@ -1,0 +1,2 @@
+models: 800 samples, pass@1 0.372, forced pass@1 0.845, truncated 0.614, median tokens 4096
+models_nothinking: 800 samples, pass@1 0.836, forced pass@1 0.876, truncated 0.121, median tokens 851
