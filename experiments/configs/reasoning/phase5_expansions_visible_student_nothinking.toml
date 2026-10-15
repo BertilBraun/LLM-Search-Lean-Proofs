@@ -1,0 +1,74 @@
+# Arm VN: the visible-reasoning student without thinking or explanation, n = 16: the control for
+# phase5_expansions_visible_student (171 visibly), at the same 64 expansions per theorem, no token cap and a 2 h
+# safety cap per theorem. Same serving as the visible arm (the merged student and a value v0 instance per GPU):
+#   GPU_MEMORY_UTILIZATION=0.62 deployment/serve_model.sh policy-gpu<gpu> \n#       /workspace/checkpoints/phase5_sft_visible_student/merged <gpu> 810<gpu> --served-model-name policy-merged \n#       --no-enable-lora
+#   GPU_MEMORY_UTILIZATION=0.30 deployment/serve_model.sh value-gpu<gpu> /workspace/checkpoints/phase3_value_v0/merged \n#       <gpu> 820<gpu> --served-model-name value-merged --no-enable-lora
+
+[lean]
+pool_size = 120
+concurrency = 120
+
+[search]
+# 64 expansions are the only budget: no token cap, the wall clock a 2 h safety cap per theorem.
+max_expansions = 64
+max_wall_seconds = 7200.0
+max_depth = 16
+score_children_early = true
+tactic_timeout_seconds = 10.0
+forbidden_steps = [
+    "exact?",
+    "apply?",
+    "rw?",
+    "simp?",
+    "simp_all?",
+    "dsimp?",
+    "aesop?",
+    "hint",
+    "rw_search",
+    "library_search",
+]
+
+[expander]
+kind = "automation_then_policy"
+overlap = true
+
+[automation]
+tactics = [
+    "omega",
+    "constructor",
+    "rfl",
+    "field_simp",
+    "ring_nf",
+    "simp_all",
+    "nlinarith",
+]
+timeout_seconds = 10.0
+max_wall_clock_timeouts_per_tactic = 1
+
+[priority]
+kind = "a_star"
+value_weight = 1.0
+depth_weight = 0.25
+policy_prior_weight = 0.0
+automation_log_probability = -2.8
+
+[policy]
+model = "policy-merged"
+server_urls = ["http://127.0.0.1:8100/v1", "http://127.0.0.1:8101/v1"]
+tokenizer = "Qwen/Qwen3.5-4B"
+sample_count = 16
+temperature = 0.8
+top_p = 1.0
+max_tokens = 256
+thinking = false
+few_shot = false
+
+[value]
+model = "value-merged"
+server_urls = ["http://127.0.0.1:8200/v1", "http://127.0.0.1:8201/v1"]
+tokenizer = "Qwen/Qwen3.5-2B"
+
+[value.readout]
+eight_or_more_steps = 12.0
+# v0 has no dead labels: p_dead is ~1e-7, so D does not change h.
+dead_steps = 16.0
