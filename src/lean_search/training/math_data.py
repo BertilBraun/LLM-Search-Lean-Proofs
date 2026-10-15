@@ -1,4 +1,4 @@
-"""General math worked solutions in the visible (non-thinking) chat format, mixed into Lean SFT to keep reasoning."""
+"""General math worked solutions (visible, or with a thinking block) mixed into Lean SFT to keep reasoning."""
 
 import dataclasses
 import json
@@ -15,6 +15,9 @@ MATH_INSTRUCTION = "Please reason step by step, and put your final answer within
 # A problem is contaminated if it shares this fraction of a reference's informal 4-grams (or the reference shares
 # this fraction of the problem's): one direction catches a reference quoted inside a longer problem.
 CONTAINMENT_THRESHOLD = 0.5
+# School-level NuminaMath-CoT sources; the competition ones are left out because miniF2F draws on AMC, AIME and IMO.
+NUMINAMATH_SOURCES = frozenset({"cn_k12", "synthetic_math", "orca_math", "gsm8k"})
+BOX = "\\boxed{"
 
 
 @dataclass(frozen=True)
@@ -23,6 +26,8 @@ class MathSolution:
     identifier: str
     problem: str
     solution: str
+    # A solution that starts with reasoning inside the thinking block (thinking-mode prompt).
+    thinking: bool = False
 
 
 class ContaminationFilter:

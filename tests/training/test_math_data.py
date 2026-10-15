@@ -73,3 +73,11 @@ def test_an_exhausted_source_passes_its_share_on() -> None:
         {"small": examples("small", 2, 10), "large": examples("large", 50, 10)}, {"small": 1.0, "large": 1.0}, 200
     )
     assert [sum(example.token_count for example in selected[source]) for source in ("small", "large")] == [20, 180]
+
+
+def test_a_thinking_solution_is_prompted_with_an_open_think_block() -> None:
+    thinking = MathSolution(
+        "math_train", "math_train/2", "What is $1+1$?", "Add.\n</think>\n\n$\\boxed{2}$", thinking=True
+    )
+    tokenized = tokenize_math_solution(CharacterTokenizer(), thinking)
+    assert decode(tokenized.input_ids[: tokenized.prompt_token_count]).endswith("<|im_start|>assistant\n")

@@ -18,15 +18,14 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
-import pyarrow.parquet as parquet
 import transformers
 
-from lean_search.data.minif2f import load_minif2f
 from lean_search.search.summary import markdown_table
 from lean_search.training.math_data import (
     ContaminationFilter,
-    MathSolution,
+    benchmark_statements,
     fill_budget,
+    load_candidates,
     tokenize_math_solution,
     write_solutions,
 )
@@ -37,8 +36,6 @@ RUN_DIRECTORY = Path(os.environ["LEAN_SEARCH_RUNS"]) / "phase2_sft_data"
 MATH_TRAIN = DATA_DIRECTORY / "raw" / "math_lighteval" / "data" / "train-00000-of-00001.parquet"
 NUMINAMATH_SHARD = DATA_DIRECTORY / "raw" / "numinamath_cot" / "data" / "train-00000-of-00005.parquet"
 MATH_500 = DATA_DIRECTORY / "math500" / "test.jsonl"
-NUMINAMATH_SOURCES = frozenset({"cn_k12", "synthetic_math", "orca_math", "gsm8k"})
-BOX = "\\boxed{"
 
 
 @dataclass(frozen=True)
@@ -63,35 +60,11 @@ def parse_arguments() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def candidates() -> dict[str, list[MathSolution]]:
-    math_rows = parquet.read_table(MATH_TRAIN).to_pylist()
-    numina_rows = parquet.read_table(NUMINAMATH_SHARD, columns=["source", "problem", "solution"]).to_pylist()
-    return {
-        "math_train": [
-            MathSolution("math_train", f"math_train/{index}", row["problem"], row["solution"])
-            for index, row in enumerate(math_rows)
-        ],
-        "numinamath_cot": [
-            MathSolution(
-                f"numinamath_cot/{row['source']}", f"numinamath_cot/0/{index}", row["problem"], row["solution"]
-            )
-            for index, row in enumerate(numina_rows)
-            if row["source"] in NUMINAMATH_SOURCES and BOX in row["solution"]
-        ],
-    }
-
-
-def references() -> list[str]:
-    with MATH_500.open(encoding="utf-8") as handle:
-        math_500 = [json.loads(line)["problem"] for line in handle]
-    return math_500 + [problem.informal_prefix for problem in load_minif2f()]
-
-
 def main() -> None:
     arguments = parse_arguments()
     tokenizer = transformers.AutoTokenizer.from_pretrained(arguments.tokenizer)
-    contamination = ContaminationFilter(references())
-    pools = candidates()
+    contamination = ContaminationFilter(benchmark_statements(MATH_500))
+    pools = load_candidates(MATH_TRAIN, NUMINAMATH_SHARD)
     tokenized_by_source = {}
     counts: dict[str, Counter[str]] = {}
     for source, solutions in pools.items():
