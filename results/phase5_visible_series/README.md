@@ -194,8 +194,8 @@ The visible student's own non-thinking mode at the same 64 expansions, n = 16, 2
 explanations the visible student solves 157, three more than the round-2 student's non-thinking mode, and with them
 171 (18 new, 4 lost: `aime_1991_p1`, `amc12a_2016_p3`, `imo_1974_p5`, `induction_seq_mul2pnp1`). The explanations
 cost ~10 times the generated tokens and 4.3 times the wall time per theorem; at equal generated tokens the
-non-thinking mode leads up to ~10k tokens per theorem (152 against 142 within 10k) and the visible mode from ~20k on
-(153 against 156 within 20k, 165 against 157 within 50k).
+non-thinking mode leads up to ~20k tokens per theorem (152 against 142 within 10k, 156 against 153 within 20k) and
+the visible mode beyond (165 against 157 within 50k).
 
 ## Answer
 
