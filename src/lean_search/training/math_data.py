@@ -7,7 +7,10 @@ from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+import pyarrow.parquet as parquet
+
 from lean_search.corpora.decontamination import informal_ngrams
+from lean_search.data.minif2f import load_minif2f
 from lean_search.policy.prompts import END_OF_TURN
 from lean_search.training.sft_data import SftExample, TokenizedExample, Tokenizer
 
@@ -52,16 +55,43 @@ class ContaminationFilter:
         )
 
 
-def math_prompt(tokenizer: Tokenizer, problem: str) -> str:
+def load_candidates(math_train: Path, numinamath_shard: Path) -> dict[str, list[MathSolution]]:
+    """MATH train and NuminaMath-CoT's school-level problems with their reference solutions, by source."""
+    math_rows = parquet.read_table(math_train).to_pylist()
+    numina_rows = parquet.read_table(numinamath_shard, columns=["source", "problem", "solution"]).to_pylist()
+    return {
+        "math_train": [
+            MathSolution("math_train", f"math_train/{index}", row["problem"], row["solution"])
+            for index, row in enumerate(math_rows)
+        ],
+        "numinamath_cot": [
+            MathSolution(
+                f"numinamath_cot/{row['source']}", f"numinamath_cot/0/{index}", row["problem"], row["solution"]
+            )
+            for index, row in enumerate(numina_rows)
+            if row["source"] in NUMINAMATH_SOURCES and BOX in row["solution"]
+        ],
+    }
+
+
+def benchmark_statements(math_500: Path) -> list[str]:
+    """MATH-500 problems and miniF2F informal statements, the references for decontamination."""
+    with math_500.open(encoding="utf-8") as handle:
+        problems = [json.loads(line)["problem"] for line in handle]
+    return problems + [problem.informal_prefix for problem in load_minif2f()]
+
+
+def math_prompt(tokenizer: Tokenizer, problem: str, thinking: bool = False) -> str:
     conversation = [{"role": "user", "content": f"{problem}\n\n{MATH_INSTRUCTION}"}]
     return tokenizer.apply_chat_template(
-        conversation, tokenize=False, add_generation_prompt=True, enable_thinking=False
+        conversation, tokenize=False, add_generation_prompt=True, enable_thinking=thinking
     )
 
 
 def tokenize_math_solution(tokenizer: Tokenizer, solution: MathSolution) -> TokenizedExample:
-    """The visible format: empty think block in the prompt, the worked solution as the completion."""
-    prompt_ids = tokenizer.encode(math_prompt(tokenizer, solution.problem), add_special_tokens=False)
+    """Visible: an empty think block in the prompt; thinking: an open one. The solution is the completion."""
+    prompt = math_prompt(tokenizer, solution.problem, solution.thinking)
+    prompt_ids = tokenizer.encode(prompt, add_special_tokens=False)
     completion_ids = tokenizer.encode(solution.solution.strip() + END_OF_TURN, add_special_tokens=False)
     # The Lean fields stay empty: math examples only train, they never enter the tactic evaluation.
     placeholder = SftExample(solution.source, solution.identifier, 0, (), "")
