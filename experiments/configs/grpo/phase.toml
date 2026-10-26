@@ -1,0 +1,102 @@
+# A search-tree GRPO phase (experiments/grpo_phase.py): the dense signal. Rewards mix AlphaZero-style,
+# (1 - 0.15) * G + 0.15 * clip(L, -1, 1), advantages are centred within each sibling group without dividing by its
+# standard deviation, and each policy token gets the credit of its part of the sample (explanation, valid prefix,
+# first failing tactic; the rest masked). The policy adapter applies to the merged starting policy (`model`), which
+# is also the KL reference; the loop fills in initial_adapter (the published adapters) per phase.
+
+[reward]
+mode = "dense"
+lean_error_reward = -1.0
+heartbeat_timeout_reward = -1.0
+wall_clock_timeout_reward = -1.0
+no_progress_reward = -0.5
+already_seen_reward = 0.0
+shaping_weight = 0.1
+goal_closed_bonus = 0.1
+shorter_proof_bonus = 0.0
+# Off until a value model passed the gate.
+use_backed_up_values = false
+
+[value_targets]
+max_targets_per_tree = 64
+
+[policy]
+model = "/workspace/checkpoints/grpo_start/merged"
+initial_adapter = ""
+sequences_per_step = 64
+warmup_steps = 5
+clip_low = 0.2
+clip_high = 0.28
+kl_coefficient = 0.0
+reference = "starting_weights"
+normalization_tokens = 256
+replay_weight = 0.1
+replay_sequences_per_step = 8
+max_prompt_tokens = 2048
+max_completion_tokens = 1088
+credit = "per_token"
+
+[policy.lora]
+rank = 64
+alpha = 64
+dropout = 0.0
+
+[policy.optimization]
+method = "lora"
+learning_rate = 1e-5
+minimum_learning_rate_ratio = 1.0
+max_gradient_norm = 1.0
+epochs = 1
+micro_batch_tokens = 16384
+gradient_checkpointing = true
+packing = true
+compile_layers = true
+seed = 0
+
+[policy.advantages]
+local_share = 0.15
+scale = "none"
+
+[policy.group_weights]
+global_signal_weight = 1.0
+local_only_weight = 1.0
+
+[policy_replay]
+lean_examples = 256
+math_examples = 128
+
+[value]
+model = "Qwen/Qwen3.5-2B"
+initial_adapter = "/workspace/checkpoints/phase3_value_v0/adapter"
+retrain_from_base = false
+smoothing_sigma = 0.5
+bin_mass_weight = 1.0
+ranking_weight = 0.5
+ranking_score = "log_odds"
+ranking_temperature = 1.0
+max_pairs_per_tree = 64
+replay_share = 0.1
+
+[value.optimization]
+method = "lora"
+learning_rate = 5e-5
+warmup_fraction = 0.05
+minimum_learning_rate_ratio = 1.0
+max_gradient_norm = 1.0
+epochs = 1
+micro_batch_tokens = 32768
+micro_batches_per_step = 1
+gradient_checkpointing = true
+packing = true
+compile_layers = true
+seed = 0
+
+[value.source_shares]
+proof_graph = 0.4
+dead_end = 0.3
+averaged = 0.3
+
+[value.gate]
+min_ranking_gain = 0.01
+max_separation_drop = 0.02
+max_brier_increase = 0.01
