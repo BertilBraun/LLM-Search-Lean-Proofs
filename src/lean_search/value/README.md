@@ -134,6 +134,15 @@ and transposition edges. The benchmark (`build_benchmark`, `experiments/value_be
 group with a proof-graph state and fills up to `max_states_per_tree` with groups holding a dead end, then the rest;
 `benchmark_metrics(benchmark, estimates)` scores any estimates aligned with its states.
 
+`graph_trainer.py` trains the value LoRA on these targets (`experiments/grpo_phase.py`): per target the cross-entropy
+against `bin_target` (plus the bin-mass term), weighted and rebalanced per step across sources (`SourceShares`), plus
+`ranking_weight` times the weighted logistic loss `softplus(-(s_preferred - s_other) / temperature)` on sibling pairs,
+with s the log-odds of the proof probability `log(1 - p_dead) - log p_dead` (or the probability itself). A parent's
+pair members train in the same micro-batch; exact and dead v0 examples are replayed as `replay_share` of the pointwise
+items. `run_value_gate` scores the benchmark with the new and the current adapter and passes when the sibling pairwise
+accuracy improves by `min_ranking_gain` without the proof-graph/dead-end AUC or the anchors' Brier score regressing
+beyond their tolerances.
+
 ## API
 
 | Call | Purpose |

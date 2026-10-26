@@ -1,0 +1,70 @@
+# The control run (DESIGN.md "Control run"): phase.toml's policy training with the outcome-only signal, G from the
+# proof graph alone (1 on it, 0 elsewhere, no local term), one advantage for every token of a sample. The value model
+# trains as in the dense run.
+
+[reward]
+mode = "outcome_only"
+
+[value_targets]
+max_targets_per_tree = 64
+
+[policy]
+model = "/workspace/checkpoints/grpo_start/merged"
+initial_adapter = ""
+sequences_per_step = 64
+warmup_steps = 5
+clip_low = 0.2
+clip_high = 0.28
+kl_coefficient = 0.0
+reference = "starting_weights"
+normalization_tokens = 256
+replay_weight = 0.1
+replay_sequences_per_step = 8
+max_prompt_tokens = 2048
+max_completion_tokens = 1088
+credit = "sequence"
+
+[policy.lora]
+rank = 64
+alpha = 64
+dropout = 0.0
+
+[policy.optimization]
+method = "lora"
+learning_rate = 1e-5
+minimum_learning_rate_ratio = 1.0
+max_gradient_norm = 1.0
+epochs = 1
+micro_batch_tokens = 16384
+gradient_checkpointing = true
+packing = true
+compile_layers = true
+seed = 0
+
+[policy.advantages]
+local_share = 0.15
+scale = "none"
+
+[policy_replay]
+lean_examples = 256
+math_examples = 128
+
+[value]
+model = "Qwen/Qwen3.5-2B"
+initial_adapter = "/workspace/checkpoints/phase3_value_v0/adapter"
+ranking_weight = 0.5
+max_pairs_per_tree = 64
+replay_share = 0.1
+
+[value.optimization]
+method = "lora"
+learning_rate = 5e-5
+warmup_fraction = 0.05
+minimum_learning_rate_ratio = 1.0
+epochs = 1
+micro_batch_tokens = 32768
+micro_batches_per_step = 1
+gradient_checkpointing = true
+packing = true
+compile_layers = true
+seed = 0
