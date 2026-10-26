@@ -1,3 +1,5 @@
+import textwrap
+
 import pytest
 
 from lean_search.policy import Sample
@@ -5,6 +7,8 @@ from lean_search.policy.prompts import (
     FEW_SHOT_EXAMPLES,
     SYSTEM_PROMPT,
     ParseFailure,
+    normalize_tactic_block,
+    normalized_block,
     parse_sample,
     parse_samples,
     prompt_messages,
@@ -32,6 +36,37 @@ class ChatMlTemplate:
 
 def sample(text: str, log_probability: float = -1.0, tokens: int = 5, finish_reason: str = "stop") -> Sample:
     return Sample(text=text, cumulative_logprob=log_probability, token_count=tokens, finish_reason=finish_reason)
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        "simp",
+        "  intro x\n    simp at x\n  exact x  \n",
+        "\n\nby\n  nlinarith [sq_nonneg (a - b)]\n\n",
+        "intro x\n\n  -- note\nsimp",
+        "\tintro x\n\tsimp",
+        "  \nby\n  simp",
+    ],
+)
+def test_normalized_block_text_matches_dedenting(block: str) -> None:
+    lines = [line.rstrip() for line in block.strip("\n").split("\n")]
+    if lines[0].strip() == "by":
+        lines = lines[1:]
+    assert normalize_tactic_block(block) == textwrap.dedent("\n".join(lines)).strip("\n")
+
+
+@pytest.mark.parametrize("block", ["  intro x\n    simp at x\n  exact x  \n", "\n\nby\n  nlinarith [h,\n    h']\n"])
+def test_normalized_block_positions_map_every_character_back(block: str) -> None:
+    normalized = normalized_block(block)
+    assert all(
+        character == "\n" or block[position] == character
+        for character, position in zip(normalized.text, normalized.positions, strict=False)
+    )
+
+
+def test_normalized_block_positions_end_after_the_last_character() -> None:
+    assert normalized_block("  simp  \n", 10).positions[-1] == 10 + len("  simp")
 
 
 def test_user_message_separates_goals_by_a_blank_line_in_a_lean_block() -> None:

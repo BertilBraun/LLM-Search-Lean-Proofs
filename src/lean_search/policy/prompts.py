@@ -1,6 +1,6 @@
 """The policy's chat format (shared by every model, the search and SFT data) and parsing of its replies."""
 
-import textwrap
+import os
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
@@ -199,33 +199,101 @@ class ParseFailure(Enum):
     FORBIDDEN = "forbidden"
 
 
-def normalize_tactic_block(text: str) -> str:
-    lines = [line.rstrip() for line in text.strip("\n").split("\n")]
+@dataclass(frozen=True)
+class NormalizedBlock:
+    text: str
+    # For every character of `text`, and its end, the position in the text the block was read from.
+    positions: tuple[int, ...]
+
+
+def normalized_block(text: str, offset: int = 0) -> NormalizedBlock:
+    """The block without surrounding blank lines, trailing spaces, a leading `by` line and common indentation."""
+    lines: list[tuple[int, str]] = []
+    start = len(text) - len(text.lstrip("\n"))
+    for line in text[start:].split("\n"):
+        lines.append((start, line.rstrip()))
+        start += len(line) + 1
     # Models sometimes open the block with the `by` that already precedes the proof.
-    if lines[0].strip() == "by":
-        lines = lines[1:]
-    return textwrap.dedent("\n".join(lines)).strip("\n")
+    if lines and lines[0][1].strip() == "by":
+        lines.pop(0)
+    while lines and not lines[0][1].strip():
+        lines.pop(0)
+    while lines and not lines[-1][1].strip():
+        lines.pop()
+    indentations = [line[: len(line) - len(line.lstrip())] for _, line in lines if line.strip()]
+    margin = len(os.path.commonprefix(indentations)) if indentations else 0
+    characters: list[str] = []
+    positions: list[int] = []
+    for index, (line_start, line) in enumerate(lines):
+        if index:
+            characters.append("\n")
+            positions.append(offset + line_start - 1)
+        kept = line[margin:] if line.strip() else ""
+        first = line_start + len(line) - len(kept)
+        characters.extend(kept)
+        positions.extend(offset + first + column for column in range(len(kept)))
+    end = positions[-1] + 1 if positions else offset
+    return NormalizedBlock("".join(characters), (*positions, end))
+
+
+def normalize_tactic_block(text: str) -> str:
+    return normalized_block(text).text
+
+
+def generated_block_start(text: str, thinking: bool, visible: bool = False) -> int | None:
+    """Where the tactic block of a generated text starts, or None without a block."""
+    if not thinking and not visible:
+        return 0
+    answer_start = 0
+    if thinking:
+        think_end = text.rfind(THINK_END)
+        if think_end < 0:
+            return None
+        answer_start = think_end + len(THINK_END)
+    fence = text.find(FENCE, answer_start)
+    if fence < 0:
+        return None
+    # Skips the info string of the opening fence, usually "lean".
+    newline = text.find("\n", fence + len(FENCE))
+    return len(text) if newline < 0 else newline + 1
 
 
 def generated_block(text: str, thinking: bool, visible: bool = False) -> str | None:
+    start = generated_block_start(text, thinking, visible)
+    if start is None:
+        return None
     if not thinking and not visible:
         return text
-    if thinking:
-        _, think_end, answer = text.rpartition(THINK_END)
-        if not think_end:
-            return None
-    else:
-        answer = text
-    _, fence, after_fence = answer.partition(FENCE)
-    if not fence:
-        return None
-    # Skips the info string of the opening fence, usually "lean".
-    return after_fence.partition("\n")[2].partition(FENCE)[0]
+    return text[start:].partition(FENCE)[0]
 
 
 def closed_visible_block(text: str) -> bool:
     _, fence, after_fence = text.partition(FENCE)
     return bool(fence) and FENCE in after_fence
+
+
+def parse_sample_block(
+    sample: Sample,
+    *,
+    thinking: bool,
+    forbidden_tokens: frozenset[str] = FORBIDDEN_TOKENS,
+    visible: bool = False,
+) -> NormalizedBlock | ParseFailure:
+    """The normalized block with its characters' positions in the sample's text, or why there is none."""
+    # A visible-reasoning sample cannot stop at the fence that opens its block, so it may run on after closing it.
+    complete_visible = visible and closed_visible_block(sample.text)
+    if sample.finish_reason == LENGTH_FINISH_REASON and not complete_visible:
+        return ParseFailure.TRUNCATED
+    start = generated_block_start(sample.text, thinking, visible)
+    block = generated_block(sample.text, thinking, visible)
+    if start is None or block is None:
+        return ParseFailure.NO_BLOCK
+    normalized = normalized_block(block, start)
+    if not normalized.text:
+        return ParseFailure.EMPTY
+    if find_forbidden_tokens(normalized.text, forbidden_tokens):
+        return ParseFailure.FORBIDDEN
+    return normalized
 
 
 def parse_sample(
@@ -236,19 +304,11 @@ def parse_sample(
     visible: bool = False,
 ) -> str | ParseFailure:
     """The normalized tactic block of one sample, or why it cannot be used."""
-    # A visible-reasoning sample cannot stop at the fence that opens its block, so it may run on after closing it.
-    complete_visible = visible and closed_visible_block(sample.text)
-    if sample.finish_reason == LENGTH_FINISH_REASON and not complete_visible:
-        return ParseFailure.TRUNCATED
-    block = generated_block(sample.text, thinking, visible)
-    if block is None:
-        return ParseFailure.NO_BLOCK
-    block = normalize_tactic_block(block)
-    if not block:
-        return ParseFailure.EMPTY
-    if find_forbidden_tokens(block, forbidden_tokens):
-        return ParseFailure.FORBIDDEN
-    return block
+    match parse_sample_block(sample, thinking=thinking, forbidden_tokens=forbidden_tokens, visible=visible):
+        case NormalizedBlock(text=block):
+            return block
+        case ParseFailure() as failure:
+            return failure
 
 
 @dataclass(frozen=True)
@@ -260,6 +320,9 @@ class TacticCandidate:
     sample_count: int
     # Samples behind the block whose answer was forced after their thoughts were cut off.
     forced_sample_count: int = 0
+    # The samples behind the block and, per sample, where each block character (and the end) is in its text.
+    sample_indices: tuple[int, ...] = ()
+    block_positions: tuple[tuple[int, ...], ...] = ()
 
     @property
     def forced(self) -> bool:
@@ -271,6 +334,8 @@ class ParsedSamples:
     candidates: tuple[TacticCandidate, ...]
     failures: tuple[ParseFailure, ...]
     failed_generated_tokens: int
+    # The sample behind each failure.
+    failed_sample_indices: tuple[int, ...] = ()
 
     @property
     def duplicate_samples(self) -> int:
@@ -288,14 +353,16 @@ def parse_samples(
     """Distinct usable tactic blocks, most likely first; identical blocks merge and keep the best log-probability."""
     candidates: dict[str, TacticCandidate] = {}
     failures: list[ParseFailure] = []
+    failed_indices: list[int] = []
     failed_generated_tokens = 0
     for index, sample in enumerate(samples):
         forced = int(index in forced_indices)
-        match parse_sample(sample, thinking=thinking, forbidden_tokens=forbidden_tokens, visible=visible):
+        match parse_sample_block(sample, thinking=thinking, forbidden_tokens=forbidden_tokens, visible=visible):
             case ParseFailure() as failure:
                 failures.append(failure)
+                failed_indices.append(index)
                 failed_generated_tokens += sample.token_count
-            case str() as block if block in candidates:
+            case NormalizedBlock(text=block, positions=positions) if block in candidates:
                 earlier = candidates[block]
                 candidates[block] = TacticCandidate(
                     block,
@@ -303,8 +370,12 @@ def parse_samples(
                     earlier.generated_tokens + sample.token_count,
                     earlier.sample_count + 1,
                     earlier.forced_sample_count + forced,
+                    (*earlier.sample_indices, index),
+                    (*earlier.block_positions, positions),
                 )
-            case str() as block:
-                candidates[block] = TacticCandidate(block, sample.cumulative_logprob, sample.token_count, 1, forced)
+            case NormalizedBlock(text=block, positions=positions):
+                candidates[block] = TacticCandidate(
+                    block, sample.cumulative_logprob, sample.token_count, 1, forced, (index,), (positions,)
+                )
     ordered = sorted(candidates.values(), key=lambda candidate: -candidate.log_probability)
-    return ParsedSamples(tuple(ordered), tuple(failures), failed_generated_tokens)
+    return ParsedSamples(tuple(ordered), tuple(failures), failed_generated_tokens, tuple(failed_indices))

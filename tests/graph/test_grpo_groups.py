@@ -12,7 +12,7 @@ from lean_search.rl.grpo_groups import (
     policy_groups,
 )
 from lean_search.search import FailureKind, StepSource
-from lean_search.search.graph_labels import label_graph
+from lean_search.search.graph_labels import EdgeKind, label_graph
 from lean_search.value.graph_targets import (
     RemainingStepsReadout,
     ValueTargetConfig,
@@ -47,6 +47,9 @@ def groups(config: RewardConfig = CONFIG) -> dict[int, PolicyGroup]:
     builder.child(builder.root, "⊢ prefix", value=4.0, text="partial", failure_after=1)
     twice = builder.failure(builder.root, text="twice", sample_count=2)
     builder.repeat(builder.root, twice)
+    builder.unparsed(builder.root)
+    builder.unparsed(builder.root)
+    builder.failure(builder.root, FailureKind.UNKNOWN_IDENTIFIER, text="exact mystery")
     expanded = builder.child(builder.root, "⊢ expanded", value=6.0, text="to expanded")
     grandchild = builder.child(expanded, "⊢ grandchild", value=4.0)
     builder.child(grandchild, "⊢ leaf", value=9.0)
@@ -104,7 +107,24 @@ def test_identical_texts_merge_and_keep_their_multiplicity() -> None:
 
 
 def test_group_holds_only_policy_samples() -> None:
-    assert groups()[0].sample_count == 11
+    assert groups()[0].sample_count == 14
+
+
+def test_unparsed_samples_merge_into_one_failed_sample() -> None:
+    assert (sample("").multiplicity, sample("").kind, sample("").reward) == (2, EdgeKind.UNPARSED_SAMPLE, -1.0)
+
+
+def test_unparsed_samples_earn_no_global_reward() -> None:
+    assert sample("").components.global_value == 0.0
+
+
+def test_unknown_identifier_scores_like_a_lean_error() -> None:
+    assert (sample("exact mystery").kind, sample("exact mystery").reward) == (EdgeKind.UNKNOWN_IDENTIFIER, -1.0)
+
+
+def test_partial_block_exposes_its_prefix_components() -> None:
+    partial = sample("partial")
+    assert partial.credit.prefix_components == dataclasses.replace(partial.components, failure=0.0)
 
 
 def test_closing_step_earns_the_goal_bonus() -> None:

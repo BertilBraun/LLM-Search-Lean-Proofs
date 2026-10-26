@@ -79,6 +79,8 @@ def prefix_components(sample: GroupSample, config: RewardConfig) -> RewardCompon
     prefix_reward = sample.credit.prefix_reward
     if prefix_reward is None:
         return None
+    if sample.credit.prefix_components is not None:
+        return sample.credit.prefix_components
     match config.mode:
         case RewardMode.DENSE:
             prefix = replace(sample.components, failure=0.0)

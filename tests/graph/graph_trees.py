@@ -126,6 +126,18 @@ class GraphBuilder:
             sample_count=sample_count,
         )
 
+    def unparsed(self, parent: Node) -> Edge:
+        """A policy sample without a usable block, recorded as the search does."""
+        return self.edge(
+            parent,
+            EdgeOutcome.REJECTED,
+            text="",
+            source=StepSource.POLICY,
+            failure=Failure(FailureKind.UNPARSED, "The sample has no usable block: truncated."),
+            applied_tactics=0,
+            total_tactics=0,
+        )
+
     def repeat(self, parent: Node, earlier: Edge, source: StepSource = StepSource.POLICY) -> Edge:
         return self.edge(
             parent,

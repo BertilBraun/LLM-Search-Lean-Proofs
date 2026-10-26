@@ -8,6 +8,7 @@ from typing import Protocol
 
 from lean_search.data import Problem
 from lean_search.lean import LeanRepl
+from lean_search.search.texts import GeneratedText, UnparsedSample
 from lean_search.search.tree import Node, SearchTree, StepSource
 
 DEFAULT_AUTOMATION_TACTICS = (
@@ -41,6 +42,8 @@ class Candidate:
     forced: bool = False
     # The policy samples that produced this text.
     sample_count: int = 1
+    # Those samples' generated texts (empty for automation and for callers that do not keep them).
+    completions: tuple[GeneratedText, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -50,6 +53,9 @@ class CandidateBatch:
     candidates: tuple[Candidate, ...]
     prompt_tokens: int = 0
     generated_tokens: int = 0
+    # The policy's prompt and its samples without a usable block (recorded as failed edges).
+    prompt: str = ""
+    unparsed: tuple[UnparsedSample, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -73,11 +79,15 @@ class Expander(Protocol):
 @dataclass(frozen=True)
 class AutomationConfig:
     tactics: tuple[str, ...] = DEFAULT_AUTOMATION_TACTICS
-    heartbeats: int | None = None
+    # Lean's maxHeartbeats units; the sweep keeps Lean's default limit.
+    heartbeats: int | None = 200_000
+    # None: the search's emergency wall-clock stop.
     timeout_seconds: float | None = None
     # Wall-clock kills cost a process restart and a replay, and a tactic that hung once tends to hang on the
     # descendants too; 0 never disables a tactic.
     max_wall_clock_timeouts_per_tactic: int = 1
+    # A sweep tactic that ran out of heartbeats once tends to on the descendants too; 0 never disables a tactic.
+    max_heartbeat_timeouts_per_tactic: int = 1
 
 
 class AutomationExpander:
@@ -99,8 +109,11 @@ class AutomationExpander:
         )
 
     def _disabled(self, tactic: str, tree: SearchTree) -> bool:
-        limit = self.config.max_wall_clock_timeouts_per_tactic
-        return limit > 0 and tree.wall_clock_timeouts(tactic) >= limit
+        wall_clock_limit = self.config.max_wall_clock_timeouts_per_tactic
+        heartbeat_limit = self.config.max_heartbeat_timeouts_per_tactic
+        return (wall_clock_limit > 0 and tree.wall_clock_timeouts(tactic) >= wall_clock_limit) or (
+            heartbeat_limit > 0 and tree.heartbeat_timeouts(tactic) >= heartbeat_limit
+        )
 
 
 class CompositeExpander:

@@ -10,6 +10,7 @@ from enum import Enum
 from pathlib import Path
 
 from lean_search.search.search import SearchResult
+from lean_search.search.texts import ExpansionTexts
 from lean_search.search.tree import Edge, NodeStatus, SearchTree, StepSource
 
 
@@ -46,6 +47,8 @@ class TreeRecord:
     result: SearchResult
     nodes: tuple[NodeRecord, ...]
     edges: tuple[Edge, ...]
+    # The prompt and generated texts of each policy request (absent from records written before they were kept).
+    expansions: tuple[ExpansionTexts, ...] = ()
 
 
 def tree_record(tree: SearchTree, statement: str, result: SearchResult) -> TreeRecord:
@@ -75,7 +78,7 @@ def tree_record(tree: SearchTree, statement: str, result: SearchResult) -> TreeR
         )
         for node in tree.nodes
     )
-    return TreeRecord(tree.problem_name, statement, result, nodes, tuple(tree.edges))
+    return TreeRecord(tree.problem_name, statement, result, nodes, tuple(tree.edges), tuple(tree.expansion_texts))
 
 
 def to_json(value: object) -> str:

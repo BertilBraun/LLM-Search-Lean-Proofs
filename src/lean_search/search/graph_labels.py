@@ -14,6 +14,10 @@ class EdgeKind(StrEnum):
     HEARTBEAT_TIMEOUT = "heartbeat_timeout"
     WALL_CLOCK_TIMEOUT = "wall_clock_timeout"
     FORBIDDEN = "forbidden"
+    # The block named something that does not exist; rejected before Lean ran.
+    UNKNOWN_IDENTIFIER = "unknown_identifier"
+    # A policy sample without a usable block (none, cut off at the token cap, empty or forbidden).
+    UNPARSED_SAMPLE = "unparsed_sample"
     INFRASTRUCTURE_FAILURE = "infrastructure_failure"
     NEW_STATE = "new_state"
     # Lean reported no goals left, but the proof failed verification.
@@ -43,6 +47,8 @@ FAILURE_KINDS = frozenset(
         EdgeKind.HEARTBEAT_TIMEOUT,
         EdgeKind.WALL_CLOCK_TIMEOUT,
         EdgeKind.FORBIDDEN,
+        EdgeKind.UNKNOWN_IDENTIFIER,
+        EdgeKind.UNPARSED_SAMPLE,
         EdgeKind.INFRASTRUCTURE_FAILURE,
         EdgeKind.UNVERIFIED_PROOF,
     }
@@ -137,7 +143,7 @@ def own_kind(edge: Edge, nodes: Sequence[NodeRecord]) -> EdgeKind:
         case EdgeOutcome.REPEATED:
             return EdgeKind.REPEAT
         case EdgeOutcome.REJECTED:
-            return EdgeKind.FORBIDDEN
+            return EdgeKind.FORBIDDEN if edge.failure is None else failure_edge_kind(edge.failure.kind)
         case EdgeOutcome.FAILED:
             assert edge.failure is not None, edge.edge_id
             return failure_edge_kind(edge.failure.kind)
@@ -168,6 +174,10 @@ def failure_edge_kind(kind: FailureKind) -> EdgeKind:
             return EdgeKind.WALL_CLOCK_TIMEOUT
         case FailureKind.FORBIDDEN:
             return EdgeKind.FORBIDDEN
+        case FailureKind.UNKNOWN_IDENTIFIER:
+            return EdgeKind.UNKNOWN_IDENTIFIER
+        case FailureKind.UNPARSED:
+            return EdgeKind.UNPARSED_SAMPLE
         case FailureKind.REPL_FAILURE:
             return EdgeKind.INFRASTRUCTURE_FAILURE
 

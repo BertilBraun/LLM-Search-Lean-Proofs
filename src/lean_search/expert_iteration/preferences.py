@@ -71,7 +71,9 @@ def dead_node_ids(record: TreeRecord) -> frozenset[int]:
 
 def rejection_kind(edge: Edge, dead: frozenset[int], dead_subtrees: bool) -> RejectionKind | None:
     match edge.outcome:
-        case EdgeOutcome.FAILED | EdgeOutcome.REJECTED if edge.failure is not None and edge.failure.is_negative_label:
+        case EdgeOutcome.FAILED | EdgeOutcome.REJECTED if (
+            edge.failure is not None and edge.failure.is_negative_label and edge.failure.kind != FailureKind.UNPARSED
+        ):
             return RejectionKind.TIMEOUT if edge.failure.kind in TIMEOUT_FAILURES else RejectionKind.ERROR
         case EdgeOutcome.CHILD | EdgeOutcome.DUPLICATE if dead_subtrees and edge.target_id in dead:
             return RejectionKind.DEAD

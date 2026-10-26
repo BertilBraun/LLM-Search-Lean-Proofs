@@ -446,6 +446,22 @@ Decisions:
 - Compare per-sample rates, not per-edge shares, with the per-step evaluation.
 - Later option: resample with the Lean error message attached (error-conditioned repair).
 
+Implemented (2026-10-26; details in `src/lean_search/lean/README.md`, "Harness for policy blocks"): heartbeat limits
+(policy 50k, sweep 200k, 60 s emergency wall clock, `experiments/configs/grpo/search/visible_student_v2.toml`; a sweep
+tactic is disabled after one timeout of either kind), flattening with guards that keep it equivalent wherever the
+original succeeds (`flatten_proof` for the data rewrite), `rename_i` on every new state with inaccessible names, and
+the identifier check (1 false rejection in 18,227 accepted blocks and prefixes, 71% of unknown-name failures caught
+on the visible student's trees). Edges keep the original block and the executed tactics with their offsets; tree
+records keep each policy request's prompt and every sample's full text with the executed tactics' spans
+(`TreeRecord.expansions`, the trainer's `ExpansionTexts`). Samples without a usable block (no block, cut off at the
+token cap, empty, forbidden) are failed edges (`FailureKind.UNPARSED`, empty text) and score like a Lean error in
+their group. `experiments/heartbeat_replay.py` is the replay test for the new node; a local run (WSL, 2 REPLs,
+indicative only) on the visible student's trees: of 52 proof-path steps from 60 solved trees, 50 complete at 25k
+heartbeats (two heavy `nlinarith`/nested-`have` steps run out) and all 52 at 50k and 100k (median 0.7 s); of 10
+sampled former wall-clock timeouts, at 25k all 10 stop on heartbeats (median 3.6 s, 37 s in total vs 153 s recorded),
+at 50k 9 stop on heartbeats and 1 fails fast (median 8.6 s, 133 s), at 100k 5 heartbeats, 3 errors, 2 still hit the
+60 s emergency stop (340 s); none finished.
+
 ### Policy update: GRPO over sibling groups
 
 - **Group** = the 8 samples of one expanded node (independent draws from the policy at the same state), after

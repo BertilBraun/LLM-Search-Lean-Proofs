@@ -4,7 +4,7 @@ from collections.abc import Sequence
 
 from lean_search.expert_iteration.thinking import StepReasoning
 from lean_search.policy.client import Sample
-from lean_search.policy.expander import PolicyExpander, candidate_batch
+from lean_search.policy.expander import PolicyExpander
 from lean_search.policy.prompts import parse_sample
 from lean_search.reasoning.thinking import sample_reasoning
 from lean_search.search import CandidateBatches, Node, SearchContext
@@ -63,4 +63,4 @@ class ReasoningExpander:
         ]
         reasoning = most_likely_reasoning(sampled.samples, sample_blocks, visible=visible)
         self.log.add(context.problem.name, node.node_id, reasoning)
-        yield candidate_batch(sampled.parsed, sampled.generation, sampled.forced)
+        yield inner.batch(sampled)

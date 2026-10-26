@@ -28,6 +28,7 @@ from lean_search.policy.prompts import (
 from lean_search.retrieval.provider import LemmaProvider, load_lemma_provider
 from lean_search.retrieval.statistics import LemmaStatistics
 from lean_search.search.expanders import Candidate, CandidateBatch, CandidateBatches, SearchContext
+from lean_search.search.texts import GeneratedText, UnparsedSample
 from lean_search.search.tree import Node, StepSource
 
 MINIMUM_GENERATED_TOKENS = 32
@@ -108,10 +109,22 @@ class PolicyStatistics:
 
 
 def candidate_batch(
-    parsed: ParsedSamples, generation: Generation, forced: ForcedAnswers | None = None
+    parsed: ParsedSamples,
+    generation: Generation,
+    forced: ForcedAnswers | None = None,
+    *,
+    samples: Sequence[Sample] | None = None,
+    prompt: str = "",
+    ends_turn_on_stop: bool = True,
 ) -> CandidateBatch:
-    """The whole request's cost, failed samples and forcing included; each candidate logs its own samples."""
+    """The whole request's cost and every sample's text: candidates with their samples, unparsed samples apart."""
+    # A request with stop sequences ends at the fence, not at the end of turn.
     forced = forced or ForcedAnswers()
+    samples = generation.samples if samples is None else samples
+
+    def ended_turn(index: int) -> bool:
+        return ends_turn_on_stop and index not in forced.sample_indices and samples[index].finish_reason == "stop"
+
     candidates = tuple(
         Candidate(
             candidate.tactic_block,
@@ -121,13 +134,23 @@ def candidate_batch(
             generated_tokens=candidate.generated_tokens,
             forced=candidate.forced,
             sample_count=candidate.sample_count,
+            completions=tuple(
+                GeneratedText(samples[index].text, ended_turn(index), positions)
+                for index, positions in zip(candidate.sample_indices, candidate.block_positions, strict=True)
+            ),
         )
         for candidate in parsed.candidates
+    )
+    unparsed = tuple(
+        UnparsedSample(samples[index].text, ended_turn(index), failure.value)
+        for index, failure in zip(parsed.failed_sample_indices, parsed.failures, strict=True)
     )
     return CandidateBatch(
         candidates,
         generation.prompt_token_count + forced.prompt_tokens,
         generation.completion_token_count + forced.generated_tokens,
+        prompt=prompt,
+        unparsed=unparsed,
     )
 
 
@@ -138,6 +161,7 @@ class SampledExpansion:
     samples: list[Sample]
     parsed: ParsedSamples
     forced: ForcedAnswers
+    prompt: str = ""
 
 
 class PolicyExpander:
@@ -162,7 +186,17 @@ class PolicyExpander:
     async def expand(self, node: Node, context: SearchContext) -> CandidateBatches:
         sampled = await self.sample(node, context)
         if sampled is not None:
-            yield candidate_batch(sampled.parsed, sampled.generation, sampled.forced)
+            yield self.batch(sampled)
+
+    def batch(self, sampled: "SampledExpansion") -> CandidateBatch:
+        return candidate_batch(
+            sampled.parsed,
+            sampled.generation,
+            sampled.forced,
+            samples=sampled.samples,
+            prompt=sampled.prompt,
+            ends_turn_on_stop=not stop_sequences(self.config.thinking, self.config.visible_reasoning),
+        )
 
     async def sample(self, node: Node, context: SearchContext) -> SampledExpansion | None:
         """The node's samples (forced answers in place) and their candidates; None when the prompt is too long."""
@@ -191,7 +225,7 @@ class PolicyExpander:
             visible=self.config.visible_reasoning,
         )
         self.statistics.record(generation, parsed, seconds + forcing_seconds, forced)
-        return SampledExpansion(generation, samples, parsed, forced)
+        return SampledExpansion(generation, samples, parsed, forced, prompt)
 
     async def force_answers(
         self, prompt: str, prompt_tokens: int, samples: Sequence[Sample]

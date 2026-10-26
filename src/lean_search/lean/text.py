@@ -183,11 +183,30 @@ def find_forbidden_tokens(text: str, tokens: frozenset[str] = FORBIDDEN_TOKENS) 
     return sorted(set(_forbidden_pattern(tokens).findall(searched)))
 
 
+@dataclass(frozen=True)
+class TacticPiece:
+    text: str
+    # Offsets in the split block: the piece's first character and the end of its last line.
+    start: int
+    end: int
+
+
+@dataclass
+class _OpenPiece:
+    lines: list[str]
+    start: int
+    end: int
+
+
 def split_tactics(block: str) -> list[str]:
+    return [piece.text for piece in split_tactic_pieces(block)]
+
+
+def split_tactic_pieces(block: str) -> list[TacticPiece]:
     lexed = lex(block)
     content_lines = lexed.masked(frozenset({LexicalKind.CODE, LexicalKind.STRING})).split("\n")
     code_lines = lexed.masked(frozenset({LexicalKind.CODE})).split("\n")
-    tactics: list[list[str]] = []
+    pieces: list[_OpenPiece] = []
     base_indentation: int | None = None
     bracket_depth = 0
     continues = False
@@ -195,6 +214,7 @@ def split_tactics(block: str) -> list[str]:
     offset = 0
     for line, content_line, code_line in zip(block.split("\n"), content_lines, code_lines, strict=True):
         starts_inside = offset > 0 and lexed.kinds[offset - 1] is not LexicalKind.CODE
+        line_start = offset
         offset += len(line) + 1
         line = line.rstrip()
         content = content_line.strip()
@@ -202,16 +222,19 @@ def split_tactics(block: str) -> list[str]:
             # The comment or string began on a dropped line, so only the code after it remains.
             first_content = len(content_line) - len(content_line.lstrip())
             line, starts_inside = line[first_content:], False
+            line_start += first_content
+        line_end = line_start + len(line)
         if not content:
-            previous_line_kept = starts_inside and previous_line_kept and bool(tactics)
+            previous_line_kept = starts_inside and previous_line_kept and bool(pieces)
             if previous_line_kept:
-                tactics[-1].append(_relative_line(line, base_indentation or 0))
+                pieces[-1].lines.append(_relative_line(line, base_indentation or 0))
+                pieces[-1].end = line_end
             continue
         indentation = len(content_line) - len(content_line.lstrip())
         if base_indentation is None:
             base_indentation = indentation
         code = code_line.strip()
-        is_continuation = bool(tactics) and (
+        is_continuation = bool(pieces) and (
             starts_inside
             or bracket_depth > 0
             or continues
@@ -220,13 +243,14 @@ def split_tactics(block: str) -> list[str]:
             or _starts_with_word(code, CONTINUATION_PREFIX_WORDS)
         )
         if is_continuation:
-            tactics[-1].append(_relative_line(line, base_indentation))
+            pieces[-1].lines.append(_relative_line(line, base_indentation))
+            pieces[-1].end = line_end
         else:
-            tactics.append([line.strip()])
+            pieces.append(_OpenPiece([line.strip()], line_start + len(line) - len(line.lstrip()), line_end))
         previous_line_kept = True
         bracket_depth = max(bracket_depth + _bracket_balance(code), 0)
         continues = code.endswith(CONTINUATION_SUFFIXES) or _ends_with_word(code, CONTINUATION_SUFFIX_WORDS)
-    return ["\n".join(lines) for lines in tactics]
+    return [TacticPiece("\n".join(piece.lines), piece.start, piece.end) for piece in pieces]
 
 
 def _relative_line(line: str, base_indentation: int) -> str:
