@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>Lean RL loop</title>
+    <link rel="icon" href="static/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="static/style.css" />
+    <script type="module" src="static/app.js"></script>
+  </head>
+  <body>
+    <header class="top">
+      <div class="top-row">
+        <div class="brand">
+          <span id="pulse" class="pulse"></span>
+          <h1 id="title">Lean RL loop</h1>
+        </div>
+        <span id="updated" class="updated">loading…</span>
+        <div class="controls">
+          <select id="run" class="control" aria-label="Run" hidden></select>
+          <select id="range" class="control" aria-label="Time range"></select>
+          <button id="theme" class="control" type="button" aria-label="Color theme">Auto</button>
+          <form method="post" action="logout">
+            <button class="control" type="submit">Log out</button>
+          </form>
+        </div>
+      </div>
+      <nav id="tabs" class="tabs" aria-label="Pages"></nav>
+    </header>
+    <main id="content"></main>
+  </body>
+</html>

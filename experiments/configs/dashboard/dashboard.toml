@@ -1,0 +1,28 @@
+# experiments/dashboard.py serve --config experiments/configs/dashboard/dashboard.toml
+# Every key is optional; the values here are the defaults.
+title = "Lean RL loop"
+refresh_seconds = 30.0
+session_days = 14.0
+max_failed_logins_per_minute = 10
+
+[alerts]
+# Records averaged at the start and at the end of a series when judging a rise or a drop.
+window = 5
+# The loop counts as silent after this many missed heartbeats.
+stale_heartbeats = 5.0
+max_minutes_since_publish = 90.0
+# Policy samples back to the same state or an ancestor: an early sign of reward hacking.
+max_no_progress_share = 0.35
+no_progress_rise = 0.05
+max_kl = 0.05
+max_clip_fraction = 0.2
+max_repetition_loop_share = 0.02
+repetition_loop_rise = 0.005
+min_math500_visible = 0.80
+max_math500_drop = 0.03
+min_mixed_group_share = 0.2
+min_gpu_utilization = 60.0
+# The curriculum's target solve rate.
+min_solve_rate = 0.3
+max_solve_rate = 0.7
+failed_gates_in_a_row = 3
