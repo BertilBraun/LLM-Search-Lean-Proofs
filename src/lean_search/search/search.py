@@ -467,6 +467,7 @@ class _TheoremSearch:
             lean_seconds=execution.lean_seconds,
             repeat_of=repeat_of,
             forced=candidate.forced,
+            sample_count=candidate.sample_count,
         )
 
     async def _verify(self, node: Node) -> bool:
