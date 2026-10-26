@@ -112,6 +112,28 @@ dead_steps = 16.0
 bin tokens, prompts too long) to
 `value.json`.
 
+## Search-graph targets (`graph_targets.py`, `ranking.py`, `benchmark.py`)
+
+For the next phase (DESIGN.md, "Value model"), on graphs labelled by `search.graph_labels.label_graph`:
+
+| Node | Proof probability | Steps | Weight |
+|---|---|---|---|
+| proof graph | 1 | exact (fewest new-state or transposition edges to a verified proof) | `proof_graph_weight` |
+| dead end | 0 | none | `dead_end_weight` |
+| expanded off the graph | mean over expanded descendants (dead-end descendants count 0) | mean of distance + h | `averaged_weight · n / (n + half_weight_descendants)` |
+| never expanded | none | none | — |
+
+Estimates are `ValueEstimate(proof_probability, remaining_steps)`: from the bins as `1 − p_dead` and the steps given
+alive (`bin_estimate`), or from a tree's recorded scalar h as `(dead_steps − h) / (dead_steps − 1)`, clipped
+(`RemainingStepsReadout`). `bin_target` maps a target back onto the nine bins (probability spread over the step bins,
+the rest dead), so only these two adapters change with the value head. `temperature` slides the average toward the
+best descendant (softmax weights on the proof probability; `None` is the plain mean).
+
+Sibling pairs (`sibling_pairs`) are taken among the distinct states one expanded node reached over new-state, sibling
+and transposition edges. The benchmark (`build_benchmark`, `experiments/value_benchmark.py`) keeps every sibling
+group with a proof-graph state and fills up to `max_states_per_tree` with groups holding a dead end, then the rest;
+`benchmark_metrics(benchmark, estimates)` scores any estimates aligned with its states.
+
 ## API
 
 | Call | Purpose |

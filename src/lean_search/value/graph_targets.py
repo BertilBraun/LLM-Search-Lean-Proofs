@@ -1,0 +1,250 @@
+"""Value targets from labelled search graphs: Lean anchors on the proof graph and dead ends, averages elsewhere."""
+
+import hashlib
+import math
+from collections.abc import Sequence
+from dataclasses import dataclass, replace
+from enum import StrEnum
+
+from lean_search.search.graph_labels import GraphLabels, NodeClass, ReachedNode
+from lean_search.search.records import TreeRecord
+from lean_search.search.tree import NodeStatus
+from lean_search.value.bins import BIN_COUNT, DEAD_BIN, STEP_BIN_COUNT, Readout
+
+
+@dataclass(frozen=True)
+class ValueEstimate:
+    proof_probability: float
+    remaining_steps: float
+
+
+@dataclass(frozen=True)
+class RemainingStepsReadout:
+    """Reads a proof probability from the scalar h a tree records, linear between a sure one-step proof and dead."""
+
+    dead_steps: float = Readout().dead_steps
+    fewest_steps: float = 1.0
+
+    def estimate(self, remaining_steps: float) -> ValueEstimate:
+        share = (self.dead_steps - remaining_steps) / (self.dead_steps - self.fewest_steps)
+        return ValueEstimate(min(1.0, max(0.0, share)), remaining_steps)
+
+    def dead_end(self) -> ValueEstimate:
+        return ValueEstimate(0.0, self.dead_steps)
+
+
+def bin_estimate(probabilities: Sequence[float], readout: Readout) -> ValueEstimate:
+    """The value model's bins 1..7, 8+, dead: proof probability 1 - p_dead, steps given alive."""
+    return ValueEstimate(1.0 - probabilities[DEAD_BIN], readout.alive_remaining_steps(probabilities))
+
+
+def recorded_estimates(record: TreeRecord, readout: RemainingStepsReadout) -> tuple[ValueEstimate | None, ...]:
+    """The search-time estimates per node; a verified proof is exact, a node never scored has none."""
+    estimates: list[ValueEstimate | None] = []
+    for node in record.nodes:
+        if not node.goals:
+            estimates.append(ValueEstimate(1.0, 0.0) if node.status == NodeStatus.PROVED else None)
+        elif node.value_estimate is None:
+            estimates.append(None)
+        else:
+            estimates.append(readout.estimate(node.value_estimate))
+    return tuple(estimates)
+
+
+class TargetSource(StrEnum):
+    PROOF_GRAPH = "proof_graph"
+    DEAD_END = "dead_end"
+    AVERAGED = "averaged"
+
+
+@dataclass(frozen=True)
+class ValueTargetConfig:
+    proof_graph_weight: float = 1.0
+    # A dead end only saw one expansion's samples and the sweep.
+    dead_end_weight: float = 0.5
+    averaged_weight: float = 0.5
+    # An averaged target reaches half its weight at this many expanded descendants.
+    half_weight_descendants: float = 4.0
+    # None: the plain average; smaller values slide it toward the best descendant.
+    temperature: float | None = None
+    # Dead-end descendants count as dead (Lean's evidence) instead of their search-time estimate.
+    anchor_dead_descendants: bool = True
+    # 0: no cap.
+    max_targets_per_tree: int = 0
+
+
+@dataclass(frozen=True)
+class ValueTarget:
+    problem_name: str
+    node_id: int
+    goals: tuple[str, ...]
+    source: TargetSource
+    proof_probability: float
+    # Exact on the proof graph, the mean of distance + h for averaged targets, None for dead ends.
+    remaining_steps: float | None
+    weight: float
+    expanded_descendants: int
+
+
+def size_weight(count: int, half_weight_count: float) -> float:
+    return count / (count + half_weight_count)
+
+
+def averaged_estimate(
+    descendants: Sequence[ReachedNode],
+    labels: GraphLabels,
+    estimates: Sequence[ValueEstimate | None],
+    readout: RemainingStepsReadout,
+    config: ValueTargetConfig,
+) -> tuple[ValueEstimate, int] | None:
+    """The mean proof probability and mean distance + h over the descendants with an estimate."""
+    values: list[tuple[int, ValueEstimate]] = []
+    for descendant in descendants:
+        if config.anchor_dead_descendants and labels.node_classes[descendant.node_id] == NodeClass.DEAD_END:
+            values.append((descendant.distance, readout.dead_end()))
+        elif (estimate := estimates[descendant.node_id]) is not None:
+            values.append((descendant.distance, estimate))
+    if not values:
+        return None
+    if config.temperature is None:
+        weights = [1.0] * len(values)
+    else:
+        best = max(estimate.proof_probability for _, estimate in values)
+        weights = [math.exp((estimate.proof_probability - best) / config.temperature) for _, estimate in values]
+    total = sum(weights)
+    proof_probability = sum(
+        weight * estimate.proof_probability for weight, (_, estimate) in zip(weights, values, strict=True)
+    )
+    steps = sum(
+        weight * (distance + estimate.remaining_steps)
+        for weight, (distance, estimate) in zip(weights, values, strict=True)
+    )
+    return ValueEstimate(proof_probability / total, steps / total), len(values)
+
+
+def value_targets(
+    record: TreeRecord,
+    labels: GraphLabels,
+    estimates: Sequence[ValueEstimate | None],
+    readout: RemainingStepsReadout,
+    config: ValueTargetConfig,
+) -> list[ValueTarget]:
+    """One target per state with goals: proof graph, dead end, or averaged; never-expanded states get none."""
+    targets = []
+    for node in record.nodes:
+        if not node.goals:
+            continue
+        match labels.node_classes[node.node_id]:
+            case NodeClass.PROOF_GRAPH:
+                steps = labels.remaining_steps[node.node_id]
+                assert steps is not None
+                target = ValueTarget(
+                    record.problem_name,
+                    node.node_id,
+                    node.goals,
+                    TargetSource.PROOF_GRAPH,
+                    1.0,
+                    float(steps),
+                    config.proof_graph_weight,
+                    len(labels.expanded_descendants.get(node.node_id, ())),
+                )
+            case NodeClass.DEAD_END:
+                target = ValueTarget(
+                    record.problem_name,
+                    node.node_id,
+                    node.goals,
+                    TargetSource.DEAD_END,
+                    0.0,
+                    None,
+                    config.dead_end_weight,
+                    0,
+                )
+            case NodeClass.EXPANDED_OFF_GRAPH:
+                averaged = averaged_estimate(
+                    labels.expanded_descendants[node.node_id], labels, estimates, readout, config
+                )
+                if averaged is None:
+                    continue
+                estimate, count = averaged
+                target = ValueTarget(
+                    record.problem_name,
+                    node.node_id,
+                    node.goals,
+                    TargetSource.AVERAGED,
+                    estimate.proof_probability,
+                    estimate.remaining_steps,
+                    config.averaged_weight * size_weight(count, config.half_weight_descendants),
+                    count,
+                )
+            case NodeClass.NEVER_EXPANDED | NodeClass.UNVERIFIED_PROOF:
+                continue
+        targets.append(target)
+    return capped_targets(targets, config.max_targets_per_tree)
+
+
+def stable_order(target: ValueTarget) -> str:
+    return hashlib.sha256(f"{target.problem_name}/{target.node_id}".encode()).hexdigest()
+
+
+def capped_targets(targets: Sequence[ValueTarget], max_targets: int) -> list[ValueTarget]:
+    """At most `max_targets` (0: all): every proof-graph target first, then the others in a fixed hashed order."""
+    if not max_targets or len(targets) <= max_targets:
+        return list(targets)
+    anchors = [target for target in targets if target.source == TargetSource.PROOF_GRAPH]
+    others = sorted((target for target in targets if target.source != TargetSource.PROOF_GRAPH), key=stable_order)
+    kept = {target.node_id for target in (anchors + others)[:max_targets]}
+    return [target for target in targets if target.node_id in kept]
+
+
+@dataclass(frozen=True)
+class SourceShares:
+    proof_graph: float = 0.4
+    dead_end: float = 0.3
+    averaged: float = 0.3
+
+    def share(self, source: TargetSource) -> float:
+        match source:
+            case TargetSource.PROOF_GRAPH:
+                return self.proof_graph
+            case TargetSource.DEAD_END:
+                return self.dead_end
+            case TargetSource.AVERAGED:
+                return self.averaged
+
+
+def balanced_weights(targets: Sequence[ValueTarget], shares: SourceShares) -> list[ValueTarget]:
+    """Rescales weights so each source present holds its share of the total weight; relative weights within stay."""
+    totals = {source: 0.0 for source in TargetSource}
+    for target in targets:
+        totals[target.source] += target.weight
+    present = [source for source, total in totals.items() if total > 0]
+    share_sum = sum(shares.share(source) for source in present)
+    grand_total = sum(totals.values())
+    scales = {
+        source: shares.share(source) / share_sum * grand_total / totals[source] if source in present else 0.0
+        for source in TargetSource
+    }
+    return [replace(target, weight=target.weight * scales[target.source]) for target in targets]
+
+
+def step_bin_masses(steps: float, sigma: float) -> list[float]:
+    """The mass of N(steps, sigma^2) on the step bins 1..7, 8+ (the first and last bin are open-ended)."""
+    if sigma == 0:
+        masses = [0.0] * STEP_BIN_COUNT
+        masses[min(max(round(steps), 1), STEP_BIN_COUNT) - 1] = 1.0
+        return masses
+    cumulative = [0.0]
+    for edge in range(1, STEP_BIN_COUNT):
+        cumulative.append(0.5 * (1 + math.erf((edge + 0.5 - steps) / (sigma * math.sqrt(2)))))
+    cumulative.append(1.0)
+    return [upper - lower for lower, upper in zip(cumulative, cumulative[1:], strict=False)]
+
+
+def bin_target(target: ValueTarget, sigma: float) -> tuple[float, ...]:
+    """The nine-bin target of the current value head: the proof probability spread over the step bins, the rest dead."""
+    distribution = [0.0] * BIN_COUNT
+    distribution[DEAD_BIN] = 1.0 - target.proof_probability
+    if target.remaining_steps is not None and target.proof_probability > 0:
+        for index, mass in enumerate(step_bin_masses(target.remaining_steps, sigma)):
+            distribution[index] = target.proof_probability * mass
+    return tuple(distribution)
