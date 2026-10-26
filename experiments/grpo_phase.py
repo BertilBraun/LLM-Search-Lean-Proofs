@@ -81,6 +81,8 @@ def main() -> None:
         print(f"value ({accepted}): {outcome.value.result}", flush=True)
         if outcome.value.gate is not None:
             print(f"gate: {outcome.value.gate.reasons or 'passed'}", flush=True)
+            for warning in outcome.value.gate.warnings:
+                print(f"gate warning: {warning}", flush=True)
 
 
 if __name__ == "__main__":

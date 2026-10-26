@@ -25,6 +25,8 @@ from lean_search.rl.tree_statistics import EdgeKindCounts, GraphStatistics, Size
 from lean_search.value.benchmark import (
     BenchmarkMetrics,
     CalibrationMetrics,
+    EstimateKind,
+    PairAccuracy,
     RankingMetrics,
     ReliabilityBin,
     SeparationMetrics,
@@ -363,24 +365,28 @@ class DemoRun:
             for index in range(10)
         )
         benchmark = BenchmarkMetrics(
+            estimates=f"fresh scores of value-v{self.value_version + 1}",
+            kind=EstimateKind.FRESH,
+            model=f"value-v{self.value_version + 1}",
+            circular_runs=(),
             states=3800,
             groups=1450,
             states_without_estimate=0,
             ranking=RankingMetrics(
                 groups_with_proof_state=640,
-                pairs=2900,
+                pairs=900,
                 pairwise_accuracy=0.63 + 0.11 * learned + self.noise(0.01),
-                over_dead_end_accuracy=0.68 + 0.12 * learned + self.noise(0.01),
-                over_expanded_accuracy=0.58 + 0.08 * learned + self.noise(0.01),
-                over_never_expanded_accuracy=0.61 + 0.06 * learned + self.noise(0.01),
+                proof_over_dead_end=PairAccuracy(60, 0.68 + 0.12 * learned + self.noise(0.01)),
+                proof_over_expanded=PairAccuracy(840, 0.58 + 0.08 * learned + self.noise(0.01)),
+                expanded_over_dead_end=PairAccuracy(2400, 0.61 + 0.06 * learned + self.noise(0.01)),
                 top_accuracy=0.41 + 0.12 * learned + self.noise(0.015),
+                never_expanded_siblings=1900,
+                unexplored_expanded_siblings=120,
             ),
             calibration=CalibrationMetrics(
                 anchor_states=2100,
                 anchor_expected_calibration_error=0.17 - 0.09 * learned + abs(self.noise(0.01)),
                 anchor_brier_score=0.23 - 0.07 * learned + abs(self.noise(0.01)),
-                labelled_states=3300,
-                labelled_expected_calibration_error=0.14 - 0.07 * learned + abs(self.noise(0.01)),
                 anchor_bins=bins,
             ),
             separation=SeparationMetrics(

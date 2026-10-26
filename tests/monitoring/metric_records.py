@@ -15,6 +15,8 @@ from lean_search.rl.tree_statistics import EdgeKindCounts, GraphStatistics, Size
 from lean_search.value.benchmark import (
     BenchmarkMetrics,
     CalibrationMetrics,
+    EstimateKind,
+    PairAccuracy,
     RankingMetrics,
     SeparationMetrics,
     StepMetrics,
@@ -106,11 +108,17 @@ def value_result(gate_passed: bool) -> ValueBenchmarkResult:
         candidate_version=1,
         gate_passed=gate_passed,
         benchmark=BenchmarkMetrics(
+            estimates="fresh scores of value-v1",
+            kind=EstimateKind.FRESH,
+            model="value-v1",
+            circular_runs=(),
             states=10,
             groups=4,
             states_without_estimate=0,
-            ranking=RankingMetrics(4, 8, 0.7, 0.8, 0.6, 0.6, 0.5),
-            calibration=CalibrationMetrics(6, 0.1, 0.2, 8, 0.12, ()),
+            ranking=RankingMetrics(
+                4, 8, 0.7, PairAccuracy(2, 0.8), PairAccuracy(6, 0.6), PairAccuracy(5, 0.6), 0.5, 3, 1
+            ),
+            calibration=CalibrationMetrics(6, 0.1, 0.2, ()),
             separation=SeparationMetrics(0.7, 0.65),
             steps=StepMetrics(4, 1.2, 0.7),
         ),

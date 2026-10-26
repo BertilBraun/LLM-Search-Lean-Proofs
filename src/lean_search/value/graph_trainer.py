@@ -4,7 +4,7 @@ import hashlib
 import random
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
 
@@ -21,15 +21,24 @@ from lean_search.training.sft import (
     load_trainable_model,
     trainable_parameters,
 )
-from lean_search.value.benchmark import BenchmarkConfig, BenchmarkMetrics, LabelledTree, ValueBenchmark
+from lean_search.value.benchmark import (
+    BenchmarkConfig,
+    BenchmarkMetrics,
+    BenchmarkScores,
+    GuidedTrees,
+    LabelledTree,
+    ValueBenchmark,
+    benchmark_fingerprint,
+    conflict_message,
+    fresh_estimates,
+    guidance_conflicts,
+)
 from lean_search.value.benchmark import benchmark_metrics as compute_benchmark_metrics
 from lean_search.value.bins import BIN_COUNT, DEAD_BIN, STEP_BIN_COUNT, Readout
 from lean_search.value.graph_targets import (
     SourceShares,
-    ValueEstimate,
     ValueTarget,
     balanced_weights,
-    bin_estimate,
     bin_target,
     step_bin_masses,
 )
@@ -53,6 +62,8 @@ class GateConfig:
     # ...without losing more than this in proof-graph-over-dead-end AUC or gaining more in the anchors' Brier score.
     max_separation_drop: float = 0.02
     max_brier_increase: float = 0.01
+    # Benchmark trees from an A* search on a value model: the current model (or its ancestor) chose their labels.
+    guided_trees: GuidedTrees = GuidedTrees.REFUSE
 
 
 @dataclass(frozen=True)
@@ -188,6 +199,7 @@ class GateResult:
     reasons: tuple[str, ...]
     new: BenchmarkMetrics
     current: BenchmarkMetrics
+    warnings: tuple[str, ...] = ()
 
 
 def stable_key(*parts: object) -> str:
@@ -569,14 +581,16 @@ def bin_probabilities(
     return results
 
 
-def benchmark_estimates(
+def benchmark_scores(
     model: LastPositionLogits,
+    name: str,
     tokenizer: ValueTokenizer,
     pad_token_id: int,
     benchmark: ValueBenchmark,
     config: GraphValueConfig,
     device: torch.device,
-) -> list[ValueEstimate]:
+) -> BenchmarkScores:
+    """Fresh bin distributions on every benchmark state, as the served scoring path stores them."""
     states = [
         ValueState(
             state.problem_name,
@@ -589,7 +603,7 @@ def benchmark_estimates(
     distributions = bin_probabilities(
         model, states, bin_ids, config.optimization.micro_batch_tokens, pad_token_id, device
     )
-    return [bin_estimate(probabilities, config.readout) for probabilities in distributions]
+    return BenchmarkScores(name, benchmark_fingerprint(benchmark), tuple(distributions))
 
 
 def gate_decision(new: BenchmarkMetrics, current: BenchmarkMetrics, config: GateConfig) -> GateResult:
@@ -600,10 +614,12 @@ def gate_decision(new: BenchmarkMetrics, current: BenchmarkMetrics, config: Gate
         reasons.append("no sibling pairs scored")
     elif current_ranking is not None and new_ranking < current_ranking + config.min_ranking_gain:
         reasons.append(f"pairwise accuracy {new_ranking:.3f} < {current_ranking:.3f} + {config.min_ranking_gain:g}")
+    assert new.separation is not None and current.separation is not None
     new_auc = new.separation.proof_graph_over_dead_end_auc
     current_auc = current.separation.proof_graph_over_dead_end_auc
     if current_auc is not None and (new_auc is None or new_auc < current_auc - config.max_separation_drop):
         reasons.append(f"proof-graph over dead-end AUC {new_auc} < {current_auc:.3f} - {config.max_separation_drop:g}")
+    assert new.calibration is not None and current.calibration is not None
     new_brier = new.calibration.anchor_brier_score
     current_brier = current.calibration.anchor_brier_score
     if current_brier is not None and (new_brier is None or new_brier > current_brier + config.max_brier_increase):
@@ -620,11 +636,19 @@ def run_value_gate(
     current_adapter: str,
     device: torch.device,
 ) -> GateResult:
-    """The benchmark metrics of the new and the current value adapter (one loaded at a time) and the decision."""
+    """Fresh scores of the new and the current adapter on the benchmark, one loaded at a time, and the decision."""
     metrics = []
     for adapter in (new_adapter, current_adapter):
         model = load_scoring_model(config.model, adapter, device)
-        estimates = benchmark_estimates(model, tokenizer, pad_token_id, benchmark, config, device)
+        scores = benchmark_scores(model, adapter or config.model, tokenizer, pad_token_id, benchmark, config, device)
+        estimates = fresh_estimates(benchmark, scores, config.readout)
         metrics.append(compute_benchmark_metrics(benchmark, estimates, config.benchmark))
         del model
-    return gate_decision(metrics[0], metrics[1], config.gate)
+    result = gate_decision(metrics[0], metrics[1], config.gate)
+    # The current adapter (or its ancestor) usually guided any value-model search, so every such tree conflicts.
+    conflicts = tuple(conflict_message(source) for source in guidance_conflicts(benchmark.provenance, None))
+    match config.gate.guided_trees:
+        case GuidedTrees.REFUSE if conflicts:
+            return replace(result, passed=False, reasons=result.reasons + conflicts)
+        case _:
+            return replace(result, warnings=conflicts)

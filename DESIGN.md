@@ -526,6 +526,13 @@ foundation of everything above, so it comes first.
   only for models with a probability output.
 - v0 measured without circularity (row-2 trees, a log-probability search, `results/phase3_astar_v0_sft_v2/`):
   Spearman 0.65 for remaining steps, but p_dead ≈ 1e-7 on every state and dead AUC 0.47: it never predicts dead.
+- Implemented (`src/lean_search/value/README.md`, "Value benchmark"): each benchmark records its runs' provenance
+  and refuses value-model-guided trees (configurable to a warning), models are scored fresh through vLLM into stored
+  per-state bin distributions, recorded h is ranking/steps only and flagged when circular, and the gate scores both
+  adapters fresh. Benchmark trees: `experiments/configs/value_benchmark_search.toml`. Proof-graph children rarely
+  have a dead-end sibling (2 such pairs among 4,228 states of the row-2 v2 trees; ~50 proof-over-expanded and ~160
+  expanded-over-dead-end pairs), so the AUC over proof-graph and dead-end states carries more weight than the
+  proof-over-dead-end pair accuracy.
 - The decisive test: an A/B search with the policy fixed and only the value model swapped, solve rate at a fixed
   budget.
 - A value model is published only if it beats the current one on the benchmark; value pseudo-labels for

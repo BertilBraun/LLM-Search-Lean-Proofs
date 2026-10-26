@@ -100,3 +100,5 @@ averaged = 0.3
 min_ranking_gain = 0.01
 max_separation_drop = 0.02
 max_brier_increase = 0.01
+# A benchmark built from value-model-guided trees fails the gate ("warn" only reports it).
+guided_trees = "refuse"
