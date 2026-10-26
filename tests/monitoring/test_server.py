@@ -75,19 +75,48 @@ def write_run(directory: Path) -> None:
     writer.write(loop_status(last_publish_time=time.time()), record_time=time.time())
 
 
-@pytest.fixture
-def dashboard(tmp_path: Path) -> Iterator[Dashboard]:
-    write_run(tmp_path / "main")
-    write_run(tmp_path / "control")
-    runs = [RunSource("main", tmp_path / "main"), RunSource("control", tmp_path / "control")]
+def running_dashboard(directory: Path, authenticator: Authenticator | None) -> Iterator[Dashboard]:
+    write_run(directory / "main")
+    write_run(directory / "control")
+    runs = [RunSource("main", directory / "main"), RunSource("control", directory / "control")]
     config = DashboardConfig(max_failed_logins_per_minute=MAX_FAILURES)
-    authenticator = Authenticator(PASSWORD, 3600, MAX_FAILURES)
     server = DashboardServer(("127.0.0.1", 0), runs, config, authenticator)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     yield Dashboard(server.server_address[1])
     server.shutdown()
     server.server_close()
+
+
+@pytest.fixture
+def dashboard(tmp_path: Path) -> Iterator[Dashboard]:
+    yield from running_dashboard(tmp_path, Authenticator(PASSWORD, 3600, MAX_FAILURES))
+
+
+@pytest.fixture
+def open_dashboard(tmp_path: Path) -> Iterator[Dashboard]:
+    yield from running_dashboard(tmp_path, None)
+
+
+@pytest.mark.parametrize("path", ["/api/runs", "/api/overview", "/api/series?family=grpo"])
+def test_open_dashboard_needs_no_authentication(open_dashboard: Dashboard, path: str) -> None:
+    assert open_dashboard.get(path).status == 200
+
+
+def test_open_dashboard_serves_the_page_without_login(open_dashboard: Dashboard) -> None:
+    assert open_dashboard.get("/").status == 200
+
+
+def test_open_dashboard_sends_the_login_page_home(open_dashboard: Dashboard) -> None:
+    assert open_dashboard.get("/login").headers["location"] == "./"
+
+
+@pytest.mark.parametrize(("fixture", "expected"), [("open_dashboard", False), ("dashboard", True)])
+def test_overview_reports_whether_authentication_is_on(
+    request: pytest.FixtureRequest, fixture: str, expected: bool
+) -> None:
+    served: Dashboard = request.getfixturevalue(fixture)
+    assert served.get("/api/overview", basic(PASSWORD)).json()["authentication"] is expected
 
 
 def session_cookie(response: Response) -> str:

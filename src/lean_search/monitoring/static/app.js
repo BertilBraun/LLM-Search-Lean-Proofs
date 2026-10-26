@@ -530,6 +530,7 @@ async function refresh() {
       buildRunSelect();
     }
     state.overview = await fetchJson(`api/overview?run=${encodeURIComponent(state.run)}`);
+    document.getElementById("logout").hidden = !state.overview.authentication;
     await loadData(currentPage());
     state.updatedAt = Date.now();
     render();

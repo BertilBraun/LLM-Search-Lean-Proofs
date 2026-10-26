@@ -5,8 +5,9 @@
     python experiments/dashboard.py record-system --run-directory $LEAN_SEARCH_RUNS/<run> --hourly-price 0.8
     python experiments/dashboard.py demo [--output artifacts/dashboard_demo] [--days 3] [--live] [--port 8600]
 
-The password is read from --password-file or the LEAN_SEARCH_DASHBOARD_PASSWORD environment variable; neither is
-created here. demo writes a synthetic run and its outcome-only control under --output and serves both.
+The dashboard is read-only and open by default. A password is optional: --password-file or the
+LEAN_SEARCH_DASHBOARD_PASSWORD environment variable turns on the login; neither is created here. demo writes a
+synthetic run and its outcome-only control under --output and serves both.
 """
 
 import argparse
@@ -56,15 +57,17 @@ def parse_arguments() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def read_password(password_file: Path | None) -> str:
+def read_password(password_file: Path | None) -> str | None:
     if password_file is not None:
         if os.name == "posix" and password_file.stat().st_mode & (stat.S_IRWXG | stat.S_IRWXO):
             print(f"warning: {password_file} is readable by others; chmod 600 it", file=sys.stderr)
         password = password_file.read_text(encoding="utf-8").rstrip("\r\n")
+        if not password:
+            raise SystemExit(f"{password_file} is empty")
     else:
         password = os.environ.get(PASSWORD_VARIABLE, "")
     if not password:
-        raise SystemExit(f"no dashboard password: pass --password-file or set {PASSWORD_VARIABLE}")
+        return None
     if len(password) < MINIMUM_PASSWORD_LENGTH:
         print(f"warning: the dashboard password is shorter than {MINIMUM_PASSWORD_LENGTH} characters", file=sys.stderr)
     return password
@@ -79,8 +82,11 @@ def compared_run(text: str) -> RunSource:
 
 def serve(arguments: argparse.Namespace, runs: list[RunSource]) -> None:
     config = load_config(arguments.config)
-    authenticator = Authenticator(
-        read_password(arguments.password_file), config.session_days * 86400, config.max_failed_logins_per_minute
+    password = read_password(arguments.password_file)
+    authenticator = (
+        None
+        if password is None
+        else Authenticator(password, config.session_days * 86400, config.max_failed_logins_per_minute)
     )
     server = DashboardServer((arguments.host, arguments.port), runs, config, authenticator, arguments.secure_cookies)
     names = ", ".join(f"{run.name} ({run.directory})" for run in runs)

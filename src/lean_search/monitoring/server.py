@@ -1,7 +1,8 @@
-"""The dashboard's web server (stdlib only): static pages, a JSON API over the metric files, and authentication.
+"""The dashboard's web server (stdlib only): static pages, a JSON API over the metric files, optional authentication.
 
-Every page and API call needs either a session cookie from the login form or HTTP basic auth (any user name, the
-dashboard password). The password comes from a file or an environment variable and is never logged.
+The dashboard is read-only, so by default it is open. With a password, every page and API call needs either a session
+cookie from the login form or HTTP basic auth (any user name, the dashboard password); the password comes from a file
+or an environment variable and is never logged.
 """
 
 import base64
@@ -129,7 +130,7 @@ class DashboardServer(ThreadingHTTPServer):
         address: tuple[str, int],
         runs: list[RunSource],
         config: DashboardConfig,
-        authenticator: Authenticator,
+        authenticator: Authenticator | None,
         secure_cookies: bool = False,
     ) -> None:
         super().__init__(address, DashboardHandler)
@@ -219,6 +220,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def authenticated(self) -> bool:
         authenticator = self.server.authenticator
+        if authenticator is None:
+            return True
         token = self.session_token()
         if token is not None and authenticator.session_valid(token, time.time()):
             return True
@@ -247,6 +250,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
         match path:
             case "/healthz":
                 self.send_body(HTTPStatus.OK, b"ok\n", "text/plain; charset=utf-8")
+            case "/login" if self.server.authenticator is None:
+                self.redirect("./")
             case "/login":
                 self.send_static("login.html")
             case _ if path.startswith("/static/"):
@@ -281,6 +286,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def login(self) -> None:
         authenticator = self.server.authenticator
+        if authenticator is None:
+            self.redirect("./")
+            return
         now = time.time()
         if authenticator.locked_out(self.client(), now):
             self.redirect("login?error=locked")
@@ -337,6 +345,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         config = self.server.config
         return {
             "title": config.title,
+            "authentication": self.server.authenticator is not None,
             "run": query.get("run", self.server.main_run),
             "now": now,
             "refresh_seconds": config.refresh_seconds,

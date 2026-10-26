@@ -233,8 +233,9 @@ best-first or lazily.
 `src/lean_search/monitoring/README.md`) as an overview page and detail pages, on phones too. Standard library only,
 no external scripts.
 
-Password: create it once on the node (it is never generated, printed or committed); the server refuses to start
-without one and also accepts `LEAN_SEARCH_DASHBOARD_PASSWORD`.
+The dashboard is read-only and open by default: anyone with the address sees the run's metrics, nothing else.
+A password is optional (`--password-file` or `LEAN_SEARCH_DASHBOARD_PASSWORD`; never generated, printed or
+committed) and turns on the login described below:
 
 ```bash
 mkdir -p ~/.config/lean-search && (umask 077 && read -rsp 'password: ' p && printf '%s' "$p" > ~/.config/lean-search/dashboard_password)
@@ -246,7 +247,7 @@ Run it next to the loop (and the system sampler, which records GPUs, cgroup CPU,
 R=$LEAN_SEARCH_RUNS/<run>
 nohup python experiments/dashboard.py record-system --run-directory $R --hourly-price 0.80 > $R/system_sampler.log 2>&1 &
 nohup python experiments/dashboard.py serve --run-directory $R --compare control=$LEAN_SEARCH_RUNS/<control run> \
-    --host 0.0.0.0 --port 8600 --password-file ~/.config/lean-search/dashboard_password \
+    --host 0.0.0.0 --port 8600 \
     --config experiments/configs/dashboard/dashboard.toml > $R/dashboard.log 2>&1 &
 ```
 
@@ -259,12 +260,12 @@ Exposing it:
 - **Mapped port**: open the port when renting (Vast: `-p 8600:8600` in the docker options) and use the external
   port Vast lists for it, `http://<ip>:<external port>/`. Plain HTTP: the password crosses the network
   unencrypted, so prefer the tunnel or an SSH forward (`ssh -L 8600:localhost:8600 ...`).
-- Login: a form with a 14-day session cookie (signed with a per-process key, so a restart logs out); scripts can use
+- Login (only with a password): a form with a 14-day session cookie (signed with a per-process key, so a restart logs out); scripts can use
   basic auth (`curl -u any:<password> .../api/overview`). Ten failed attempts per minute lock a client out for the
   rest of that minute.
 
 Try it locally with synthetic data (3 days of a run and its control, `--live` keeps appending):
-`LEAN_SEARCH_DASHBOARD_PASSWORD=<throwaway> PYTHONPATH=src python experiments/dashboard.py demo --live`, then
+`PYTHONPATH=src python experiments/dashboard.py demo --live`, then
 open `http://localhost:8600/`.
 
 TensorBoard: `MetricsWriter(..., tensorboard=True)` mirrors every scalar to `$R/tensorboard` when `tensorboard` is
