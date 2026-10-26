@@ -39,6 +39,8 @@ class Candidate:
     timeout_seconds: float | None = None
     # Written after the policy's thoughts were cut off and closed (budget forcing).
     forced: bool = False
+    # The policy samples that produced this text.
+    sample_count: int = 1
 
 
 @dataclass(frozen=True)

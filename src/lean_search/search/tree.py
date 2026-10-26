@@ -115,6 +115,8 @@ class Edge:
     repeat_of: int | None
     # The policy's answer was forced after its thoughts were cut off.
     forced: bool = False
+    # Identical policy samples run once; 1 in records written before the count was kept.
+    sample_count: int = 1
 
 
 class SearchTree:
@@ -169,6 +171,7 @@ class SearchTree:
         lean_seconds: float = 0.0,
         repeat_of: int | None = None,
         forced: bool = False,
+        sample_count: int = 1,
     ) -> Edge:
         assert parent.expansion_index is not None, parent.node_id
         edge = Edge(
@@ -188,6 +191,7 @@ class SearchTree:
             lean_seconds=lean_seconds,
             repeat_of=repeat_of,
             forced=forced,
+            sample_count=sample_count,
         )
         self.edges.append(edge)
         if failure is not None and failure.kind == FailureKind.WALL_CLOCK_TIMEOUT:

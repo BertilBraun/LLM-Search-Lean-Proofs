@@ -120,6 +120,7 @@ def candidate_batch(
             prompt_tokens=generation.prompt_token_count,
             generated_tokens=candidate.generated_tokens,
             forced=candidate.forced,
+            sample_count=candidate.sample_count,
         )
         for candidate in parsed.candidates
     )
