@@ -377,15 +377,48 @@ Error analysis of these trees (`results/search_error_analysis/`):
 
 ### Lean hygiene for the new loop
 
-- Policy tactics: about 25–50k heartbeats and a 3–5 s wall clock (re-check the solve rate at the new cap; the
-  first loop already used 25k heartbeats).
-- Rename inaccessible hypotheses (`x✝`) before prompting; check identifiers against the environment and the local
-  context before running Lean.
-- Keep the goal-key de-duplication and `ring_nf` in the sweep; steps that return to their parent count as no
-  progress in the labels.
+- **Heartbeats are the limit**, the wall clock only a generous emergency stop. Heartbeats are deterministic; the
+  wall clock depends on load (on the first node the 10 s wall clock always fired before 200k heartbeats). A
+  wall-clock timeout costs ~16 s (limit, kill, REPL restart, replay); a heartbeat timeout is an ordinary Lean error.
+  Policy tactics at about 25–50k heartbeats (the first loop's 25k cut Lean time per expansion by 32% at equal solve
+  rate). First test on the new node: replay all steps on found proofs plus a sample of the timeouts at 25k, 50k and
+  100k heartbeats and check which formerly successful steps still complete.
+- **Flatten nested `have`**: the unit of execution is the top-level tactic, so `have h : A := by …` with its nested
+  proof is atomic and one error inside kills it (32% of the visible model's blocks start with `have`; 72.6% of
+  those fail; `have`-headed blocks use 26% of Lean time). The harness rewrites `have h : A := by t₁ … tₙ` into
+  `have h : A` (Mathlib: A becomes the first goal) followed by `t₁ … tₙ` as top-level steps, so the valid prefix
+  inside nested proofs is kept. The SFT data is rewritten the same way and re-verified by replay (rewrites that
+  change behaviour, e.g. `all_goals` or `simp_all` now seeing both goals, are dropped), so the model stops writing
+  nested `have` blocks.
+- **Mixed step lengths in SFT**: from the traced (flattened) proofs, chunks of k consecutive top-level tactics with
+  their exact start and end states, k ∈ {1, 3, 5, 7, rest of the proof}, so the model learns to choose its own step
+  size. Today's data teaches one tactic per step (the non-reasoning policies emit exactly one).
+- **No length penalty** on explanations or blocks, only a hard token limit against runaway outputs. A no-op tactic
+  inside a block is harmless; only blocks with no net change count as no progress.
+- **Names**: rename inaccessible hypotheses (`x✝`, 0.6% of samples copy them and can never be valid) before
+  prompting; check identifiers against the pinned environment's constants and the local context before running
+  Lean, reject or repair. The 3.2% non-existent library names and 3.0% unknown hypothesis names are the model's own
+  inventions: the traced training data only contains tactics that replayed in the pinned environment.
+- **The policy does not know what the sweep tried**: `exact` (99.7%), `linarith` (99.8%) and `nlinarith […]`
+  (99.4%) from the policy almost never work, because the sweep runs first and already closes those states; 3.4% of
+  samples repeat a sweep tactic that already failed at that node. Repeats of a failed sweep tactic count as
+  failures in the GRPO reward; telling the policy which sweep tactics failed (in the prompt) is an option.
+- **Repetition loops**: 89% of the "unexpected end of input" errors are answers forced at 1,280 tokens, often
+  repetition loops in the explanation. Rare (139 blocks) but logged on the dashboard, since RL can amplify them.
+- **Budget sinks**: 30 of 244 problems hold half of the failed policy blocks and 90.6% of policy expansions go to
+  the 73 never-proved problems. In the loop the curriculum and the escalation stages bound this; in evaluation it
+  is the price of a fixed per-problem budget.
+- Keep the goal-key de-duplication and `ring_nf` in the sweep (it produced 1,049 children and 9 proof steps);
+  steps that return to their parent count as no progress in the labels. If cast-heavy problems matter, a second key
+  printed with numeral and coercion types would remove the residual risk of false merges (none found in 47 checks).
 - Compare per-sample rates, not per-edge shares, with the per-step evaluation.
-- Later options: train on the search's malformed and ill-typed blocks as negatives (GRPO does this through the
-  local reward), resample with the Lean error message attached, push the visible model toward shorter blocks.
+- Later options: resample with the Lean error message attached (error-conditioned repair).
+- **Optional ablation, descriptive hypothesis names**: miniF2F and the training corpora number hypotheses (`h₀,
+  h₁, …`). Renaming them descriptively (an LLM proposes names, a consistent rename in states and tactics, verified
+  by replay; the benchmark statements keep their meaning because binder names do not change the proposition) might
+  transfer general coding knowledge and reduce references to non-existent hypotheses, but it shifts the model away
+  from its training distribution. Test only after the core loop: rename SFT data and evaluation states, gentle
+  retrain, compare per-sample success on the 512 states.
 
 - **Proof graph**: every node with a route to a proof via new-state or transposition edges is on a proof. Its
   exact remaining steps are the shortest such route. Transpositions are never failures (A then B and B then A both
@@ -413,6 +446,11 @@ Error analysis of these trees (`results/search_error_analysis/`):
     never-expanded children** until then (the safe fallback: the loop still works, with less signal).
 - Advantage = reward minus the group mean (normalized). Groups with identical rewards are dropped, as in the
   mainstream recipes.
+- **Per-token credit within a sample** (the GRPO loss is a sum over tokens, so each token can get its own
+  advantage): the explanation gets the sample's overall advantage; the tactics up to the last successful one get
+  the advantage of the state they reach; the first failing tactic (or, after flattening, the line Lean's error
+  points to) gets the error advantage; everything after it is masked, since Lean never evaluated it. The SFT
+  counterpart is training on the valid prefix plus unlikelihood on the failing line.
 - **Control run**: the same loop with only the outcome / proof-graph signal (expert iteration via GRPO), to
   measure whether the dense part helps.
 
@@ -468,7 +506,9 @@ model is the foundation of everything above, so it comes first.
 
 ### Order of work
 
-1. New node, rebuild, smoke tests; reproduce student v2 (or v1) and value v0 numbers.
+1. New node, rebuild, smoke tests; reproduce student v2 (or v1) and value v0 numbers; the heartbeat replay test;
+   harness changes (flattening, name checks, inaccessible names); flattened mixed-length SFT data and a gentle
+   retrain of the starting policy.
 2. Value benchmark; value v1 from search-graph targets; A/B search against v0.
 3. GRPO loop with the neutral fallback (global term from the proof graph and dead ends only).
 4. Value pseudo-labels once v1 passed the gate.
@@ -483,6 +523,8 @@ phase from day one:
   of never-expanded children;
 - edges by kind (error, timeout, new state, no progress, back to an ancestor, sibling duplicate, transposition,
   repeat); a rising no-progress share is an early warning of reward hacking;
+- failures by tier (malformed, invalid in the state, valid but failing, timeout) per policy sample, block lengths,
+  repeats of failed sweep tactics, forced answers and repetition loops;
 - value benchmark metrics;
 - GRPO: share of groups with mixed rewards, reward split into local and global, the share of local reward earned on
   states that never lead to a proof, KL and clip fraction, explanation length;
@@ -507,7 +549,7 @@ Paper names in the last three rows are from memory and still need checking befor
 - Starting policy v1 or v2 (proposed v2); budget and hardware offers.
 - Local reward magnitudes, β, the A* priority formula combining proof probability and steps, the value-average
   temperature, weights by subtree size.
-- Whether a length penalty on blocks (not only on explanations) is needed, given that long blocks fail ~80%.
+- Whether flattening plus mixed step lengths bring the failure rate of long blocks (9+ lines: ~80%) down.
 
 ## Known issues (backlog)
 - Resolved: search generation cost is charged per batch (`CandidateBatch`), when the expander yields it. Runs before
