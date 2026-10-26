@@ -352,8 +352,40 @@ The search is a graph: a tactic that reaches an existing state records a duplica
 student's 244 trees: 66.2% of attempts fail (Lean error or timeout), 15.5% create a new state, 14.4% reach an
 existing state, 3.8% repeat an earlier tactic text. Duplicates: 49% back to the same state (no progress), 4% back
 to an ancestor, 21% the same state as a sibling, 26% transpositions into another branch; 56 transposition edges
-lead from 24 off-path nodes into a proof. The error and no-progress shares are under investigation
-(`results/search_error_analysis/`).
+lead from 24 off-path nodes into a proof.
+
+Error analysis of these trees (`results/search_error_analysis/`):
+- The 66% failed edges overstate the policy's failure rate: 38% of failed edges come from the automation sweep
+  (70.8% of sweep tactics fail, cheaply: 6.9% of Lean time), and identical policy samples are merged before
+  execution. Per policy sample about 53.6% fail; 90.6% of policy expansions are spent in the 73 problems never
+  proved. At the first expansion of later-solved problems the failure rate is 23.6%, matching the per-step
+  evaluation.
+- Per policy sample: 5.0% malformed Lean (1.8% syntax, 3.2% library names missing in the pinned Mathlib), 8.8%
+  invalid in the state (3.0% unknown hypothesis names, 5.8% ill-typed terms), 33.7% well-formed tactics that do
+  not work there (linarith/nlinarith, simp without progress, rw pattern missing, unsolved goals, omega), 2.6%
+  timeouts. About 95% of samples are syntactically valid Lean with real names. Visible explanations roughly double
+  the malformed and invalid rates (long blocks: 9+ lines fail ~80%). "99% valid Lean" is a sensible target only
+  for the malformed tier.
+- Wall-clock timeouts are 2.3% of edges but **41.9% of Lean seconds** (mostly `nlinarith`, `norm_num`,
+  `simp_all`, `omega`, `interval_cases`), while steps on found proofs take a median 0.21 s (95th percentile 2.4 s).
+- "Back to the same state" duplicates come from tactics that succeed without changing anything: the sweep's
+  `ring_nf` (49% of them; it returns to the same state on 69% of its runs) and the policy's `norm_num` variants
+  (32%), plus `all_goals`/`try` wrappers, `exfalso` on `False`, `norm_cast`. They cost 2.1% of Lean time. The state
+  key contains every hypothesis (with case tags, `let` values and inaccessible names) and the target, so an added
+  `have` always changes the state; Lean does not prune unused hypotheses. False duplicates are possible only where
+  printing hides a difference (numeral or coercion types); 47 spot checks found none.
+
+### Lean hygiene for the new loop
+
+- Policy tactics: about 25–50k heartbeats and a 3–5 s wall clock (re-check the solve rate at the new cap; the
+  first loop already used 25k heartbeats).
+- Rename inaccessible hypotheses (`x✝`) before prompting; check identifiers against the environment and the local
+  context before running Lean.
+- Keep the goal-key de-duplication and `ring_nf` in the sweep; steps that return to their parent count as no
+  progress in the labels.
+- Compare per-sample rates, not per-edge shares, with the per-step evaluation.
+- Later options: train on the search's malformed and ill-typed blocks as negatives (GRPO does this through the
+  local reward), resample with the Lean error message attached, push the visible model toward shorter blocks.
 
 - **Proof graph**: every node with a route to a proof via new-state or transposition edges is on a proof. Its
   exact remaining steps are the shortest such route. Transpositions are never failures (A then B and B then A both
@@ -475,8 +507,7 @@ Paper names in the last three rows are from memory and still need checking befor
 - Starting policy v1 or v2 (proposed v2); budget and hardware offers.
 - Local reward magnitudes, β, the A* priority formula combining proof probability and steps, the value-average
   temperature, weights by subtree size.
-- The error and no-progress rates in search (`results/search_error_analysis/`): how much is malformed Lean vs
-  well-formed tactics that do not work, and where "back to the same state" comes from.
+- Whether a length penalty on blocks (not only on explanations) is needed, given that long blocks fail ~80%.
 
 ## Known issues (backlog)
 - Resolved: search generation cost is charged per batch (`CandidateBatch`), when the expander yields it. Runs before
