@@ -8,6 +8,12 @@ Success is a significant improvement over the base model **at fixed compute**, r
 curves and an ablation ladder on miniF2F. Reaching the published reference provers (70–95% on miniF2F) is not
 the goal.
 
+**Reframed 2026-10-25** (`results/literature/state_of_the_art_2026-10.md`, section "Next phase" below): the
+project is a learning project on the reinforcement-learning stage of the LLM lifecycle, with Lean as a verifiable
+target, written up on the owner's homepage. It is not aimed at a publication: miniF2F is saturated at the top
+(95–100% with agentic systems) and whole-proof models of our size are far ahead (Pythagoras-Prover-4B 86.1% on
+miniF2F-test at pass@32). The next phase is search-tree GRPO with a combined local and global reward.
+
 ## Benchmark and data
 
 | Use | Data |
@@ -32,7 +38,8 @@ Nothing derived from miniF2F-test is ever used for training or for generating re
 - **Models**: served by vLLM (OpenAI-compatible API). Policy and value are LoRA adapters on one base model.
 - **Hardware**: one Vast.ai node (see `deployment/README.md`): 2× RTX 3090 24 GB, 46 effective CPU cores,
   ~120 GB RAM cgroup limit, 300 GB non-persistent disk. During search both GPUs serve; during expert iteration
-  one GPU serves while the other trains.
+  one GPU serves while the other trains. The node was returned after 2026-10-15 and is rented to others; the next
+  phase needs a new node ("Next phase" below).
 - **Throughput** (`results/gpu_utilization/`): training is GPU-bound (98–100%) with packed sequences and compiled
   element-wise layers (10.9k tokens/s on both GPUs, 1.5× the padded setup). Search at row-4 settings is bound by
   Lean CPU (~4.3 core-seconds per expansion with the 7-tactic sweep): 120 searches pinned to 40 CPUs reach
@@ -200,10 +207,19 @@ allows.
     lazy re-scoring, evaluation at 32 expansions inside training pauses. By 06:00 UTC: versions 0–4, 3,098
     statements processed, 2,696 proofs; miniF2F-valid (32 expansions) v0 147 → v3 152; band ~8.5–9.5 at ~44%
     solve rate.
-- [ ] **Phase 7** — Final ladder on miniF2F-test, write-up in `results/README.md`.
+  - [x] Outcome of the 2B loop (9 phases): miniF2F-valid at 32 expansions v0 147, v3 152, v6 148, v9 149, no
+    gain beyond noise. 4B thinking loop (2026-10-14 12:16–17:47 UTC, round-2 student): 305 statements, 130
+    proofs (~25–35 proofs/hour), v1 143; held for the visible-reasoning experiments, then the node was returned.
+  - [x] The loop's value gate was measured on far too few held-out states (0–63 exact, 0–53 dead per phase;
+    Spearman jumped between −0.87 and 1.0), so it never opened and v0 stayed in use. Whether loop value training
+    helped or hurt was never established; its labels were mostly censored, with few exact or dead ones.
+- [ ] **Phase 7** — Final ladder on miniF2F-test, write-up in `results/README.md`. Report the test split as
+  commonly used (Kimina's five fixed statements) and the corrected miniF2F-v2c (2511.03108), on which scores drop
+  8–10 points.
 
 Results of each phase are committed under `results/` as small JSON summaries plus a markdown table; large
-per-theorem logs, datasets and checkpoints stay on the node.
+per-theorem logs, datasets and checkpoints stay on the node. A copy of the irreplaceable parts of the first node
+(all run logs and results, generated datasets, 12 adapters) is in the gitignored `node_backup/2026-10-15/`.
 
 ### Findings 2026-10-13
 
@@ -263,6 +279,204 @@ per-theorem logs, datasets and checkpoints stay on the node.
   10% thinking traces, full-length math replay): MATH-500 visible 87.6%, thinking forced 84.5% (base 80.9%), but
   miniF2F-valid equal-expansion search 166/244 vs 171 for student v1 (2 new, 7 lost; one run each) and 42.1% vs
   44.6% per sample on the 512 states. Control without explanations (v1): 157/244.
+
+## Next phase: search-tree GRPO (agreed 2026-10-26)
+
+### Where the project stands (2026-10-25)
+
+- **Fair comparisons** on miniF2F-valid (single runs; differences under ~5–7 theorems are noise):
+
+  | Comparison | Same model and budget | Result |
+  |---|---|---|
+  | 2B base few-shot vs Lean SFT | yes (16 × 64) | 115 → 148 |
+  | 2B SFT, + value v0 in A* | yes | 148 → 157 (p ≈ 0.035) |
+  | 4B student, with vs without visible explanations | same expansions, ~10× tokens (94k vs 10k) | 157 → 171 |
+  | Expert-iteration loop v0 vs v3 (2B) | yes (32 expansions) | 147 → 152 (noise) |
+  | 4B base model in search | never run | — |
+
+  Most of the gain is SFT on public proof corpora produced by large-compute provers (distillation of a fixed
+  dataset). Our own contributions are the value model (+9), visible per-step reasoning (+14 per expansion) and
+  the loop (unproven).
+- **Visible student v1 vs v2** (`results/phase5_visible_v2`): v1 171/244, 44.6% per sample on the 512 held-out
+  states, MATH-500 52.0% visible (collapsed); v2 (gentle SFT v2 base, self-solution math replay, 10% thinking
+  traces) 166/244, 42.1%, MATH-500 87.6% visible and 84.5% thinking (base 4B 87.3% / 80.9%).
+- **Literature** (`results/literature/state_of_the_art_2026-10.md`): our ~64–70% test-equivalent at ~1k
+  generations matches late-2024 step provers (InternLM2.5-StepProver, HunyuanProver, BFS-Prover V1) with 20–5,000×
+  fewer samples, but small whole-proof models are far ahead at matched tokens (DeepSeek-Prover-V2-7B non-CoT
+  68.0% test at ~14k tokens; Pythagoras-4B 86.1% at pass@32). Covered by prior work: step-level best-first search
+  with a critic, remaining-steps values, expert iteration and its plateau, per-tactic thoughts (Lean-STaR), teacher
+  distillation. Possibly new but small: short visible reasoning inside value-guided best-first search (Lean-STaR
+  found thoughts break log-probability BFS); a value model helping at a one-attempt budget (InternLM2.5's critic
+  hurt there); keeping general reasoning while LoRA-tuning a prover.
+- **Compute so far**: ~480 RTX-3090-hours (~100–150 H100-hours). Published RL stages: Kimina-RL 384 H100-hours
+  from a strong whole-proof model; one Goedel-Prover round 64 H100 × 6 h plus 8,000 CPUs; InternLM2.5 21k
+  CPU-days. Large-scale expert iteration is out of budget; the target is a measurable improvement over the
+  starting policy at a fixed evaluation budget, with detailed intermediate feedback.
+
+### Goal
+
+Learn and measure the RL stage on a verifiable task: an RL loop with a concrete optimization target, dense but
+globally anchored rewards, and per-phase curves rather than a single final score. Success: the loop improves its
+starting policy on the fixed targets beyond noise, and the dense signal beats an outcome-only control.
+
+### Starting point and infrastructure
+
+- Policy: a visible-reasoning 4B student (short explanation, then the Lean block; `enable_thinking = false`).
+  Proposed v2, because RL tends to erode general reasoning and v2 lets us measure that; v1 is the alternative (5
+  theorems better). Value: v0 to start. Both adapters are in `node_backup/`.
+- Reasoning stays visible and short (~120 tokens mean now), with a hard length cap, because GRPO tends to
+  lengthen outputs. The explanation and the tactic block form one action and share one advantage.
+- New node: 2–4 RTX 3090/4090-class GPUs (or one or two larger cards), at least 64–128 CPU cores for Lean (the
+  first node's 46 cores were the bottleneck), a region with direct access to Hugging Face and GitHub (the first
+  node needed mirrors and had a slow, dropping link). The owner picks offers; nothing is rented without approval.
+- Rebuild on the new node (about half a day): setup scripts, raw downloads, normalization, curriculum pools,
+  evaluation states from the backup. Copying from the old node is not possible. Full tracing is not needed for the
+  loop.
+
+### The loop
+
+1. Search a batch of curriculum statements with best-first / A* search, **n = 8 samples per expansion** (not 16),
+   without raising the sampling temperature.
+2. After each search finishes, label the whole search graph (below). No training after individual steps.
+3. Build GRPO groups and value targets from the labelled graphs; train policy and value in a pause–train–publish
+   phase.
+4. Publish after every training phase (~15–30 min); an in-place weight publish takes ~20 s, so training time, not
+   publishing, sets the cadence. Watch the clip fraction and the KL between the data-collecting policy and the
+   current one; if they rise, publish more often or train on smaller batches.
+5. The curriculum keeps the solve rate around 30–70%, so groups carry signal and trees are balanced between
+   solved and unsolved.
+
+### Search graph and labels
+
+The search is a graph: a tactic that reaches an existing state records a duplicate edge to it. In the visible
+student's 244 trees: 66.2% of attempts fail (Lean error or timeout), 15.5% create a new state, 14.4% reach an
+existing state, 3.8% repeat an earlier tactic text. Duplicates: 49% back to the same state (no progress), 4% back
+to an ancestor, 21% the same state as a sibling, 26% transpositions into another branch; 56 transposition edges
+lead from 24 off-path nodes into a proof. The error and no-progress shares are under investigation
+(`results/search_error_analysis/`).
+
+- **Proof graph**: every node with a route to a proof via new-state or transposition edges is on a proof. Its
+  exact remaining steps are the shortest such route. Transpositions are never failures (A then B and B then A both
+  prove).
+- **No progress** (back to the same state or an ancestor): a wasted step.
+- **Same state as a sibling**: both tactics are equally good and get the reward of the state they reach.
+- **Dead end**: an expanded node whose 8 samples and automation sweep produced no new state and no transposition
+  to a live state (only errors, timeouts, repeats or no-progress). Checked by Lean, but only for 8 samples, so a
+  weaker 0 than a single tactic error.
+- **Subtrees are never fully explored** (the branching factor is too large), so "fully explored dead subtree" is not
+  a label; off-path nodes are judged by the evidence beneath them (value targets below).
+- Possible later fix: when a transposition finds a shorter route to an existing state, A* would reopen it with the
+  shorter depth; the search currently does not.
+
+### Policy update: GRPO over sibling groups
+
+- **Group** = the 8 samples of one expanded node (independent draws from the policy at the same state), after
+  merging identical tactic texts. Best-first selection skews which states are trained, not the groups themselves.
+- **Reward** = `r_local + β · G`, with β large enough that the global term dominates whenever it is known:
+  - `r_local`: −1 Lean error, about −0.5 timeout, 0 (or slightly negative) no progress or an already-seen state,
+    potential-based value shaping `h(parent) − h(child)` (cannot change the optimal policy), a bonus for closing a
+    goal.
+  - `G` (global): 1 on the proof graph (larger for shorter remaining proofs), 0 for dead ends; for expanded
+    off-path children the backed-up value (below) once the value model passed the gate; **0 (neutral) for
+    never-expanded children** until then (the safe fallback: the loop still works, with less signal).
+- Advantage = reward minus the group mean (normalized). Groups with identical rewards are dropped, as in the
+  mainstream recipes.
+- **Control run**: the same loop with only the outcome / proof-graph signal (expert iteration via GRPO), to
+  measure whether the dense part helps.
+
+### Value model
+
+Diagnosis: v0 never saw a dead end (trained on human-proof states only, all provable and on-path) and cannot
+separate dead from live states in search trees (AUC 0.35–0.55); it ranks remaining steps with Spearman 0.80 on
+held-out human proofs but 0.55–0.73 on our own search trees (0.39 on few-shot trees). A representative value
+model is the foundation of everything above, so it comes first.
+
+- **Target** (AlphaZero-style): the probability that the current policy finds a proof from this state within the
+  budget, plus a remaining-steps head trained only on proof-graph nodes, where steps are exact. The A* priority
+  combines both (high proof probability and few remaining steps first; exact formula open).
+- **Targets and weights per node:**
+
+  | Node | Target | Weight |
+  |---|---|---|
+  | On the proof graph | 1, exact remaining steps | high |
+  | Dead end | 0 | moderate (only 8 samples tried) |
+  | Expanded, off the proof graph | **average** over the expanded descendants reachable via new-state and transposition edges (each once, no back-edges): proof probability = mean of their values; steps = mean of (distance + h) | grows with the number of expanded descendants |
+  | Never expanded | none (only a weak sibling-ranking partner) | ≈ 0 |
+
+  Lean-error edges have no state; they enter only the policy reward. The average was chosen over max/min for a
+  stable target: best-first search expands mostly promising nodes, so the average is dominated by good branches;
+  its pessimistic bias is similar across nodes. A temperature parameter can slide it toward the maximum later.
+- **Sibling ranking loss**, only among children of the same expanded node (identical states merged first),
+  logistic on the score difference, added to the pointwise loss with a mixing factor:
+  - solved trees: the proof-graph child against a dead-end sibling (high weight), an expanded off-path sibling
+    (medium, growing with its subtree), a never-expanded sibling (low, 0 at first);
+  - unsolved trees: expanded siblings with a large subtree against dead-end siblings;
+  - not at first: pairs of two off-path siblings ranked by their averaged values (noise against noise).
+- **Guards against a self-reinforcing loop**: Lean anchors (proof graph 1, dead ends 0) are never overwritten;
+  leaf values come from the value version that ran the search (a frozen target network); best-first search
+  replaces optimistic estimates of expanded nodes by their children's values; per-batch class balance and a cap on
+  labels per tree, so large unsolved trees do not dominate; a small replay of v0 data; occasional retraining from
+  the base checkpoint; the gate below.
+- **Not done**: extra searches only to label states (AlphaZero does not need them either).
+
+### Benchmark and gate
+
+- A fixed value benchmark of a few thousand states from search graphs of the current policy, including
+  never-expanded children. Metrics: ranking among siblings (proof-graph child above its siblings), calibration of
+  the proof probability, dead/live separation, remaining-step error on proof-graph nodes.
+- The decisive test: an A/B search with the policy fixed and only the value model swapped, solve rate at a fixed
+  budget.
+- A value model is published only if it beats the current one on the benchmark; value pseudo-labels for
+  off-path children (and value-based rewards) are switched on only after a model passed.
+
+### Fixed targets after every phase
+
+- Per-sample success on the 512 held-out states; miniF2F-valid at a fixed search budget; MATH-500 retention
+  (visible and thinking). Curves over training, not just a final score.
+
+### Order of work
+
+1. New node, rebuild, smoke tests; reproduce student v2 (or v1) and value v0 numbers.
+2. Value benchmark; value v1 from search-graph targets; A/B search against v0.
+3. GRPO loop with the neutral fallback (global term from the proof graph and dead ends only).
+4. Value pseudo-labels once v1 passed the gate.
+5. Control run with the outcome-only signal.
+6. Write-up on the homepage: the ladder, the RL curves, what the dense signal adds.
+
+### Dashboard
+
+TensorBoard as the backend, with a custom dashboard on top for project-specific views (built later). Logged per
+phase from day one:
+- value targets by source (proof graph, dead end, averaged), the subtree sizes behind averaged targets, the number
+  of never-expanded children;
+- edges by kind (error, timeout, new state, no progress, back to an ancestor, sibling duplicate, transposition,
+  repeat); a rising no-progress share is an early warning of reward hacking;
+- value benchmark metrics;
+- GRPO: share of groups with mixed rewards, reward split into local and global, the share of local reward earned on
+  states that never lead to a proof, KL and clip fraction, explanation length;
+- fixed targets (above).
+
+### Relation to other recipes
+
+| Recipe | Credit per step | Users |
+|---|---|---|
+| Outcome-only GRPO on whole proofs | none; sequence-level pass/fail, curriculum filter | DeepSeek-Prover-V1.5-RL, Kimina-RL, Goedel-V2 |
+| Expert iteration / rejection sampling | successes only | Polu 2022, Goedel, STP, BFS-Prover |
+| DPO on search-tree sibling pairs | local pairs labelled by the global outcome | BFS-Prover V1, our first loop |
+| Search distillation | policy toward the search's choices, value toward outcomes | AlphaZero, AlphaProof, HTPS |
+| Process rewards from subtree outcomes | step value from continuations | Math-Shepherd, VinePPO, tree-based GRPO variants |
+| Backed-up value targets for every searched node | value trained on the subtree's backed-up value | TreeStrap (Veness et al. 2009) |
+| **This plan** | sibling groups, local reward + proof-graph / backed-up global term | closest to HTPS and tree-based GRPO |
+
+Paper names in the last three rows are from memory and still need checking before the write-up.
+
+### Open
+
+- Starting policy v1 or v2 (proposed v2); budget and hardware offers.
+- Local reward magnitudes, β, the A* priority formula combining proof probability and steps, the value-average
+  temperature, weights by subtree size.
+- The error and no-progress rates in search (`results/search_error_analysis/`): how much is malformed Lean vs
+  well-formed tactics that do not work, and where "back to the same state" comes from.
 
 ## Known issues (backlog)
 - Resolved: search generation cost is charged per batch (`CandidateBatch`), when the expander yields it. Runs before
