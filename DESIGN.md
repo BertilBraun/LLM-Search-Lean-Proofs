@@ -327,7 +327,9 @@ starting policy on the fixed targets beyond noise, and the dense signal beats an
   without approval.
 - **New node**: a region with direct access to Hugging Face and GitHub (the first node needed mirrors and had a
   slow, dropping link); as many CPU cores as the budget allows (Lean was the bottleneck at 46 cores); 2–4 RTX
-  3090/4090-class GPUs or equivalent.
+  3090/4090-class GPUs or equivalent. Candidate class: 4× RTX 3090 with a 96-thread EPYC and ~128 GB RAM at about
+  $0.80/hour, which matches 2× RTX 5090 in aggregate memory bandwidth (3.8 vs 3.6 TB/s) at a lower price and with
+  more CPU; check that the threads are all ours, the location, the network speed and the reliability.
 - **Work that needs no GPU happens before renting**: implementation and unit tests locally; tests that need Lean
   either on a local Linux environment (e.g. WSL) or on a cheap CPU-only instance. The GPU node is rented when the
   code is ready.
@@ -537,8 +539,15 @@ foundation of everything above, so it comes first.
 
 ### Dashboard
 
-TensorBoard as the backend, with a custom dashboard on top for project-specific views (built later). Logged per
-phase from day one:
+A self-built dashboard (no dashboard framework): a small web server in the project serving our own pages and
+charts from the metrics files, with an overview page of the most important values and detail pages per area
+(policy/GRPO, value, search/Lean, curriculum, evaluations, system); it grows as gaps appear. It runs on the node
+and is exposed on an open port behind authentication (HTTPS where possible), laid out for phones too, so a
+multi-day run can be checked from anywhere; TensorBoard is exposed the same way. Overview page: status (loop
+running, phase, versions, time since the last publish, proofs per hour, GPU and Lean CPU utilization, money spent),
+headline curves (the fixed targets against the baseline and the control run), RL health, value health, search
+behaviour, warnings (rising no-progress share, KL too high, repetition loops, MATH dropping). Logged per phase
+from day one:
 - value targets by source (proof graph, dead end, averaged), the subtree sizes behind averaged targets, the number
   of never-expanded children;
 - edges by kind (error, timeout, new state, no progress, back to an ancestor, sibling duplicate, transposition,
