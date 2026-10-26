@@ -46,8 +46,8 @@ Tests, from Windows (`environment.sh` puts elan's `lake` and the venv on `PATH`;
 wsl -d Ubuntu -e bash -lc 'cd ~/lean-proofs && source deployment/environment.sh && pytest -q -p no:cacheprovider'
 ```
 
-The whole suite takes about 3 minutes on 4 CPUs: 1496 passed, 41 skipped (no GPU, no vLLM server, models not in the
-Hugging Face cache). Tests start at most two REPLs at once; a Mathlib REPL maps ~2.4 GB of `.olean` files that are
+The whole suite takes about 3.5 minutes on 4 CPUs; 41 tests skip (no GPU, no vLLM server, models not in the Hugging
+Face cache). Tests start at most two REPLs at once; a Mathlib REPL maps ~2.4 GB of `.olean` files that are
 shared through the page cache, and the run peaks at ~2 GB used, so a 6 GB WSL is enough.
 
 Another checkout, e.g. an agent's git worktree on Windows, runs against the same venv and Lean build: `PYTHONPATH`
