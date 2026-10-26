@@ -450,15 +450,23 @@ Decisions:
 
 - **Group** = the 8 samples of one expanded node (independent draws from the policy at the same state), after
   merging identical tactic texts. Best-first selection skews which states are trained, not the groups themselves.
-- **Reward** = `r_local + β · G`, with β large enough that the global term dominates whenever it is known:
-  - `r_local`: −1 Lean error (heartbeat timeouts included, possibly smaller), 0 (or slightly negative) no progress
-    or an already-seen state, potential-based value shaping `h(parent) − h(child)` (cannot change the optimal
-    policy), a bonus for closing a goal.
-  - `G` (global): 1 on the proof graph (larger for shorter remaining proofs), 0 for dead ends; for expanded
-    off-path children the backed-up value (below) once the value model passed the gate; **0 (neutral) for
-    never-expanded children** until then (the safe fallback: the loop still works, with less signal).
-- Advantage = reward minus the group mean (normalized). Groups with identical rewards are dropped, as in the
-  mainstream recipes.
+- **Reward** = `(1 − λ) · G + λ · L`, both on a common scale, mixed AlphaZero-style with **λ = 0.15** (the local
+  influence stays at about 15–20%; the proof graph decides):
+  - `G` (global) ∈ [0, 1]: 1 on the proof graph (optionally slightly more for shorter remaining proofs), 0 for dead
+    ends; for expanded off-path children the backed-up value (below) once the value model passed the gate; **0
+    (neutral) for never-expanded children** until then (the safe fallback: the loop still works, with less signal).
+  - `L` (local) ∈ [−1, 1]: −1 Lean error (heartbeat timeouts included), **−0.5 no progress** (net-unchanged state or
+    back to an ancestor, so a no-op never beats a genuine attempt), 0 for a new state plus potential-based value
+    shaping `h(parent) − h(child)` (cannot change the optimal policy) and a small bonus for closing a goal, clipped.
+- Advantage = reward minus the group mean, **without dividing by the group's standard deviation**: with std
+  normalization, groups where G is constant (most groups in unsolved trees) would have their small λ·L differences
+  re-amplified to full-size advantages and defeat the 15% cap. Only relative differences within a group matter;
+  absolute sums over samples (e.g. the placeholder weights' local −45,918 vs global +1,112 on the visible student's
+  trees, dominated by the many −1 errors) carry no meaning. Groups with identical rewards are dropped, as in the
+  mainstream recipes. The dashboard shows the effective local share of the summed |advantage|.
+- Measured on the visible student's trees: 93.1% of groups have mixed rewards with the dense reward, 3.1% with the
+  outcome-only reward (the control's sparsity); 72.6% of the positive local reward (placeholder weights) was earned
+  off the proof graph, which is why L is capped at λ.
 - **Per-token credit within a sample** (the GRPO loss is a sum over tokens, so each token can get its own
   advantage): the explanation gets the sample's overall advantage; the tactics up to the last successful one get
   the advantage of the state they reach; the first failing tactic (after flattening, the line Lean's error points
@@ -508,6 +516,16 @@ foundation of everything above, so it comes first.
 - A fixed value benchmark of a few thousand states from search graphs of the current policy, including
   never-expanded children. Metrics: ranking among siblings (proof-graph child above its siblings), calibration of
   the proof probability, dead/live separation, remaining-step error on proof-graph nodes.
+- **No circularity**: labels from a search guided by a value model are selected by that model. In the visible
+  student's v0-guided trees every labelled sibling pair is ordered exactly as v0 ordered the expansions (sibling
+  expanded first: v0 rated it higher in 52 of 52 pairs; proof child expanded first: 23 of 23; never-expanded
+  siblings: 253 of 253 rated lower), so v0 looked "worse than chance" on proof-vs-dead pairs by construction. The
+  benchmark is therefore built from searches **without a value model** (log-probability best-first of the starting
+  policy on held-out statements), pairs are counted only when both sides carry a known label (never-expanded
+  siblings are unknown, not negatives), every model is scored fresh on the same states, and calibration is reported
+  only for models with a probability output.
+- v0 measured without circularity (row-2 trees, a log-probability search, `results/phase3_astar_v0_sft_v2/`):
+  Spearman 0.65 for remaining steps, but p_dead ≈ 1e-7 on every state and dead AUC 0.47: it never predicts dead.
 - The decisive test: an A/B search with the policy fixed and only the value model swapped, solve rate at a fixed
   budget.
 - A value model is published only if it beats the current one on the benchmark; value pseudo-labels for
