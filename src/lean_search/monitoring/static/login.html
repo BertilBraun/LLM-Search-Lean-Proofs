@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>Sign in · Lean RL loop</title>
+    <link rel="icon" href="static/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="static/style.css" />
+    <script type="module" src="static/login.js"></script>
+  </head>
+  <body>
+    <div class="login">
+      <form method="post" action="login">
+        <h1>Lean RL loop</h1>
+        <p id="error" class="error" hidden></p>
+        <input
+          type="password"
+          name="password"
+          autocomplete="current-password"
+          placeholder="Password"
+          aria-label="Password"
+          required
+          autofocus
+        />
+        <button type="submit">Sign in</button>
+      </form>
+    </div>
+  </body>
+</html>

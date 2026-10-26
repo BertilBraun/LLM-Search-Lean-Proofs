@@ -227,6 +227,51 @@ per step (`MAX_NUM_BATCHED_TOKENS=16384`) did not change the rate. At 120 search
 an estimated 5k states (half the trees' final frontiers, 61 on average), about 35 s; re-score larger frontiers
 best-first or lazily.
 
+## Dashboard
+
+`experiments/dashboard.py` serves a run's metrics (`$LEAN_SEARCH_RUNS/<run>/metrics/*.jsonl`, see
+`src/lean_search/monitoring/README.md`) as an overview page and detail pages, on phones too. Standard library only,
+no external scripts.
+
+Password: create it once on the node (it is never generated, printed or committed); the server refuses to start
+without one and also accepts `LEAN_SEARCH_DASHBOARD_PASSWORD`.
+
+```bash
+mkdir -p ~/.config/lean-search && (umask 077 && read -rsp 'password: ' p && printf '%s' "$p" > ~/.config/lean-search/dashboard_password)
+```
+
+Run it next to the loop (and the system sampler, which records GPUs, cgroup CPU, Lean REPL cores and the money spent):
+
+```bash
+R=$LEAN_SEARCH_RUNS/<run>
+nohup python experiments/dashboard.py record-system --run-directory $R --hourly-price 0.80 > $R/system_sampler.log 2>&1 &
+nohup python experiments/dashboard.py serve --run-directory $R --compare control=$LEAN_SEARCH_RUNS/<control run> \
+    --host 0.0.0.0 --port 8600 --password-file ~/.config/lean-search/dashboard_password \
+    --config experiments/configs/dashboard/dashboard.toml > $R/dashboard.log 2>&1 &
+```
+
+Exposing it:
+
+- **HTTPS tunnel (preferred, works from a phone)**: `cloudflared tunnel --url http://localhost:8600` prints a
+  `https://<random>.trycloudflare.com` address (no account; the address changes on restart); with `--host
+  127.0.0.1` nothing else is reachable. Vast's Instance Portal can open the same kind of tunnel for a local port.
+  Behind a tunnel the session cookie is marked `Secure` (from `X-Forwarded-Proto`; `--secure-cookies` forces it).
+- **Mapped port**: open the port when renting (Vast: `-p 8600:8600` in the docker options) and use the external
+  port Vast lists for it, `http://<ip>:<external port>/`. Plain HTTP: the password crosses the network
+  unencrypted, so prefer the tunnel or an SSH forward (`ssh -L 8600:localhost:8600 ...`).
+- Login: a form with a 14-day session cookie (signed with a per-process key, so a restart logs out); scripts can use
+  basic auth (`curl -u any:<password> .../api/overview`). Ten failed attempts per minute lock a client out for the
+  rest of that minute.
+
+Try it locally with synthetic data (3 days of a run and its control, `--live` keeps appending):
+`LEAN_SEARCH_DASHBOARD_PASSWORD=<throwaway> PYTHONPATH=src python experiments/dashboard.py demo --live`, then
+open `http://localhost:8600/`.
+
+TensorBoard: `MetricsWriter(..., tensorboard=True)` mirrors every scalar to `$R/tensorboard` when `tensorboard` is
+installed (`uv pip install tensorboard`; not in the lock file). TensorBoard has no authentication, so never map
+its port openly: run `tensorboard --logdir $R/tensorboard --host 127.0.0.1 --port 6006` and reach it through an SSH
+forward or a tunnel that authenticates (Vast's Instance Portal; Cloudflare Access), not a bare quick tunnel.
+
 ## Node layout
 
 | Path | Contents | Persistent |
