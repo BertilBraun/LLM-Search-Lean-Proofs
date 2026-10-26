@@ -243,7 +243,7 @@ function latestBands(chart) {
 
 function reliabilitySpec(chart) {
   const fields = latestFields("value");
-  const bins = fields ? fields.benchmark.calibration.anchor_bins : [];
+  const bins = fields && fields.benchmark.calibration ? fields.benchmark.calibration.anchor_bins : [];
   const known = bins.filter((bin) => bin.mean_predicted !== null && bin.mean_target !== null);
   const subtitle = fields ? `candidate v${fields.candidate_version}; ${chart.subtitle}` : chart.subtitle;
   return {

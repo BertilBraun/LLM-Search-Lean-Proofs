@@ -24,7 +24,13 @@ from lean_search.rl.training_phase import (  # noqa: E402
 from lean_search.search import TreeRecord  # noqa: E402
 from lean_search.search.records import from_json_object  # noqa: E402
 from lean_search.training.sft import LoraSettings, OptimizationConfig  # noqa: E402
-from lean_search.value.benchmark import BenchmarkConfig, build_benchmark  # noqa: E402
+from lean_search.value.benchmark import (  # noqa: E402
+    BenchmarkConfig,
+    SearchGuidance,
+    TreeProvenance,
+    TreeSource,
+    build_benchmark,
+)
 from lean_search.value.graph_trainer import GraphValueConfig  # noqa: E402
 
 CONFIG_DIRECTORY = Path(__file__).resolve().parents[2] / "experiments" / "configs" / "grpo"
@@ -67,7 +73,8 @@ def phase(tmp_path_factory: pytest.TempPathFactory) -> tuple[PhaseOutcome, Path]
         policy=GrpoConfig(model=str(model), lora=LORA, optimization=OPTIMIZATION, scoring_micro_batch_tokens=65536),
         value=GraphValueConfig(model=str(model), lora=LORA, optimization=OPTIMIZATION),
     )
-    benchmark = build_benchmark(label_phase_data([record], config).trees, BenchmarkConfig())
+    provenance = TreeProvenance("benchmark", SearchGuidance.VALUE_FREE, None, "")
+    benchmark = build_benchmark([TreeSource(provenance, label_phase_data([record], config).trees)], BenchmarkConfig())
     inputs = PhaseInputs(records=[record], texts=expansion_texts(record), value_benchmark=benchmark)
     output = tmp_path_factory.mktemp("phase")
     tokenizer = CharacterTokenizer()

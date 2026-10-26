@@ -155,12 +155,13 @@ export const PAGES = [
         title: "Benchmark",
         charts: [
           {
-            title: "Proof-graph state ranked above its siblings", family: "value", unit: "share",
+            title: "Sibling pairs ranked correctly", subtitle: "both siblings labelled; never-expanded ones excluded",
+            family: "value", unit: "share",
             series: [
-              { label: "all", field: "benchmark.ranking.pairwise_accuracy" },
-              { label: "over dead end", field: "benchmark.ranking.over_dead_end_accuracy" },
-              { label: "over expanded", field: "benchmark.ranking.over_expanded_accuracy" },
-              { label: "over never expanded", field: "benchmark.ranking.over_never_expanded_accuracy" },
+              { label: "proof graph over all", field: "benchmark.ranking.pairwise_accuracy" },
+              { label: "proof graph over dead end", field: "benchmark.ranking.proof_over_dead_end.accuracy" },
+              { label: "proof graph over expanded", field: "benchmark.ranking.proof_over_expanded.accuracy" },
+              { label: "expanded over dead end", field: "benchmark.ranking.expanded_over_dead_end.accuracy" },
             ],
           },
           {

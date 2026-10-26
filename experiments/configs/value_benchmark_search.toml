@@ -1,0 +1,74 @@
+# Trees for the value benchmark (experiments/value_benchmark.py): the starting policy on miniF2F-valid (held out:
+# never trained on), searched without a value model. Otherwise the visible student v2's search
+# (reasoning/phase5_expansions_visible_student_v2.toml); keep sample_count and the budget equal to the phase's
+# searches. Serve the starting policy on each GPU (no value server is needed):
+#   deployment/serve_model.sh policy-gpu<gpu> /workspace/checkpoints/grpo_start/merged <gpu> 810<gpu> \
+#       --served-model-name policy-merged --no-enable-lora
+# then
+#   python experiments/run_search.py --config experiments/configs/value_benchmark_search.toml --split valid \
+#       --run-name value_benchmark_search
+#   python experiments/value_benchmark.py build --trees $LEAN_SEARCH_RUNS/value_benchmark_search/trees \
+#       --output $LEAN_SEARCH_RUNS/value_benchmark/benchmark.json.gz
+
+[lean]
+pool_size = 120
+concurrency = 120
+
+[search]
+# 64 expansions are the only budget: no token cap, the wall clock a 2 h safety cap per theorem.
+max_expansions = 64
+max_wall_seconds = 7200.0
+max_depth = 16
+score_children_early = true
+tactic_timeout_seconds = 10.0
+forbidden_steps = [
+    "exact?",
+    "apply?",
+    "rw?",
+    "simp?",
+    "simp_all?",
+    "dsimp?",
+    "aesop?",
+    "hint",
+    "rw_search",
+    "library_search",
+]
+
+[expander]
+kind = "automation_then_policy"
+overlap = true
+
+[automation]
+tactics = [
+    "omega",
+    "constructor",
+    "rfl",
+    "field_simp",
+    "ring_nf",
+    "simp_all",
+    "nlinarith",
+]
+timeout_seconds = 10.0
+max_wall_clock_timeouts_per_tactic = 1
+
+[priority]
+# No value model: best-first on the path's step log-probabilities (row 2's priority), so no value model chose which
+# states were expanded and labelled. A visible-reasoning sample's log-probability includes its explanation.
+kind = "cumulative_log_probability"
+length_exponent = 1.0
+automation_log_probability = -2.8
+
+[policy]
+model = "policy-merged"
+server_urls = ["http://127.0.0.1:8100/v1", "http://127.0.0.1:8101/v1"]
+tokenizer = "Qwen/Qwen3.5-4B"
+sample_count = 16
+temperature = 0.8
+top_p = 1.0
+max_tokens = 1024
+thinking = false
+visible_reasoning = true
+few_shot = false
+# Budget forcing: a sample cut off before its block gets the block opened and 256 tokens to write it.
+force_answer_on_truncation = true
+forced_answer_tokens = 256

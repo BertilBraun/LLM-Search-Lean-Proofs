@@ -130,18 +130,49 @@ the rest dead), so only these two adapters change with the value head. `temperat
 best descendant (softmax weights on the proof probability; `None` is the plain mean).
 
 Sibling pairs (`sibling_pairs`) are taken among the distinct states one expanded node reached over new-state, sibling
-and transposition edges. The benchmark (`build_benchmark`, `experiments/value_benchmark.py`) keeps every sibling
-group with a proof-graph state and fills up to `max_states_per_tree` with groups holding a dead end, then the rest;
-`benchmark_metrics(benchmark, estimates)` scores any estimates aligned with its states.
+and transposition edges.
 
 `graph_trainer.py` trains the value LoRA on these targets (`experiments/grpo_phase.py`): per target the cross-entropy
 against `bin_target` (plus the bin-mass term), weighted and rebalanced per step across sources (`SourceShares`), plus
 `ranking_weight` times the weighted logistic loss `softplus(-(s_preferred - s_other) / temperature)` on sibling pairs,
 with s the log-odds of the proof probability `log(1 - p_dead) - log p_dead` (or the probability itself). A parent's
 pair members train in the same micro-batch; exact and dead v0 examples are replayed as `replay_share` of the pointwise
-items. `run_value_gate` scores the benchmark with the new and the current adapter and passes when the sibling pairwise
-accuracy improves by `min_ranking_gain` without the proof-graph/dead-end AUC or the anchors' Brier score regressing
-beyond their tolerances.
+items. `run_value_gate` scores the benchmark fresh with the new and the current adapter (`benchmark_scores`, the same
+`BenchmarkScores` as the served path) and passes when the sibling pairwise accuracy improves by `min_ranking_gain`
+without the proof-graph/dead-end AUC or the anchors' Brier score regressing beyond their tolerances, and the
+benchmark holds no value-model-guided tree (`guided_trees = "refuse"`; `"warn"` only reports them in `warnings`).
+
+## Value benchmark (`benchmark.py`, `benchmark_scoring.py`, `experiments/value_benchmark.py`)
+
+Best-first search expands what its priority rates best, so the labels of an A* search on a value model are chosen
+by that model: in the visible student's v0-guided trees every labelled sibling pair is ordered as v0 ordered the
+expansions. The benchmark therefore records each run's provenance (`TreeProvenance`, from the run's `config.toml`):
+`value_free` (cumulative log-probability or depth plus goals), `heuristic_value` (A* on the goal count),
+`value_model` (A* on a named served adapter or merged value model) or `unknown_value` (trees with recorded estimates
+and no config). `guidance_conflicts` lists the runs guided by a compared model (by served name; `None` compares every
+value model, and an unknown guide always conflicts); `build` refuses them unless `--guided-trees warn`, and so does
+the gate (`GateConfig.guided_trees`). Benchmark trees come from a value-free search of the starting policy on
+miniF2F-valid (`experiments/configs/value_benchmark_search.toml`, the commands are in its header).
+
+`build_benchmark` keeps one tree per statement (the first run listing it), every sibling group with a proof-graph
+state, and fills up to `max_states_per_tree` with groups holding a dead end, then the rest; never-expanded children
+stay in. Metrics (`benchmark_metrics`):
+
+| Metric | States and pairs |
+|---|---|
+| ranking | pairs of a preferred over an other sibling, both with a known label: proof graph over dead end, proof graph over an expanded off-graph sibling whose subtree the search explored (`min_expanded_nodes`, default the state plus one expanded descendant: the estimate-free counterpart of an averaged target, since value-free trees record no estimates to average), and that expanded sibling over a dead end; each type separately, the first two together as `pairwise_accuracy`; top-1 per group. Never-expanded and unexplored expanded siblings are unknown, not negatives: counted, never paired |
+| steps | MAE and Spearman of the steps (given alive, or the recorded h) on proof-graph states |
+| calibration, separation | fresh scores only: the anchors' ECE and Brier score and the proof-graph/dead-end AUCs of `1 − p_dead` |
+
+Estimates come in two kinds. **Fresh**: `score_benchmark(estimator, benchmark)` scores every state through the
+search's vLLM path (`ValueModelEstimator.score_states`: top-k logprobs renormalized over the nine bin tokens; a
+prompt longer than the server's context gets no score) and stores the distributions with the served model's name and
+the benchmark's fingerprint (`BenchmarkScores`, `write_scores`); `fresh_estimates` reads them back for the same
+benchmark only, so every model is compared on identical states. **Recorded**: the h a search stored per node
+(`recorded_benchmark_estimates`, or `looked_up_estimates` for the h a model recorded for identical goals of the same
+statement in another search it guided). An h has no probability, so recorded metrics are ranking and steps only, are
+labelled "recorded (biased if the trees were guided by this model)", and `circular_runs` names the runs whose labels
+the estimating model chose. The `(dead_steps − h) / (dead_steps − 1)` mapping is used only for training targets.
 
 ## API
 

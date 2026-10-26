@@ -11,16 +11,25 @@ pytest.importorskip("peft")
 
 from lean_search.rl.training_phase import TrainingPhaseConfig, label_phase_data  # noqa: E402
 from lean_search.search import TreeRecord  # noqa: E402
+from lean_search.search.priority import PriorityKind  # noqa: E402
 from lean_search.training.sft import LoraSettings, OptimizationConfig  # noqa: E402
 from lean_search.value.benchmark import (  # noqa: E402
     BenchmarkConfig,
+    BenchmarkEstimates,
     BenchmarkMetrics,
+    EstimateKind,
+    GuidedTrees,
     LabelledTree,
+    SearchGuidance,
+    StateEstimate,
+    TreeProvenance,
+    TreeSource,
+    ValueBenchmark,
     benchmark_metrics,
     build_benchmark,
 )
 from lean_search.value.bins import BIN_COUNT, DEAD_BIN  # noqa: E402
-from lean_search.value.graph_targets import SourceShares, TargetSource, ValueEstimate  # noqa: E402
+from lean_search.value.graph_targets import SourceShares, TargetSource  # noqa: E402
 from lean_search.value.graph_trainer import (  # noqa: E402
     GateConfig,
     GraphValueConfig,
@@ -63,6 +72,14 @@ def value_tree() -> TreeRecord:
 
 def labelled_trees() -> tuple[LabelledTree, ...]:
     return label_phase_data([value_tree()], TrainingPhaseConfig()).trees
+
+
+VALUE_FREE = TreeProvenance("row2", SearchGuidance.VALUE_FREE, PriorityKind.CUMULATIVE_LOG_PROBABILITY, "")
+GUIDED = TreeProvenance("astar", SearchGuidance.VALUE_MODEL, PriorityKind.A_STAR, "value-v0")
+
+
+def value_benchmark(provenance: TreeProvenance = VALUE_FREE) -> ValueBenchmark:
+    return build_benchmark([TreeSource(provenance, labelled_trees())], BenchmarkConfig())
 
 
 REPLAY = [
@@ -152,8 +169,9 @@ def test_soft_target_loss_with_a_one_hot_target_is_the_cross_entropy() -> None:
 
 
 def metrics(pairwise: float, auc: float, brier: float) -> BenchmarkMetrics:
-    benchmark = build_benchmark(labelled_trees(), BenchmarkConfig())
-    base = benchmark_metrics(benchmark, [ValueEstimate(0.5, 3.0)] * len(benchmark.states), BenchmarkConfig())
+    benchmark = value_benchmark()
+    estimates = BenchmarkEstimates(EstimateKind.FRESH, "m", (StateEstimate(0.5, 3.0),) * len(benchmark.states))
+    base = benchmark_metrics(benchmark, estimates, BenchmarkConfig())
     return dataclasses.replace(
         base,
         ranking=dataclasses.replace(base.ranking, pairwise_accuracy=pairwise),
@@ -192,6 +210,23 @@ def test_training_lowers_the_ranking_loss(tiny_model: Path, tmp_path: Path) -> N
 def test_gate_scores_every_benchmark_state(tiny_model: Path, tmp_path: Path) -> None:
     config = value_config(str(tiny_model), optimization=dataclasses.replace(value_config().optimization, epochs=2))
     train_graph_value_model(config, CharacterTokenizer(), 0, value_data(config), CPU, tmp_path / "new", print)
-    benchmark = build_benchmark(labelled_trees(), BenchmarkConfig())
+    benchmark = value_benchmark()
     result = run_value_gate(config, CharacterTokenizer(), 0, benchmark, str(tmp_path / "new"), "", CPU)
     assert result.new.states - result.new.states_without_estimate == len(benchmark.states)
+
+
+def test_gate_scores_both_models_fresh(tiny_model: Path) -> None:
+    result = run_value_gate(value_config(str(tiny_model)), CharacterTokenizer(), 0, value_benchmark(), "", "", CPU)
+    assert (result.new.kind, result.current.kind) == (EstimateKind.FRESH, EstimateKind.FRESH)
+
+
+def test_gate_refuses_a_benchmark_from_value_guided_trees(tiny_model: Path) -> None:
+    config = value_config(str(tiny_model), gate=GateConfig(min_ranking_gain=-1.0))
+    result = run_value_gate(config, CharacterTokenizer(), 0, value_benchmark(GUIDED), "", "", CPU)
+    assert not result.passed
+
+
+def test_gate_only_warns_about_value_guided_trees_when_configured(tiny_model: Path) -> None:
+    config = value_config(str(tiny_model), gate=GateConfig(min_ranking_gain=-1.0, guided_trees=GuidedTrees.WARN))
+    result = run_value_gate(config, CharacterTokenizer(), 0, value_benchmark(GUIDED), "", "", CPU)
+    assert (result.passed, len(result.warnings)) == (True, 1)
