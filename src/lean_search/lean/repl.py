@@ -33,7 +33,8 @@ from lean_search.lean.text import (
     wrap_tactic,
 )
 
-PROJECT_DIRECTORY = Path(__file__).resolve().parents[3] / "lean"
+# Overridable so a checkout without a Lean build (e.g. a git worktree) can use another checkout's built lean/.
+PROJECT_DIRECTORY = Path(os.environ.get("LEAN_SEARCH_LEAN_PROJECT") or Path(__file__).resolve().parents[3] / "lean")
 REPL_BINARY = Path(".lake/packages/REPL/.lake/build/bin/repl")
 STANDARD_AXIOMS = frozenset({"propext", "Classical.choice", "Quot.sound"})
 

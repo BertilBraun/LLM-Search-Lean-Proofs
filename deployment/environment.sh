@@ -1,17 +1,31 @@
 #!/usr/bin/env bash
 # Sourced on the node by every deployment script and by deployment/on_node.sh.
+#
+# Downloads go direct. Mirrors are opt-in for networks without direct access (the first node, in China):
+#   HF_ENDPOINT=https://hf-mirror.com
+#   LEAN_SEARCH_GITHUB_PROXY=https://ghfast.top/                        (setup_lean.sh)
+#   LEAN_SEARCH_PYPI_MIRROR=https://pypi.tuna.tsinghua.edu.cn/simple    (setup_python.sh)
 
-export LEAN_SEARCH_ROOT="${LEAN_SEARCH_ROOT:-/workspace/LLM-Search-Lean-Proofs}"
-export LEAN_SEARCH_DATA="${LEAN_SEARCH_DATA:-/workspace/data}"
-export LEAN_SEARCH_RUNS="${LEAN_SEARCH_RUNS:-/workspace/runs}"
-export LEAN_SEARCH_CHECKPOINTS="${LEAN_SEARCH_CHECKPOINTS:-/workspace/checkpoints}"
+export LEAN_SEARCH_ROOT="${LEAN_SEARCH_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+# /workspace on nodes; machines without it (local WSL) keep the same layout under the home directory.
+if [[ -z "${LEAN_SEARCH_WORKSPACE:-}" ]]; then
+    if [[ -w /workspace ]]; then
+        LEAN_SEARCH_WORKSPACE=/workspace
+    else
+        LEAN_SEARCH_WORKSPACE="${HOME}/lean-search-workspace"
+    fi
+fi
+export LEAN_SEARCH_WORKSPACE
+export LEAN_SEARCH_DATA="${LEAN_SEARCH_DATA:-${LEAN_SEARCH_WORKSPACE}/data}"
+export LEAN_SEARCH_RUNS="${LEAN_SEARCH_RUNS:-${LEAN_SEARCH_WORKSPACE}/runs}"
+export LEAN_SEARCH_CHECKPOINTS="${LEAN_SEARCH_CHECKPOINTS:-${LEAN_SEARCH_WORKSPACE}/checkpoints}"
 
-# The node cannot reach huggingface.co directly, and pypi.org is slow from it.
-export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
-export HF_HOME="${HF_HOME:-/workspace/.hf_home}"
+export HF_HOME="${HF_HOME:-${LEAN_SEARCH_WORKSPACE}/.hf_home}"
 export HF_HUB_ENABLE_HF_TRANSFER="${HF_HUB_ENABLE_HF_TRANSFER:-0}"
-# hf-mirror.com serves plain files, but Xet downloads go to cas-server.xethub.hf.co and fail with 401.
-export HF_HUB_DISABLE_XET="${HF_HUB_DISABLE_XET:-1}"
+if [[ "${HF_ENDPOINT:-}" == *hf-mirror.com* ]]; then
+    # hf-mirror.com serves plain files, but Xet downloads go to cas-server.xethub.hf.co and fail with 401.
+    export HF_HUB_DISABLE_XET="${HF_HUB_DISABLE_XET:-1}"
+fi
 
 export PATH="${HOME}/.elan/bin:${LEAN_SEARCH_ROOT}/.venv/bin:${PATH}"
 

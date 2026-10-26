@@ -3,10 +3,10 @@
 #
 #   deployment/setup_lean.sh
 #
-# Idempotent. Pins live in lean/lean-toolchain and lean/lake-manifest.json. GitHub release downloads are throttled
-# on some nodes, so they go through $LEAN_SEARCH_GITHUB_PROXY (default https://ghfast.top/, empty for direct) and
-# are checked against the SHA-256 sums below. Lake packages are shallow-fetched at their manifest revisions, because
-# Lake itself would clone the full Mathlib history.
+# Idempotent. Pins live in lean/lean-toolchain and lean/lake-manifest.json. GitHub release downloads are checked
+# against the SHA-256 sums below and go through $LEAN_SEARCH_GITHUB_PROXY when set (e.g. https://ghfast.top/ where
+# they are throttled). Lake packages are shallow-fetched at their manifest revisions, because Lake itself would clone
+# the full Mathlib history. Needs git, curl, python3 and zstd.
 
 set -euo pipefail
 
@@ -14,13 +14,20 @@ script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${script_directory}/environment.sh"
 
 lean_directory="${LEAN_SEARCH_ROOT}/lean"
-github_proxy="${LEAN_SEARCH_GITHUB_PROXY-https://ghfast.top/}"
+github_proxy="${LEAN_SEARCH_GITHUB_PROXY:-}"
 
 elan_version="v4.2.4"
 elan_sha256="42b94d4244e8353142c456ec0e4ca6528fd898a6c604d4059f494e706e431f63"
 declare -A toolchain_sha256=(
     ["v4.9.0-rc1"]="a6c521a9329aa03fb167e45df8e30be83a5512fc6f74f9c3edf67019a0705068"
 )
+
+for required_command in git curl python3 zstd; do
+    if ! command -v "${required_command}" >/dev/null 2>&1; then
+        echo "Required command is unavailable: ${required_command}" >&2
+        exit 1
+    fi
+done
 
 download_verified() {
     local url="$1" sha256="$2" output="$3"

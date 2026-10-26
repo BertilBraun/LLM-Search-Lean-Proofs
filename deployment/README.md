@@ -1,6 +1,7 @@
 # Deployment
 
-All heavy work runs on one rented Vast.ai node. The local machine only edits code and drives the node over SSH.
+All heavy work runs on one rented Vast.ai node. The local machine edits code, runs tests (WSL, below) and drives the
+node over SSH.
 Changes reach the node through GitHub: commit locally, then `deployment/deploy.sh` pushes and fast-forwards the
 node's checkout.
 
@@ -11,7 +12,7 @@ node's checkout.
 | `deploy.sh` | local | Push the current branch and fast-forward the node to it. |
 | `fetch_results.sh` | local | Copy `$LEAN_SEARCH_RUNS/<run>/summary/` from the node into `results/<run>/`. |
 | `setup_remote.sh` | node | Provision a node: clone the repo, then `setup_python.sh` and `setup_lean.sh`. |
-| `environment.sh` | node | Paths, mirrors and `PATH`; sourced by everything else. |
+| `environment.sh` | node | Paths, opt-in mirrors and `PATH`; sourced by everything else. |
 | `setup_python.sh` | node | Create the virtual environment from `uv.lock`. |
 | `serve_model.sh` | node | Start a detached vLLM server for one model on one GPU (prefix caching, runtime LoRA). |
 | `stop_model.sh` | node | Stop servers started by `serve_model.sh` (by name or `--all`). |
@@ -24,6 +25,44 @@ node's checkout.
 echo "HOST:PORT" > deployment/.node_address
 deployment/remote_command.sh "$(cat deployment/.node_address)" 'bash -s' < deployment/setup_remote.sh
 ```
+
+## Local development (WSL)
+
+Implementation and all tests that need no GPU or model server, Lean included, run in WSL2 (Ubuntu 24.04, no GPU).
+The clone lives on the Linux filesystem at `~/lean-proofs` (Lean under `/mnt/c` is slow); the Windows repository is
+its remote `local`, so commits made on Windows, worktree branches included, arrive without pushing to GitHub.
+
+```bash
+git clone https://github.com/BertilBraun/LLM-Search-Lean-Proofs.git ~/lean-proofs && cd ~/lean-proofs
+git remote add local /mnt/c/Projects/Lean-Proofs
+uv sync --locked --python 3.12 --extra ml --group dev   # ~6 minutes, 8 GB; torch and vLLM import without CUDA
+deployment/setup_lean.sh                                # ~3 minutes, 5 GB; needs zstd (sudo apt install zstd)
+git fetch local && git reset --hard local/master        # later: sync to the Windows master
+```
+
+Tests, from Windows (`environment.sh` puts elan's `lake` and the venv on `PATH`; Lean tests skip without `lake`):
+
+```bash
+wsl -d Ubuntu -e bash -lc 'cd ~/lean-proofs && source deployment/environment.sh && pytest -q -p no:cacheprovider'
+```
+
+The whole suite takes about 3 minutes on 4 CPUs: 1496 passed, 41 skipped (no GPU, no vLLM server, models not in the
+Hugging Face cache). Tests start at most two REPLs at once; a Mathlib REPL maps ~2.4 GB of `.olean` files that are
+shared through the page cache, and the run peaks at ~2 GB used, so a 6 GB WSL is enough.
+
+Another checkout, e.g. an agent's git worktree on Windows, runs against the same venv and Lean build: `PYTHONPATH`
+puts its `src/` ahead of the venv's editable install, `LEAN_SEARCH_LEAN_PROJECT` points the REPL at the built
+`lean/` (a worktree has no `lean/.lake`, so its Lean tests would skip), and the worktree's own `tests/` and
+`pyproject.toml` are used. New dependencies of the worktree need a `uv sync` in `~/lean-proofs` first.
+
+```bash
+wsl -d Ubuntu -e bash -lc 'source ~/lean-proofs/deployment/environment.sh
+  W=/mnt/c/Projects/Lean-Proofs/.claude/worktrees/<name> && cd $W
+  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=$W/src LEAN_SEARCH_LEAN_PROJECT=$HOME/lean-proofs/lean \
+      python -m pytest -q -p no:cacheprovider tests'
+```
+
+Same results as the native run, in ~3.5 minutes (sources read over `/mnt/c`).
 
 ## Lean environment
 
@@ -41,10 +80,10 @@ linter fix), `lean4-cli` bumped, and a REPL fork (`xinhjBrant/repl@3334a97b` = R
 extraction) added. Those files enter Mathlib's cache hashes, so the fork has no prebuilt cache; its upstream parent
 has one (4650 files). The Mathlib sources are identical.
 
-`setup_lean.sh` takes about 4 minutes on a fresh node (3 of them downloading the Mathlib cache from Azure) and under
-a minute when `~/.cache/mathlib` is warm. GitHub release downloads (elan, the toolchain) are throttled to a few KB/s
-on the current node, so they go through `$LEAN_SEARCH_GITHUB_PROXY` (default `https://ghfast.top/`) and are checked
-against pinned SHA-256 sums; `git fetch` from GitHub is fast and used directly.
+`setup_lean.sh` takes about 3–4 minutes on a fresh machine (most of it downloading the Mathlib cache from Azure) and
+under a minute when `~/.cache/mathlib` is warm. It needs `git`, `curl`, `python3` and `zstd`. GitHub release
+downloads (elan, the toolchain) are checked against pinned SHA-256 sums and go through `$LEAN_SEARCH_GITHUB_PROXY`
+when set (`https://ghfast.top/` on the first node, where they were throttled to a few KB/s).
 
 REPL facts for this version (handled in `src/lean_search/lean/`): it never flushes stdout (run it under
 `stdbuf -oL`); tactic-level `set_option maxHeartbeats N in` does not change the heartbeat limit in Lean 4.9, so the
@@ -53,11 +92,12 @@ are never freed, so processes are restarted by memory and proof-state thresholds
 
 ## Python environment and model serving
 
-`setup_python.sh` installs `uv.lock` (Python 3.12, extra `ml`) in about a minute. The lock records the Tsinghua PyPI
-mirror, so `uv sync --locked` downloads from it (~50 MB/s on the node). vLLM 0.31.0 pins torch 2.13.0, whose PyPI
+`setup_python.sh` installs `uv.lock` (Python 3.12, extra `ml`) in about a minute. The lock records pypi.org; with
+`LEAN_SEARCH_PYPI_MIRROR` set (e.g. `https://pypi.tuna.tsinghua.edu.cn/simple`) it resolves against that index
+instead, keeping the locked versions. vLLM 0.31.0 pins torch 2.13.0, whose PyPI
 wheels bundle the CUDA 13.0 runtime; driver 595 supports it and sm_86 is in the arch list, so the system CUDA 12.8
-toolkit is not used. Models are fetched with `hf download <repository>` into `$HF_HOME`; `environment.sh` disables
-Xet, which hf-mirror.com does not proxy (401).
+toolkit is not used. Models are fetched with `hf download <repository>` into `$HF_HOME`, from huggingface.co or
+from `HF_ENDPOINT=https://hf-mirror.com`, for which `environment.sh` disables Xet (the mirror does not proxy it: 401).
 
 ```bash
 deployment/on_node.sh 'deployment/serve_model.sh qwen3.5-2b Qwen/Qwen3.5-2B 0 8000'   # returns once healthy
@@ -195,12 +235,15 @@ best-first or lazily.
 | `/workspace/data` | downloaded and traced datasets | no |
 | `/workspace/runs` | search logs and per-theorem results | no |
 | `/workspace/checkpoints` | LoRA adapters and value models | no |
-| `/workspace/.hf_home` | Hugging Face cache (models via hf-mirror.com) | no |
+| `/workspace/.hf_home` | Hugging Face cache | no |
 
-`/workspace` is not a volume on the current node, so anything that must survive the rental is either committed
+`/workspace` was not a volume on the first node, so anything that must survive the rental is either committed
 (summaries under `results/`) or copied back to the local machine (adapters under the untracked `artifacts/`).
 
-## Current node
+Without a writable `/workspace` (local WSL), `environment.sh` uses `~/lean-search-workspace` instead
+(`LEAN_SEARCH_WORKSPACE` overrides both).
+
+## First node (returned)
 
 2× RTX 3090 (24 GB), AMD EPYC 7K62 with a 46-core cgroup quota, ~120 GB RAM cgroup limit, 300 GB disk,
 Ubuntu 24.04, CUDA 12.8, driver 595. Network: GitHub reachable; huggingface.co blocked (use hf-mirror.com);

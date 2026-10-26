@@ -37,12 +37,6 @@ packages = ["src/lean_search"]
 [tool.uv]
 environments = ["sys_platform == 'linux'"]
 
-# The node reaches pypi.org slowly; uv.lock records the mirror's URLs, so `uv sync --locked` downloads from it.
-[[tool.uv.index]]
-name = "tsinghua"
-url = "https://pypi.tuna.tsinghua.edu.cn/simple"
-default = true
-
 [tool.ruff]
 line-length = 120
 target-version = "py312"
