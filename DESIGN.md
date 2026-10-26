@@ -319,19 +319,44 @@ Learn and measure the RL stage on a verifiable task: an RL loop with a concrete 
 globally anchored rewards, and per-phase curves rather than a single final score. Success: the loop improves its
 starting policy on the fixed targets beyond noise, and the dense signal beats an outcome-only control.
 
-### Starting point and infrastructure
+### Budget and infrastructure
 
-- Policy: a visible-reasoning 4B student (short explanation, then the Lean block; `enable_thinking = false`).
-  Proposed v2, because RL tends to erode general reasoning and v2 lets us measure that; v1 is the alternative (5
-  theorems better). Value: v0 to start. Both adapters are in `node_backup/`.
-- Reasoning stays visible and short (~120 tokens mean now), with a hard length cap, because GRPO tends to
-  lengthen outputs. The explanation and the tactic block form one action and share one advantage.
-- New node: 2–4 RTX 3090/4090-class GPUs (or one or two larger cards), at least 64–128 CPU cores for Lean (the
-  first node's 46 cores were the bottleneck), a region with direct access to Hugging Face and GitHub (the first
-  node needed mirrors and had a slow, dropping link). The owner picks offers; nothing is rented without approval.
-- Rebuild on the new node (about half a day): setup scripts, raw downloads, normalization, curriculum pools,
-  evaluation states from the backup. Copying from the old node is not possible. Full tracing is not needed for the
-  loop.
+- **Budget: about $200**, spent over one to two weeks rather than in a few days: no time pressure, so cheaper,
+  slower hardware is preferred; setup, data transfer and implementation overhead then weigh less. Roughly $0.6–1.4
+  per hour of node time; concrete offers are checked live before renting, the owner picks, nothing is rented
+  without approval.
+- **New node**: a region with direct access to Hugging Face and GitHub (the first node needed mirrors and had a
+  slow, dropping link); as many CPU cores as the budget allows (Lean was the bottleneck at 46 cores); 2–4 RTX
+  3090/4090-class GPUs or equivalent.
+- **Work that needs no GPU happens before renting**: implementation and unit tests locally; tests that need Lean
+  either on a local Linux environment (e.g. WSL) or on a cheap CPU-only instance. The GPU node is rented when the
+  code is ready.
+- **Rebuild on the new node** (about half a day): setup scripts, raw downloads, normalization, curriculum pools;
+  evaluation states, generated datasets and adapters from `node_backup/`. Copying from the old node is not
+  possible. The flattened SFT data needs a re-trace of the selected proofs (CPU work, see below).
+
+### Starting policy and the SFT stage before GRPO
+
+- **Starting point: visible student v2** (decided): RL tends to erode general reasoning, and v2 keeps it
+  measurable. Value: v0. Both adapters are in `node_backup/`.
+- Reasoning stays visible and short (~120 tokens mean now): a short explanation, then the Lean block
+  (`enable_thinking = false`). No length penalty; only a hard token limit against runaway outputs.
+- **One more fine-tune before GRPO** (gentle, from v2, with the same math replay so MATH-500 retention holds),
+  on rewritten data:
+  - **No nested `have` blocks**: Lean data and visible-reasoning examples rewritten into flat steps (below) and
+    re-verified by replay, so the model stops writing them.
+  - **Mixed step lengths**: chunks of k consecutive top-level tactics with their exact start and end states,
+    k ∈ {1, 3, 5, 7, rest of the proof}, so the model learns to choose its own step size. Today's data teaches one
+    tactic per step (the non-reasoning policies emit exactly one).
+- **Required A/B: descriptive hypothesis names.** miniF2F and the training corpora number hypotheses (`h₀, h₁, …`);
+  descriptive names might transfer general coding habits and reduce references to non-existent hypotheses (3.0% of
+  samples), but they move the model away from its training distribution. Two variants of the fine-tune above:
+  numbered names (as today) and descriptive names. For the second, a language model proposes names; they are
+  renamed consistently in states, tactics, the model's own `have` names and the explanations, and verified by
+  replay. Benchmark statements keep their meaning (binder names do not change the proposition; the final proof is
+  checked against the original statement). The search renames hypotheses in each statement the same way.
+  Compared on the 512 states (renamed accordingly), miniF2F-valid at the fixed budget and MATH-500; the winner is
+  the GRPO starting policy.
 
 ### The loop
 
@@ -344,7 +369,8 @@ starting policy on the fixed targets beyond noise, and the dense signal beats an
    publishing, sets the cadence. Watch the clip fraction and the KL between the data-collecting policy and the
    current one; if they rise, publish more often or train on smaller batches.
 5. The curriculum keeps the solve rate around 30–70%, so groups carry signal and trees are balanced between
-   solved and unsolved.
+   solved and unsolved. Hard problems absorbing most of the budget is expected; the curriculum and escalation
+   stages bound it.
 
 ### Search graph and labels
 
@@ -354,76 +380,11 @@ existing state, 3.8% repeat an earlier tactic text. Duplicates: 49% back to the 
 to an ancestor, 21% the same state as a sibling, 26% transpositions into another branch; 56 transposition edges
 lead from 24 off-path nodes into a proof.
 
-Error analysis of these trees (`results/search_error_analysis/`):
-- The 66% failed edges overstate the policy's failure rate: 38% of failed edges come from the automation sweep
-  (70.8% of sweep tactics fail, cheaply: 6.9% of Lean time), and identical policy samples are merged before
-  execution. Per policy sample about 53.6% fail; 90.6% of policy expansions are spent in the 73 problems never
-  proved. At the first expansion of later-solved problems the failure rate is 23.6%, matching the per-step
-  evaluation.
-- Per policy sample: 5.0% malformed Lean (1.8% syntax, 3.2% library names missing in the pinned Mathlib), 8.8%
-  invalid in the state (3.0% unknown hypothesis names, 5.8% ill-typed terms), 33.7% well-formed tactics that do
-  not work there (linarith/nlinarith, simp without progress, rw pattern missing, unsolved goals, omega), 2.6%
-  timeouts. About 95% of samples are syntactically valid Lean with real names. Visible explanations roughly double
-  the malformed and invalid rates (long blocks: 9+ lines fail ~80%). "99% valid Lean" is a sensible target only
-  for the malformed tier.
-- Wall-clock timeouts are 2.3% of edges but **41.9% of Lean seconds** (mostly `nlinarith`, `norm_num`,
-  `simp_all`, `omega`, `interval_cases`), while steps on found proofs take a median 0.21 s (95th percentile 2.4 s).
-- "Back to the same state" duplicates come from tactics that succeed without changing anything: the sweep's
-  `ring_nf` (49% of them; it returns to the same state on 69% of its runs) and the policy's `norm_num` variants
-  (32%), plus `all_goals`/`try` wrappers, `exfalso` on `False`, `norm_cast`. They cost 2.1% of Lean time. The state
-  key contains every hypothesis (with case tags, `let` values and inaccessible names) and the target, so an added
-  `have` always changes the state; Lean does not prune unused hypotheses. False duplicates are possible only where
-  printing hides a difference (numeral or coercion types); 47 spot checks found none.
-
-### Lean hygiene for the new loop
-
-- **Heartbeats are the limit**, the wall clock only a generous emergency stop. Heartbeats are deterministic; the
-  wall clock depends on load (on the first node the 10 s wall clock always fired before 200k heartbeats). A
-  wall-clock timeout costs ~16 s (limit, kill, REPL restart, replay); a heartbeat timeout is an ordinary Lean error.
-  Policy tactics at about 25–50k heartbeats (the first loop's 25k cut Lean time per expansion by 32% at equal solve
-  rate). First test on the new node: replay all steps on found proofs plus a sample of the timeouts at 25k, 50k and
-  100k heartbeats and check which formerly successful steps still complete.
-- **Flatten nested `have`**: the unit of execution is the top-level tactic, so `have h : A := by …` with its nested
-  proof is atomic and one error inside kills it (32% of the visible model's blocks start with `have`; 72.6% of
-  those fail; `have`-headed blocks use 26% of Lean time). The harness rewrites `have h : A := by t₁ … tₙ` into
-  `have h : A` (Mathlib: A becomes the first goal) followed by `t₁ … tₙ` as top-level steps, so the valid prefix
-  inside nested proofs is kept. The SFT data is rewritten the same way and re-verified by replay (rewrites that
-  change behaviour, e.g. `all_goals` or `simp_all` now seeing both goals, are dropped), so the model stops writing
-  nested `have` blocks.
-- **Mixed step lengths in SFT**: from the traced (flattened) proofs, chunks of k consecutive top-level tactics with
-  their exact start and end states, k ∈ {1, 3, 5, 7, rest of the proof}, so the model learns to choose its own step
-  size. Today's data teaches one tactic per step (the non-reasoning policies emit exactly one).
-- **No length penalty** on explanations or blocks, only a hard token limit against runaway outputs. A no-op tactic
-  inside a block is harmless; only blocks with no net change count as no progress.
-- **Names**: rename inaccessible hypotheses (`x✝`, 0.6% of samples copy them and can never be valid) before
-  prompting; check identifiers against the pinned environment's constants and the local context before running
-  Lean, reject or repair. The 3.2% non-existent library names and 3.0% unknown hypothesis names are the model's own
-  inventions: the traced training data only contains tactics that replayed in the pinned environment.
-- **The policy does not know what the sweep tried**: `exact` (99.7%), `linarith` (99.8%) and `nlinarith […]`
-  (99.4%) from the policy almost never work, because the sweep runs first and already closes those states; 3.4% of
-  samples repeat a sweep tactic that already failed at that node. Repeats of a failed sweep tactic count as
-  failures in the GRPO reward; telling the policy which sweep tactics failed (in the prompt) is an option.
-- **Repetition loops**: 89% of the "unexpected end of input" errors are answers forced at 1,280 tokens, often
-  repetition loops in the explanation. Rare (139 blocks) but logged on the dashboard, since RL can amplify them.
-- **Budget sinks**: 30 of 244 problems hold half of the failed policy blocks and 90.6% of policy expansions go to
-  the 73 never-proved problems. In the loop the curriculum and the escalation stages bound this; in evaluation it
-  is the price of a fixed per-problem budget.
-- Keep the goal-key de-duplication and `ring_nf` in the sweep (it produced 1,049 children and 9 proof steps);
-  steps that return to their parent count as no progress in the labels. If cast-heavy problems matter, a second key
-  printed with numeral and coercion types would remove the residual risk of false merges (none found in 47 checks).
-- Compare per-sample rates, not per-edge shares, with the per-step evaluation.
-- Later options: resample with the Lean error message attached (error-conditioned repair).
-- **Optional ablation, descriptive hypothesis names**: miniF2F and the training corpora number hypotheses (`h₀,
-  h₁, …`). Renaming them descriptively (an LLM proposes names, a consistent rename in states and tactics, verified
-  by replay; the benchmark statements keep their meaning because binder names do not change the proposition) might
-  transfer general coding knowledge and reduce references to non-existent hypotheses, but it shifts the model away
-  from its training distribution. Test only after the core loop: rename SFT data and evaluation states, gentle
-  retrain, compare per-sample success on the 512 states.
-
 - **Proof graph**: every node with a route to a proof via new-state or transposition edges is on a proof. Its
   exact remaining steps are the shortest such route. Transpositions are never failures (A then B and B then A both
   prove).
-- **No progress** (back to the same state or an ancestor): a wasted step.
+- **No progress**: a block whose net effect leaves the state unchanged or returns to an ancestor (a wasted step).
+  A no-op tactic inside a block that otherwise makes progress is harmless.
 - **Same state as a sibling**: both tactics are equally good and get the reward of the state they reach.
 - **Dead end**: an expanded node whose 8 samples and automation sweep produced no new state and no transposition
   to a live state (only errors, timeouts, repeats or no-progress). Checked by Lean, but only for 8 samples, so a
@@ -433,14 +394,64 @@ Error analysis of these trees (`results/search_error_analysis/`):
 - Possible later fix: when a transposition finds a shorter route to an existing state, A* would reopen it with the
   shorter depth; the search currently does not.
 
+### Lean execution and harness
+
+Findings (`results/search_error_analysis/`):
+- The 66% failed edges overstate the policy's failure rate: 38% of failed edges come from the automation sweep
+  (70.8% of sweep tactics fail, cheaply: 6.9% of Lean time), and identical policy samples are merged before
+  execution. Per policy sample about 53.6% fail; 90.6% of policy expansions are spent in the 73 problems never
+  proved. At the first expansion of later-solved problems the failure rate is 23.6%, matching the per-step
+  evaluation.
+- Per policy sample: 5.0% malformed Lean (1.8% syntax, 3.2% library names missing in the pinned Mathlib), 8.8%
+  invalid in the state (3.0% unknown hypothesis names, 5.8% ill-typed terms), 33.7% well-formed tactics that do
+  not work there (linarith/nlinarith, simp without progress, rw pattern missing, unsolved goals, omega), 2.6%
+  timeouts. About 95% of samples are syntactically valid Lean with real names; the non-existent names are the
+  model's own inventions (the traced training data only contains tactics that replayed in the pinned environment).
+  Visible explanations roughly double the malformed and invalid rates (2.6% / 3.4% without) through longer, more
+  ambitious blocks, yet solve more problems.
+- Wall-clock timeouts are 2.3% of edges but **41.9% of Lean seconds** (mostly `nlinarith`, `norm_num`,
+  `simp_all`, `omega`, `interval_cases`), ~16 s each (limit, kill, REPL restart, replay); steps on found proofs
+  take a median 0.21 s (95th percentile 2.4 s).
+- "Back to the same state" comes from tactics that succeed without changing anything: the sweep's `ring_nf` (49%;
+  it returns to the same state on 69% of its runs) and the policy's `norm_num` variants (32%), plus `all_goals` /
+  `try` wrappers, `exfalso` on `False`, `norm_cast`; 2.1% of Lean time. The state key contains every hypothesis
+  (with case tags, `let` values and inaccessible names) and the target, so an added `have` always changes the
+  state; Lean does not prune unused hypotheses. False merges would need differences hidden by printing (numeral
+  types); none were found and the residual risk is ignored.
+
+Decisions:
+- **Heartbeats are the limit** (deterministic; the wall clock depends on load). Policy tactics at about 25–50k
+  heartbeats (the first loop's 25k cut Lean time per expansion by 32% at equal solve rate). A heartbeat timeout is
+  an ordinary Lean error without killing the REPL. A wall clock stays only as a generous emergency stop (e.g.
+  60 s) for hangs that heartbeats do not count, such as kernel reduction. First test on the new node: replay all
+  steps on found proofs plus a sample of the former timeouts at 25k, 50k and 100k heartbeats and check which
+  formerly successful steps still complete.
+- **Flatten nested `have`**: the unit of execution is the top-level tactic, so `have h : A := by …` with its nested
+  proof is atomic and one error inside kills it (32% of the visible model's blocks start with `have`; 72.6% of
+  those fail; `have`-headed blocks use 26% of Lean time). The harness rewrites `have h : A := by t₁ … tₙ` into
+  `have h : A` (Mathlib: A becomes the first goal) followed by `t₁ … tₙ` as top-level steps, so the valid prefix
+  inside nested proofs is kept. Only rewrites that are equivalent are used: the training data is re-verified by
+  replay and rewrites that change behaviour (e.g. `all_goals` or `simp_all` now seeing both goals) are dropped.
+- **Names**: rename inaccessible hypotheses (`x✝`; 0.6% of samples copy them and can never be valid) before
+  prompting; check identifiers against the pinned environment's constants and the local context before running
+  Lean, reject or repair.
+- **Sweep and policy**: the policy's `exact`, `linarith` and `nlinarith […]` almost never work because the sweep
+  already closes those states, and 3.4% of samples repeat a failed sweep tactic. Not treated specially: a wasted
+  sample, which the GRPO reward already scores as the failure it is.
+- **Repetition loops**: 139 blocks were answers forced at the 1,280-token cap, mostly repeating explanations. The
+  GRPO reward should dampen them (they fail); logged on the dashboard in case RL amplifies them instead.
+- Keep the goal-key de-duplication and `ring_nf` in the sweep (it produced 1,049 children and 9 proof steps).
+- Compare per-sample rates, not per-edge shares, with the per-step evaluation.
+- Later option: resample with the Lean error message attached (error-conditioned repair).
+
 ### Policy update: GRPO over sibling groups
 
 - **Group** = the 8 samples of one expanded node (independent draws from the policy at the same state), after
   merging identical tactic texts. Best-first selection skews which states are trained, not the groups themselves.
 - **Reward** = `r_local + β · G`, with β large enough that the global term dominates whenever it is known:
-  - `r_local`: −1 Lean error, about −0.5 timeout, 0 (or slightly negative) no progress or an already-seen state,
-    potential-based value shaping `h(parent) − h(child)` (cannot change the optimal policy), a bonus for closing a
-    goal.
+  - `r_local`: −1 Lean error (heartbeat timeouts included, possibly smaller), 0 (or slightly negative) no progress
+    or an already-seen state, potential-based value shaping `h(parent) − h(child)` (cannot change the optimal
+    policy), a bonus for closing a goal.
   - `G` (global): 1 on the proof graph (larger for shorter remaining proofs), 0 for dead ends; for expanded
     off-path children the backed-up value (below) once the value model passed the gate; **0 (neutral) for
     never-expanded children** until then (the safe fallback: the loop still works, with less signal).
@@ -448,9 +459,9 @@ Error analysis of these trees (`results/search_error_analysis/`):
   mainstream recipes.
 - **Per-token credit within a sample** (the GRPO loss is a sum over tokens, so each token can get its own
   advantage): the explanation gets the sample's overall advantage; the tactics up to the last successful one get
-  the advantage of the state they reach; the first failing tactic (or, after flattening, the line Lean's error
-  points to) gets the error advantage; everything after it is masked, since Lean never evaluated it. The SFT
-  counterpart is training on the valid prefix plus unlikelihood on the failing line.
+  the advantage of the state they reach; the first failing tactic (after flattening, the line Lean's error points
+  to) gets the error advantage; everything after it is masked, since Lean never evaluated it. The SFT counterpart
+  is training on the valid prefix plus unlikelihood on the failing line.
 - **Control run**: the same loop with only the outcome / proof-graph signal (expert iteration via GRPO), to
   measure whether the dense part helps.
 
@@ -458,8 +469,9 @@ Error analysis of these trees (`results/search_error_analysis/`):
 
 Diagnosis: v0 never saw a dead end (trained on human-proof states only, all provable and on-path) and cannot
 separate dead from live states in search trees (AUC 0.35–0.55); it ranks remaining steps with Spearman 0.80 on
-held-out human proofs but 0.55–0.73 on our own search trees (0.39 on few-shot trees). A representative value
-model is the foundation of everything above, so it comes first.
+held-out human proofs but 0.55–0.73 on our own search trees (0.39 on few-shot trees). The loop's value gate was
+measured on far too few states to tell whether loop training helped or hurt. A representative value model is the
+foundation of everything above, so it comes first.
 
 - **Target** (AlphaZero-style): the probability that the current policy finds a proof from this state within the
   budget, plus a remaining-steps head trained only on proof-graph nodes, where steps are exact. The A* priority
@@ -501,19 +513,27 @@ model is the foundation of everything above, so it comes first.
 
 ### Fixed targets after every phase
 
-- Per-sample success on the 512 held-out states; miniF2F-valid at a fixed search budget; MATH-500 retention
-  (visible and thinking). Curves over training, not just a final score.
+- Per-sample success on the 512 held-out states; miniF2F-valid at a fixed search budget (n = 8; the expansion
+  budget is set when the baselines are re-measured); MATH-500 retention (visible and thinking). Curves over
+  training, not just a final score. Baselines are re-measured on the new node with the new settings (n = 8,
+  heartbeat limits, flattening), since the old numbers used n = 16 and wall-clock limits.
 
 ### Order of work
 
-1. New node, rebuild, smoke tests; reproduce student v2 (or v1) and value v0 numbers; the heartbeat replay test;
-   harness changes (flattening, name checks, inaccessible names); flattened mixed-length SFT data and a gentle
-   retrain of the starting policy.
-2. Value benchmark; value v1 from search-graph targets; A/B search against v0.
-3. GRPO loop with the neutral fallback (global term from the proof graph and dead ends only).
-4. Value pseudo-labels once v1 passed the gate.
-5. Control run with the outcome-only signal.
-6. Write-up on the homepage: the ladder, the RL curves, what the dense signal adds.
+1. **Implementation before renting** (local; Lean-dependent tests on a local Linux environment or a cheap CPU
+   instance): flattening, name checks and renaming of inaccessible hypotheses in the harness; heartbeat-only limits;
+   graph labelling (proof graph, dead ends, duplicate kinds); value targets (averaging, weights, sibling ranking)
+   and the value benchmark; GRPO with per-token advantages and the outcome-only control; dashboard logging; the
+   data rewrite (flattening, chunks, descriptive renaming). Each with tests.
+2. **New node**: rebuild, smoke tests, the heartbeat replay test, baselines with the new settings (student v2,
+   value v0).
+3. **SFT stage**: rewritten data (re-trace the selected proofs flat), both naming variants, gentle fine-tunes from
+   v2, compared on the fixed targets; pick the starting policy.
+4. **Value**: benchmark, value v1 from search-graph targets, A/B search against v0.
+5. **GRPO loop** with the neutral fallback (global term from the proof graph and dead ends only).
+6. Value pseudo-labels once v1 passed the gate.
+7. Control run with the outcome-only signal.
+8. Write-up on the homepage: the ladder, the RL curves, what the dense signal adds.
 
 ### Dashboard
 
@@ -546,9 +566,9 @@ Paper names in the last three rows are from memory and still need checking befor
 
 ### Open
 
-- Starting policy v1 or v2 (proposed v2); budget and hardware offers.
+- Hardware offers within the budget.
 - Local reward magnitudes, β, the A* priority formula combining proof probability and steps, the value-average
-  temperature, weights by subtree size.
+  temperature, weights by subtree size, the expansion budget of the fixed miniF2F evaluation.
 - Whether flattening plus mixed step lengths bring the failure rate of long blocks (9+ lines: ~80%) down.
 
 ## Known issues (backlog)
