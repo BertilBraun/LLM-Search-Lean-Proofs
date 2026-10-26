@@ -10,24 +10,28 @@ from lean_search.lean import LeanError, LeanReplPool, LeanTimeout, ProofState, R
 
 problem = load_minif2f(Split.VALID)[0]
 async with LeanReplPool(32) as pool:
-    await pool.start([problem.header])                       # optional: import the header everywhere up front
+    await pool.start([problem.header])  # optional: import the header everywhere up front
     async with pool.acquire() as repl:
         start = await repl.start_proof(problem.formal_statement, problem.header)
         match start.outcome:
-            case ProofState() as root: ...                   # root.goals: tuple of pretty-printed goals
-            case LeanError() | LeanTimeout(): ...            # statement does not elaborate
-            case ReplFailure(): ...                          # infrastructure failure, not the statement's fault
+            case ProofState() as root:
+                ...  # root.goals: tuple of pretty-printed goals
+            case LeanError() | LeanTimeout():
+                ...  # statement does not elaborate
+            case ReplFailure():
+                ...  # infrastructure failure, not the statement's fault
         result = await repl.apply_tactic(root, "nlinarith [sq_nonneg (x - y)]")
-        block = await repl.apply_block(root, model_output)   # longest valid prefix of top-level tactics
+        block = await repl.apply_block(root, model_output)  # longest valid prefix of top-level tactics
         if block.state.is_proved:
-            check = await repl.verify_state(block.state)     # the proof exactly as the search executed it
+            check = await repl.verify_state(block.state)  # the proof exactly as the search executed it
 ```
 
 | Call | Returns |
 |---|---|
 | `start_proof(statement, header)` | `TacticResult(outcome, elapsed_seconds)`; outcome is the root `ProofState`, `LeanError` (also for a header that does not elaborate or lacks Lean), `LeanTimeout` or `ReplFailure` |
 | `apply_tactic(state, tactic, heartbeats=None, timeout_seconds=None)` | `TacticResult`; a new `ProofState` (no goals = proved), `LeanError(message, panic)`, `LeanTimeout(message, wall_clock)` or `ReplFailure(kind, message)` |
-| `apply_block(state, block, heartbeats=None, timeout_seconds=None)` | `BlockResult(state, applied_tactics, total_tactics, failure, elapsed_seconds)`; `failure` is `LeanError \| LeanTimeout \| ReplFailure \| None` |
+| `apply_block(state, block, heartbeats=None, timeout_seconds=None)` | `BlockResult(state, applied_tactics, total_tactics, failure, elapsed_seconds, tactics, flattened)`; `block` is text or a `TacticPlan` (`plans.py`); `failure` is `LeanError \| LeanTimeout \| ReplFailure \| Rejection \| None`; `tactics` are the executed pieces with their offsets in the block |
+| `export_environment_names(header, command)` | runs the name export of `identifiers.py` in the header's import environment |
 | `verify_state(state)` | `VerificationResult(verified, problems, axioms, elapsed_seconds, plain_verified)`: `verified` checks the steps as executed, `plain_verified` the unwrapped text |
 | `verify_proof(statement, proof, header)` | `VerificationResult` for a plain proof text (`plain_verified` is `None`) |
 | `memory_usage()`, `proof_state_count`, `needs_restart`, `restart()`, `load_header(header)` | process health and control |
@@ -35,7 +39,12 @@ async with LeanReplPool(32) as pool:
 ## Outcomes
 
 - `LeanError` and `LeanTimeout` are the candidate's own result: Lean rejected the tactic, or it exceeded its heartbeat
-  limit (`wall_clock=False`) or the wall-clock backstop (`wall_clock=True`, the process is killed and restarted).
+  limit (`wall_clock=False`, an ordinary error: the process keeps running) or the wall-clock backstop
+  (`wall_clock=True`, the process is killed and restarted). Heartbeats are the limit (deterministic, independent of
+  load; the search's policy steps 50k, the sweep 200k); the wall clock (60 s by default) is only an emergency stop for
+  hangs heartbeats do not count, such as kernel reduction or big-number arithmetic. Replays get 120 s.
+- `Rejection(index, message)` (`plans.py`) ends a plan before tactic `index` without running it: the search's
+  identifier check (below).
   `LeanError(panic=True)` (message `Lean panic: ...`) means the tactic killed the process with a deterministic runtime
   panic (see below); the process was restarted.
 - `ReplFailure(kind, message)` is never the candidate's fault and must not become a negative training label. Kinds
@@ -97,6 +106,48 @@ async with LeanReplPool(32) as pool:
   `:=`, `_` (calc steps), `else`, `then` or `with`. Comment-only lines between tactics are dropped; a `·` bullet takes
   its indented body. If a piece still fails with `unexpected end of input` or `unterminated comment`, `apply_block`
   merges it with the next piece and retries; `total_tactics` counts the merged pieces.
+
+## Harness for policy blocks
+
+The search applies three transformations to policy blocks (`SearchConfig.flatten_blocks`, `check_identifiers`,
+`name_inaccessible_hypotheses`); the edge keeps the original block (`Edge.text`) and the executed tactics with their
+character offsets in it (`Edge.executed_tactics`), so a failing executed tactic maps back to the text.
+
+- **Flattening** (`plans.py`, `plan_block`, `flatten_proof` for whole proofs): `have h : A := by t₁ … tₙ` (also
+  `have : A`, `obtain pat : A := by …`, the proof on the `by` line or indented below it) runs as `have h : A`
+  followed by `t₁ … tₙ`; Mathlib's `have h : A` without a proof makes `A` the first goal and `h` available in the
+  second (verified in the pinned Mathlib, as is `obtain pat : A`). Nested `have`s flatten recursively, and a `·` block
+  whose body contains one is dissolved into its body. Each nested proof is a `FocusSegment`; `apply_block` checks
+  after every tactic that the segment's goal is still open before its last tactic (else the next one fails with Lean's
+  own `no goals to be proved`; trailing `try`/`skip`/`done` are skipped as the no-ops they are then), closed exactly
+  after its last tactic (else the block stops there: `unsolved goals` if outer tactics follow, the open state if the
+  block ends) and that no tactic touched the goals outside it. So a flattened block behaves like the original
+  wherever the original succeeds, and keeps the valid prefix inside the nested proof where it fails. Left unchanged
+  (Lean decides): binders after the name (`have h (x : ℝ) : …`, whose goal would be a `∀`), holes or `?` in the type,
+  patterns after `have`, a proof starting on the `by` line and continuing below, lines not indented past the `have`,
+  and nested proofs using tactics that act on other goals (`all_goals`, `any_goals`, `repeat`, `iterate`, `case`,
+  `on_goal`, `swap`, `rotate_*`, `pick_goal`, `exacts`, `focus`, `solve_by_elim`). Each flattened tactic gets its own
+  heartbeat budget, where the nested proof shared one.
+- **Inaccessible hypotheses** (`hypotheses.py`): every new state whose goals print `x✝` (inaccessible or shadowed
+  names) is followed by `rename_i` with fresh names (`x_1`, `h₂_1`, …) for the main goal and `on_goal k => rename_i …`
+  for the others, as a step of the state's own tactic path. `rename_i` renames the newest inaccessible or shadowed
+  hypotheses, so naming all of them in context order renames exactly the marked ones (checked in Lean). The renamed
+  state is the node's state: prompts, goal keys and de-duplication all see the names Lean has. If Lean's result still
+  prints a mark, the state stays unrenamed.
+- **Identifier check** (`identifiers.py`): before Lean runs, every identifier in a reference position is resolved
+  against the constants and aliases of the header's imports (exported once through the REPL, `$LEAN_SEARCH_DATA/lean/
+  environment_names_*.tsv.gz`, keyed by the imports and the Lean pins), the goals' hypotheses, names bound earlier in
+  the block (an over-approximation of every binder: `intro`, `obtain`, `rcases … with`, `fun`, `∀`, `∑`, match
+  alternatives, set-builder, `name :`), the root and opened namespaces (header `open`s, the theorem's namespace),
+  field notation on any constant but an inductive type, equation-lemma suffixes and keywords of every syntax category
+  (tokens, scoped tokens, leading identifiers). The plan stops before the first tactic with an unknown name
+  (`FailureKind.UNKNOWN_IDENTIFIER`); its valid prefix still runs. Not checked (Lean decides): tactics under
+  `try`, `first`, `all_goals`, `any_goals`, `repeat`, `iterate`, `<|>` (errors there are caught), everything after a
+  `<;>` (it runs only on the goals left before it, possibly none), blocks with `✝`, inexact lexing, `conv`, `open`,
+  declarations or notation, and headers with namespaces, variables or notation. On the visible student's 244 trees:
+  1 false rejection in 18,227 accepted blocks and valid prefixes (0.0055%; `simpa using` with a name Lean never
+  elaborated) and 71% of the 4,905 failures whose first error is an unknown identifier or constant caught
+  (`experiments/identifier_check.py`).
 
 ## Proof states and replay
 

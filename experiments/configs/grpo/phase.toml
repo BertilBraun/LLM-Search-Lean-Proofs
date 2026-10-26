@@ -7,6 +7,8 @@
 [reward]
 mode = "dense"
 lean_error_reward = -1.0
+# Samples without a usable block (e.g. repetition loops cut off at the token cap) score like a Lean error.
+unparsed_sample_reward = -1.0
 heartbeat_timeout_reward = -1.0
 wall_clock_timeout_reward = -1.0
 no_progress_reward = -0.5

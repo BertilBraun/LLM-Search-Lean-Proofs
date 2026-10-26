@@ -24,6 +24,8 @@ class RewardConfig:
     # beta: large enough that the global term dominates whenever it is known.
     global_weight: float = 4.0
     lean_error_reward: float = -1.0
+    # A sample without a usable block, e.g. a repetition loop cut off at the token cap.
+    unparsed_sample_reward: float = -1.0
     heartbeat_timeout_reward: float = -1.0
     wall_clock_timeout_reward: float = -1.0
     no_progress_reward: float = 0.0
@@ -64,6 +66,8 @@ class TokenCredit:
     prefix_state_id: int | None
     # The reward of the valid prefix as if the sample had ended there; None without a prefix.
     prefix_reward: float | None
+    # The components behind `prefix_reward`.
+    prefix_components: RewardComponents | None = None
 
 
 @dataclass(frozen=True)
@@ -126,7 +130,9 @@ def failure_reward(edge: EdgeLabel, config: RewardConfig) -> float:
             return config.heartbeat_timeout_reward
         case FailureKind.WALL_CLOCK_TIMEOUT:
             return config.wall_clock_timeout_reward
-        case FailureKind.ERROR | FailureKind.FORBIDDEN | FailureKind.REPL_FAILURE:
+        case FailureKind.UNPARSED:
+            return config.unparsed_sample_reward
+        case FailureKind.ERROR | FailureKind.FORBIDDEN | FailureKind.UNKNOWN_IDENTIFIER | FailureKind.REPL_FAILURE:
             return config.lean_error_reward
 
 
@@ -202,6 +208,7 @@ def group_sample(
             first_failing_tactic=None if edge.failure_kind is None else edge.applied_tactics,
             prefix_state_id=edge.target_id,
             prefix_reward=None if prefix is None else total_reward(prefix, config),
+            prefix_components=prefix,
         ),
     )
 

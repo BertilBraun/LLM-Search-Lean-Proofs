@@ -15,31 +15,10 @@ from lean_search.rl.advantages import (
     local_share_of_advantages,
 )
 from lean_search.rl.grpo_groups import PolicyGroup, RewardConfig
-from lean_search.rl.token_credit import CharacterSpan, CreditMode, TokenSegment, token_credits
+from lean_search.rl.token_credit import CreditMode, TokenSegment, token_credits
 from lean_search.search.records import from_json_object, to_json
+from lean_search.search.texts import ExpansionTexts, SampledCompletion
 from lean_search.training.sft_data import SftExample, TokenizedExample
-
-
-@dataclass(frozen=True)
-class SampledCompletion:
-    """One policy sample as generated: its edge in the tree and the executed tactics' characters in its text."""
-
-    edge_id: int
-    # Everything the model generated after the prompt: explanation, fenced block, anything after it.
-    text: str
-    # Per executed top-level tactic after flattening, in execution order, its characters in `text`.
-    tactic_spans: tuple[CharacterSpan, ...]
-    # Generation stopped at the end of turn, which the text itself does not contain.
-    ended_turn: bool = True
-
-
-@dataclass(frozen=True)
-class ExpansionTexts:
-    problem_name: str
-    node_id: int
-    # The exact prompt the samples were drawn from.
-    prompt: str
-    completions: tuple[SampledCompletion, ...]
 
 
 @dataclass(frozen=True)

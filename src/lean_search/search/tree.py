@@ -4,6 +4,10 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 from lean_search.lean import LeanError, LeanTimeout, ProofState, ReplFailure
+from lean_search.lean.plans import Rejection
+from lean_search.lean.repl import BlockFailure
+from lean_search.lean.text import TacticPiece
+from lean_search.search.texts import ExpansionTexts
 
 MAX_FAILURE_MESSAGE_CHARACTERS = 1000
 
@@ -34,6 +38,10 @@ class FailureKind(StrEnum):
     HEARTBEAT_TIMEOUT = "heartbeat_timeout"
     WALL_CLOCK_TIMEOUT = "wall_clock_timeout"
     FORBIDDEN = "forbidden"
+    # A name the block refers to exists neither in the environment nor in the context (checked before Lean).
+    UNKNOWN_IDENTIFIER = "unknown_identifier"
+    # A policy sample without a usable block: none, cut off at the token cap, empty or forbidden.
+    UNPARSED = "unparsed"
     # Crash, failed or mismatched replay, failed restart: infrastructure, never the candidate's fault.
     REPL_FAILURE = "repl_failure"
 
@@ -44,9 +52,11 @@ class Failure:
     message: str
 
     @staticmethod
-    def from_lean(outcome: LeanError | LeanTimeout | ReplFailure) -> "Failure":
+    def from_lean(outcome: BlockFailure) -> "Failure":
         message = outcome.message[:MAX_FAILURE_MESSAGE_CHARACTERS]
         match outcome:
+            case Rejection():
+                return Failure(FailureKind.UNKNOWN_IDENTIFIER, message)
             case LeanTimeout(wall_clock=True):
                 return Failure(FailureKind.WALL_CLOCK_TIMEOUT, message)
             case LeanTimeout():
@@ -117,6 +127,10 @@ class Edge:
     forced: bool = False
     # Identical policy samples run once; 1 in records written before the count was kept.
     sample_count: int = 1
+    # The tactics as executed, with their offsets in `text`: top-level pieces, or after flattening nested proofs;
+    # `applied_tactics` and the first failing tactic index into them. Empty when nothing ran.
+    executed_tactics: tuple[TacticPiece, ...] = ()
+    flattened: bool = False
 
 
 class SearchTree:
@@ -125,7 +139,8 @@ class SearchTree:
         self.nodes: list[Node] = []
         self.edges: list[Edge] = []
         self._node_by_goal_key: dict[tuple[str, ...], int] = {}
-        self._wall_clock_timeouts_by_text: dict[str, int] = {}
+        self._timeouts_by_text: dict[tuple[FailureKind, str], int] = {}
+        self.expansion_texts: list[ExpansionTexts] = []
         self._add_node(None, None, None, None, None, root_state, 0.0, root_lean_seconds)
 
     @property
@@ -152,7 +167,10 @@ class SearchTree:
         return None if node_id is None else self.nodes[node_id]
 
     def wall_clock_timeouts(self, text: str) -> int:
-        return self._wall_clock_timeouts_by_text.get(text, 0)
+        return self._timeouts_by_text.get((FailureKind.WALL_CLOCK_TIMEOUT, text), 0)
+
+    def heartbeat_timeouts(self, text: str) -> int:
+        return self._timeouts_by_text.get((FailureKind.HEARTBEAT_TIMEOUT, text), 0)
 
     def add_edge(
         self,
@@ -172,6 +190,8 @@ class SearchTree:
         repeat_of: int | None = None,
         forced: bool = False,
         sample_count: int = 1,
+        executed_tactics: tuple[TacticPiece, ...] = (),
+        flattened: bool = False,
     ) -> Edge:
         assert parent.expansion_index is not None, parent.node_id
         edge = Edge(
@@ -192,10 +212,13 @@ class SearchTree:
             repeat_of=repeat_of,
             forced=forced,
             sample_count=sample_count,
+            executed_tactics=executed_tactics,
+            flattened=flattened,
         )
         self.edges.append(edge)
-        if failure is not None and failure.kind == FailureKind.WALL_CLOCK_TIMEOUT:
-            self._wall_clock_timeouts_by_text[text] = self._wall_clock_timeouts_by_text.get(text, 0) + 1
+        if failure is not None and failure.kind in (FailureKind.WALL_CLOCK_TIMEOUT, FailureKind.HEARTBEAT_TIMEOUT):
+            key = (failure.kind, text)
+            self._timeouts_by_text[key] = self._timeouts_by_text.get(key, 0) + 1
         return edge
 
     def add_child(

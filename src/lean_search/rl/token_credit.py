@@ -5,18 +5,13 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from lean_search.rl.advantages import SampleAdvantages
+from lean_search.search.texts import CharacterSpan
 
 
 class CreditMode(StrEnum):
     PER_TOKEN = "per_token"
     # Every completion token gets the sample's overall advantage (outcome-level GRPO).
     SEQUENCE = "sequence"
-
-
-@dataclass(frozen=True)
-class CharacterSpan:
-    start: int
-    end: int
 
 
 class TokenSegment(StrEnum):

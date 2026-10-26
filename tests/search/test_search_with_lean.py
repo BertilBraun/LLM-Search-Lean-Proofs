@@ -8,6 +8,7 @@ import pytest_asyncio
 from lean_search.data import Problem, Split
 from lean_search.lean import FORBIDDEN_TOKENS, LeanRepl, LeanReplConfig, LeanReplPool
 from lean_search.lean.repl import PROJECT_DIRECTORY, REPL_BINARY
+from lean_search.policy.prompts import normalized_block
 from lean_search.search import (
     AutomationConfig,
     AutomationExpander,
@@ -32,6 +33,7 @@ from lean_search.search import (
     search_problems,
     search_theorem,
 )
+from lean_search.search.texts import GeneratedText, UnparsedSample
 
 HEADER = "import Mathlib\nimport Aesop\n\nset_option maxHeartbeats 0\n\nopen BigOperators Real Nat Topology Rat\n\n"
 TRIVIAL = "theorem trivial_sum : (2 : ℕ) + 2 = 4 := by\n"
@@ -118,7 +120,7 @@ async def test_solve_is_recorded_with_the_accounting_at_that_moment(repl: LeanRe
 
 async def test_structural_step_then_automation_finds_a_two_step_proof(repl: LeanRepl) -> None:
     completed = await search(repl, NEEDS_INTRO, automation("rfl", "intros"))
-    assert completed.result.proof_steps == ("intros", "rfl")
+    assert completed.result.proof_steps == ("intros\nrename_i n_1", "rfl")
 
 
 async def test_proof_path_nodes_are_marked_proved(repl: LeanRepl) -> None:
@@ -167,7 +169,7 @@ async def test_forbidden_step_is_rejected_before_lean_runs(repl: LeanRepl) -> No
 
 
 async def test_block_keeps_the_longest_valid_prefix_as_the_child(repl: LeanRepl) -> None:
-    completed = await search(repl, NEEDS_INTRO, FixedPolicy(["intros\nexact undefined_lemma"]), max_expansions=1)
+    completed = await search(repl, NEEDS_INTRO, FixedPolicy(["intros\nexact (1 : ℕ)"]), max_expansions=1)
     assert completed.tree is not None
     edge = completed.tree.edges[0]
     assert (edge.outcome, edge.applied_tactics, edge.total_tactics, edge.failure and edge.failure.kind) == (
@@ -322,6 +324,78 @@ async def test_wall_clock_timeout_disables_the_tactic_for_the_rest_of_the_search
 async def test_found_proof_also_verifies_without_heartbeat_wrappers(repl: LeanRepl) -> None:
     completed = await search(repl, NEEDS_INTRO, automation("rfl", "intros"))
     assert completed.result.plain_verified is True
+
+
+class GeneratingPolicy:
+    """One request whose samples explain, then give a block; unparsed samples are passed through."""
+
+    def __init__(self, blocks: Sequence[str], unparsed: Sequence[str] = ()) -> None:
+        self.blocks = tuple(blocks)
+        self.unparsed = tuple(unparsed)
+
+    async def expand(self, node: Node, context: SearchContext) -> CandidateBatches:
+        candidates = []
+        for block in self.blocks:
+            text = f"An explanation.\n\n```lean\n{block}\n```"
+            positions = normalized_block(block, text.index(block)).positions
+            generated = GeneratedText(text, ended_turn=True, block_positions=positions)
+            candidates.append(Candidate(block, StepSource.POLICY, log_probability=-1.0, completions=(generated,)))
+        unparsed = tuple(UnparsedSample(text, ended_turn=False, reason="truncated") for text in self.unparsed)
+        yield CandidateBatch(tuple(candidates), prompt=PROMPT, unparsed=unparsed)
+
+
+PROMPT = "<prompt>"
+NESTED_BLOCK = "have h₂ : a * a = b * b := by\n  subst h\n  exact undefined_lemma"
+
+
+async def test_nested_proof_failure_keeps_the_flattened_prefix_as_a_child(repl: LeanRepl) -> None:
+    completed = await search(repl, ARITHMETIC, GeneratingPolicy([NESTED_BLOCK]), max_expansions=1)
+    assert completed.tree is not None
+    edge = completed.tree.edges[0]
+    assert (edge.outcome, edge.applied_tactics, edge.total_tactics, edge.flattened) == (EdgeOutcome.CHILD, 2, 3, True)
+
+
+async def test_unflattened_nested_proof_failure_is_a_failed_edge(repl: LeanRepl) -> None:
+    completed = await search(repl, ARITHMETIC, GeneratingPolicy([NESTED_BLOCK]), max_expansions=1, flatten_blocks=False)
+    assert completed.tree is not None and completed.tree.edges[0].outcome == EdgeOutcome.FAILED
+
+
+async def test_completion_spans_cover_the_executed_tactics(repl: LeanRepl) -> None:
+    completed = await search(repl, ARITHMETIC, GeneratingPolicy([NESTED_BLOCK]), max_expansions=1)
+    assert completed.tree is not None
+    (expansion,) = completed.tree.expansion_texts
+    (completion,) = expansion.completions
+    spans = [completion.text[span.start : span.end] for span in completion.tactic_spans]
+    assert spans == ["have h₂ : a * a = b * b := by", "subst h", "exact undefined_lemma"]
+
+
+async def test_unknown_identifier_is_rejected_before_lean(repl: LeanRepl) -> None:
+    completed = await search(repl, ARITHMETIC, GeneratingPolicy(["subst h\nexact mystery_lemma"]), max_expansions=1)
+    assert completed.tree is not None
+    edge = completed.tree.edges[0]
+    assert (edge.applied_tactics, edge.failure and edge.failure.kind) == (1, FailureKind.UNKNOWN_IDENTIFIER)
+
+
+async def test_unparsed_samples_are_failed_edges_with_their_texts(repl: LeanRepl) -> None:
+    policy = GeneratingPolicy(["subst h"], unparsed=["An explanation that repeats, repeats, repeats"])
+    completed = await search(repl, ARITHMETIC, policy, max_expansions=1)
+    assert completed.tree is not None
+    unparsed = completed.tree.edges[0]
+    (expansion,) = completed.tree.expansion_texts
+    assert (unparsed.failure and unparsed.failure.kind, expansion.completions[0].edge_id) == (
+        FailureKind.UNPARSED,
+        unparsed.edge_id,
+    )
+
+
+async def test_expansion_texts_keep_the_prompt(repl: LeanRepl) -> None:
+    completed = await search(repl, ARITHMETIC, GeneratingPolicy(["subst h"]), max_expansions=1)
+    assert completed.tree is not None and [texts.prompt for texts in completed.tree.expansion_texts] == [PROMPT]
+
+
+async def test_new_states_get_accessible_hypothesis_names(repl: LeanRepl) -> None:
+    completed = await search(repl, NEEDS_INTRO, FixedPolicy(["intros"]), max_expansions=1)
+    assert completed.tree is not None and completed.tree.nodes[1].goals == ("n_1 : ℕ\n⊢ n_1 + 0 = n_1",)
 
 
 async def test_concurrent_searches_share_a_pool() -> None:

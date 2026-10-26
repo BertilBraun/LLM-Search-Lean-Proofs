@@ -4,8 +4,9 @@
         --texts runs/<run>/expansion_texts.jsonl --run-name grpo_phase_0001 [--part policy|value]
 
 Writes the adapters to $LEAN_SEARCH_CHECKPOINTS/<run-name>/{policy,value}/adapter, the step records next to them and
-the phase's outcome (data metrics, training results, the value gate) to phase.json there. The replay files and the
-value benchmark are optional.
+the phase's outcome (data metrics, training results, the value gate) to phase.json there. The policy texts come from
+the tree records (`TreeRecord.expansions`) and any --texts files. The replay files and the value benchmark are
+optional.
 """
 
 import argparse
@@ -58,9 +59,12 @@ def main() -> None:
     os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     arguments = parse_arguments()
     config = load_config(arguments)
+    records = [read_tree(path) for directory in arguments.trees for path in sorted(directory.glob("*.json.gz"))]
     inputs = PhaseInputs(
-        records=[read_tree(path) for directory in arguments.trees for path in sorted(directory.glob("*.json.gz"))],
-        texts=[expansion for path in arguments.texts for expansion in read_expansion_texts(path)],
+        records=records,
+        # Tree records written by the search carry their expansions' texts; --texts adds texts kept apart.
+        texts=[expansion for record in records for expansion in record.expansions]
+        + [expansion for path in arguments.texts for expansion in read_expansion_texts(path)],
         lean_replay=list(read_reasoning_examples(arguments.lean_replay)) if arguments.lean_replay else [],
         math_replay=list(read_solutions(arguments.math_replay)) if arguments.math_replay else [],
         value_replay=list(read_value_examples(arguments.value_replay)) if arguments.value_replay else [],

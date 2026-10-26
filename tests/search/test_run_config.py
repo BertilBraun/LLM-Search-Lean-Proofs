@@ -13,6 +13,24 @@ def test_shipped_configs_load(path: Path) -> None:
     assert load_run_config(path).expander.kind in ExpanderKind
 
 
+def test_grpo_search_config_limits_steps_by_heartbeats() -> None:
+    config = load_run_config(CONFIG_DIRECTORY / "grpo" / "search" / "visible_student_v2.toml")
+    assert (config.search.tactic_heartbeats, config.automation.heartbeats, config.search.tactic_timeout_seconds) == (
+        50_000,
+        200_000,
+        60.0,
+    )
+
+
+def test_default_limits_are_heartbeats_with_a_wall_clock_emergency_stop() -> None:
+    config = parse_run_config("")
+    assert (config.search.tactic_heartbeats, config.automation.heartbeats, config.search.tactic_timeout_seconds) == (
+        50_000,
+        200_000,
+        60.0,
+    )
+
+
 def test_baseline_config_sweeps_cheapest_tactics_first() -> None:
     config = load_run_config(CONFIG_DIRECTORY / "phase0_automation_baseline.toml")
     assert config.automation.tactics[:2] == ("decide", "omega")

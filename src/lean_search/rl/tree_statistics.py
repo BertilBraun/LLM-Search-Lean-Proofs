@@ -21,6 +21,8 @@ class EdgeKindCounts:
     heartbeat_timeout: int = 0
     wall_clock_timeout: int = 0
     forbidden: int = 0
+    unknown_identifier: int = 0
+    unparsed_sample: int = 0
     infrastructure_failure: int = 0
     new_state: int = 0
     unverified_proof: int = 0

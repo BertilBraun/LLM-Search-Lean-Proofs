@@ -69,6 +69,44 @@ def test_candidates_carry_their_log_probability() -> None:
     assert [candidate.log_probability for candidate in candidates] == [-1.5, -2.0]
 
 
+VISIBLE_SAMPLES = [
+    Sample("Simplify.\n\n```lean\nsimp\n```", cumulative_logprob=-1.0, token_count=5, finish_reason="stop"),
+    Sample("Again.\n```lean\n  simp\n```", cumulative_logprob=-2.0, token_count=5, finish_reason="stop"),
+    Sample("Loop, loop, loop", cumulative_logprob=-9.0, token_count=9, finish_reason="length"),
+]
+
+
+def visible_batch() -> CandidateBatch:
+    parsed = parse_samples(VISIBLE_SAMPLES, thinking=False, visible=True)
+    return candidate_batch(parsed, generation(VISIBLE_SAMPLES), prompt="<prompt>")
+
+
+def test_merged_candidate_keeps_every_sample_text() -> None:
+    (candidate,) = visible_batch().candidates
+    assert [completion.text for completion in candidate.completions] == [sample.text for sample in VISIBLE_SAMPLES[:2]]
+
+
+def test_block_positions_point_into_each_sample_text() -> None:
+    (candidate,) = visible_batch().candidates
+    spans = [
+        completion.text[completion.block_positions[0] : completion.block_positions[-1]]
+        for completion in candidate.completions
+    ]
+    assert spans == ["simp", "simp"]
+
+
+def test_unparsed_samples_are_passed_on_with_their_reason() -> None:
+    assert [(sample.text, sample.reason) for sample in visible_batch().unparsed] == [("Loop, loop, loop", "truncated")]
+
+
+def test_truncated_sample_did_not_end_its_turn() -> None:
+    assert not visible_batch().unparsed[0].ended_turn
+
+
+def test_batch_carries_the_prompt() -> None:
+    assert visible_batch().prompt == "<prompt>"
+
+
 class PlainTemplate:
     """Stands in for a Hugging Face tokenizer: the messages' contents joined, one token per word."""
 

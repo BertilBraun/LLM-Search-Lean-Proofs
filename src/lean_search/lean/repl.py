@@ -17,8 +17,10 @@ from enum import StrEnum
 from pathlib import Path
 from typing import NamedTuple
 
+from lean_search.lean.plans import Proceed, Rejection, Stop, TacticPlan, plain_plan, segment_verdict
 from lean_search.lean.text import (
     FORBIDDEN_TOKENS,
+    TacticPiece,
     auxiliary_statement,
     executed_proof,
     find_forbidden_tokens,
@@ -27,7 +29,6 @@ from lean_search.lean.text import (
     lean_string_literal,
     normalize_goal,
     split_header,
-    split_tactics,
     theorem_name,
     theorem_with_proof,
     wrap_tactic,
@@ -96,10 +97,13 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class LeanReplConfig:
     project_directory: Path = PROJECT_DIRECTORY
+    # Lean's maxHeartbeats units: the limit of a step, an ordinary error without a restart when exceeded.
     tactic_heartbeats: int = 200_000
-    tactic_timeout_seconds: float = 20.0
+    # Emergency stop for hangs heartbeats do not count (kernel reduction, big-number arithmetic): kill and restart.
+    tactic_timeout_seconds: float = 60.0
     command_timeout_seconds: float = 300.0
-    replay_timeout_seconds: float = 60.0
+    # Above the tactic stop, so a step that once finished under it also finishes when its state is rebuilt.
+    replay_timeout_seconds: float = 120.0
     max_anonymous_memory_bytes: int = 2 << 30
     max_proof_states: int = 8_000
     max_data_bytes: int | None = 6 << 30
@@ -168,13 +172,19 @@ class TacticResult:
     elapsed_seconds: float
 
 
+type BlockFailure = LeanError | LeanTimeout | ReplFailure | Rejection
+
+
 @dataclass(frozen=True)
 class BlockResult:
     state: ProofState
     applied_tactics: tuple[str, ...]
     total_tactics: int
-    failure: LeanError | LeanTimeout | ReplFailure | None
+    failure: BlockFailure | None
     elapsed_seconds: float
+    # The plan's tactics as finally executed (pieces merged after an incomplete-input error), with their offsets.
+    tactics: tuple[TacticPiece, ...] = ()
+    flattened: bool = False
 
 
 @dataclass(frozen=True)
@@ -487,32 +497,70 @@ class LeanRepl:
             return TacticResult(outcome, time.monotonic() - started)
 
     async def apply_block(
-        self, state: ProofState, block: str, heartbeats: int | None = None, timeout_seconds: float | None = None
+        self,
+        state: ProofState,
+        block: str | TacticPlan,
+        heartbeats: int | None = None,
+        timeout_seconds: float | None = None,
     ) -> BlockResult:
+        """The longest valid prefix of the block's top-level tactics (a plan's flattened ones with their guards)."""
         async with self._lock:
             started = time.monotonic()
             limits = self._limits(heartbeats, timeout_seconds)
-            tactics = split_tactics(block)
+            plan = plain_plan(block) if isinstance(block, str) else block
             current = state
             applied: list[str] = []
-            failure: LeanError | LeanTimeout | ReplFailure | None = (
-                None if tactics else LeanError("Empty tactic block.")
-            )
+            goals_before: dict[int, int] = {}
+            failure: BlockFailure | None = None if plan.tactics else LeanError("Empty tactic block.")
             index = 0
-            while index < len(tactics) and not current.is_proved:
-                outcome = await self._guarded(self._apply_tactic, current, tactics[index], limits)
+            while index < plan.limit and not current.is_proved:
+                goals_before[index] = len(current.goals)
+                outcome = await self._guarded(self._apply_tactic, current, plan.tactics[index].text, limits)
                 match outcome:
                     case ProofState():
-                        current = outcome
-                        applied.append(tactics[index])
-                        index += 1
-                    case LeanError(message=message) if is_incomplete_input(message) and index + 1 < len(tactics):
-                        tactics[index : index + 2] = [join_tactics(tactics[index : index + 2])]
+                        match segment_verdict(plan, goals_before, index, len(outcome.goals)):
+                            case Proceed(next_index=next_index):
+                                current = outcome
+                                applied.extend(tactic.text for tactic in plan.tactics[index:next_index])
+                                index = next_index
+                            case Stop(message=message, keep_state=keep_state, applied_until=applied_until):
+                                current = outcome if keep_state else current
+                                applied.extend(tactic.text for tactic in plan.tactics[index:applied_until])
+                                # A nested proof left open at the end of the block is just where the block stops.
+                                if applied_until < len(plan.tactics):
+                                    failure = LeanError(message)
+                                break
+                    case LeanError(message=message) if is_incomplete_input(message) and (merged := plan.merged(index)):
+                        plan = merged
                     case _:
                         failure = outcome
                         break
+            if failure is None and len(applied) < len(plan.tactics) and not current.is_proved:
+                assert plan.rejection is not None
+                failure = plan.rejection
             await self._recover()
-            return BlockResult(current, tuple(applied), len(tactics), failure, time.monotonic() - started)
+            return BlockResult(
+                current,
+                tuple(applied),
+                len(plan.tactics),
+                failure,
+                time.monotonic() - started,
+                plan.tactics,
+                plan.flattened,
+            )
+
+    async def export_environment_names(self, header: str, command: str) -> tuple[str, ...]:
+        """Runs an export command in the environment of the header's imports; returns its errors."""
+        async with self._lock:
+            try:
+                await self._ensure_healthy()
+                environment = await self._import_environment(split_header(header).imports)
+                response = await self._command(command, environment, self.config.command_timeout_seconds)
+                return response.texts(Severity.ERROR)
+            except (ReplFailureError, ReplCrashedError, ReplWallClockTimeoutError, ValueError) as error:
+                return (str(error),)
+            finally:
+                await self._recover()
 
     async def verify_proof(self, statement: str, proof: str, header: str) -> VerificationResult:
         async with self._lock:

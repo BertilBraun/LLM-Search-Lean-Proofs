@@ -4,19 +4,25 @@ import asyncio
 import contextlib
 import copy
 import dataclasses
+import logging
 import re
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
+from pathlib import Path
 from typing import NamedTuple
 
 from lean_search.data import Problem
 from lean_search.lean import LeanError, LeanRepl, LeanReplPool, LeanTimeout, ProofState, ReplFailure
-from lean_search.lean.text import join_tactics
+from lean_search.lean.hypotheses import has_inaccessible_names, renaming_tactic
+from lean_search.lean.identifiers import IdentifierChecker, NameScope, environment_names, name_scope
+from lean_search.lean.plans import TacticPlan, plain_plan, plan_block
+from lean_search.lean.text import TacticPiece, join_tactics
 from lean_search.search.expanders import Candidate, CandidateBatch, Expander, SearchContext
 from lean_search.search.frontier import Frontier
 from lean_search.search.priority import PriorityFunction, Scores
+from lean_search.search.texts import ExpansionTexts, SampledCompletion, UnparsedSample, tactic_spans
 from lean_search.search.tree import (
     Edge,
     EdgeOutcome,
@@ -42,6 +48,7 @@ DEFAULT_FORBIDDEN_STEPS = (
     "library_search",
 )
 POLICY_STEP_KEY = "<policy>"
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -50,11 +57,22 @@ class SearchConfig:
     max_wall_seconds: float = 300.0
     max_depth: int = 16
     max_generated_tokens: int | None = None
-    tactic_heartbeats: int | None = None
-    tactic_timeout_seconds: float = 10.0
+    # Lean's maxHeartbeats units for candidates without their own limit (the policy's; the sweep sets its own).
+    # Running out is an ordinary error of the step, without a restart.
+    tactic_heartbeats: int | None = 50_000
+    # Only an emergency stop for hangs heartbeats do not count: it kills and restarts the process.
+    tactic_timeout_seconds: float = 60.0
     forbidden_steps: tuple[str, ...] = DEFAULT_FORBIDDEN_STEPS
     # Score each child (the value request) as soon as it exists, while the expansion's other candidates run.
     score_children_early: bool = False
+    # Policy blocks: nested `have … := by` proofs and `·` blocks run as top-level steps (lean/plans.py).
+    flatten_blocks: bool = True
+    # New states get accessible names for inaccessible hypotheses (`rename_i`) before the policy sees them.
+    name_inaccessible_hypotheses: bool = True
+    # Policy blocks that refer to unknown names fail before Lean runs (lean/identifiers.py).
+    check_identifiers: bool = True
+    # The cache of the environment's exported names; empty: $LEAN_SEARCH_DATA/lean.
+    environment_names_directory: str = ""
 
 
 class StopReason(StrEnum):
@@ -82,6 +100,8 @@ class Accounting:
     repl_failures: int = 0
     rejected: int = 0
     verification_seconds: float = 0.0
+    unknown_identifiers: int = 0
+    unparsed_samples: int = 0
 
 
 @dataclass
@@ -98,6 +118,7 @@ class StepStatistics:
     rejected: int = 0
     repeated: int = 0
     proofs: int = 0
+    unknown_identifiers: int = 0
 
 
 @dataclass(frozen=True)
@@ -206,7 +227,9 @@ def step_statistics(tree: SearchTree) -> tuple[StepStatistics, ...]:
                 statistics.wall_clock_timeouts += 1
             case FailureKind.REPL_FAILURE:
                 statistics.repl_failures += 1
-            case FailureKind.FORBIDDEN | None:
+            case FailureKind.UNKNOWN_IDENTIFIER:
+                statistics.unknown_identifiers += 1
+            case FailureKind.FORBIDDEN | FailureKind.UNPARSED | None:
                 pass
     return tuple(by_step.values())
 
@@ -216,6 +239,8 @@ class _Execution(NamedTuple):
     total_tactics: int
     failure: Failure | None
     lean_seconds: float
+    tactics: tuple[TacticPiece, ...] = ()
+    flattened: bool = False
 
 
 @dataclass
@@ -252,6 +277,8 @@ class _TheoremSearch:
         self.verification_failures = 0
         self.plain_verified: bool | None = None
         self.started = time.monotonic()
+        self.identifier_checker: IdentifierChecker | None = None
+        self.name_scope: NameScope | None = None
 
     def wall_seconds(self) -> float:
         return time.monotonic() - self.started
@@ -269,8 +296,11 @@ class _TheoremSearch:
                 result = self._result(StopReason.START_FAILED, None, None)
                 return CompletedSearch(dataclasses.replace(result, start_failure=failure.message), None)
             case ProofState() as root_state:
-                tree = SearchTree(self.problem.name, root_state, start.elapsed_seconds)
+                root_state, naming_seconds = await self._named(root_state)
+                self.accounting.lean_seconds += naming_seconds
+                tree = SearchTree(self.problem.name, root_state, start.elapsed_seconds + naming_seconds)
         self.tree = tree
+        await self._prepare_identifier_check()
         self.context = SearchContext(self.problem, tree, self.repl)
         self.accounting.nodes = 1
         await self._enqueue([tree.root], {})
@@ -279,6 +309,32 @@ class _TheoremSearch:
             tree.mark_proof_path(proved)
         tree.settle_statuses()
         return CompletedSearch(self._result(stop_reason, proved, tree), tree)
+
+    async def _prepare_identifier_check(self) -> None:
+        if not self.config.check_identifiers:
+            return
+        self.name_scope = name_scope(self.problem.header, self.problem.formal_statement)
+        if self.name_scope is None:
+            return
+        directory = Path(self.config.environment_names_directory) if self.config.environment_names_directory else None
+        try:
+            names = await environment_names(self.repl, self.problem.header, directory)
+        except RuntimeError:
+            logger.exception("The identifier check is off for %s", self.problem.name)
+            return
+        self.identifier_checker = IdentifierChecker(names)
+
+    async def _named(self, state: ProofState) -> tuple[ProofState, float]:
+        """The state with its inaccessible hypotheses renamed by Lean, or unchanged if that did not name them all."""
+        tactic = renaming_tactic(state.goals) if self.config.name_inaccessible_hypotheses else None
+        if tactic is None:
+            return state, 0.0
+        result = await self.repl.apply_tactic(state, tactic)
+        match result.outcome:
+            case ProofState() as renamed if not has_inaccessible_names(renamed.goals):
+                return renamed, result.elapsed_seconds
+            case _:
+                return state, result.elapsed_seconds
 
     async def _search(self) -> tuple[StopReason, Node | None]:
         while True:
@@ -338,7 +394,7 @@ class _TheoremSearch:
         async with contextlib.aclosing(self.expander.expand(expansion.node, self.context)) as batches:
             async for batch in batches:
                 self._charge(expansion, batch)
-                await self._run_batch(expansion, batch.candidates)
+                await self._run_batch(expansion, batch)
                 if expansion.stopped:
                     break
         for batch in self.context.abandoned_batches:
@@ -362,24 +418,55 @@ class _TheoremSearch:
         assert self.solved_at is not None
         return [self.accounting, self.solved_at]
 
-    async def _run_batch(self, expansion: _Expansion, batch: Sequence[Candidate]) -> None:
-        for candidate in batch:
-            if self.wall_seconds() >= self.config.max_wall_seconds:
-                expansion.out_of_time = True
-                return
-            child = await self._execute(expansion, candidate)
-            if child is not None and child.is_proved and await self._verify(child):
-                expansion.proved = child
-                return
+    async def _run_batch(self, expansion: _Expansion, batch: CandidateBatch) -> None:
+        completions = [self._record_unparsed(expansion.node, sample) for sample in batch.unparsed]
+        try:
+            for candidate in batch.candidates:
+                if self.wall_seconds() >= self.config.max_wall_seconds:
+                    expansion.out_of_time = True
+                    return
+                edge, child = await self._execute(expansion, candidate)
+                completions.extend(self._completions(edge, candidate))
+                if child is not None and child.is_proved and await self._verify(child):
+                    expansion.proved = child
+                    return
+        finally:
+            if batch.prompt:
+                self.tree.expansion_texts.append(
+                    ExpansionTexts(self.problem.name, expansion.node.node_id, batch.prompt, tuple(completions))
+                )
 
-    async def _execute(self, expansion: _Expansion, candidate: Candidate) -> Node | None:
+    def _record_unparsed(self, node: Node, sample: UnparsedSample) -> SampledCompletion:
+        self.accounting.edges += 1
+        self.accounting.unparsed_samples += 1
+        failure = Failure(FailureKind.UNPARSED, f"The sample has no usable block: {sample.reason}.")
+        edge = self.tree.add_edge(
+            node,
+            text="",
+            source=StepSource.POLICY,
+            log_probability=None,
+            prompt_tokens=0,
+            generated_tokens=0,
+            outcome=EdgeOutcome.REJECTED,
+            failure=failure,
+        )
+        return SampledCompletion(edge.edge_id, sample.text, (), sample.ended_turn)
+
+    def _completions(self, edge: Edge, candidate: Candidate) -> list[SampledCompletion]:
+        executed = edge if edge.repeat_of is None else self.tree.edges[edge.repeat_of]
+        tactics = executed.executed_tactics if executed.text == candidate.text else ()
+        return [
+            SampledCompletion(edge.edge_id, generated.text, tactic_spans(generated, tactics), generated.ended_turn)
+            for generated in candidate.completions
+        ]
+
+    async def _execute(self, expansion: _Expansion, candidate: Candidate) -> tuple[Edge, Node | None]:
         node = expansion.node
         self.accounting.edges += 1
         normalized_text = candidate.text.strip()
         earlier_edge_id = expansion.edge_id_by_text.get(normalized_text)
         if earlier_edge_id is not None:
-            self._record(node, candidate, EdgeOutcome.REPEATED, repeat_of=earlier_edge_id)
-            return None
+            return self._record(node, candidate, EdgeOutcome.REPEATED, repeat_of=earlier_edge_id), None
         child: Node | None = None
         forbidden = self.forbidden_steps.find(candidate.text)
         if forbidden:
@@ -398,15 +485,23 @@ class _TheoremSearch:
             expansion.early_scores[child.node_id] = asyncio.create_task(
                 self.priority_function.score([child], self.tree)
             )
-        return child
+        return edge, child
+
+    def _plan(self, node: Node, candidate: Candidate) -> TacticPlan:
+        if candidate.source != StepSource.POLICY:
+            return plain_plan(candidate.text)
+        plan = plan_block(candidate.text, flatten=self.config.flatten_blocks)
+        if self.identifier_checker is None or self.name_scope is None:
+            return plan
+        unknown = self.identifier_checker.first_unknown(plan.texts, node.goals, self.name_scope)
+        return plan if unknown is None else plan.rejecting(unknown.rejection)
 
     async def _apply(self, node: Node, candidate: Candidate) -> tuple[Edge, Node | None]:
         heartbeats = candidate.heartbeats if candidate.heartbeats is not None else self.config.tactic_heartbeats
         timeout_seconds = (
             candidate.timeout_seconds if candidate.timeout_seconds is not None else self.config.tactic_timeout_seconds
         )
-        result = await self.repl.apply_block(node.state, candidate.text, heartbeats, timeout_seconds)
-        self.accounting.lean_seconds += result.elapsed_seconds
+        result = await self.repl.apply_block(node.state, self._plan(node, candidate), heartbeats, timeout_seconds)
         failure = None if result.failure is None else Failure.from_lean(result.failure)
         match None if failure is None else failure.kind:
             case FailureKind.HEARTBEAT_TIMEOUT | FailureKind.WALL_CLOCK_TIMEOUT:
@@ -415,13 +510,22 @@ class _TheoremSearch:
                 self.accounting.repl_failures += 1
             case FailureKind.ERROR:
                 self.accounting.errors += 1
-            case FailureKind.FORBIDDEN | None:
+            case FailureKind.UNKNOWN_IDENTIFIER:
+                self.accounting.unknown_identifiers += 1
+            case FailureKind.FORBIDDEN | FailureKind.UNPARSED | None:
                 pass
         applied_tactics = len(result.applied_tactics)
-        execution = _Execution(applied_tactics, result.total_tactics, failure, result.elapsed_seconds)
+        state, naming_seconds = (
+            (result.state, 0.0) if not applied_tactics or result.state.is_proved else await self._named(result.state)
+        )
+        lean_seconds = result.elapsed_seconds + naming_seconds
+        self.accounting.lean_seconds += lean_seconds
+        execution = _Execution(
+            applied_tactics, result.total_tactics, failure, lean_seconds, result.tactics, result.flattened
+        )
         if not applied_tactics:
             return self._record(node, candidate, EdgeOutcome.FAILED, execution=execution), None
-        existing = None if result.state.is_proved else self.tree.node_with_goals(result.state.goal_key)
+        existing = None if state.is_proved else self.tree.node_with_goals(state.goal_key)
         if existing is not None:
             self.accounting.duplicates += 1
             edge = self._record(node, candidate, EdgeOutcome.DUPLICATE, existing.node_id, execution=execution)
@@ -430,12 +534,12 @@ class _TheoremSearch:
         child = self.tree.add_child(
             node,
             edge.edge_id,
-            join_tactics(result.state.tactics[len(node.state.tactics) :]),
+            join_tactics(state.tactics[len(node.state.tactics) :]),
             candidate.source,
             candidate.log_probability,
-            result.state,
+            state,
             self.wall_seconds(),
-            result.elapsed_seconds,
+            lean_seconds,
         )
         self.accounting.nodes += 1
         return edge, child
@@ -468,6 +572,8 @@ class _TheoremSearch:
             repeat_of=repeat_of,
             forced=candidate.forced,
             sample_count=candidate.sample_count,
+            executed_tactics=execution.tactics,
+            flattened=execution.flattened,
         )
 
     async def _verify(self, node: Node) -> bool:
