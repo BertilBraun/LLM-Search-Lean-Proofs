@@ -7,3 +7,4 @@ lean/.lake/
 deployment/.node_address
 /artifacts/
 node_backup/
+.claude/

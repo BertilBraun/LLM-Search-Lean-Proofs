@@ -380,7 +380,7 @@ The search is a graph: a tactic that reaches an existing state records a duplica
 student's 244 trees: 66.2% of attempts fail (Lean error or timeout), 15.5% create a new state, 14.4% reach an
 existing state, 3.8% repeat an earlier tactic text. Duplicates: 49% back to the same state (no progress), 4% back
 to an ancestor, 21% the same state as a sibling, 26% transpositions into another branch; 56 transposition edges
-lead from 24 off-path nodes into a proof.
+lead from 14 off-path nodes into a proof (the proof graph has 458 nodes vs 444 on the found proof paths).
 
 - **Proof graph**: every node with a route to a proof via new-state or transposition edges is on a proof. Its
   exact remaining steps are the shortest such route. Transpositions are never failures (A then B and B then A both
