@@ -468,9 +468,11 @@ at 50k 9 stop on heartbeats and 1 fails fast (median 8.6 s, 133 s), at 100k 5 he
   merging identical tactic texts. Best-first selection skews which states are trained, not the groups themselves.
 - **Reward** = `(1 − λ) · G + λ · L`, both on a common scale, mixed AlphaZero-style with **λ = 0.15** (the local
   influence stays at about 15–20%; the proof graph decides):
-  - `G` (global) ∈ [0, 1]: 1 on the proof graph (optionally slightly more for shorter remaining proofs), 0 for dead
-    ends; for expanded off-path children the backed-up value (below) once the value model passed the gate; **0
-    (neutral) for never-expanded children** until then (the safe fallback: the loop still works, with less signal).
+  - `G` (global) ∈ [0, 1] = `(1 − μ) · z + μ · q` with **μ = 0.15** (decided 2026-10-27): `z` is the concrete
+    label, 1 if the state reached lies on the proof graph and 0 otherwise (never-expanded children included); `q` is
+    the value part (the averaged estimate below, or the child's own estimate if it has no expanded subtree). Before
+    the value model has passed the gate μ = 0, so G is the concrete label alone; afterwards the value model
+    contributes at most 0.85 · 0.15 ≈ 13% of the reward. Dead ends are not a separate case (z = 0).
   - `L` (local) ∈ [−1, 1]: −1 Lean error (heartbeat timeouts included), **−0.5 no progress** (net-unchanged state or
     back to an ancestor, so a no-op never beats a genuine attempt), 0 for a new state plus potential-based value
     shaping `h(parent) − h(child)` (cannot change the optimal policy) and a small bonus for closing a goal, clipped.
@@ -487,7 +489,20 @@ at 50k 9 stop on heartbeats and 1 fails fast (median 8.6 s, 133 s), at 100k 5 he
   advantage): the explanation gets the sample's overall advantage; the tactics up to the last successful one get
   the advantage of the state they reach; the first failing tactic (after flattening, the line Lean's error points
   to) gets the error advantage; everything after it is masked, since Lean never evaluated it. The SFT counterpart
-  is training on the valid prefix plus unlikelihood on the failing line.
+  is training on the valid prefix plus unlikelihood on the failing line. Implemented (`src/lean_search/rl/`): with
+  b the sample-weighted group mean, overall A = r − b, prefix P = r_prefix − b, error E = r − r_prefix (A when there
+  is no valid prefix), so A = P + E; tokens before the first tactic span (explanation, opening fence) get A, tactics
+  before the failing one P, the failing tactic E, the rest is masked; after a complete block the closing fence and
+  end of turn get P; the control run uses sequence-level credit (every token A). Samples without a usable block
+  (none, cut off at the token cap, empty, forbidden) are failures in their group (L = −1, G = 0), which is how RL
+  dampens repetition loops.
+- **Optimization** (implemented defaults): PPO-style clipped objective per token, clip range [1 − 0.2, 1 + 0.28];
+  old log-probabilities from the trainer's own weights before the phase's first update (the published version
+  that collected most of the data; no recorded vLLM log-probabilities); KL (k3 estimator) measured to the
+  data-collecting policy and to the starting weights, penalty coefficient 0; loss normalized as Σ weight · token
+  loss / (sequences in the step × 256), so there is no per-sequence mean and no length bias; LoRA rank 64,
+  learning rate 1e-5, 64 sequences per step, one pass per phase; NLL replay (Lean SFT and math) at weight 0.1;
+  single GPU.
 - **Control run**: the same loop with only the outcome / proof-graph signal (expert iteration via GRPO), to
   measure whether the dense part helps.
 
@@ -500,32 +515,41 @@ measured on far too few states to tell whether loop training helped or hurt. A r
 foundation of everything above, so it comes first.
 
 - **Target** (AlphaZero-style): the probability that the current policy finds a proof from this state within the
-  budget, plus a remaining-steps head trained only on proof-graph nodes, where steps are exact. The A* priority
-  combines both (high proof probability and few remaining steps first; exact formula open).
-- **Targets and weights per node:**
+  budget, plus a remaining-steps head trained only on proof-graph nodes, where steps are exact. The value model's
+  ninth bin ("dead") is read as "no proof within the budget", the complement of the proof probability. The A*
+  priority combines both (high proof probability and few remaining steps first; exact formula open).
+- **Targets and weights per node** (decided 2026-10-27, replacing purely averaged targets, which made ~90% of all
+  targets the model's own estimates): every expanded node gets `y = (1 − μ) · z + μ · q` with **μ = 0.15**, the same
+  mix as the policy's global term:
 
-  | Node | Target | Weight |
-  |---|---|---|
-  | On the proof graph | 1, exact remaining steps | high |
-  | Dead end | 0 | moderate (only 8 samples tried) |
-  | Expanded, off the proof graph | **average** over the expanded descendants reachable via new-state and transposition edges (each once, no back-edges): proof probability = mean of their values; steps = mean of (distance + h) | grows with the number of expanded descendants |
-  | Never expanded | none (only a weak sibling-ranking partner) | ≈ 0 |
+  | Node | z (concrete label) | q (value part) | Weight |
+  |---|---|---|---|
+  | On the proof graph | 1, exact remaining steps | average below (or own estimate) | high |
+  | Expanded, off the proof graph | 0 | **average** over the expanded descendants reachable via new-state and transposition edges (each once, no back-edges): proof probability = mean of their values; steps = mean of (distance + h); own estimate if there are none | grows with the number of expanded descendants (a node expanded once in a tree the search then abandoned is weak evidence for "no proof") |
+  | Never expanded | — | — | no target |
 
-  Lean-error edges have no state; they enter only the policy reward. The average was chosen over max/min for a
-  stable target: best-first search expands mostly promising nodes, so the average is dominated by good branches;
-  its pessimistic bias is similar across nodes. A temperature parameter can slide it toward the maximum later.
-- **Sibling ranking loss**, only among children of the same expanded node (identical states merged first),
-  logistic on the score difference, added to the pointwise loss with a mixing factor:
-  - solved trees: the proof-graph child against a dead-end sibling (high weight), an expanded off-path sibling
-    (medium, growing with its subtree), a never-expanded sibling (low, 0 at first);
-  - unsolved trees: expanded siblings with a large subtree against dead-end siblings;
-  - not at first: pairs of two off-path siblings ranked by their averaged values (noise against noise).
-- **Guards against a self-reinforcing loop**: Lean anchors (proof graph 1, dead ends 0) are never overwritten;
-  leaf values come from the value version that ran the search (a frozen target network); best-first search
-  replaces optimistic estimates of expanded nodes by their children's values; per-batch class balance and a cap on
-  labels per tree, so large unsolved trees do not dominate; a small replay of v0 data; occasional retraining from
-  the base checkpoint; the gate below.
+  Concrete labels thus make up at least 85% of every target; nothing is trained purely on estimates. Dead ends
+  (expanded nodes whose 8 samples and sweep produced nothing usable, ~6% of expanded nodes) are no longer a
+  separate category: they are off-graph nodes with z = 0 and appear only as a dashboard statistic. Lean-error edges
+  have no state; they enter only the policy reward. The average was chosen over max/min for a stable q: best-first
+  search expands mostly promising nodes, so the average is dominated by good branches; a temperature parameter can
+  slide it toward the maximum later.
+- **Sibling ranking loss**, only among children of the same expanded node (identical states merged first; children
+  reached by transpositions count as siblings), logistic on the difference of the log-odds of the proof
+  probability, added to the pointwise loss with a mixing factor: the proof-graph child against each expanded
+  off-graph sibling (weight growing with the sibling's subtree) and against never-expanded siblings (weight 0 at
+  first: they may be provable too). Unsolved trees give no pairs (no concrete label differs); pairs of two off-graph
+  siblings ranked by their estimates are not used (noise against noise).
+- **Guards against a self-reinforcing loop**: the concrete label carries 85% of every target and is never
+  overwritten; leaf values come from the value version that ran the search (a frozen target network); best-first
+  search replaces optimistic estimates of expanded nodes by their children's values; per-batch class balance and a
+  cap on labels per tree, so large unsolved trees do not dominate; a small replay of v0 data (10%); occasional
+  retraining from the base checkpoint; the gate below.
 - **Not done**: extra searches only to label states (AlphaZero does not need them either).
+- **Implemented** (`src/lean_search/value/graph_targets.py`, `ranking.py`, `graph_trainer.py`): weighted soft
+  cross-entropy on the bins plus the ranking loss (0.5 × softplus of the negative score difference), pair members
+  in the same micro-batch, learning rate 5e-5, at most 64 targets and 64 pairs per tree. The μ-mix of this section
+  replaces the purely averaged targets and the dead-end pairs still in the code (next implementation step).
 
 ### Benchmark and gate
 
@@ -552,7 +576,10 @@ foundation of everything above, so it comes first.
 - The decisive test: an A/B search with the policy fixed and only the value model swapped, solve rate at a fixed
   budget.
 - A value model is published only if it beats the current one on the benchmark; value pseudo-labels for
-  off-path children (and value-based rewards) are switched on only after a model passed.
+  off-path children (and value-based rewards) are switched on only after a model passed. Implemented gate
+  defaults: sibling pairwise accuracy improves by at least 0.01, the proof-graph-vs-dead AUC drops by at most 0.02,
+  the anchors' Brier score rises by at most 0.01; thresholds to be set again once fresh scores from the node exist
+  (the headline pair accuracy rests on only ~50 pairs per benchmark).
 
 ### Fixed targets after every phase
 
@@ -563,11 +590,13 @@ foundation of everything above, so it comes first.
 
 ### Order of work
 
-1. **Implementation before renting** (local; Lean-dependent tests on a local Linux environment or a cheap CPU
-   instance): flattening, name checks and renaming of inaccessible hypotheses in the harness; heartbeat-only limits;
-   graph labelling (proof graph, dead ends, duplicate kinds); value targets (averaging, weights, sibling ranking)
-   and the value benchmark; GRPO with per-token advantages and the outcome-only control; dashboard logging; the
-   data rewrite (flattening, chunks, descriptive renaming). Each with tests.
+1. **Implementation before renting** (local, WSL; Lean-dependent tests run there). Done and merged (2026-10-27):
+   WSL development environment with direct downloads; graph labelling (proof graph, edge kinds, statistics); value
+   targets, sibling pairs, value benchmark without circularity and fresh scoring; GRPO trainer with per-token credit
+   and the outcome-only control; value trainer and gate; the dashboard (self-built, open by default); the harness
+   (heartbeats, flattening, `rename_i`, identifier check, full sample texts, unparsed samples). Remaining: the μ-mix
+   of value targets and G, the data rewrite (flattening, chunks, descriptive renaming), the loop integration
+   (search → label → train → publish, metrics writing for the dashboard).
 2. **New node**: rebuild, smoke tests, the heartbeat replay test, baselines with the new settings (student v2,
    value v0).
 3. **SFT stage**: rewritten data (re-trace the selected proofs flat), both naming variants, gentle fine-tunes from
@@ -583,8 +612,9 @@ foundation of everything above, so it comes first.
 A self-built dashboard (no dashboard framework): a small web server in the project serving our own pages and
 charts from the metrics files, with an overview page of the most important values and detail pages per area
 (policy/GRPO, value, search/Lean, curriculum, evaluations, system); it grows as gaps appear. It runs on the node
-and is exposed on an open port behind authentication (HTTPS where possible), laid out for phones too, so a
-multi-day run can be checked from anywhere; TensorBoard is exposed the same way. Overview page: status (loop
+and is exposed on an open port (read-only, so open by default; a password is optional; HTTPS through a tunnel
+where possible), laid out for phones too, so a multi-day run can be checked from anywhere; TensorBoard has no login
+of its own and stays behind SSH or the tunnel. Overview page: status (loop
 running, phase, versions, time since the last publish, proofs per hour, GPU and Lean CPU utilization, money spent),
 headline curves (the fixed targets against the baseline and the control run), RL health, value health, search
 behaviour, warnings (rising no-progress share, KL too high, repetition loops, MATH dropping). Logged per phase
@@ -617,8 +647,9 @@ Paper names in the last three rows are from memory and still need checking befor
 ### Open
 
 - Hardware offers within the budget.
-- Local reward magnitudes, β, the A* priority formula combining proof probability and steps, the value-average
-  temperature, weights by subtree size, the expansion budget of the fixed miniF2F evaluation.
+- Local reward magnitudes, the A* priority formula combining proof probability and steps, the value-average
+  temperature, the exact weights by subtree size, the expansion budget of the fixed miniF2F evaluation, the gate
+  thresholds.
 - Whether flattening plus mixed step lengths bring the failure rate of long blocks (9+ lines: ~80%) down.
 
 ## Known issues (backlog)
