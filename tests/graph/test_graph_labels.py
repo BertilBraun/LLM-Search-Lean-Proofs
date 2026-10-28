@@ -213,3 +213,56 @@ def test_expanded_descendants_skip_back_edges() -> None:
     builder.duplicate(a, builder.root)
     labels = label_graph(builder.record())
     assert labels.expanded_descendants[a.node_id] == ()
+
+
+def tactic_routes() -> tuple[TreeRecord, dict[str, int]]:
+    """Two edges of one tactic each to a proof against a block of three tactics, and a partial block."""
+    builder = GraphBuilder("⊢ r")
+    short = builder.child(builder.root, "⊢ short")
+    builder.tree.mark_proof_path(builder.child(short))
+    long_block = builder.child(builder.root, "⊢ long block", tactics=3)
+    proof = builder.child(long_block, tactics=2)
+    partial = builder.child(builder.root, "⊢ partial", failure_after=2)
+    builder.duplicate(partial, long_block, tactics=4)
+    return builder.record(proof), {
+        "r": 0,
+        "short": short.node_id,
+        "long block": long_block.node_id,
+        "partial": partial.node_id,
+    }
+
+
+@pytest.mark.parametrize(("name", "steps"), [("r", 2), ("short", 1), ("long block", 2), ("partial", 6)])
+def test_remaining_steps_count_tactics(name: str, steps: int) -> None:
+    record, ids = tactic_routes()
+    assert label_graph(record).remaining_steps[ids[name]] == steps
+
+
+def test_fewer_tactics_win_over_fewer_edges() -> None:
+    builder = GraphBuilder("⊢ r")
+    one_block = builder.child(builder.root, "⊢ one block", tactics=4)
+    builder.tree.mark_proof_path(builder.child(one_block))
+    first = builder.child(builder.root, "⊢ first")
+    second = builder.child(first, "⊢ second")
+    proof = builder.child(second)
+    assert label_graph(builder.record(proof)).remaining_steps[0] == 3
+
+
+def test_a_partial_block_counts_its_valid_prefix() -> None:
+    record, ids = tactic_routes()
+    assert label_graph(record).successors[0][ids["partial"]] == 2
+
+
+def test_expanded_descendants_are_at_their_fewest_tactics() -> None:
+    builder = GraphBuilder("⊢ r")
+    a = builder.child(builder.root, "⊢ a", tactics=3)
+    b = builder.child(builder.root, "⊢ b")
+    ab = builder.child(a, "⊢ ab", tactics=2)
+    builder.duplicate(b, ab)
+    builder.failure(ab)
+    labels = label_graph(builder.record())
+    assert set(labels.expanded_descendants[0]) == {
+        ReachedNode(a.node_id, 3),
+        ReachedNode(b.node_id, 1),
+        ReachedNode(ab.node_id, 2),
+    }

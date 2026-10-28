@@ -90,11 +90,14 @@ class GraphStatistics:
     dead_ends: int
     expanded_off_graph_nodes: int
     proof_graph_targets: int
-    dead_end_targets: int
-    averaged_targets: int
-    # Expanded off-graph nodes without an expanded descendant, hence without a target.
+    off_graph_targets: int
+    # Targets whose value part q averages expanded descendants; the others use their own estimate (or have no q).
+    targets_averaging_descendants: int
+    targets_without_value_part: int
+    # Expanded states with goals that the per-tree cap left without a target.
     expanded_without_target: int
-    averaged_descendants: SizeHistogram
+    # Expanded nodes including the node itself, for every off-graph target.
+    off_graph_subtree_sizes: SizeHistogram
     # Expanded nodes including the node itself, for every expanded node.
     expanded_subtree_sizes: SizeHistogram
     groups: int
@@ -139,13 +142,13 @@ def graph_statistics(
     into_proof = [edge for edge in labels.edges if is_into_proof_graph(edge, labels)]
     off_path_into_proof = [edge for edge in into_proof if edge.parent_id not in on_path]
     sources = Counter(target.source for target in targets)
-    expanded_off_graph = [
-        node_id for node_id, node_class in enumerate(labels.node_classes) if node_class == NodeClass.EXPANDED_OFF_GRAPH
-    ]
-    averaged = [target for target in targets if target.source == TargetSource.AVERAGED]
+    expanded_with_goals = sum(
+        expanded and bool(node.goals) for expanded, node in zip(labels.expanded, record.nodes, strict=True)
+    )
+    off_graph = [target for target in targets if target.source == TargetSource.OFF_GRAPH]
     samples = [sample for group in groups for sample in group.samples]
     local = [sample.components.local * sample.multiplicity for sample in samples]
-    off_graph = [
+    off_graph_samples = [
         sample.target_id is None or labels.node_classes[sample.target_id] != NodeClass.PROOF_GRAPH for sample in samples
     ]
     proof_graph_nodes = class_count(labels, NodeClass.PROOF_GRAPH)
@@ -173,12 +176,13 @@ def graph_statistics(
         off_path_transposition_sources=len({edge.parent_id for edge in off_path_into_proof}),
         off_path_transpositions_into_proof_path=sum(edge.target_id in on_path for edge in off_path_into_proof),
         dead_ends=class_count(labels, NodeClass.DEAD_END),
-        expanded_off_graph_nodes=len(expanded_off_graph),
+        expanded_off_graph_nodes=class_count(labels, NodeClass.EXPANDED_OFF_GRAPH),
         proof_graph_targets=sources[TargetSource.PROOF_GRAPH],
-        dead_end_targets=sources[TargetSource.DEAD_END],
-        averaged_targets=sources[TargetSource.AVERAGED],
-        expanded_without_target=len(expanded_off_graph) - sources[TargetSource.AVERAGED],
-        averaged_descendants=SizeHistogram.of(target.expanded_descendants for target in averaged),
+        off_graph_targets=sources[TargetSource.OFF_GRAPH],
+        targets_averaging_descendants=sum(bool(target.expanded_descendants) for target in targets),
+        targets_without_value_part=sum(target.value_part is None for target in targets),
+        expanded_without_target=expanded_with_goals - len(targets),
+        off_graph_subtree_sizes=SizeHistogram.of(1 + target.expanded_descendants for target in off_graph),
         expanded_subtree_sizes=SizeHistogram.of(
             1 + len(descendants) for descendants in labels.expanded_descendants.values()
         ),
@@ -192,7 +196,7 @@ def graph_statistics(
         ),
         positive_local_reward=sum(max(0.0, value) for value in local),
         positive_local_reward_off_proof_graph=sum(
-            max(0.0, value) for value, off in zip(local, off_graph, strict=True) if off
+            max(0.0, value) for value, off in zip(local, off_graph_samples, strict=True) if off
         ),
     )
 

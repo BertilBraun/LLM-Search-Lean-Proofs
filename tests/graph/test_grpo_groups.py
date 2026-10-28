@@ -57,7 +57,7 @@ def groups(config: RewardConfig = CONFIG) -> dict[int, PolicyGroup]:
     record = builder.record(proof)
     labels = label_graph(record)
     estimates = recorded_estimates(record, READOUT)
-    targets = value_targets(record, labels, estimates, READOUT, ValueTargetConfig())
+    targets = value_targets(record, labels, estimates, ValueTargetConfig())
     return {group.node_id: group for group in policy_groups(record, labels, estimates, targets, config)}
 
 

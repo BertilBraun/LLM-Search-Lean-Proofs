@@ -1,6 +1,6 @@
 """Labels of a finished search graph: edge kinds, the proof graph, dead ends and expanded descendants."""
 
-from collections import deque
+import heapq
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
@@ -99,6 +99,7 @@ class EdgeLabel:
 @dataclass(frozen=True)
 class ReachedNode:
     node_id: int
+    # Fewest top-level tactics over forward edges.
     distance: int
 
 
@@ -106,12 +107,12 @@ class ReachedNode:
 class GraphLabels:
     edges: tuple[EdgeLabel, ...]
     node_classes: tuple[NodeClass, ...]
-    # Fewest forward edges to a verified proof; None off the proof graph.
+    # Fewest top-level tactics over forward edges to a verified proof; None off the proof graph.
     remaining_steps: tuple[int | None, ...]
     expanded: tuple[bool, ...]
-    # Distinct targets of each node's forward edges.
-    successors: Mapping[int, tuple[int, ...]]
-    # Per expanded node: the other expanded nodes reachable over forward edges, each once, at its fewest edges.
+    # Distinct targets of each node's forward edges, each with the fewest tactics of an edge reaching it.
+    successors: Mapping[int, Mapping[int, int]]
+    # Per expanded node: the other expanded nodes reachable over forward edges, each once, at its fewest tactics.
     expanded_descendants: Mapping[int, tuple[ReachedNode, ...]]
 
     @property
@@ -209,40 +210,50 @@ def edge_labels(record: TreeRecord) -> tuple[EdgeLabel, ...]:
     return tuple(labels)
 
 
-def forward_successors(edges: Sequence[EdgeLabel]) -> dict[int, tuple[int, ...]]:
-    targets: dict[int, dict[int, None]] = {}
+def forward_successors(edges: Sequence[EdgeLabel]) -> dict[int, dict[int, int]]:
+    """A partial block counts the tactics of its valid prefix, a proving block those run until the proof."""
+    successors: dict[int, dict[int, int]] = {}
     for edge in edges:
         if edge.kind.is_forward:
             assert edge.target_id is not None
-            targets.setdefault(edge.parent_id, {})[edge.target_id] = None
-    return {node_id: tuple(node_targets) for node_id, node_targets in targets.items()}
+            targets = successors.setdefault(edge.parent_id, {})
+            targets[edge.target_id] = min(edge.applied_tactics, targets.get(edge.target_id, edge.applied_tactics))
+    return successors
 
 
-def reverse(successors: Mapping[int, Sequence[int]]) -> dict[int, list[int]]:
-    predecessors: dict[int, list[int]] = {}
+def reverse(successors: Mapping[int, Mapping[int, int]]) -> dict[int, dict[int, int]]:
+    predecessors: dict[int, dict[int, int]] = {}
     for node_id, targets in successors.items():
-        for target_id in targets:
-            predecessors.setdefault(target_id, []).append(node_id)
+        for target_id, tactics in targets.items():
+            predecessors.setdefault(target_id, {})[node_id] = tactics
     return predecessors
 
 
-def proof_distances(record: TreeRecord, predecessors: Mapping[int, Sequence[int]]) -> dict[int, int]:
-    distances = {node.node_id: 0 for node in record.nodes if is_verified_proof(node)}
-    queue = deque(distances)
+def shortest_distances(sources: Sequence[int], neighbours: Mapping[int, Mapping[int, int]]) -> dict[int, int]:
+    """Fewest tactics from any source to each node reached over the weighted edges."""
+    distances = dict.fromkeys(sources, 0)
+    queue = [(0, node_id) for node_id in sources]
     while queue:
-        node_id = queue.popleft()
-        for predecessor in predecessors.get(node_id, ()):
-            if predecessor not in distances:
-                distances[predecessor] = distances[node_id] + 1
-                queue.append(predecessor)
+        distance, node_id = heapq.heappop(queue)
+        if distance > distances[node_id]:
+            continue
+        for neighbour, tactics in neighbours.get(node_id, {}).items():
+            reached = distance + tactics
+            if neighbour not in distances or reached < distances[neighbour]:
+                distances[neighbour] = reached
+                heapq.heappush(queue, (reached, neighbour))
     return distances
+
+
+def proof_distances(record: TreeRecord, predecessors: Mapping[int, Mapping[int, int]]) -> dict[int, int]:
+    return shortest_distances([node.node_id for node in record.nodes if is_verified_proof(node)], predecessors)
 
 
 def dead_end_ids(
     record: TreeRecord,
     edges: Sequence[EdgeLabel],
     on_proof_graph: Mapping[int, int],
-    successors: Mapping[int, Sequence[int]],
+    successors: Mapping[int, Mapping[int, int]],
 ) -> set[int]:
     """Fully expanded nodes without a new state whose transpositions (if any) only reach other dead ends."""
     infrastructure_failures = {edge.parent_id for edge in edges if edge.kind == EdgeKind.INFRASTRUCTURE_FAILURE}
@@ -267,16 +278,9 @@ def dead_end_ids(
 
 
 def reached_expanded(
-    start_id: int, successors: Mapping[int, Sequence[int]], expanded: Sequence[bool]
+    start_id: int, successors: Mapping[int, Mapping[int, int]], expanded: Sequence[bool]
 ) -> tuple[ReachedNode, ...]:
-    distances = {start_id: 0}
-    queue = deque([start_id])
-    while queue:
-        node_id = queue.popleft()
-        for target_id in successors.get(node_id, ()):
-            if target_id not in distances:
-                distances[target_id] = distances[node_id] + 1
-                queue.append(target_id)
+    distances = shortest_distances([start_id], successors)
     return tuple(
         ReachedNode(node_id, distance)
         for node_id, distance in distances.items()

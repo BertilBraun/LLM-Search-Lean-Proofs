@@ -53,7 +53,10 @@ class TrainingPhaseConfig:
     # The owner's local scale: Lean errors and heartbeat timeouts -1, no progress -0.5, before clipping L to [-1, 1].
     reward: RewardConfig = field(default_factory=lambda: RewardConfig(no_progress_reward=-0.5))
     readout: RemainingStepsReadout = field(default_factory=RemainingStepsReadout)
-    value_targets: ValueTargetConfig = field(default_factory=lambda: ValueTargetConfig(max_targets_per_tree=64))
+    # value_share (μ) stays 0 until a value model passed the gate.
+    value_targets: ValueTargetConfig = field(
+        default_factory=lambda: ValueTargetConfig(value_share=0.0, max_targets_per_tree=64)
+    )
     ranking: RankingConfig = field(default_factory=RankingConfig)
     # Absent: that model does not train this phase.
     policy: GrpoConfig | None = None
@@ -112,7 +115,7 @@ def label_phase_data(records: Sequence[TreeRecord], config: TrainingPhaseConfig)
     for record in records:
         labels = label_graph(record)
         estimates = recorded_estimates(record, config.readout)
-        targets = value_targets(record, labels, estimates, config.readout, config.value_targets)
+        targets = value_targets(record, labels, estimates, config.value_targets)
         trees.append(LabelledTree(record, labels, targets))
         groups.extend(policy_groups(record, labels, estimates, targets, config.reward))
     return LabelledPhaseData(tuple(trees), tuple(groups))

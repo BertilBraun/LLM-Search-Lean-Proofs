@@ -71,7 +71,7 @@ def tree_record(with_values: bool = True) -> TreeRecord:
 
 def labelled_tree(record: TreeRecord) -> LabelledTree:
     labels = label_graph(record)
-    targets = value_targets(record, labels, recorded_estimates(record, READOUT), READOUT, ValueTargetConfig())
+    targets = value_targets(record, labels, recorded_estimates(record, READOUT), ValueTargetConfig())
     return LabelledTree(record, labels, targets)
 
 

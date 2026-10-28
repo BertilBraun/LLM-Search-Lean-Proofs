@@ -107,7 +107,7 @@ def read_records(directory: Path) -> list[TreeRecord]:
 
 def labelled_tree(record: TreeRecord, readout: RemainingStepsReadout, config: ValueTargetConfig) -> LabelledTree:
     labels = label_graph(record)
-    targets = value_targets(record, labels, recorded_estimates(record, readout), readout, config)
+    targets = value_targets(record, labels, recorded_estimates(record, readout), config)
     return LabelledTree(record, labels, targets)
 
 

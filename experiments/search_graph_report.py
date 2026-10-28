@@ -52,7 +52,7 @@ def run_report(
         record = read_tree(path)
         labels = label_graph(record)
         estimates = recorded_estimates(record, readout)
-        targets = value_targets(record, labels, estimates, readout, target_config)
+        targets = value_targets(record, labels, estimates, target_config)
         groups = policy_groups(record, labels, estimates, targets, reward_config)
         outcome_groups = policy_groups(record, labels, estimates, targets, outcome_config)
         statistics = graph_statistics(record, labels, targets, groups, outcome_groups, reward_config)
@@ -147,12 +147,19 @@ def render_run(run: RunReport) -> str:
             ],
         ),
         markdown_table(
-            ["Proof graph targets", "Dead-end targets", "Averaged targets", "Expanded without target"],
+            [
+                "Proof graph targets",
+                "Off-graph targets",
+                "q averaging descendants",
+                "Without q",
+                "Expanded, capped",
+            ],
             [
                 [
                     total.proof_graph_targets,
-                    total.dead_end_targets,
-                    total.averaged_targets,
+                    total.off_graph_targets,
+                    total.targets_averaging_descendants,
+                    total.targets_without_value_part,
                     total.expanded_without_target,
                 ]
             ],
@@ -161,9 +168,9 @@ def render_run(run: RunReport) -> str:
             ["Sizes", *sizes, "Mean"],
             [
                 [
-                    "expanded descendants behind averaged targets",
-                    *total.averaged_descendants.buckets,
-                    f"{total.averaged_descendants.mean_size:.1f}",
+                    "expanded subtree behind off-graph targets",
+                    *total.off_graph_subtree_sizes.buckets,
+                    f"{total.off_graph_subtree_sizes.mean_size:.1f}",
                 ],
                 [
                     "expanded subtree of every expanded node",
