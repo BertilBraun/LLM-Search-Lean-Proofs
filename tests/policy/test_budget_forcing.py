@@ -13,7 +13,9 @@ from lean_search.policy.config import PolicyConfig
 from lean_search.policy.expander import PolicyExpander
 from lean_search.policy.prompts import (
     ASSISTANT_PREFILL,
+    FENCE,
     THINK_END,
+    answer_opening,
     forced_answer_prompt,
     forced_sample,
     parse_sample,
@@ -22,6 +24,7 @@ from lean_search.policy.prompts import (
 )
 from lean_search.search import CandidateBatch, EdgeOutcome, SearchContext, SearchTree, StepSource
 from lean_search.search.records import from_json_object, to_json
+from lean_search.search.texts import GeneratedText, SampledTokens, TokenSpan
 from lean_search.search.tree import Edge
 
 PROMPT_TOKENS = 100
@@ -32,8 +35,28 @@ def sample(text: str, finish_reason: str = "stop", tokens: int = 5, log_probabil
     return Sample(text=text, cumulative_logprob=log_probability, token_count=tokens, finish_reason=finish_reason)
 
 
-def choice(text: str, finish_reason: str, tokens: int) -> dict[str, object]:
-    return {"text": text, "logprobs": {"token_logprobs": [-0.25] * tokens}, "finish_reason": finish_reason}
+def sampled(
+    text: str, token_ids: tuple[int, ...], finish_reason: str = "stop", stop_string: str | None = None
+) -> Sample:
+    tokens = SampledTokens(token_ids, tuple(-0.5 for _ in token_ids))
+    return Sample(text, -0.5 * len(token_ids), len(token_ids), finish_reason, tokens, stop_string)
+
+
+def choice(
+    text: str, finish_reason: str, tokens: int, first_token_id: int = 1000, stop_reason: str | None = None
+) -> dict[str, object]:
+    """A choice as vLLM's completions endpoint returns it with `logprobs: 0, return_tokens_as_token_ids: true`."""
+    return {
+        "text": text,
+        "logprobs": {
+            "tokens": [f"token_id:{first_token_id + offset}" for offset in range(tokens)],
+            "token_logprobs": [-0.25] * tokens,
+            "top_logprobs": [None] * tokens,
+            "text_offset": list(range(tokens)),
+        },
+        "finish_reason": finish_reason,
+        "stop_reason": stop_reason,
+    }
 
 
 @pytest.mark.parametrize(
@@ -48,24 +71,68 @@ def test_only_samples_cut_off_inside_their_thoughts_are_forced(text: str, finish
     assert truncated_in_thinking(sample(text, finish_reason)) == truncated
 
 
-def test_the_forced_prompt_closes_the_thoughts_and_opens_the_block() -> None:
-    prompt = forced_answer_prompt("<prompt>", sample(CUT_OFF_THOUGHTS, "length"))
-    assert prompt == f"<prompt>{CUT_OFF_THOUGHTS}\n{THINK_END}\n\n{ASSISTANT_PREFILL}"
+@pytest.mark.parametrize(
+    ("visible", "opening"),
+    [(False, f"\n{THINK_END}\n\n{ASSISTANT_PREFILL}"), (True, f"\n\n{ASSISTANT_PREFILL}")],
+)
+def test_the_opening_closes_the_reasoning_and_opens_the_block(visible: bool, opening: str) -> None:
+    assert answer_opening(visible=visible) == opening
+
+
+def test_the_forced_prompt_is_the_prompt_the_cut_off_tokens_and_the_opening() -> None:
+    prompt = forced_answer_prompt((1, 2), sampled(CUT_OFF_THOUGHTS, (3, 4), "length"), (5, 6))
+    assert prompt == (1, 2, 3, 4, 5, 6)
 
 
 def test_a_forced_sample_parses_to_the_continuations_block() -> None:
-    forced = forced_sample(sample(CUT_OFF_THOUGHTS, "length", 1024), sample("linarith\n", "stop", 4))
+    forced = forced_sample(sample(CUT_OFF_THOUGHTS, "length", 1024), (), sample("linarith\n", "stop", 4))
     assert parse_sample(forced, thinking=True) == "linarith"
 
 
 def test_a_forced_sample_charges_both_parts() -> None:
-    forced = forced_sample(sample(CUT_OFF_THOUGHTS, "length", 1024, -30.0), sample("linarith", "stop", 4, -1.0))
+    forced = forced_sample(sample(CUT_OFF_THOUGHTS, "length", 1024, -30.0), (), sample("linarith", "stop", 4, -1.0))
     assert (forced.token_count, forced.cumulative_logprob) == (1028, -31.0)
 
 
 def test_a_forced_answer_cut_off_again_stays_truncated() -> None:
-    forced = forced_sample(sample(CUT_OFF_THOUGHTS, "length"), sample("nlinarith [sq_nonneg (a", "length", 256))
+    forced = forced_sample(sample(CUT_OFF_THOUGHTS, "length"), (), sample("nlinarith [sq_nonneg (a", "length", 256))
     assert parse_sample(forced, thinking=True) is not None and not isinstance(parse_sample(forced, thinking=True), str)
+
+
+CUT_OFF = sampled(CUT_OFF_THOUGHTS, (11, 12, 13), "length")
+OPENING_TOKEN_IDS = (21, 22)
+FENCED_CONTINUATION = sampled("linarith\n", (31, 32), stop_string=FENCE)
+CAPPED_CONTINUATION = sampled("nlinarith [sq_nonneg (a", (41, 42, 43), "length")
+
+
+def test_a_forced_sample_keeps_every_token_the_model_saw() -> None:
+    forced = forced_sample(CUT_OFF, OPENING_TOKEN_IDS, FENCED_CONTINUATION)
+    assert forced.tokens.token_ids == (11, 12, 13, 21, 22, 31, 32)
+
+
+def test_inserted_tokens_have_no_log_probability() -> None:
+    forced = forced_sample(CUT_OFF, OPENING_TOKEN_IDS, FENCED_CONTINUATION)
+    assert forced.tokens.log_probabilities == (-0.5, -0.5, -0.5, None, None, -0.5, -0.5)
+
+
+def test_the_inserted_opening_is_marked_in_characters_and_tokens() -> None:
+    forced = forced_sample(CUT_OFF, OPENING_TOKEN_IDS, FENCED_CONTINUATION)
+    (opening,) = forced.tokens.inserted
+    assert (forced.text[opening.characters.start : opening.characters.end], opening.tokens) == (
+        f"\n{THINK_END}\n\n{ASSISTANT_PREFILL}",
+        TokenSpan(3, 5),
+    )
+
+
+def test_a_closing_fence_the_model_wrote_is_not_marked_inserted() -> None:
+    forced = forced_sample(CUT_OFF, OPENING_TOKEN_IDS, FENCED_CONTINUATION)
+    assert (forced.text.endswith(f"linarith\n{FENCE}"), len(forced.tokens.inserted)) == (True, 1)
+
+
+def test_a_closing_fence_added_after_the_cap_is_inserted_text_without_tokens() -> None:
+    forced = forced_sample(CUT_OFF, OPENING_TOKEN_IDS, CAPPED_CONTINUATION)
+    closing = forced.tokens.inserted[-1]
+    assert (forced.text[closing.characters.start :], closing.tokens) == (f"\n{FENCE}", TokenSpan(8, 8))
 
 
 @pytest.mark.parametrize(("forced_indices", "forced"), [(frozenset({0}), True), (frozenset(), False)])
@@ -130,15 +197,20 @@ class PlainTemplate:
         return "\n\n".join(message["content"] for message in conversation)
 
     def encode(self, text: str, *, add_special_tokens: bool) -> list[int]:
-        return [0] * len(text.split())
+        """One token per character, its code point."""
+        return [ord(character) for character in text]
 
 
 THINKING_RESPONSE = [
-    choice(CUT_OFF_THOUGHTS, "length", 40),
-    choice(f"Close it.\n{THINK_END}\n\n```lean\nsimp\n```", "stop", 10),
-    choice(CUT_OFF_THOUGHTS + " again", "length", 40),
+    choice(CUT_OFF_THOUGHTS, "length", 40, first_token_id=1000),
+    choice(f"Close it.\n{THINK_END}\n\n```lean\nsimp\n```", "stop", 10, first_token_id=2000),
+    choice(CUT_OFF_THOUGHTS + " again", "length", 40, first_token_id=3000),
 ]
-FORCED_RESPONSE = [choice("linarith\n", "stop", 3), choice("nlinarith [sq_nonneg (a", "length", 30)]
+FORCED_RESPONSE = [
+    choice("linarith\n", "stop", 3, first_token_id=4000, stop_reason=FENCE),
+    choice("nlinarith [sq_nonneg (a", "length", 30, first_token_id=5000),
+]
+THINKING_OPENING = [ord(character) for character in answer_opening(visible=False)]
 
 
 async def expand(
@@ -164,7 +236,48 @@ async def test_one_forcing_request_carries_every_cut_off_sample() -> None:
 
 async def test_forced_requests_open_the_block_after_the_closed_thoughts() -> None:
     server, _, _ = await expand(THINKING, [THINKING_RESPONSE, FORCED_RESPONSE])
-    assert all(prompt.endswith(f"{THINK_END}\n\n{ASSISTANT_PREFILL}") for prompt in server.bodies[1]["prompt"])
+    openings = [prompt[-len(THINKING_OPENING) :] for prompt in server.bodies[1]["prompt"]]
+    assert openings == [THINKING_OPENING, THINKING_OPENING]
+
+
+async def test_forced_requests_continue_the_cut_off_samples_own_tokens() -> None:
+    server, _, _ = await expand(THINKING, [THINKING_RESPONSE, FORCED_RESPONSE])
+    first_prompt = server.bodies[1]["prompt"][0]
+    assert first_prompt[-len(THINKING_OPENING) - 40 : -len(THINKING_OPENING)] == list(range(1000, 1040))
+
+
+async def test_requests_ask_for_sampled_token_ids() -> None:
+    server, _, _ = await expand(THINKING, [THINKING_RESPONSE, FORCED_RESPONSE])
+    assert [body["return_tokens_as_token_ids"] for body in server.bodies] == [True, True]
+
+
+def completion_of(batch: CandidateBatch, text: str) -> GeneratedText:
+    (candidate,) = (candidate for candidate in batch.candidates if candidate.text == text)
+    (completion,) = candidate.completions
+    return completion
+
+
+async def test_samples_keep_their_token_ids_and_log_probabilities() -> None:
+    _, (batch,), _ = await expand(THINKING, [THINKING_RESPONSE, FORCED_RESPONSE])
+    assert completion_of(batch, "simp").tokens == SampledTokens(tuple(range(2000, 2010)), (-0.25,) * 10)
+
+
+async def test_forced_samples_keep_the_cut_off_inserted_and_forced_tokens() -> None:
+    _, (batch,), _ = await expand(THINKING, [THINKING_RESPONSE, FORCED_RESPONSE])
+    token_ids = completion_of(batch, "linarith").tokens.token_ids
+    assert token_ids == (*range(1000, 1040), *THINKING_OPENING, 4000, 4001, 4002)
+
+
+async def test_forced_samples_mark_the_inserted_opening() -> None:
+    _, (batch,), _ = await expand(THINKING, [THINKING_RESPONSE, FORCED_RESPONSE])
+    completion = completion_of(batch, "linarith")
+    (opening,) = completion.tokens.inserted
+    assert completion.text[opening.characters.start : opening.characters.end] == answer_opening(visible=False)
+
+
+async def test_the_batch_records_the_sampling_settings() -> None:
+    _, (batch,), _ = await expand(THINKING, [THINKING_RESPONSE, FORCED_RESPONSE])
+    assert (batch.temperature, batch.top_p) == (THINKING.temperature, THINKING.top_p)
 
 
 async def test_forced_blocks_become_marked_candidates() -> None:
@@ -216,7 +329,7 @@ async def test_visible_reasoning_forces_samples_cut_off_before_their_block() -> 
     server, (batch,), _ = await expand(VISIBLE, [VISIBLE_RESPONSE, [choice("linarith\n", "stop", 3)]])
     assert (server.bodies[0]["stop"], [prompt[-10:] for prompt in server.bodies[1]["prompt"]]) == (
         [],
-        ["\n\n```lean\n"],
+        [[ord(character) for character in "\n\n```lean\n"]],
     )
 
 

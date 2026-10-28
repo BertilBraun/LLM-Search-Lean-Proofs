@@ -90,7 +90,7 @@ def test_only_samples_cut_off_before_any_block_are_forced(text: str, forced: boo
 
 
 def test_a_forced_visible_sample_parses_to_the_continuations_block() -> None:
-    forced = forced_sample(sample(EXPLANATION, "length", 1024), sample(f"{BLOCK}\n", "stop", 6), visible=True)
+    forced = forced_sample(sample(EXPLANATION, "length", 1024), (), sample(f"{BLOCK}\n", "stop", 6), visible=True)
     assert parse_sample(forced, thinking=False, visible=True) == BLOCK
 
 

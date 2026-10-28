@@ -6,6 +6,8 @@ from typing import Any, Literal, Self
 
 import httpx
 
+from lean_search.search.texts import SampledTokens
+
 TOKEN_ID_PREFIX = "token_id:"
 TRANSPORT_ATTEMPTS = 3
 # Timeouts are not retried: a request that ran out its timeout would only run it out again.
@@ -25,6 +27,10 @@ class Sample:
     cumulative_logprob: float
     token_count: int
     finish_reason: str
+    # The tokens as the model saw them, the end of turn included where generation stopped there.
+    tokens: SampledTokens = SampledTokens()
+    # The stop sequence that ended generation (its text is not in `text`, its tokens are in `tokens`).
+    stop_string: str | None = None
 
 
 @dataclass(frozen=True)
@@ -91,18 +97,15 @@ class PolicyClient:
         body = {
             "prompt": prompt,
             "logprobs": 0,
+            "return_tokens_as_token_ids": True,
             **_sampling_fields(sample_count, max_tokens, temperature, top_p, stop, seed, ignore_eos),
         }
         response = await self._post("/completions", body, adapter)
-        samples = [
-            _sample(choice["text"], choice["logprobs"]["token_logprobs"], choice["finish_reason"])
-            for choice in sorted(response["choices"], key=lambda choice: choice["index"])
-        ]
-        return _generation(samples, response["usage"])
+        return _generation(_completion_samples(response), response["usage"])
 
     async def generate_each(
         self,
-        prompts: Sequence[str],
+        prompts: Sequence[Sequence[int]],
         *,
         max_tokens: int,
         temperature: float = 1.0,
@@ -110,18 +113,15 @@ class PolicyClient:
         stop: Sequence[str] = (),
         adapter: str | None = None,
     ) -> Generation:
-        """One sample per prompt, in the prompts' order, from a single request."""
+        """One sample per prompt (given as token ids), in the prompts' order, from a single request."""
         body = {
-            "prompt": list(prompts),
+            "prompt": [list(prompt) for prompt in prompts],
             "logprobs": 0,
+            "return_tokens_as_token_ids": True,
             **_sampling_fields(1, max_tokens, temperature, top_p, stop, None, False),
         }
         response = await self._post("/completions", body, adapter)
-        samples = [
-            _sample(choice["text"], choice["logprobs"]["token_logprobs"], choice["finish_reason"])
-            for choice in sorted(response["choices"], key=lambda choice: choice["index"])
-        ]
-        return _generation(samples, response["usage"])
+        return _generation(_completion_samples(response), response["usage"])
 
     async def generate_chat(
         self,
@@ -141,6 +141,7 @@ class PolicyClient:
             "messages": [{"role": message.role, "content": message.content} for message in messages],
             "logprobs": True,
             "top_logprobs": 0,
+            "return_tokens_as_token_ids": True,
             "chat_template_kwargs": {"enable_thinking": enable_thinking},
             **_sampling_fields(sample_count, max_tokens, temperature, top_p, stop, seed, ignore_eos),
         }
@@ -148,8 +149,10 @@ class PolicyClient:
         samples = [
             _sample(
                 choice["message"]["content"] or "",
+                [token["token"] for token in choice["logprobs"]["content"]],
                 [token["logprob"] for token in choice["logprobs"]["content"]],
                 choice["finish_reason"],
+                choice.get("stop_reason"),
             )
             for choice in sorted(response["choices"], key=lambda choice: choice["index"])
         ]
@@ -234,12 +237,32 @@ def _sampling_fields(
     return fields
 
 
-def _sample(text: str, token_logprobs: list[float], finish_reason: str) -> Sample:
+def _completion_samples(response: dict[str, Any]) -> list[Sample]:
+    return [
+        _sample(
+            choice["text"],
+            choice["logprobs"]["tokens"],
+            choice["logprobs"]["token_logprobs"],
+            choice["finish_reason"],
+            choice.get("stop_reason"),
+        )
+        for choice in sorted(response["choices"], key=lambda choice: choice["index"])
+    ]
+
+
+def _sample(
+    text: str, tokens: list[str], token_logprobs: list[float], finish_reason: str, stop_reason: object
+) -> Sample:
+    # vLLM's stop_reason is the matched stop string, or the stop token's id (an int) for a stop token.
     return Sample(
         text=text,
         cumulative_logprob=sum(token_logprobs),
         token_count=len(token_logprobs),
         finish_reason=finish_reason,
+        tokens=SampledTokens(
+            tuple(int(token.removeprefix(TOKEN_ID_PREFIX)) for token in tokens), tuple(token_logprobs)
+        ),
+        stop_string=stop_reason if isinstance(stop_reason, str) else None,
     )
 
 

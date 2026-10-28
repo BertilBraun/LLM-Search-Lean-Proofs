@@ -18,6 +18,7 @@ from lean_search.policy.prompts import (
     ChatTemplate,
     ParsedSamples,
     ParseFailure,
+    answer_opening,
     forced_answer_prompt,
     forced_sample,
     parse_samples,
@@ -32,7 +33,7 @@ from lean_search.search.texts import GeneratedText, UnparsedSample
 from lean_search.search.tree import Node, StepSource
 
 MINIMUM_GENERATED_TOKENS = 32
-# Room for the closing of the thoughts and the opened block, and for re-tokenizing the thoughts as prompt text.
+# Room for the closing of the thoughts and the opened block.
 FORCED_ANSWER_PROMPT_SLACK = 64
 
 
@@ -116,6 +117,8 @@ def candidate_batch(
     samples: Sequence[Sample] | None = None,
     prompt: str = "",
     ends_turn_on_stop: bool = True,
+    temperature: float | None = None,
+    top_p: float | None = None,
 ) -> CandidateBatch:
     """The whole request's cost and every sample's text: candidates with their samples, unparsed samples apart."""
     # A request with stop sequences ends at the fence, not at the end of turn.
@@ -135,14 +138,14 @@ def candidate_batch(
             forced=candidate.forced,
             sample_count=candidate.sample_count,
             completions=tuple(
-                GeneratedText(samples[index].text, ended_turn(index), positions)
+                GeneratedText(samples[index].text, ended_turn(index), positions, samples[index].tokens.rounded())
                 for index, positions in zip(candidate.sample_indices, candidate.block_positions, strict=True)
             ),
         )
         for candidate in parsed.candidates
     )
     unparsed = tuple(
-        UnparsedSample(samples[index].text, ended_turn(index), failure.value)
+        UnparsedSample(samples[index].text, ended_turn(index), failure.value, samples[index].tokens.rounded())
         for index, failure in zip(parsed.failed_sample_indices, parsed.failures, strict=True)
     )
     return CandidateBatch(
@@ -151,6 +154,8 @@ def candidate_batch(
         generation.completion_token_count + forced.generated_tokens,
         prompt=prompt,
         unparsed=unparsed,
+        temperature=temperature,
+        top_p=top_p,
     )
 
 
@@ -196,6 +201,8 @@ class PolicyExpander:
             samples=sampled.samples,
             prompt=sampled.prompt,
             ends_turn_on_stop=not stop_sequences(self.config.thinking, self.config.visible_reasoning),
+            temperature=self.config.temperature,
+            top_p=self.config.top_p,
         )
 
     async def sample(self, node: Node, context: SearchContext) -> SampledExpansion | None:
@@ -210,13 +217,13 @@ class PolicyExpander:
             thinking_instruction=self.config.thinking_instruction,
             visible=self.config.visible_reasoning,
         )
-        prompt_tokens = len(self.tokenizer.encode(prompt, add_special_tokens=False))
-        max_tokens = min(self.config.max_tokens, self.max_model_length - prompt_tokens)
+        prompt_token_ids = self.tokenizer.encode(prompt, add_special_tokens=False)
+        max_tokens = min(self.config.max_tokens, self.max_model_length - len(prompt_token_ids))
         if max_tokens < MINIMUM_GENERATED_TOKENS:
             self.statistics.prompts_too_long += 1
             return None
         generation, seconds = await self._generate(prompt, max_tokens)
-        samples, forced, forcing_seconds = await self.force_answers(prompt, prompt_tokens, generation.samples)
+        samples, forced, forcing_seconds = await self.force_answers(prompt_token_ids, generation.samples)
         parsed = parse_samples(
             samples,
             thinking=self.config.thinking,
@@ -228,11 +235,12 @@ class PolicyExpander:
         return SampledExpansion(generation, samples, parsed, forced, prompt)
 
     async def force_answers(
-        self, prompt: str, prompt_tokens: int, samples: Sequence[Sample]
+        self, prompt_token_ids: Sequence[int], samples: Sequence[Sample]
     ) -> tuple[list[Sample], ForcedAnswers, float]:
         started = time.monotonic()
-        room = self.max_model_length - prompt_tokens
-        forced_samples, forced = await force_answers(next(self._clients), self.config, prompt, room, samples)
+        forced_samples, forced = await force_answers(
+            next(self._clients), self.config, self.tokenizer, prompt_token_ids, self.max_model_length, samples
+        )
         return forced_samples, forced, time.monotonic() - started if forced.sample_indices else 0.0
 
     async def _generate(self, prompt: str, max_tokens: int) -> tuple[Generation, float]:
@@ -254,7 +262,12 @@ class PolicyExpander:
 
 
 async def force_answers(
-    client: PolicyClient, config: PolicyConfig, prompt: str, room: int, samples: Sequence[Sample]
+    client: PolicyClient,
+    config: PolicyConfig,
+    tokenizer: PolicyTokenizer,
+    prompt_token_ids: Sequence[int],
+    max_model_length: int,
+    samples: Sequence[Sample],
 ) -> tuple[list[Sample], ForcedAnswers]:
     """Budget forcing: one request continues every sample cut off before its block, its reasoning closed."""
     visible = config.visible_reasoning
@@ -262,11 +275,13 @@ async def force_answers(
     if not (config.reasons and config.force_answer_on_truncation and truncated):
         return list(samples), ForcedAnswers()
     longest = max(samples[index].token_count for index in truncated)
+    room = max_model_length - len(prompt_token_ids)
     max_tokens = min(config.forced_answer_tokens, room - longest - FORCED_ANSWER_PROMPT_SLACK)
     if max_tokens < MINIMUM_GENERATED_TOKENS:
         return list(samples), ForcedAnswers()
+    opening_token_ids = tokenizer.encode(answer_opening(visible=visible), add_special_tokens=False)
     continuations = await client.generate_each(
-        [forced_answer_prompt(prompt, samples[index], visible=visible) for index in truncated],
+        [forced_answer_prompt(prompt_token_ids, samples[index], opening_token_ids) for index in truncated],
         max_tokens=max_tokens,
         temperature=config.temperature,
         top_p=config.top_p,
@@ -275,7 +290,7 @@ async def force_answers(
     )
     forced = list(samples)
     for index, continuation in zip(truncated, continuations.samples, strict=True):
-        forced[index] = forced_sample(samples[index], continuation, visible=visible)
+        forced[index] = forced_sample(samples[index], opening_token_ids, continuation, visible=visible)
     return forced, ForcedAnswers(
         frozenset(truncated), continuations.prompt_token_count, continuations.completion_token_count
     )

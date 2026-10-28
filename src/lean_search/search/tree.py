@@ -131,6 +131,8 @@ class Edge:
     # `applied_tactics` and the first failing tactic index into them. Empty when nothing ran.
     executed_tactics: tuple[TacticPiece, ...] = ()
     flattened: bool = False
+    # The goals each applied executed tactic reached, as Lean printed them before the search's `rename_i` naming.
+    tactic_goals: tuple[tuple[str, ...], ...] = ()
 
 
 class SearchTree:
@@ -192,6 +194,7 @@ class SearchTree:
         sample_count: int = 1,
         executed_tactics: tuple[TacticPiece, ...] = (),
         flattened: bool = False,
+        tactic_goals: tuple[tuple[str, ...], ...] = (),
     ) -> Edge:
         assert parent.expansion_index is not None, parent.node_id
         edge = Edge(
@@ -214,6 +217,7 @@ class SearchTree:
             sample_count=sample_count,
             executed_tactics=executed_tactics,
             flattened=flattened,
+            tactic_goals=tactic_goals,
         )
         self.edges.append(edge)
         if failure is not None and failure.kind in (FailureKind.WALL_CLOCK_TIMEOUT, FailureKind.HEARTBEAT_TIMEOUT):

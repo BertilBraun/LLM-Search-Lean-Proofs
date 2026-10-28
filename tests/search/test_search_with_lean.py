@@ -20,7 +20,9 @@ from lean_search.search import (
     DepthPlusGoals,
     EdgeOutcome,
     Expander,
+    ExplorationConfig,
     FailureKind,
+    HarvestConfig,
     Node,
     NodeStatus,
     PriorityFunction,
@@ -410,3 +412,103 @@ async def test_concurrent_searches_share_a_pool() -> None:
             problems, pool, automation(), DepthPlusGoals(), SearchConfig(max_expansions=8), 2, ignore
         )
     assert [result.proved for result in results] == [True, True, False]
+
+
+async def test_edges_record_the_goals_of_each_applied_tactic(repl: LeanRepl) -> None:
+    completed = await search(repl, ARITHMETIC, GeneratingPolicy([NESTED_BLOCK]), max_expansions=1)
+    assert completed.tree is not None
+    edge = completed.tree.edges[0]
+    assert [len(goals) for goals in edge.tactic_goals] == [2] * edge.applied_tactics
+
+
+async def test_the_last_tactic_goals_are_the_target_nodes(repl: LeanRepl) -> None:
+    completed = await search(repl, ARITHMETIC, FixedPolicy(["subst h"]), max_expansions=1)
+    assert completed.tree is not None
+    edge = completed.tree.edges[0]
+    assert edge.target_id is not None and edge.tactic_goals[-1] == completed.tree.node(edge.target_id).goals
+
+
+async def test_tactic_goals_are_recorded_before_hypotheses_are_named(repl: LeanRepl) -> None:
+    completed = await search(repl, NEEDS_INTRO, FixedPolicy(["intros"]), max_expansions=1)
+    assert completed.tree is not None and completed.tree.edges[0].tactic_goals == (("n✝ : ℕ\n⊢ n✝ + 0 = n✝",),)
+
+
+HARVEST = HarvestConfig(enabled=True, max_remaining_steps=2.0, max_expansions=16)
+TWO_INTRODUCTIONS = ("rfl", "intros", "intro m")
+
+
+async def harvested(repl: LeanRepl, harvest: HarvestConfig = HARVEST) -> CompletedSearch:
+    """The root's two children are both one `rfl` from done: the first proves, harvesting proves the other."""
+    expander = automation(*TWO_INTRODUCTIONS)
+    return await search(repl, NEEDS_INTRO, expander, ValueLikePriority(), harvest=harvest)
+
+
+async def test_harvesting_expands_states_close_to_done_after_the_first_proof(repl: LeanRepl) -> None:
+    completed = await harvested(repl)
+    assert completed.result.accounting.harvest_expansions == 1
+
+
+async def test_harvesting_finds_further_proofs(repl: LeanRepl) -> None:
+    completed = await harvested(repl)
+    assert completed.result.accounting.proofs == 2
+
+
+async def test_harvested_proofs_are_marked_proved(repl: LeanRepl) -> None:
+    completed = await harvested(repl)
+    assert completed.tree is not None
+    proved_leaves = [node for node in completed.tree.nodes if node.is_proved and node.status == NodeStatus.PROVED]
+    assert len(proved_leaves) == 2
+
+
+async def test_the_solve_cost_excludes_harvesting(repl: LeanRepl) -> None:
+    completed = await harvested(repl)
+    assert completed.result.solved_at is not None and completed.result.solved_at.expansions == 2
+
+
+async def test_harvesting_skips_states_estimated_further_from_done(repl: LeanRepl) -> None:
+    completed = await harvested(repl, dataclasses.replace(HARVEST, max_remaining_steps=1.5))
+    assert completed.result.accounting.harvest_expansions == 0
+
+
+async def test_without_harvesting_the_search_stops_at_the_first_proof(repl: LeanRepl) -> None:
+    completed = await harvested(repl, HarvestConfig())
+    assert (completed.result.accounting.proofs, completed.result.accounting.harvest_expansions) == (1, 0)
+
+
+async def test_harvesting_finishes_the_proving_expansion(repl: LeanRepl) -> None:
+    completed = await search(repl, TRIVIAL, automation("norm_num", "decide"), harvest=HARVEST)
+    assert completed.result.accounting.proofs == 2
+
+
+async def test_the_proof_of_a_harvested_search_is_the_first_one(repl: LeanRepl) -> None:
+    completed = await search(repl, TRIVIAL, automation("norm_num", "decide"), harvest=HARVEST)
+    assert completed.result.proof_steps == ("norm_num",)
+
+
+def expansion_order(completed: CompletedSearch) -> list[int]:
+    assert completed.tree is not None
+    expanded = [node for node in completed.tree.nodes if node.expansion_index is not None]
+    return [node.node_id for node in sorted(expanded, key=lambda node: node.expansion_index or 0)]
+
+
+EXPLORED = automation(ALWAYS_PROGRESSES, "have : (2 : ℕ) = 2 := rfl", "have : (3 : ℕ) = 3 := rfl")
+
+
+async def test_every_exploration_draw_is_counted(repl: LeanRepl) -> None:
+    exploration = ExplorationConfig(enabled=True, epsilon=1.0)
+    completed = await search(repl, ARITHMETIC, EXPLORED, max_expansions=4, exploration=exploration)
+    assert completed.result.accounting.exploration_expansions == 4
+
+
+async def test_exploration_is_reproducible(repl: LeanRepl) -> None:
+    exploration = ExplorationConfig(enabled=True, epsilon=1.0)
+    first = await search(repl, ARITHMETIC, EXPLORED, max_expansions=4, exploration=exploration)
+    second = await search(repl, ARITHMETIC, EXPLORED, max_expansions=4, exploration=exploration)
+    assert expansion_order(first) == expansion_order(second)
+
+
+async def test_exploration_leaves_the_best_first_order(repl: LeanRepl) -> None:
+    exploration = ExplorationConfig(enabled=True, epsilon=1.0, seed=3)
+    explored = await search(repl, ARITHMETIC, EXPLORED, max_expansions=6, exploration=exploration)
+    best_first = await search(repl, ARITHMETIC, EXPLORED, max_expansions=6)
+    assert expansion_order(explored) != expansion_order(best_first)

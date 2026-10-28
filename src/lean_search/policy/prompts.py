@@ -8,6 +8,7 @@ from typing import Protocol
 
 from lean_search.lean.text import FORBIDDEN_TOKENS, find_forbidden_tokens
 from lean_search.policy.client import ChatMessage, Sample
+from lean_search.search.texts import CharacterSpan, InsertedSpan, SampledTokens, TokenSpan
 
 SYSTEM_PROMPT = (
     "You are a Lean 4 and Mathlib expert. Given the current proof state, write the next tactic or tactics that make "
@@ -173,22 +174,52 @@ def truncated_before_answer(sample: Sample, *, visible: bool) -> bool:
     return truncated_in_thinking(sample)
 
 
-def answer_prefix(truncated: Sample, *, visible: bool) -> str:
-    return visible_prefill(truncated.text) if visible else thinking_prefill(truncated.text)
+def answer_opening(*, visible: bool) -> str:
+    """What budget forcing inserts after reasoning cut off by the token cap: the reasoning closed, the block opened."""
+    return f"\n\n{ASSISTANT_PREFILL}" if visible else f"\n{THINK_END}\n\n{ASSISTANT_PREFILL}"
 
 
-def forced_answer_prompt(prompt: str, truncated: Sample, *, visible: bool = False) -> str:
-    """The prompt and the cut-off reasoning, closed, up to the opened block."""
-    return prompt + answer_prefix(truncated, visible=visible)
+def forced_answer_prompt(
+    prompt_token_ids: Sequence[int], truncated: Sample, opening_token_ids: Sequence[int]
+) -> tuple[int, ...]:
+    """The prompt, the cut-off sample's own tokens and the opening: the record holds exactly what the model saw."""
+    return (*prompt_token_ids, *truncated.tokens.token_ids, *opening_token_ids)
 
 
-def forced_sample(truncated: Sample, continuation: Sample, *, visible: bool = False) -> Sample:
-    """The cut-off sample with its reasoning closed and the forced block: it parses like any other sample."""
+def forced_sample(
+    truncated: Sample, opening_token_ids: Sequence[int], continuation: Sample, *, visible: bool = False
+) -> Sample:
+    """The cut-off sample, the inserted opening and the forced block: it parses like any other sample."""
+    opening = answer_opening(visible=visible)
+    sampled_before = len(truncated.tokens.token_ids)
+    inserted = [
+        InsertedSpan(
+            CharacterSpan(len(truncated.text), len(truncated.text) + len(opening)),
+            TokenSpan(sampled_before, sampled_before + len(opening_token_ids)),
+        )
+    ]
+    token_ids = (*truncated.tokens.token_ids, *opening_token_ids, *continuation.tokens.token_ids)
+    text = truncated.text + opening + continuation.text
+    if continuation.stop_string == FENCE:
+        # The model wrote the closing fence: vLLM cut it from the text, its tokens end the continuation.
+        text += FENCE
+    else:
+        closing = f"\n{FENCE}"
+        inserted.append(
+            InsertedSpan(CharacterSpan(len(text), len(text) + len(closing)), TokenSpan(len(token_ids), len(token_ids)))
+        )
+        text += closing
+    log_probabilities = (
+        *truncated.tokens.log_probabilities,
+        *(None for _ in opening_token_ids),
+        *continuation.tokens.log_probabilities,
+    )
     return Sample(
-        text=f"{answer_prefix(truncated, visible=visible)}{continuation.text}\n{FENCE}",
+        text=text,
         cumulative_logprob=truncated.cumulative_logprob + continuation.cumulative_logprob,
         token_count=truncated.token_count + continuation.token_count,
         finish_reason=continuation.finish_reason,
+        tokens=SampledTokens(token_ids, log_probabilities, tuple(inserted)),
     )
 
 

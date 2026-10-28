@@ -15,6 +15,7 @@ from lean_search.policy.expander import PolicyExpander, candidate_batch
 from lean_search.policy.prompts import BRIEF_THINKING_INSTRUCTION, parse_samples
 from lean_search.search import CandidateBatch, ExpanderKind, SearchContext, SearchTree
 from lean_search.search.config import parse_run_config
+from lean_search.search.texts import SampledTokens
 
 POLICY_SECTION = """
 [expander]
@@ -26,7 +27,11 @@ tokenizer = "Qwen/Qwen3.5-2B"
 """
 TWO_SERVERS = 'server_urls = ["http://127.0.0.1:8000/v1", "http://127.0.0.1:8001/v1"]\n'
 PROMPT_TOKENS = 100
-TRUNCATED_CHOICE = {"text": "simp [", "logprobs": {"token_logprobs": [-0.5] * 6}, "finish_reason": "length"}
+TRUNCATED_CHOICE = {
+    "text": "simp [",
+    "logprobs": {"tokens": ["token_id:3"] * 6, "token_logprobs": [-0.5] * 6},
+    "finish_reason": "length",
+}
 
 
 def parsed_samples() -> list[Sample]:
@@ -97,6 +102,13 @@ def test_block_positions_point_into_each_sample_text() -> None:
 
 def test_unparsed_samples_are_passed_on_with_their_reason() -> None:
     assert [(sample.text, sample.reason) for sample in visible_batch().unparsed] == [("Loop, loop, loop", "truncated")]
+
+
+def test_recorded_log_probabilities_are_rounded() -> None:
+    tokens = SampledTokens((5, 6), (-0.123456, -2.5e-07))
+    samples = [Sample("simp", cumulative_logprob=-0.12, token_count=2, finish_reason="stop", tokens=tokens)]
+    (candidate,) = batch_of(samples).candidates
+    assert candidate.completions[0].tokens.log_probabilities == (-0.1235, -0.0)
 
 
 def test_truncated_sample_did_not_end_its_turn() -> None:

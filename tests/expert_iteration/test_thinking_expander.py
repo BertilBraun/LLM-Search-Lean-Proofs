@@ -21,12 +21,12 @@ class ScriptedClient:
     """Answers the sampling request with fixed samples and every forcing prompt with a fixed block."""
 
     samples: list[Sample]
-    forced_prompts: list[str] = field(default_factory=list)
+    forced_prompts: list[Sequence[int]] = field(default_factory=list)
 
     async def generate(self, prompt: str, **_: object) -> Generation:
         return Generation(self.samples, 100, 0, sum(sample.token_count for sample in self.samples))
 
-    async def generate_each(self, prompts: Sequence[str], **_: object) -> Generation:
+    async def generate_each(self, prompts: Sequence[Sequence[int]], **_: object) -> Generation:
         self.forced_prompts.extend(prompts)
         return Generation([FORCED_ANSWER] * len(prompts), 100, 0, FORCED_ANSWER.token_count * len(prompts))
 

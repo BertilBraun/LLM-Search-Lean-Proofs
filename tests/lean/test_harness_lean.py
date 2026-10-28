@@ -74,6 +74,28 @@ async def test_flattened_block_reports_the_executed_tactics(repl: LeanRepl, init
     assert (result.tactics, result.flattened) == (plan.tactics, True)
 
 
+async def test_each_applied_tactic_records_the_goal_count_it_reached(repl: LeanRepl, initial_state: ProofState) -> None:
+    result = await repl.apply_block(initial_state, plan_block(NESTED_FAILURE))
+    assert [len(state.goals) for state in result.tactic_states] == [2, 2]
+
+
+async def test_the_last_tactic_state_is_the_blocks_state(repl: LeanRepl, initial_state: ProofState) -> None:
+    result = await repl.apply_block(initial_state, plan_block(NESTED_FAILURE))
+    assert result.tactic_states[-1] == result.state
+
+
+async def test_tactic_states_follow_merged_pieces(repl: LeanRepl, initial_state: ProofState) -> None:
+    result = await repl.apply_block(initial_state, "subst h₀\nsubst h₁\nexact\nrfl")
+    assert (len(result.tactics), len(result.tactic_states), result.state.is_proved) == (3, 3, True)
+
+
+async def test_no_ops_skipped_after_a_closed_nested_proof_share_its_state(
+    repl: LeanRepl, initial_state: ProofState
+) -> None:
+    result = await repl.apply_block(initial_state, plan_block("have h : a = 2 := by\n  exact h₀\n  try simp\nomega"))
+    assert result.tactic_states[1] == result.tactic_states[2]
+
+
 async def test_unflattened_nested_proof_fails_as_a_whole(repl: LeanRepl, initial_state: ProofState) -> None:
     result = await repl.apply_block(initial_state, NESTED_FAILURE)
     assert result.applied_tactics == ()

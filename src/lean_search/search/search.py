@@ -5,6 +5,7 @@ import contextlib
 import copy
 import dataclasses
 import logging
+import random
 import re
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -52,6 +53,30 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
+class HarvestConfig:
+    """After the first proof: finish the proving expansion, then expand states the value model puts close to done."""
+
+    # Off for evaluations; the parameters are the GRPO loop's.
+    enabled: bool = False
+    # By the value estimate h; steps are top-level tactics.
+    max_remaining_steps: float = 2.0
+    # Expansions after the first proof, beyond the search's expansion budget.
+    max_expansions: int = 16
+
+
+@dataclass(frozen=True)
+class ExplorationConfig:
+    """With probability epsilon the next expansion is drawn uniformly from the best `top_k` frontier states."""
+
+    # Off for evaluations; the parameters are the GRPO loop's.
+    enabled: bool = False
+    epsilon: float = 0.1
+    top_k: int = 8
+    # Combined with the problem name, so every search draws its own reproducible sequence.
+    seed: int = 0
+
+
+@dataclass(frozen=True)
 class SearchConfig:
     max_expansions: int = 256
     max_wall_seconds: float = 300.0
@@ -73,6 +98,8 @@ class SearchConfig:
     check_identifiers: bool = True
     # The cache of the environment's exported names; empty: $LEAN_SEARCH_DATA/lean.
     environment_names_directory: str = ""
+    harvest: HarvestConfig = field(default_factory=HarvestConfig)
+    exploration: ExplorationConfig = field(default_factory=ExplorationConfig)
 
 
 class StopReason(StrEnum):
@@ -102,6 +129,12 @@ class Accounting:
     verification_seconds: float = 0.0
     unknown_identifiers: int = 0
     unparsed_samples: int = 0
+    # Verified proofs, each a distinct tactic sequence: the first one and those found after it.
+    proofs: int = 0
+    # Expansions after the first proof (also counted in `expansions`).
+    harvest_expansions: int = 0
+    # Expansions whose state was drawn by exploration rather than taken as the best.
+    exploration_expansions: int = 0
 
 
 @dataclass
@@ -241,19 +274,25 @@ class _Execution(NamedTuple):
     lean_seconds: float
     tactics: tuple[TacticPiece, ...] = ()
     flattened: bool = False
+    tactic_goals: tuple[tuple[str, ...], ...] = ()
 
 
 @dataclass
 class _Expansion:
     node: Node
+    # Harvesting: candidates after a proof still run.
+    finish_after_proof: bool = False
     edge_id_by_text: dict[str, int] = field(default_factory=dict)
+    # The expansion's first verified proof.
     proved: Node | None = None
+    # The expansion found the search's first proof, so its costs are the solve's too.
+    solved: bool = False
     out_of_time: bool = False
     early_scores: dict[int, asyncio.Task[Scores]] = field(default_factory=dict)
 
     @property
     def stopped(self) -> bool:
-        return self.proved is not None or self.out_of_time
+        return self.out_of_time or (self.proved is not None and not self.finish_after_proof)
 
 
 class _TheoremSearch:
@@ -279,6 +318,8 @@ class _TheoremSearch:
         self.started = time.monotonic()
         self.identifier_checker: IdentifierChecker | None = None
         self.name_scope: NameScope | None = None
+        self.proofs: list[Node] = []
+        self.exploration_random = random.Random(f"{config.exploration.seed}:{problem.name}")
 
     def wall_seconds(self) -> float:
         return time.monotonic() - self.started
@@ -305,8 +346,8 @@ class _TheoremSearch:
         self.accounting.nodes = 1
         await self._enqueue([tree.root], {})
         stop_reason, proved = await self._search()
-        if proved is not None:
-            tree.mark_proof_path(proved)
+        for proof in self.proofs:
+            tree.mark_proof_path(proof)
         tree.settle_statuses()
         return CompletedSearch(self._result(stop_reason, proved, tree), tree)
 
@@ -351,16 +392,42 @@ class _TheoremSearch:
                 return StopReason.TOKEN_BUDGET, None
             expansion = await self._expand(await self._next_node())
             if expansion.proved is not None:
+                if self.config.harvest.enabled and not expansion.out_of_time:
+                    await self._harvest()
                 return StopReason.PROVED, expansion.proved
             if expansion.out_of_time:
                 return StopReason.WALL_CLOCK_BUDGET, None
 
     async def _next_node(self) -> Node:
-        """The frontier's best node; a subclass may refresh stale priorities first."""
-        return self.tree.node(self.frontier.pop())
+        """The frontier's best node, or an exploration draw; a subclass may refresh stale priorities first."""
+        exploration = self.config.exploration
+        if not (exploration.enabled and self.exploration_random.random() < exploration.epsilon):
+            return self.tree.node(self.frontier.pop())
+        self.accounting.exploration_expansions += 1
+        rank = self.exploration_random.randrange(min(exploration.top_k, len(self.frontier)))
+        return self.tree.node(self.frontier.pop_at_rank(rank))
+
+    async def _harvest(self) -> None:
+        """More proofs after the first: the best frontier states within the harvest's remaining steps."""
+        harvest = self.config.harvest
+
+        def close_to_done(node_id: int) -> bool:
+            estimate = self.tree.node(node_id).value_estimate
+            return estimate is not None and estimate <= harvest.max_remaining_steps
+
+        while (
+            self.accounting.harvest_expansions < harvest.max_expansions
+            and self.wall_seconds() < self.config.max_wall_seconds
+        ):
+            node_id = self.frontier.pop_best_where(close_to_done)
+            if node_id is None:
+                return
+            self.accounting.harvest_expansions += 1
+            if (await self._expand(self.tree.node(node_id))).out_of_time:
+                return
 
     async def _expand(self, node: Node) -> _Expansion:
-        expansion = _Expansion(node)
+        expansion = _Expansion(node, finish_after_proof=self.config.harvest.enabled)
         node.expansion_index = self.accounting.expansions
         node.expanded_seconds = self.wall_seconds()
         self.accounting.expansions += 1
@@ -378,13 +445,13 @@ class _TheoremSearch:
         if expansion.out_of_time:
             return expansion
         node.status = NodeStatus.EXPANDED
-        if expansion.proved is not None:
+        if expansion.stopped:
             return expansion
         await self._enqueue(
             [
                 child
                 for child in self.tree.children(node)
-                if child.status == NodeStatus.OPEN and child.depth < self.config.max_depth
+                if child.status == NodeStatus.OPEN and not child.is_proved and child.depth < self.config.max_depth
             ],
             expansion.early_scores,
         )
@@ -412,7 +479,7 @@ class _TheoremSearch:
             ledger.generated_tokens += batch.generated_tokens
 
     def _ledgers(self, expansion: _Expansion) -> list[Accounting]:
-        if expansion.proved is None:
+        if not expansion.solved:
             return [self.accounting]
         # Costs settled after the proving step were incurred before it, so the solve paid for them too.
         assert self.solved_at is not None
@@ -428,12 +495,22 @@ class _TheoremSearch:
                 edge, child = await self._execute(expansion, candidate)
                 completions.extend(self._completions(edge, candidate))
                 if child is not None and child.is_proved and await self._verify(child):
-                    expansion.proved = child
-                    return
+                    expansion.solved = expansion.solved or self.proofs[0] is child
+                    if expansion.proved is None:
+                        expansion.proved = child
+                    if expansion.stopped:
+                        return
         finally:
             if batch.prompt:
                 self.tree.expansion_texts.append(
-                    ExpansionTexts(self.problem.name, expansion.node.node_id, batch.prompt, tuple(completions))
+                    ExpansionTexts(
+                        self.problem.name,
+                        expansion.node.node_id,
+                        batch.prompt,
+                        tuple(completions),
+                        batch.temperature,
+                        batch.top_p,
+                    )
                 )
 
     def _record_unparsed(self, node: Node, sample: UnparsedSample) -> SampledCompletion:
@@ -450,13 +527,15 @@ class _TheoremSearch:
             outcome=EdgeOutcome.REJECTED,
             failure=failure,
         )
-        return SampledCompletion(edge.edge_id, sample.text, (), sample.ended_turn)
+        return SampledCompletion(edge.edge_id, sample.text, (), sample.ended_turn, sample.tokens)
 
     def _completions(self, edge: Edge, candidate: Candidate) -> list[SampledCompletion]:
         executed = edge if edge.repeat_of is None else self.tree.edges[edge.repeat_of]
         tactics = executed.executed_tactics if executed.text == candidate.text else ()
         return [
-            SampledCompletion(edge.edge_id, generated.text, tactic_spans(generated, tactics), generated.ended_turn)
+            SampledCompletion(
+                edge.edge_id, generated.text, tactic_spans(generated, tactics), generated.ended_turn, generated.tokens
+            )
             for generated in candidate.completions
         ]
 
@@ -521,7 +600,13 @@ class _TheoremSearch:
         lean_seconds = result.elapsed_seconds + naming_seconds
         self.accounting.lean_seconds += lean_seconds
         execution = _Execution(
-            applied_tactics, result.total_tactics, failure, lean_seconds, result.tactics, result.flattened
+            applied_tactics,
+            result.total_tactics,
+            failure,
+            lean_seconds,
+            result.tactics,
+            result.flattened,
+            tuple(tactic_state.goals for tactic_state in result.tactic_states),
         )
         if not applied_tactics:
             return self._record(node, candidate, EdgeOutcome.FAILED, execution=execution), None
@@ -574,14 +659,18 @@ class _TheoremSearch:
             sample_count=candidate.sample_count,
             executed_tactics=execution.tactics,
             flattened=execution.flattened,
+            tactic_goals=execution.tactic_goals,
         )
 
     async def _verify(self, node: Node) -> bool:
         verification = await self.repl.verify_state(node.state)
         self.accounting.verification_seconds += verification.elapsed_seconds
         if verification.verified:
-            self.solved_at = self.snapshot()
-            self.plain_verified = verification.plain_verified
+            self.proofs.append(node)
+            self.accounting.proofs += 1
+            if self.solved_at is None:
+                self.solved_at = self.snapshot()
+                self.plain_verified = verification.plain_verified
             return True
         self.verification_failures += 1
         node.verification_problems = verification.problems
