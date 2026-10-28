@@ -317,7 +317,8 @@ per-theorem logs, datasets and checkpoints stay on the node. A copy of the irrep
 
 Learn and measure the RL stage on a verifiable task: an RL loop with a concrete optimization target, dense but
 globally anchored rewards, and per-phase curves rather than a single final score. Success: the loop improves its
-starting policy on the fixed targets beyond noise, and the dense signal beats an outcome-only control.
+starting policy on the fixed targets beyond noise. There is no full control run (decided 2026-10-28: too
+expensive); per-tactic against sequence-level credit is compared only in the cheap single-step test below.
 
 ### Budget and infrastructure
 
@@ -350,27 +351,41 @@ starting policy on the fixed targets beyond noise, and the dense signal beats an
   - **Mixed step lengths**: chunks of k consecutive top-level tactics with their exact start and end states,
     k ∈ {1, 3, 5, 7, rest of the proof}, so the model learns to choose its own step size. Today's data teaches one
     tactic per step (the non-reasoning policies emit exactly one).
-- **Required A/B: descriptive hypothesis names.** miniF2F and the training corpora number hypotheses (`h₀, h₁, …`);
-  descriptive names might transfer general coding habits and reduce references to non-existent hypotheses (3.0% of
-  samples), but they move the model away from its training distribution. Two variants of the fine-tune above:
-  numbered names (as today) and descriptive names. For the second, a language model proposes names; they are
-  renamed consistently in states, tactics, the model's own `have` names and the explanations, and verified by
-  replay. Benchmark statements keep their meaning (binder names do not change the proposition; the final proof is
-  checked against the original statement). The search renames hypotheses in each statement the same way.
-  Compared on the 512 states (renamed accordingly), miniF2F-valid at the fixed budget and MATH-500; the winner is
-  the GRPO starting policy.
+- **Descriptive hypothesis names: a cheap A/B before GRPO, leaning towards adopting them** (decided 2026-10-28).
+  miniF2F and the corpora of other provers (Lean Workbook, DeepSeek-Prover, Goedel) number hypotheses (`h₀, h₁, …`);
+  Mathlib mostly uses short meaningful names (`hx`, `hab`, `hpos`). The main argument is the reasoning: facts
+  referenced by what they say rather than by a number, which matters most in longer proofs with many `have`s (e.g.
+  `amgm_sqrtxymulxmyeqxpy_xpygeq4` with h₃ … h₁₂); the 3.0% of samples referencing non-existent hypotheses is only
+  the measurable symptom. The distribution shift is expected to be small (the names stand in the goal state in the
+  prompt and are copied from context; the fine-tune adapts). Practical risks: misleading names (names are proposed
+  once offline by a larger model and checked to be unique, valid identifiers, and the renamed proofs replay) and
+  statements (binder names do not change the proposition; every proof is also checked against the original
+  statement; the search renames each statement's hypotheses the same way). Two short fine-tunes on the same
+  rewritten data, numbered vs named, compared on the probe set below, the unknown-name error rate and MATH-500;
+  the winner is the GRPO starting policy.
 
 ### The loop
 
 1. Search a batch of curriculum statements with best-first / A* search, **n = 8 samples per expansion** (not 16),
-   without raising the sampling temperature.
-2. After each search finishes, label the whole search graph (below). No training after individual steps.
-3. Build GRPO groups and value targets from the labelled graphs; train policy and value in a pause–train–publish
-   phase.
-4. Publish after every training phase (~15–30 min); an in-place weight publish takes ~20 s, so training time, not
+   without raising the sampling temperature (0.8). Exploration over which state is expanded next: with probability
+   **ε = 0.1** the search picks uniformly among the **top 8 frontier states** by priority instead of the best one
+   (never fully random; off in evaluations). Reason: only expanded states get value labels and the value model
+   decides what is expanded, so a state it under-rates is never labelled and the error never corrected (in the v0
+   trees all 253 never-expanded siblings were rated below the expanded ones); the near misses are where ranking
+   errors matter.
+2. **Harvesting after the first proof**: the rest of the proving expansion's samples are still executed, then the
+   search keeps expanding frontier states the value model puts at most **2 tactics** from done, for up to **16
+   more expansions** (the old loop's `HarvestConfig`: 1.5 steps, 8 expansions). Goal: several proof paths per
+   problem and more proof-graph nodes, i.e. more policy groups. Tuned by the harvest yield on the dashboard.
+3. After each search finishes, label the whole search graph (below). No training after individual steps.
+4. Build GRPO groups and value targets from the labelled graphs; train policy and value in a pause–train–publish
+   phase, **two passes over the phase's data** if training time allows (PPO clipping exists for this reuse;
+   decided 2026-10-28, depending on the measured ratio of training to sampling time; 1 or 2 is a setting, there is
+   no control run to compare them).
+5. Publish after every training phase (~15–30 min); an in-place weight publish takes ~20 s, so training time, not
    publishing, sets the cadence. Watch the clip fraction and the KL between the data-collecting policy and the
    current one; if they rise, publish more often or train on smaller batches.
-5. The curriculum keeps the solve rate around 30–70%, so groups carry signal and trees are balanced between
+6. The curriculum keeps the solve rate around 30–70%, so groups carry signal and trees are balanced between
    solved and unsolved. Hard problems absorbing most of the budget is expected; the curriculum and escalation
    stages bound it.
 
@@ -382,11 +397,20 @@ existing state, 3.8% repeat an earlier tactic text. Duplicates: 49% back to the 
 to an ancestor, 21% the same state as a sibling, 26% transpositions into another branch; 56 transposition edges
 lead from 14 off-path nodes into a proof (the proof graph has 458 nodes vs 444 on the found proof paths).
 
+- **A step is one top-level tactic after flattening** (decided 2026-10-28), for remaining steps, A* depth, the
+  value bins and harvesting; a block of 7 tactics is 7 steps. This is independent of how the model splits its
+  output into blocks and matches v0's training data (human proofs, one tactic per step), so the bins (1–7, 8+)
+  stay. Measured on the visible student's 171 solved trees: a block that reaches a new state applies a median 1
+  tactic (mean 1.8, 90th percentile 3); proofs take a median 2 tactics (90th percentile 8); of the 124 problems
+  solved by the first expansion, 71 are a single tactic (e.g. `nlinarith [...]`), the rest a median 3.
 - **Proof graph**: every node with a route to a proof via new-state or transposition edges is on a proof. Its
   exact remaining steps are the shortest such route. Transpositions are never failures (A then B and B then A both
-  prove).
-- **No progress**: a block whose net effect leaves the state unchanged or returns to an ancestor (a wasted step).
-  A no-op tactic inside a block that otherwise makes progress is harmless.
+  prove). **Per tactic**: the harness records the state after every tactic of a block, so the intermediate states
+  of proof blocks are proof-graph states too, and a tactic of another sample that reaches one of them (e.g. the same
+  first `have` followed by a failing line) is on the proof graph.
+- **No progress** (per tactic): a tactic that leaves the state unchanged, returns to an ancestor, or adds a
+  **redundant hypothesis** (a `have` whose type is already in the context, e.g. `have h₉ : y ≤ x := h₁`, or a
+  reflexive `a = a`). Found inside successful proofs too, so it is penalized wherever it occurs.
 - **Same state as a sibling**: both tactics are equally good and get the reward of the state they reach.
 - **Dead end**: an expanded node whose 8 samples and automation sweep produced no new state and no transposition
   to a live state (only errors, timeouts, repeats or no-progress). Checked by Lean, but only for 8 samples, so a
@@ -464,8 +488,13 @@ at 50k 9 stop on heartbeats and 1 fails fast (median 8.6 s, 133 s), at 100k 5 he
 
 ### Policy update: GRPO over sibling groups
 
-- **Group** = the 8 samples of one expanded node (independent draws from the policy at the same state), after
-  merging identical tactic texts. Best-first selection skews which states are trained, not the groups themselves.
+- **Group** = the 8 samples of one expanded node **on the proof graph** (decided 2026-10-28): only those groups
+  are trained; nodes off the proof graph and unsolved trees give no policy groups (they still give value targets).
+  This removes the local reward earned off the proof graph (72.6% of it before), makes the trained data small
+  (about 4 groups per solved tree with harvesting), and every group has at least one sample on the proof graph.
+  Identical tactic texts are merged. Best-first selection skews which states are trained, not the groups
+  themselves. Later option, off at first: Lean-checked malformed samples (syntax errors, unknown constants) from
+  any tree as a small separate negative signal ("not valid Lean", never "does not work here").
 - **Reward** = `(1 − λ) · G + λ · L`, both on a common scale, mixed AlphaZero-style with **λ = 0.15** (the local
   influence stays at about 15–20%; the proof graph decides):
   - `G` (global) ∈ [0, 1] = `(1 − μ) · z + μ · q` with **μ = 0.15** (decided 2026-10-27): `z` is the concrete
@@ -483,28 +512,51 @@ at 50k 9 stop on heartbeats and 1 fails fast (median 8.6 s, 133 s), at 100k 5 he
   trees, dominated by the many −1 errors) carry no meaning. Groups with identical rewards are dropped, as in the
   mainstream recipes. The dashboard shows the effective local share of the summed |advantage|.
 - Measured on the visible student's trees: 93.1% of groups have mixed rewards with the dense reward, 3.1% with the
-  outcome-only reward (the control's sparsity); 72.6% of the positive local reward (placeholder weights) was earned
+  outcome-only reward; 72.6% of the positive local reward (placeholder weights) was earned
   off the proof graph, which is why L is capped at λ.
-- **Per-token credit within a sample** (the GRPO loss is a sum over tokens, so each token can get its own
-  advantage): the explanation gets the sample's overall advantage; the tactics up to the last successful one get
-  the advantage of the state they reach; the first failing tactic (after flattening, the line Lean's error points
-  to) gets the error advantage; everything after it is masked, since Lean never evaluated it. The SFT counterpart
-  is training on the valid prefix plus unlikelihood on the failing line. Implemented (`src/lean_search/rl/`): with
-  b the sample-weighted group mean, overall A = r − b, prefix P = r_prefix − b, error E = r − r_prefix (A when there
-  is no valid prefix), so A = P + E; tokens before the first tactic span (explanation, opening fence) get A, tactics
-  before the failing one P, the failing tactic E, the rest is masked; after a complete block the closing fence and
-  end of turn get P; the control run uses sequence-level credit (every token A). Samples without a usable block
-  (none, cut off at the token cap, empty, forbidden) are failures in their group (L = −1, G = 0), which is how RL
-  dampens repetition loops.
+- **Per-tactic credit within a sample** (decided 2026-10-28; the GRPO loss is a sum over tokens, so each
+  tactic's tokens get their own advantage). Each evaluated tactic gets a reward `R = (1 − λ) · G + λ · L` from the
+  state it reaches:
+
+  | Tactic | G | L | R (λ = 0.15) |
+  |---|---|---|---|
+  | Reaches a proof-graph state (closing the goal included) | 1 | 0, closing bonus | 0.85 + bonus |
+  | Reaches an expanded state off the proof graph | 0 (+ μ · q once gated) | 0 | ≈ 0 |
+  | Reaches a new state that was never expanded | unknown | — | **neutral: advantage 0**, outside the baseline |
+  | No progress (unchanged, ancestor, redundant hypothesis) | 0 | −0.5 | −0.075 |
+  | First failing tactic (the line Lean's error points to, after flattening) | 0 | −1 | −0.15 |
+  | Everything after the failing tactic | — | — | masked (Lean never evaluated it) |
+
+  A sample's score is the mean R of its known tactics; the baseline b is the mean score over the group's samples
+  with a known score. Tactic tokens get R − b, the explanation and the opening fence the sample's score − b, the
+  closing fence and end of turn the last tactic's advantage. Every good tactic carries its own positive credit, so
+  five tactics on the proof route followed by a failure push more than one; the failure affects only its own line.
+  Since every group sits at a proof-graph node, b is pulled up by the proof samples and a failing or no-op tactic
+  ends up strongly negative relative to them. Samples without a usable block (none, cut off at the token cap,
+  empty, forbidden) score like a first failing tactic over the whole completion, which is how RL dampens
+  repetition loops. Magnitudes are settings. Sequence-level credit (every token gets the sample's score − b) stays
+  as an option for the single-step comparison.
+- **Example** (root of `algebra_2varlineareq_xpeeq7_2xpeeq3_eeq11_xeqn4`): A writes the proof (`have h₂ : x = -4
+  := by linear_combination h₁ - h₀`, `have h₃ …`, `exact ⟨h₃, h₂⟩`): all three tactics positive. B writes the same
+  first `have`, then a failing `have h₃ : e = 11 := by linarith`: the first tactic reaches A's state after one
+  tactic (positive), the second is strongly negative, the rest masked. C proves `e = 11` first, then fails: a new
+  state never expanded, neutral. D writes `have h₄ : x + e = 7 := h₀`: redundant, negative.
+- **Exact sampling data**: the search records every sample's sampled token ids and vLLM log-probabilities; the
+  trainer trains on those tokens (no re-tokenization) and computes log-probabilities with the logits divided by the
+  sampling temperature (0.8), so the PPO ratio compares like with like; the recorded log-probabilities are logged
+  against the trainer's for the mismatch. **Forced answers are kept**: there is no length filter in the trainer
+  (the old 1,088-token limit was the old trainer's explanation cap plus a 64-token margin and silently dropped all
+  1,605 forced samples, 2.7%); the text the harness inserts (the fence after the cap) is masked, the rest trained.
+  The sampling cap of 1,024 explanation tokens stays (90% of samples are below 760 tokens).
 - **Optimization** (implemented defaults): PPO-style clipped objective per token, clip range [1 − 0.2, 1 + 0.28];
   old log-probabilities from the trainer's own weights before the phase's first update (the published version
   that collected most of the data; no recorded vLLM log-probabilities); KL (k3 estimator) measured to the
   data-collecting policy and to the starting weights, penalty coefficient 0; loss normalized as Σ weight · token
   loss / (sequences in the step × 256), so there is no per-sequence mean and no length bias; LoRA rank 64,
-  learning rate 1e-5, 64 sequences per step, one pass per phase; NLL replay (Lean SFT and math) at weight 0.1;
-  single GPU.
-- **Control run**: the same loop with only the outcome / proof-graph signal (expert iteration via GRPO), to
-  measure whether the dense part helps.
+  learning rate 1e-5, 64 sequences per step, two passes per phase if training time allows (above); NLL replay
+  (Lean SFT and math) at weight 0.1; single GPU.
+- **No control run** (decided 2026-10-28): a second full loop is out of budget. The credit comparison happens in
+  the single-step test.
 
 ### Value model
 
@@ -525,8 +577,11 @@ foundation of everything above, so it comes first.
   | Node | z (concrete label) | q (value part) | Weight |
   |---|---|---|---|
   | On the proof graph | 1, exact remaining steps | average below (or own estimate) | high |
-  | Expanded, off the proof graph | 0 | **average** over the expanded descendants reachable via new-state and transposition edges (each once, no back-edges): proof probability = mean of their values; steps = mean of (distance + h); own estimate if there are none | grows with the number of expanded descendants (a node expanded once in a tree the search then abandoned is weak evidence for "no proof") |
+  | Expanded, off the proof graph, in solved and unsolved trees ("no proof within this budget", censored) | 0 | **average** over the expanded descendants reachable via new-state and transposition edges (each once, no back-edges): proof probability = mean of their values; steps = mean of (distance + h); own estimate if there are none | grows with the number of expanded descendants (a node expanded once in a tree the search then abandoned is weak evidence for "no proof") |
   | Never expanded | — | — | no target |
+
+  Unsolved trees are kept on purpose (confirmed 2026-10-28): without them the model never sees hopeless problems
+  and stays like v0, which never predicts dead.
 
   Concrete labels thus make up at least 85% of every target; nothing is trained purely on estimates. Dead ends
   (expanded nodes whose 8 samples and sweep produced nothing usable, ~6% of expanded nodes) are no longer a
@@ -581,12 +636,21 @@ foundation of everything above, so it comes first.
   the anchors' Brier score rises by at most 0.01; thresholds to be set again once fresh scores from the node exist
   (the headline pair accuracy rests on only ~50 pairs per benchmark).
 
-### Fixed targets after every phase
+### Fixed targets
 
-- Per-sample success on the 512 held-out states; miniF2F-valid at a fixed search budget (n = 8; the expansion
-  budget is set when the baselines are re-measured); MATH-500 retention (visible and thinking). Curves over
-  training, not just a final score. Baselines are re-measured on the new node with the new settings (n = 8,
+- **Probe set** (decided 2026-10-28): about 500 held-out pool problems, stratified easy / medium / hard by the
+  curriculum's difficulty estimate (not mostly easy), searched at a small budget (16 expansions, ~10 min wall cap
+  per problem) every ~6 hours of training: about 5,000 expansions, estimated 40–60 min on 4× 3090 at n = 8 (from
+  the old 2× 3090 node: 4,577 expansions at n = 16 in 124 min; GPUs were the bottleneck), ~10% of compute; 300
+  problems (~25 min) if that is too much. Small budgets because RL improves efficiency first (126 of 166 miniF2F
+  solves came at the first expansion).
+- **miniF2F-valid** at the full budget (64 expansions, n = 8; ~1–1.5 h) at the start, at milestones and at the end.
+- Per-sample success on the 512 held-out states and MATH-500 retention (visible and thinking) per phase. Curves
+  over training, not just a final score. Baselines are re-measured on the new node with the new settings (n = 8,
   heartbeat limits, flattening), since the old numbers used n = 16 and wall-clock limits.
+- The value gate's benchmark comes from a separate held-out problem set (searched once without a value model, ~1–2
+  h), so value models are not selected on the evaluation set and the gate gets enough pairs.
+- Timings are measured in the first hour on the node.
 
 ### Order of work
 
@@ -594,17 +658,23 @@ foundation of everything above, so it comes first.
    WSL development environment with direct downloads; graph labelling (proof graph, edge kinds, statistics); value
    targets, sibling pairs, value benchmark without circularity and fresh scoring; GRPO trainer with per-token credit
    and the outcome-only control; value trainer and gate; the dashboard (self-built, open by default); the harness
-   (heartbeats, flattening, `rename_i`, identifier check, full sample texts, unparsed samples). Remaining: the μ-mix
-   of value targets and G, the data rewrite (flattening, chunks, descriptive renaming), the loop integration
-   (search → label → train → publish, metrics writing for the dashboard).
+   (heartbeats, flattening, `rename_i`, identifier check, full sample texts, unparsed samples). Remaining
+   (decided 2026-10-28): per-tactic states in the harness and per-tactic labels (proof graph, no progress including
+   redundant hypotheses); policy groups only at proof-graph nodes with per-tactic credit; the μ-mix of value
+   targets and G; harvesting and ε-exploration in the new search; recorded token ids and log-probabilities, the
+   temperature in the trainer, no length filter, masked forced text; two passes per phase as a setting; the data
+   rewrite (flattening, chunks, descriptive renaming); the probe set; the loop integration (search → label → train
+   → publish, metrics for the dashboard); the cheap tests below.
 2. **New node**: rebuild, smoke tests, the heartbeat replay test, baselines with the new settings (student v2,
-   value v0).
-3. **SFT stage**: rewritten data (re-trace the selected proofs flat), both naming variants, gentle fine-tunes from
-   v2, compared on the fixed targets; pick the starting policy.
-4. **Value**: benchmark, value v1 from search-graph targets, A/B search against v0.
-5. **GRPO loop** with the neutral fallback (global term from the proof graph and dead ends only).
-6. Value pseudo-labels once v1 passed the gate.
-7. Control run with the outcome-only signal.
+   value v0), timings of search, training and the probe.
+3. **Cheap tests before the loop**: the naming A/B (two short fine-tunes); single-step GRPO on the 512 states with
+   per-tactic and sequence-level credit (does the policy improve on states it trained on, which credit is better,
+   about a GPU-hour); an overfit test on ~300 statements (the loop must drive their solve rate up).
+4. **SFT stage**: rewritten data (re-trace the selected proofs flat), the naming the A/B picked, a gentle fine-tune
+   from v2; the starting policy.
+5. **Value**: benchmark, value v1 from search-graph targets, A/B search against v0.
+6. **GRPO loop** with μ = 0 (proof graph only) until a value model passed the gate.
+7. Value pseudo-labels once v1 passed the gate.
 8. Write-up on the homepage: the ladder, the RL curves, what the dense signal adds.
 
 ### Dashboard
@@ -616,7 +686,7 @@ and is exposed on an open port (read-only, so open by default; a password is opt
 where possible), laid out for phones too, so a multi-day run can be checked from anywhere; TensorBoard has no login
 of its own and stays behind SSH or the tunnel. Overview page: status (loop
 running, phase, versions, time since the last publish, proofs per hour, GPU and Lean CPU utilization, money spent),
-headline curves (the fixed targets against the baseline and the control run), RL health, value health, search
+headline curves (the fixed targets against the baseline), RL health, value health, search
 behaviour, warnings (rising no-progress share, KL too high, repetition loops, MATH dropping). Logged per phase
 from day one:
 - value targets by source (proof graph, dead end, averaged), the subtree sizes behind averaged targets, the number
@@ -626,8 +696,12 @@ from day one:
 - failures by tier (malformed, invalid in the state, valid but failing, timeout) per policy sample, block lengths,
   repeats of failed sweep tactics, forced answers and repetition loops;
 - value benchmark metrics;
-- GRPO: share of groups with mixed rewards, reward split into local and global, the share of local reward earned on
-  states that never lead to a proof, KL and clip fraction, explanation length;
+- GRPO: share of groups with mixed rewards, reward split into local and global, tactics by credit label (proof
+  graph, off graph, unknown, no progress, redundant hypothesis, failing, masked), KL and clip fraction, the
+  sampler-vs-trainer log-probability mismatch, explanation length, forced answers kept;
+- proofs (decided 2026-10-28): proof length in tactics and in blocks, proofs per solved problem, the share of
+  proof-graph nodes, harvest yield (proofs and proof-graph nodes per harvest expansion), the share of ε-picks;
+- time: training vs sampling per phase (decides one or two passes);
 - fixed targets (above).
 
 ### Relation to other recipes
