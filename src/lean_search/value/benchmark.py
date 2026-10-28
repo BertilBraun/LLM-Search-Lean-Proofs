@@ -17,10 +17,16 @@ from lean_search.value.bins import Readout
 from lean_search.value.config import ValueConfig
 from lean_search.value.graph_targets import ValueTarget, bin_estimate
 from lean_search.value.metrics import roc_auc, spearman_correlation
-from lean_search.value.ranking import PairKind, expanded_nodes
+from lean_search.value.ranking import expanded_nodes
 
 GROUP_PRIORITY = {NodeClass.PROOF_GRAPH: 0, NodeClass.DEAD_END: 1}
 RECORDED_DESCRIPTION = "recorded (biased if the trees were guided by this model)"
+
+
+class BenchmarkPairKind(StrEnum):
+    PROOF_OVER_DEAD_END = "proof_over_dead_end"
+    PROOF_OVER_EXPANDED = "proof_over_expanded"
+    EXPANDED_OVER_DEAD_END = "expanded_over_dead_end"
 
 
 class SearchGuidance(StrEnum):
@@ -108,7 +114,7 @@ class BenchmarkState:
     node_id: int
     goals: tuple[str, ...]
     node_class: NodeClass
-    # 1 on the proof graph, 0 for a dead end, the averaged value of an expanded off-graph state, else None.
+    # The training target's proof probability y of an expanded state, else None.
     target_proof_probability: float | None
     # Exact, on the proof graph only.
     remaining_steps: int | None
@@ -455,7 +461,7 @@ def pair_accuracy(outcomes: Sequence[float]) -> PairAccuracy:
 def ranking_metrics(
     benchmark: ValueBenchmark, estimates: Sequence[StateEstimate | None], config: BenchmarkConfig
 ) -> RankingMetrics:
-    outcomes: dict[PairKind, list[float]] = {kind: [] for kind in PairKind}
+    outcomes: dict[BenchmarkPairKind, list[float]] = {kind: [] for kind in BenchmarkPairKind}
     top: list[float] = []
     groups_with_proof_state = never_expanded = unexplored = 0
     for group in benchmark.groups:
@@ -466,10 +472,10 @@ def ranking_metrics(
         dead_ends = [estimate for state, estimate in known if state.node_class == NodeClass.DEAD_END]
         expanded = [estimate for state, estimate in known if state.node_class == NodeClass.EXPANDED_OFF_GRAPH]
         for proof in proofs:
-            outcomes[PairKind.PROOF_OVER_DEAD_END].extend(preference(proof, other) for other in dead_ends)
-            outcomes[PairKind.PROOF_OVER_EXPANDED].extend(preference(proof, other) for other in expanded)
+            outcomes[BenchmarkPairKind.PROOF_OVER_DEAD_END].extend(preference(proof, other) for other in dead_ends)
+            outcomes[BenchmarkPairKind.PROOF_OVER_EXPANDED].extend(preference(proof, other) for other in expanded)
         for alive in expanded:
-            outcomes[PairKind.EXPANDED_OVER_DEAD_END].extend(preference(alive, other) for other in dead_ends)
+            outcomes[BenchmarkPairKind.EXPANDED_OVER_DEAD_END].extend(preference(alive, other) for other in dead_ends)
         if not proofs:
             continue
         groups_with_proof_state += 1
@@ -481,14 +487,14 @@ def ranking_metrics(
         if others:
             best_proof = max(proofs, key=StateEstimate.ranking_key)
             top.append(min(preference(best_proof, other) for other in others))
-    proof_pairs = outcomes[PairKind.PROOF_OVER_DEAD_END] + outcomes[PairKind.PROOF_OVER_EXPANDED]
+    proof_pairs = outcomes[BenchmarkPairKind.PROOF_OVER_DEAD_END] + outcomes[BenchmarkPairKind.PROOF_OVER_EXPANDED]
     return RankingMetrics(
         groups_with_proof_state=groups_with_proof_state,
         pairs=len(proof_pairs),
         pairwise_accuracy=mean(proof_pairs),
-        proof_over_dead_end=pair_accuracy(outcomes[PairKind.PROOF_OVER_DEAD_END]),
-        proof_over_expanded=pair_accuracy(outcomes[PairKind.PROOF_OVER_EXPANDED]),
-        expanded_over_dead_end=pair_accuracy(outcomes[PairKind.EXPANDED_OVER_DEAD_END]),
+        proof_over_dead_end=pair_accuracy(outcomes[BenchmarkPairKind.PROOF_OVER_DEAD_END]),
+        proof_over_expanded=pair_accuracy(outcomes[BenchmarkPairKind.PROOF_OVER_EXPANDED]),
+        expanded_over_dead_end=pair_accuracy(outcomes[BenchmarkPairKind.EXPANDED_OVER_DEAD_END]),
         top_accuracy=mean(top),
         never_expanded_siblings=never_expanded,
         unexplored_expanded_siblings=unexplored,

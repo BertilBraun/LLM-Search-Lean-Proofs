@@ -5,7 +5,7 @@ from graph_trees import GraphBuilder
 
 from lean_search.search import TreeRecord
 from lean_search.search.graph_labels import label_graph
-from lean_search.value.bins import DEAD_BIN, Readout
+from lean_search.value.bins import DEAD_BIN, STEP_BIN_COUNT, Readout
 from lean_search.value.graph_targets import (
     RemainingStepsReadout,
     SourceShares,
@@ -38,59 +38,79 @@ def solved_tree() -> tuple[TreeRecord, dict[str, int]]:
     return record, {"r": 0, "a": a.node_id, "off": off.node_id, "x": x.node_id, "dead": dead.node_id, "y": y.node_id}
 
 
-def targets_by_node(config: ValueTargetConfig = DEFAULT_CONFIG) -> dict[int, ValueTarget]:
-    record, _ = solved_tree()
-    labels = label_graph(record)
-    targets = value_targets(record, labels, recorded_estimates(record, READOUT), READOUT, config)
+def labelled_targets(record: TreeRecord, config: ValueTargetConfig = DEFAULT_CONFIG) -> dict[int, ValueTarget]:
+    targets = value_targets(record, label_graph(record), recorded_estimates(record, READOUT), config)
     return {target.node_id: target for target in targets}
+
+
+def targets_by_node(config: ValueTargetConfig = DEFAULT_CONFIG) -> dict[int, ValueTarget]:
+    return labelled_targets(solved_tree()[0], config)
 
 
 def node_id(name: str) -> int:
     return solved_tree()[1][name]
 
 
-@pytest.mark.parametrize(("name", "steps"), [("r", 2.0), ("a", 1.0)])
-def test_proof_graph_target_has_exact_steps(name: str, steps: float) -> None:
-    assert targets_by_node()[node_id(name)].remaining_steps == steps
+@pytest.mark.parametrize(("name", "steps"), [("r", 2), ("a", 1)])
+def test_proof_graph_target_has_exact_steps(name: str, steps: int) -> None:
+    assert targets_by_node()[node_id(name)].exact_steps == steps
 
 
-def test_proof_graph_target_is_certain() -> None:
-    assert targets_by_node()[node_id("a")].proof_probability == 1.0
+def test_proof_graph_target_mixes_its_concrete_one_with_its_value_part() -> None:
+    assert targets_by_node()[node_id("a")].proof_probability == pytest.approx(0.85 + 0.15 * 14 / 15)
 
 
-def test_dead_end_target_is_zero() -> None:
-    assert targets_by_node()[node_id("dead")].proof_probability == 0.0
+def test_value_part_is_the_mean_over_expanded_descendants() -> None:
+    assert targets_by_node()[node_id("off")].value_part.proof_probability == pytest.approx((0.8 + 14 / 15) / 2)
 
 
-def test_dead_end_target_has_no_steps() -> None:
-    assert targets_by_node()[node_id("dead")].source == TargetSource.DEAD_END
+def test_value_part_steps_are_the_mean_of_distance_plus_h() -> None:
+    assert targets_by_node()[node_id("off")].value_part.remaining_steps == pytest.approx(((1 + 4) + (1 + 2)) / 2)
 
 
-def test_averaged_proof_probability_is_the_mean_over_expanded_descendants() -> None:
-    assert targets_by_node()[node_id("off")].proof_probability == pytest.approx((0.8 + 0.0) / 2)
+def test_off_graph_target_is_mu_times_its_value_part() -> None:
+    assert targets_by_node()[node_id("off")].proof_probability == pytest.approx(0.15 * (0.8 + 14 / 15) / 2)
 
 
-def test_averaged_steps_are_the_mean_of_distance_plus_h() -> None:
-    assert targets_by_node()[node_id("off")].remaining_steps == pytest.approx(((1 + 4) + (1 + 16)) / 2)
+def test_dead_end_is_an_ordinary_off_graph_target() -> None:
+    assert targets_by_node()[node_id("dead")].source == TargetSource.OFF_GRAPH
 
 
-def test_averaged_weight_grows_with_expanded_descendants() -> None:
-    assert targets_by_node()[node_id("off")].weight == pytest.approx(0.5 * 2 / (2 + 4))
+def test_state_without_expanded_descendants_uses_its_own_estimate() -> None:
+    assert targets_by_node()[node_id("x")].value_part == ValueEstimate(0.8, 4.0)
 
 
-@pytest.mark.parametrize("name", ["x", "y"])
-def test_states_without_expanded_descendants_get_no_target(name: str) -> None:
-    assert node_id(name) not in targets_by_node()
+def test_never_expanded_state_gets_no_target() -> None:
+    assert node_id("y") not in targets_by_node()
 
 
-def test_dead_descendants_use_their_recorded_estimate_without_anchoring() -> None:
-    target = targets_by_node(ValueTargetConfig(anchor_dead_descendants=False))[node_id("off")]
-    assert target.proof_probability == pytest.approx((0.8 + 14 / 15) / 2)
+@pytest.mark.parametrize(("name", "weight"), [("off", 0.5 * 3 / (3 + 4)), ("x", 0.5 * 1 / (1 + 4))])
+def test_off_graph_weight_grows_with_expanded_nodes(name: str, weight: float) -> None:
+    assert targets_by_node()[node_id(name)].weight == pytest.approx(weight)
 
 
-def test_low_temperature_slides_the_average_toward_the_best_descendant() -> None:
+@pytest.mark.parametrize(("name", "probability"), [("a", 1.0), ("off", 0.0)])
+def test_zero_value_share_keeps_the_concrete_label(name: str, probability: float) -> None:
+    assert targets_by_node(ValueTargetConfig(value_share=0.0))[node_id(name)].proof_probability == probability
+
+
+def test_low_temperature_slides_the_value_part_toward_the_best_descendant() -> None:
     target = targets_by_node(ValueTargetConfig(temperature=0.01))[node_id("off")]
-    assert target.proof_probability == pytest.approx(0.8, abs=1e-6)
+    assert target.value_part.proof_probability == pytest.approx(14 / 15, abs=1e-6)
+
+
+def test_unsolved_tree_keeps_its_expanded_states_as_off_graph_targets() -> None:
+    builder = GraphBuilder("⊢ r", root_value=3.0)
+    child = builder.child(builder.root, "⊢ child", value=4.0)
+    builder.failure(child)
+    assert [target.source for target in labelled_targets(builder.record()).values()] == [TargetSource.OFF_GRAPH] * 2
+
+
+def test_value_part_distance_counts_tactics() -> None:
+    builder = GraphBuilder("⊢ r", root_value=3.0)
+    child = builder.child(builder.root, "⊢ child", value=4.0, tactics=3)
+    builder.failure(child)
+    assert labelled_targets(builder.record())[0].value_part.remaining_steps == pytest.approx(3 + 4)
 
 
 @pytest.mark.parametrize(("steps", "probability"), [(1.0, 1.0), (16.0, 0.0), (8.5, 0.5), (20.0, 0.0), (0.5, 1.0)])
@@ -109,16 +129,22 @@ def test_verified_proof_has_an_exact_estimate() -> None:
     assert recorded_estimates(record, READOUT)[proof_id] == ValueEstimate(1.0, 0.0)
 
 
-def target(source: TargetSource, probability: float, steps: float | None, node: int = 0) -> ValueTarget:
-    return ValueTarget("t", node, ("⊢ g",), source, probability, steps, 1.0, 0)
+def target(
+    source: TargetSource, exact_steps: int | None, value_part: ValueEstimate | None = None, node: int = 0
+) -> ValueTarget:
+    return ValueTarget("t", node, ("⊢ g",), source, exact_steps, value_part, 0.15, 1.0, 0)
 
 
 @pytest.mark.parametrize(
     ("value_target", "expected"),
     [
-        (target(TargetSource.PROOF_GRAPH, 1.0, 2.0), {1: 1.0}),
-        (target(TargetSource.DEAD_END, 0.0, None), {DEAD_BIN: 1.0}),
-        (target(TargetSource.AVERAGED, 0.4, 11.0), {7: 0.4, DEAD_BIN: 0.6}),
+        (target(TargetSource.PROOF_GRAPH, 2), {1: 1.0}),
+        (target(TargetSource.OFF_GRAPH, None), {DEAD_BIN: 1.0}),
+        (
+            target(TargetSource.PROOF_GRAPH, 2, ValueEstimate(0.4, 11.0)),
+            {1: 0.85, 7: 0.15 * 0.4, DEAD_BIN: 0.15 * 0.6},
+        ),
+        (target(TargetSource.OFF_GRAPH, None, ValueEstimate(0.4, 3.0)), {2: 0.15 * 0.4, DEAD_BIN: 0.85 + 0.15 * 0.6}),
     ],
 )
 def test_bin_target_without_smoothing(value_target: ValueTarget, expected: dict[int, float]) -> None:
@@ -126,32 +152,40 @@ def test_bin_target_without_smoothing(value_target: ValueTarget, expected: dict[
     assert distribution == pytest.approx([expected.get(index, 0.0) for index in range(len(distribution))])
 
 
+@pytest.mark.parametrize("source", [TargetSource.PROOF_GRAPH, TargetSource.OFF_GRAPH])
+def test_bin_target_alive_mass_is_the_mixed_proof_probability(source: TargetSource) -> None:
+    value_target = target(source, 3 if source == TargetSource.PROOF_GRAPH else None, ValueEstimate(0.4, 3.3))
+    assert sum(bin_target(value_target, sigma=0.5)[:STEP_BIN_COUNT]) == pytest.approx(value_target.proof_probability)
+
+
 def test_smoothed_bin_target_sums_to_one() -> None:
-    assert sum(bin_target(target(TargetSource.AVERAGED, 0.4, 3.3), sigma=0.5)) == pytest.approx(1.0)
+    assert sum(bin_target(target(TargetSource.OFF_GRAPH, None, ValueEstimate(0.4, 3.3)), sigma=0.5)) == pytest.approx(
+        1.0
+    )
 
 
 def test_cap_keeps_every_proof_graph_target() -> None:
-    targets = [target(TargetSource.DEAD_END, 0.0, None, node) for node in range(10)]
-    targets.append(target(TargetSource.PROOF_GRAPH, 1.0, 1.0, 10))
+    targets = [target(TargetSource.OFF_GRAPH, None, node=node) for node in range(10)]
+    targets.append(target(TargetSource.PROOF_GRAPH, 1, node=10))
     kept = capped_targets(targets, 3)
     assert sum(kept_target.source == TargetSource.PROOF_GRAPH for kept_target in kept) == 1
 
 
 def test_cap_limits_the_targets_per_tree() -> None:
-    targets = [target(TargetSource.DEAD_END, 0.0, None, node) for node in range(10)]
+    targets = [target(TargetSource.OFF_GRAPH, None, node=node) for node in range(10)]
     assert len(capped_targets(targets, 3)) == 3
 
 
 def test_balanced_weights_give_each_source_its_share() -> None:
-    targets = [target(TargetSource.DEAD_END, 0.0, None, node) for node in range(9)]
-    targets.append(target(TargetSource.PROOF_GRAPH, 1.0, 1.0, 9))
-    balanced = balanced_weights(targets, SourceShares(proof_graph=0.5, dead_end=0.5, averaged=0.0))
+    targets = [target(TargetSource.OFF_GRAPH, None, node=node) for node in range(9)]
+    targets.append(target(TargetSource.PROOF_GRAPH, 1, node=9))
+    balanced = balanced_weights(targets, SourceShares(proof_graph=0.5, off_graph=0.5))
     proof_weight = sum(item.weight for item in balanced if item.source == TargetSource.PROOF_GRAPH)
     assert proof_weight == pytest.approx(sum(item.weight for item in balanced) / 2)
 
 
 def test_balanced_weights_keep_the_total() -> None:
-    targets = [target(TargetSource.DEAD_END, 0.0, None, node) for node in range(9)]
-    targets.append(dataclasses.replace(target(TargetSource.PROOF_GRAPH, 1.0, 1.0, 9), weight=2.0))
+    targets = [target(TargetSource.OFF_GRAPH, None, node=node) for node in range(9)]
+    targets.append(dataclasses.replace(target(TargetSource.PROOF_GRAPH, 1, node=9), weight=2.0))
     balanced = balanced_weights(targets, SourceShares())
     assert sum(item.weight for item in balanced) == pytest.approx(11.0)

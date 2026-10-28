@@ -40,7 +40,7 @@ def statistics() -> GraphStatistics:
     record = builder.record(proof)
     labels = label_graph(record)
     estimates = recorded_estimates(record, READOUT)
-    targets = value_targets(record, labels, estimates, READOUT, ValueTargetConfig())
+    targets = value_targets(record, labels, estimates, ValueTargetConfig())
     groups = policy_groups(record, labels, estimates, targets, REWARDS)
     outcome_groups = policy_groups(
         record, labels, estimates, targets, dataclasses.replace(REWARDS, mode=RewardMode.OUTCOME_ONLY)
@@ -58,7 +58,8 @@ def statistics() -> GraphStatistics:
         ("dead_ends", 1),
         ("never_expanded_nodes", 1),
         ("repeats_of_failed_automation", 1),
-        ("dead_end_targets", 1),
+        ("off_graph_targets", 1),
+        ("expanded_without_target", 0),
         ("proof_graph_targets", 3),
     ],
 )

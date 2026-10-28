@@ -6,12 +6,9 @@ from lean_search.search.graph_labels import label_graph
 from lean_search.value.ranking import PairKind, RankingConfig, SiblingPair, sibling_pairs
 
 CONFIG = RankingConfig(
-    proof_over_dead_end_weight=1.0,
     proof_over_expanded_weight=0.5,
     proof_over_never_expanded_weight=0.1,
-    expanded_over_dead_end_weight=0.5,
     half_weight_expanded_nodes=2.0,
-    minimum_expanded_nodes=3,
 )
 
 
@@ -22,7 +19,8 @@ def grow(builder: GraphBuilder, node: Node, expanded_levels: int) -> None:
     builder.child(node, f"⊢ {node.goals[0]} leaf")
 
 
-def solved_pairs() -> dict[PairKind, list[SiblingPair]]:
+def solved_pairs() -> dict[str, list[SiblingPair]]:
+    """Pairs by the other sibling's goal: a dead end, an expanded subtree of two nodes, a never-expanded state."""
     builder = GraphBuilder("⊢ r")
     proof_child = builder.child(builder.root, "⊢ proof child")
     dead = builder.child(builder.root, "⊢ dead")
@@ -32,26 +30,28 @@ def solved_pairs() -> dict[PairKind, list[SiblingPair]]:
     builder.child(builder.root, "⊢ never expanded")
     builder.duplicate(builder.root, proof_child)
     proof = builder.child(proof_child)
-    pairs = sibling_pairs(label_graph(builder.record(proof)), CONFIG)
-    by_kind: dict[PairKind, list[SiblingPair]] = {}
-    for pair in pairs:
-        by_kind.setdefault(pair.kind, []).append(pair)
-    return by_kind
+    record = builder.record(proof)
+    by_other: dict[str, list[SiblingPair]] = {}
+    for pair in sibling_pairs(label_graph(record), CONFIG):
+        by_other.setdefault(record.nodes[pair.other_id].goals[0], []).append(pair)
+    return by_other
 
 
 @pytest.mark.parametrize(
-    "kind", [PairKind.PROOF_OVER_DEAD_END, PairKind.PROOF_OVER_EXPANDED, PairKind.PROOF_OVER_NEVER_EXPANDED]
+    ("other", "kind"),
+    [
+        ("⊢ dead", PairKind.PROOF_OVER_EXPANDED),
+        ("⊢ expanded", PairKind.PROOF_OVER_EXPANDED),
+        ("⊢ never expanded", PairKind.PROOF_OVER_NEVER_EXPANDED),
+    ],
 )
-def test_solved_tree_pairs_the_proof_child_once_with_each_sibling_class(kind: PairKind) -> None:
-    assert len(solved_pairs()[kind]) == 1
+def test_solved_tree_pairs_the_proof_child_once_with_each_off_graph_sibling(other: str, kind: PairKind) -> None:
+    assert [pair.kind for pair in solved_pairs()[other]] == [kind]
 
 
-def test_solved_tree_has_no_expanded_over_dead_end_pair_by_default() -> None:
-    assert PairKind.EXPANDED_OVER_DEAD_END not in solved_pairs()
-
-
-def test_proof_over_expanded_weight_grows_with_the_subtree() -> None:
-    assert solved_pairs()[PairKind.PROOF_OVER_EXPANDED][0].weight == pytest.approx(0.5 * 2 / (2 + 2))
+@pytest.mark.parametrize(("other", "weight"), [("⊢ dead", 0.5 * 1 / (1 + 2)), ("⊢ expanded", 0.5 * 2 / (2 + 2))])
+def test_proof_over_expanded_weight_grows_with_the_sibling_subtree(other: str, weight: float) -> None:
+    assert solved_pairs()[other][0].weight == pytest.approx(weight)
 
 
 def test_never_expanded_pairs_are_dropped_at_weight_zero() -> None:
@@ -63,22 +63,14 @@ def test_never_expanded_pairs_are_dropped_at_weight_zero() -> None:
     assert pairs == []
 
 
-def unsolved_pairs() -> list[SiblingPair]:
+def test_unsolved_tree_gives_no_pairs() -> None:
     builder = GraphBuilder("⊢ r")
     dead = builder.child(builder.root, "⊢ dead")
     builder.failure(dead)
     large = builder.child(builder.root, "⊢ large")
     grow(builder, large, 2)
-    small = builder.child(builder.root, "⊢ small")
-    grow(builder, small, 0)
     builder.child(builder.root, "⊢ never expanded")
-    return sibling_pairs(label_graph(builder.record()), CONFIG)
-
-
-def test_unsolved_tree_ranks_only_large_expanded_subtrees_over_dead_ends() -> None:
-    assert [(pair.kind, pair.preferred_id, pair.other_id) for pair in unsolved_pairs()] == [
-        (PairKind.EXPANDED_OVER_DEAD_END, 2, 1)
-    ]
+    assert sibling_pairs(label_graph(builder.record()), CONFIG) == []
 
 
 def test_identical_states_reached_twice_give_one_pair() -> None:

@@ -36,7 +36,8 @@ class RewardConfig:
     goal_closed_bonus: float = 0.1
     # G on the proof graph is 1 + shorter_proof_bonus / (1 + remaining steps of the state reached).
     shorter_proof_bonus: float = 0.0
-    # Expanded off-graph states get their averaged value as G once a value model passed the gate; 0 before.
+    # Expanded off-graph states get their value part q (averaged over expanded descendants) as G once a value model
+    # passed the gate; 0 before.
     use_backed_up_values: bool = False
 
 
@@ -214,7 +215,12 @@ def group_sample(
 
 
 def backed_up_values(targets: Sequence[ValueTarget]) -> dict[int, float]:
-    return {target.node_id: target.proof_probability for target in targets if target.source == TargetSource.AVERAGED}
+    """The value part q of off-graph targets averaged over expanded descendants."""
+    return {
+        target.node_id: target.value_part.proof_probability
+        for target in targets
+        if target.source == TargetSource.OFF_GRAPH and target.expanded_descendants and target.value_part is not None
+    }
 
 
 def policy_groups(

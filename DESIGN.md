@@ -603,8 +603,14 @@ foundation of everything above, so it comes first.
 - **Not done**: extra searches only to label states (AlphaZero does not need them either).
 - **Implemented** (`src/lean_search/value/graph_targets.py`, `ranking.py`, `graph_trainer.py`): weighted soft
   cross-entropy on the bins plus the ranking loss (0.5 × softplus of the negative score difference), pair members
-  in the same micro-batch, learning rate 5e-5, at most 64 targets and 64 pairs per tree. The μ-mix of this section
-  replaces the purely averaged targets and the dead-end pairs still in the code (next implementation step).
+  in the same micro-batch, learning rate 5e-5, at most 64 targets and 64 pairs per tree. The μ-mix and pairs of this
+  section are implemented (2026-10-28): the bin target is `(1 − μ) · bins(z) + μ · bins(q)` (z: smoothed exact steps
+  on the proof graph, all-dead off it; q: its proof probability over the step bins at its steps, the rest dead), so
+  `1 − p_dead` is y; `value_share` (μ) is 0 in the GRPO phase configs until a value model passes the gate; off-graph
+  weight `0.5 · n / (n + 4)` for n expanded nodes in the subtree; per-step source shares proof graph 0.4, off graph
+  0.6. Remaining steps and q's distance count top-level tactics (`applied_tactics` per edge). On the visible student's
+  244 trees: 287 proof-graph and 4,535 off-graph targets (4,303 from unsolved trees), q from descendants for 2,949,
+  the own estimate for 1,873; proof-graph steps median 2 tactics (mean 3.8) vs 1 block (mean 2.0).
 
 ### Benchmark and gate
 

@@ -114,23 +114,27 @@ bin tokens, prompts too long) to
 
 ## Search-graph targets (`graph_targets.py`, `ranking.py`, `benchmark.py`)
 
-For the next phase (DESIGN.md, "Value model"), on graphs labelled by `search.graph_labels.label_graph`:
+For the next phase (DESIGN.md, "Value model"), on graphs labelled by `search.graph_labels.label_graph`, every
+expanded state gets `y = (1 − μ) · z + μ · q` (`value_share` = μ; 0 until a value model passed the gate, then 0.15):
 
-| Node | Proof probability | Steps | Weight |
+| Node | z (concrete label) | q (value part) | Weight |
 |---|---|---|---|
-| proof graph | 1 | exact (fewest new-state or transposition edges to a verified proof) | `proof_graph_weight` |
-| dead end | 0 | none | `dead_end_weight` |
-| expanded off the graph | mean over expanded descendants (dead-end descendants count 0) | mean of distance + h | `averaged_weight · n / (n + half_weight_descendants)` |
-| never expanded | none | none | — |
+| proof graph | 1, exact steps (fewest top-level tactics over new-state, sibling or transposition edges to a verified proof) | as below | `proof_graph_weight` |
+| expanded off the graph, solved or unsolved tree (dead ends included) | 0 ("no proof within this budget") | mean over the expanded descendants (each once, at its fewest tactics): proof probability, and distance + h; the state's own estimate without any | `off_graph_weight · n / (n + half_weight_expanded_nodes)`, n the state and its expanded descendants |
+| never expanded | — | — | no target |
 
 Estimates are `ValueEstimate(proof_probability, remaining_steps)`: from the bins as `1 − p_dead` and the steps given
 alive (`bin_estimate`), or from a tree's recorded scalar h as `(dead_steps − h) / (dead_steps − 1)`, clipped
-(`RemainingStepsReadout`). `bin_target` maps a target back onto the nine bins (probability spread over the step bins,
-the rest dead), so only these two adapters change with the value head. `temperature` slides the average toward the
-best descendant (softmax weights on the proof probability; `None` is the plain mean).
+(`RemainingStepsReadout`). `bin_target` is the mixture `(1 − μ) · bins(z) + μ · bins(q)`: bins(z) is the smoothed exact
+step on the proof graph and all-dead off it, bins(q) spreads q's proof probability over the step bins around its
+steps and puts the rest on dead, so `1 − p_dead` of the target is y. A target without any estimate is z alone.
+`temperature` slides q toward the best descendant (softmax weights on the proof probability; `None` is the plain
+mean). Dead ends are only a statistic (`GraphStatistics.dead_ends`, the benchmark's separation metrics).
 
 Sibling pairs (`sibling_pairs`) are taken among the distinct states one expanded node reached over new-state, sibling
-and transposition edges.
+and transposition edges: each proof-graph child over each expanded off-graph sibling (`proof_over_expanded_weight`
+times the sibling's `n / (n + half_weight_expanded_nodes)`) and over each never-expanded sibling
+(`proof_over_never_expanded_weight`, 0 by default). Unsolved trees give no pairs, nor do two off-graph siblings.
 
 `graph_trainer.py` trains the value LoRA on these targets (`experiments/grpo_phase.py`): per target the cross-entropy
 against `bin_target` (plus the bin-mass term), weighted and rebalanced per step across sources (`SourceShares`), plus

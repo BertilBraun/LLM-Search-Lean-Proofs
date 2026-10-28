@@ -79,8 +79,9 @@ class GraphBuilder:
         source: StepSource = StepSource.POLICY,
         failure_after: int | None = None,
         sample_count: int = 1,
+        tactics: int = 1,
     ) -> Node:
-        """`failure_after`: the block's first n tactics applied, then the next one failed."""
+        """`failure_after`: the block's first n tactics applied, then the next one failed; else `tactics` applied."""
         step = text or f"step {self.tree.next_node_id()}"
         edge = self.edge(
             parent,
@@ -89,8 +90,8 @@ class GraphBuilder:
             source=source,
             target_id=self.tree.next_node_id(),
             failure=None if failure_after is None else Failure(FailureKind.ERROR, "failed"),
-            applied_tactics=1 if failure_after is None else failure_after,
-            total_tactics=1 if failure_after is None else failure_after + 2,
+            applied_tactics=tactics if failure_after is None else failure_after,
+            total_tactics=tactics if failure_after is None else failure_after + 2,
             sample_count=sample_count,
         )
         child = self.tree.add_child(parent, edge.edge_id, step, source, -1.0, proof_state(*goals), 0.0, 0.0)
@@ -98,7 +99,12 @@ class GraphBuilder:
         return child
 
     def duplicate(
-        self, parent: Node, target: Node, text: str | None = None, source: StepSource = StepSource.POLICY
+        self,
+        parent: Node,
+        target: Node,
+        text: str | None = None,
+        source: StepSource = StepSource.POLICY,
+        tactics: int = 1,
     ) -> Edge:
         return self.edge(
             parent,
@@ -106,6 +112,8 @@ class GraphBuilder:
             text=text or f"duplicate {len(self.tree.edges)}",
             source=source,
             target_id=target.node_id,
+            applied_tactics=tactics,
+            total_tactics=tactics,
         )
 
     def failure(

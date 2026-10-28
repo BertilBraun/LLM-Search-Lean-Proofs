@@ -196,14 +196,13 @@ export const PAGES = [
             title: "Value targets by source", family: "search", kind: "stacked",
             series: [
               { label: "proof graph", field: "graph.proof_graph_targets" },
-              { label: "dead end", field: "graph.dead_end_targets" },
-              { label: "averaged", field: "graph.averaged_targets" },
-              { label: "expanded, no target", field: "graph.expanded_without_target" },
+              { label: "off graph", field: "graph.off_graph_targets" },
+              { label: "expanded, capped", field: "graph.expanded_without_target" },
             ],
           },
           {
-            title: "Subtree behind averaged targets", subtitle: "mean expanded descendants", family: "search", unit: "number",
-            series: [{ label: "descendants", field: "graph.averaged_descendants.total_size", over: "graph.averaged_targets" }],
+            title: "Subtree behind off-graph targets", subtitle: "mean expanded nodes, the node included", family: "search", unit: "number",
+            series: [{ label: "expanded nodes", field: "graph.off_graph_subtree_sizes.total_size", over: "graph.off_graph_targets" }],
           },
           {
             title: "Never-expanded children", subtitle: "per searched tree", family: "search", unit: "number",
