@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from lean_search.search import ExpanderKind, PriorityKind, load_run_config
+from lean_search.search import ExpanderKind, ExplorationConfig, HarvestConfig, PriorityKind, load_run_config
 from lean_search.search.config import parse_run_config
 
 CONFIG_DIRECTORY = Path(__file__).resolve().parents[2] / "experiments" / "configs"
@@ -59,8 +59,24 @@ def test_absent_optional_budget_is_none() -> None:
         "[automation]\ntactics = [1, 2]\n",
         "[lean]\npool_size = 4\nconcurrency = 8\n",
         "[search]\nmax_expansions = 0\n",
+        "[search.exploration]\nepsilon = 1.5\n",
+        "[search.exploration]\ntop_k = 0\n",
+        "[search.harvest]\nmax_expansions = -1\n",
     ],
 )
 def test_invalid_config_is_rejected(text: str) -> None:
     with pytest.raises(ValueError):
         parse_run_config(text)
+
+
+def test_grpo_search_config_harvests_and_explores() -> None:
+    search = load_run_config(CONFIG_DIRECTORY / "grpo" / "search" / "visible_student_v2.toml").search
+    assert (search.harvest, search.exploration) == (
+        HarvestConfig(enabled=True, max_remaining_steps=2.0, max_expansions=16),
+        ExplorationConfig(enabled=True, epsilon=0.1, top_k=8, seed=0),
+    )
+
+
+def test_harvesting_and_exploration_are_off_by_default() -> None:
+    search = parse_run_config("").search
+    assert (search.harvest.enabled, search.exploration.enabled) == (False, False)

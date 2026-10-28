@@ -11,7 +11,14 @@ from lean_search.policy import PolicyClient
 from lean_search.policy.client import TRANSPORT_ATTEMPTS
 
 COMPLETION = {
-    "choices": [{"index": 0, "text": "rfl", "logprobs": {"token_logprobs": [-0.25]}, "finish_reason": "stop"}],
+    "choices": [
+        {
+            "index": 0,
+            "text": "rfl",
+            "logprobs": {"tokens": ["token_id:7"], "token_logprobs": [-0.25]},
+            "finish_reason": "stop",
+        }
+    ],
     "usage": {"prompt_tokens": 3, "completion_tokens": 1},
 }
 

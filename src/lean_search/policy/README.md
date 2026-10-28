@@ -77,6 +77,25 @@ logs the request's prompt tokens and the tokens of the samples that produced it 
 cost, the node's `expansion_prompt_tokens` and `expansion_generated_tokens` are. `run_search.py` writes the statistics
 to `policy.json`.
 
+## Sampled tokens and budget forcing
+
+Every request asks vLLM for `logprobs` with `return_tokens_as_token_ids`, so each `Sample` carries its token ids and
+their log-probabilities (`SampledTokens`, `search/texts.py`), as vLLM reports them: its default log-probability mode
+is the raw model distribution, before temperature and top-p. A sample that ended its turn ends with the end-of-turn
+token; a sample stopped by a stop string (`Sample.stop_string`) ends with the tokens that wrote it, though the text
+does not contain it. The tree records keep them per completion (`SampledCompletion.tokens`, log-probabilities rounded to
+4 decimals) with the request's `temperature` and `top_p` (`ExpansionTexts`), so the trainer trains on the sampled tokens
+without re-tokenizing.
+
+Budget forcing (`force_answer_on_truncation`) continues a sample cut off by `max_tokens` before its block: the forcing
+request's prompt is token ids, the prompt's (`tokenizer.encode(prompt, add_special_tokens=False)`), the cut-off
+sample's own tokens and the encoded opening (`answer_opening`: the reasoning closed, the block opened), so the record
+holds exactly what the model saw. The forced sample's text is the cut-off text, the opening and the continuation; its
+`SampledTokens.inserted` marks what the harness wrote rather than the model: the opening (characters and tokens, whose
+log-probabilities are `None`) and, when the continuation ran out of tokens or ended its turn without closing the block,
+the closing fence appended to the text, which has no tokens (an empty token span at the end). A fence the continuation
+wrote itself is sampled and not marked.
+
 ## Overlap and early value scoring
 
 Two search options change only timing, never which candidates run or how they are ordered:

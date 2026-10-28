@@ -28,6 +28,20 @@ forbidden_steps = [
     "library_search",
 ]
 
+# DESIGN.md "The loop": after the first proof, finish the proving expansion, then expand states the value model puts
+# at most 2 tactics from done, for up to 16 more expansions. Off for evaluations.
+[search.harvest]
+enabled = true
+max_remaining_steps = 2.0
+max_expansions = 16
+
+# With probability 0.1 the next expansion is drawn uniformly from the 8 best frontier states. Off for evaluations.
+[search.exploration]
+enabled = true
+epsilon = 0.1
+top_k = 8
+seed = 0
+
 [expander]
 kind = "automation_then_policy"
 overlap = true

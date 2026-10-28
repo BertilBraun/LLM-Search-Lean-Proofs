@@ -56,6 +56,9 @@ class CandidateBatch:
     # The policy's prompt and its samples without a usable block (recorded as failed edges).
     prompt: str = ""
     unparsed: tuple[UnparsedSample, ...] = ()
+    # The policy's sampling settings, recorded with the samples' log-probabilities.
+    temperature: float | None = None
+    top_p: float | None = None
 
 
 @dataclass(frozen=True)

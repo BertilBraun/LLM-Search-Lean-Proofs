@@ -185,6 +185,8 @@ class BlockResult:
     # The plan's tactics as finally executed (pieces merged after an incomplete-input error), with their offsets.
     tactics: tuple[TacticPiece, ...] = ()
     flattened: bool = False
+    # The state after each applied tactic; no-ops skipped after a nested proof closed early share the closing state.
+    tactic_states: tuple[ProofState, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -510,6 +512,7 @@ class LeanRepl:
             plan = plain_plan(block) if isinstance(block, str) else block
             current = state
             applied: list[str] = []
+            tactic_states: list[ProofState] = []
             goals_before: dict[int, int] = {}
             failure: BlockFailure | None = None if plan.tactics else LeanError("Empty tactic block.")
             index = 0
@@ -522,10 +525,12 @@ class LeanRepl:
                             case Proceed(next_index=next_index):
                                 current = outcome
                                 applied.extend(tactic.text for tactic in plan.tactics[index:next_index])
+                                tactic_states.extend([current] * (next_index - index))
                                 index = next_index
                             case Stop(message=message, keep_state=keep_state, applied_until=applied_until):
                                 current = outcome if keep_state else current
                                 applied.extend(tactic.text for tactic in plan.tactics[index:applied_until])
+                                tactic_states.extend([current] * (applied_until - index))
                                 # A nested proof left open at the end of the block is just where the block stops.
                                 if applied_until < len(plan.tactics):
                                     failure = LeanError(message)
@@ -547,6 +552,7 @@ class LeanRepl:
                 time.monotonic() - started,
                 plan.tactics,
                 plan.flattened,
+                tuple(tactic_states),
             )
 
     async def export_environment_names(self, header: str, command: str) -> tuple[str, ...]:

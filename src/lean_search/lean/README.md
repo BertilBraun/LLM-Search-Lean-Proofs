@@ -30,7 +30,7 @@ async with LeanReplPool(32) as pool:
 |---|---|
 | `start_proof(statement, header)` | `TacticResult(outcome, elapsed_seconds)`; outcome is the root `ProofState`, `LeanError` (also for a header that does not elaborate or lacks Lean), `LeanTimeout` or `ReplFailure` |
 | `apply_tactic(state, tactic, heartbeats=None, timeout_seconds=None)` | `TacticResult`; a new `ProofState` (no goals = proved), `LeanError(message, panic)`, `LeanTimeout(message, wall_clock)` or `ReplFailure(kind, message)` |
-| `apply_block(state, block, heartbeats=None, timeout_seconds=None)` | `BlockResult(state, applied_tactics, total_tactics, failure, elapsed_seconds, tactics, flattened)`; `block` is text or a `TacticPlan` (`plans.py`); `failure` is `LeanError \| LeanTimeout \| ReplFailure \| Rejection \| None`; `tactics` are the executed pieces with their offsets in the block |
+| `apply_block(state, block, heartbeats=None, timeout_seconds=None)` | `BlockResult(state, applied_tactics, total_tactics, failure, elapsed_seconds, tactics, flattened, tactic_states)`; `block` is text or a `TacticPlan` (`plans.py`); `failure` is `LeanError \| LeanTimeout \| ReplFailure \| Rejection \| None`; `tactics` are the executed pieces with their offsets in the block; `tactic_states[i]` is the state after `tactics[i]` for every applied tactic |
 | `export_environment_names(header, command)` | runs the name export of `identifiers.py` in the header's import environment |
 | `verify_state(state)` | `VerificationResult(verified, problems, axioms, elapsed_seconds, plain_verified)`: `verified` checks the steps as executed, `plain_verified` the unwrapped text |
 | `verify_proof(statement, proof, header)` | `VerificationResult` for a plain proof text (`plain_verified` is `None`) |
@@ -112,6 +112,13 @@ async with LeanReplPool(32) as pool:
 The search applies three transformations to policy blocks (`SearchConfig.flatten_blocks`, `check_identifiers`,
 `name_inaccessible_hypotheses`); the edge keeps the original block (`Edge.text`) and the executed tactics with their
 character offsets in it (`Edge.executed_tactics`), so a failing executed tactic maps back to the text.
+
+Per-tactic states: `Edge.tactic_goals[i]` holds the goals reached by `executed_tactics[i]` for every applied tactic
+(`i < applied_tactics`; the first failing tactic is `executed_tactics[applied_tactics]`). Executed tactics are the
+plan's steps as finally run, so a merged piece (above) is one tactic with one state, and the no-ops skipped after a
+nested proof closed early count as applied and repeat the state of the tactic that closed it. The goals are Lean's,
+before the search renames inaccessible hypotheses: the last entry is the target node's state (`target_id`) but can
+print `x✝` where the node prints `x_1`; intermediate states match nodes by `normalize_goal` keys up to that renaming.
 
 - **Flattening** (`plans.py`, `plan_block`, `flatten_proof` for whole proofs): `have h : A := by t₁ … tₙ` (also
   `have : A`, `obtain pat : A := by …`, the proof on the `by` line or indented below it) runs as `have h : A`

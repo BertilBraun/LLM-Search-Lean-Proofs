@@ -54,6 +54,11 @@ def parse_run_config(text: str) -> RunConfig:
         raise ValueError("lean.concurrency must be between 1 and lean.pool_size: each search holds one process.")
     if config.search.max_expansions < 1 or config.search.max_depth < 1 or config.search.max_wall_seconds <= 0:
         raise ValueError("search budgets must be positive.")
+    exploration = config.search.exploration
+    if not 0 <= exploration.epsilon <= 1 or exploration.top_k < 1:
+        raise ValueError("search.exploration needs epsilon in [0, 1] and a positive top_k.")
+    if config.search.harvest.max_expansions < 0:
+        raise ValueError("search.harvest.max_expansions must not be negative.")
     if config.expander.kind.uses_policy and not (config.policy.model and config.policy.tokenizer):
         raise ValueError("A policy expander needs policy.model and policy.tokenizer.")
     if config.policy.sample_count < 1 or not config.policy.server_urls:

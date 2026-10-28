@@ -1,5 +1,6 @@
 import heapq
 import math
+from collections.abc import Callable
 from typing import NamedTuple
 
 
@@ -26,6 +27,23 @@ class Frontier:
 
     def pop(self) -> int:
         return heapq.heappop(self._heap).node_id
+
+    def pop_at_rank(self, rank: int) -> int:
+        """The node id at this rank in priority order (0: the best), removed; the others keep their order."""
+        better = [heapq.heappop(self._heap) for _ in range(rank)]
+        chosen = heapq.heappop(self._heap)
+        for entry in better:
+            heapq.heappush(self._heap, entry)
+        return chosen.node_id
+
+    def pop_best_where(self, accepts: Callable[[int], bool]) -> int | None:
+        """The best node id that `accepts`, removed; None when there is none."""
+        for entry in sorted(self._heap):
+            if accepts(entry.node_id):
+                self._heap.remove(entry)
+                heapq.heapify(self._heap)
+                return entry.node_id
+        return None
 
     def node_ids(self) -> list[int]:
         return [entry.node_id for entry in sorted(self._heap)]

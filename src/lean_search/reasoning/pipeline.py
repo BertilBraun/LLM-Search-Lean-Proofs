@@ -88,7 +88,8 @@ class ReasoningSampler:
             thinking_instruction=self.config.thinking_instruction,
             visible=self.config.visible_reasoning,
         )
-        prompt_tokens = len(self.tokenizer.encode(prompt, add_special_tokens=False))
+        prompt_token_ids = self.tokenizer.encode(prompt, add_special_tokens=False)
+        prompt_tokens = len(prompt_token_ids)
         max_tokens = min(self.config.max_tokens, self.max_model_length - prompt_tokens)
         if max_tokens < MINIMUM_GENERATED_TOKENS:
             return StateSamples(
@@ -113,9 +114,13 @@ class ReasoningSampler:
                 stop=stop_sequences(self.config.thinking, self.config.visible_reasoning),
                 adapter=self.config.adapter,
             )
-            room = self.max_model_length - prompt_tokens
             forced_samples, forced = await force_answers(
-                next(self._clients), self.config, prompt, room, generation.samples
+                next(self._clients),
+                self.config,
+                self.tokenizer,
+                prompt_token_ids,
+                self.max_model_length,
+                generation.samples,
             )
             seconds = time.monotonic() - started
         samples = tuple(
