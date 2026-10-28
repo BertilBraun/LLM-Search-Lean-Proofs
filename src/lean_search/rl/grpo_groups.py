@@ -1,74 +1,45 @@
-"""GRPO groups from labelled search graphs: the policy samples of one expanded node with their reward components."""
+"""GRPO groups at proof-graph nodes: each policy sample's tactics with their rewards R = (1 − λ) · G + λ · L."""
 
-import math
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
-from enum import StrEnum
+from dataclasses import dataclass
 
 from lean_search.search.graph_labels import EdgeKind, EdgeLabel, GraphLabels, NodeClass
 from lean_search.search.records import TreeRecord
-from lean_search.search.tree import FailureKind, NodeStatus, StepSource
-from lean_search.value.graph_targets import TargetSource, ValueEstimate, ValueTarget
-
-
-class RewardMode(StrEnum):
-    # r_local + beta * G.
-    DENSE = "dense"
-    # The control run: only G from the proof graph (1 on it, 0 elsewhere).
-    OUTCOME_ONLY = "outcome_only"
+from lean_search.search.tactic_labels import TacticLabel, TacticOutcome
+from lean_search.search.tree import StepSource
+from lean_search.value.graph_targets import ValueEstimate, value_part
 
 
 @dataclass(frozen=True)
 class RewardConfig:
-    mode: RewardMode = RewardMode.DENSE
-    # beta: large enough that the global term dominates whenever it is known.
-    global_weight: float = 4.0
-    lean_error_reward: float = -1.0
-    # A sample without a usable block, e.g. a repetition loop cut off at the token cap.
-    unparsed_sample_reward: float = -1.0
-    heartbeat_timeout_reward: float = -1.0
-    wall_clock_timeout_reward: float = -1.0
-    no_progress_reward: float = 0.0
-    already_seen_reward: float = 0.0
-    # Times h(parent) - h(state reached).
-    shaping_weight: float = 0.1
-    # Per goal fewer than the parent's.
+    # λ: the local term's share of every tactic's reward.
+    local_share: float = 0.15
+    # L of the first failing tactic (errors and timeouts) and of a sample without a usable block.
+    failure_local: float = -1.0
+    # L of a tactic without progress or adding only redundant hypotheses.
+    no_progress_local: float = -0.5
+    # L per goal a tactic on the proof graph closes.
     goal_closed_bonus: float = 0.1
-    # G on the proof graph is 1 + shorter_proof_bonus / (1 + remaining steps of the state reached).
-    shorter_proof_bonus: float = 0.0
-    # Expanded off-graph states get their value part q (averaged over expanded descendants) as G once a value model
-    # passed the gate; 0 before.
-    use_backed_up_values: bool = False
+    # μ: an expanded off-graph state earns G = μ · q, q its value part; 0 until a value model passed the gate.
+    value_share: float = 0.0
 
 
 @dataclass(frozen=True)
-class RewardComponents:
-    failure: float
-    no_progress: float
-    already_seen: float
-    shaping: float
-    goals_closed: float
-    # G, before the factor beta.
-    global_value: float
+class RewardParts:
+    # (1 − λ) · G and λ · L.
+    global_part: float
+    local_part: float
 
     @property
-    def local(self) -> float:
-        return self.failure + self.no_progress + self.already_seen + self.shaping + self.goals_closed
+    def total(self) -> float:
+        return self.global_part + self.local_part
 
 
 @dataclass(frozen=True)
-class TokenCredit:
-    """Inputs for per-token advantages: tactics before `first_failing_tactic` reach `prefix_state_id`."""
-
-    applied_tactics: int
-    total_tactics: int
-    # The index of the first failing top-level tactic; None when the block ran completely.
-    first_failing_tactic: int | None
-    prefix_state_id: int | None
-    # The reward of the valid prefix as if the sample had ended there; None without a prefix.
-    prefix_reward: float | None
-    # The components behind `prefix_reward`.
-    prefix_components: RewardComponents | None = None
+class TacticReward:
+    label: TacticLabel
+    # None for unknown and masked tactics, which earn nothing and stay out of the score.
+    parts: RewardParts | None
 
 
 @dataclass(frozen=True)
@@ -78,10 +49,21 @@ class GroupSample:
     edge_ids: tuple[int, ...]
     multiplicity: int
     kind: EdgeKind
-    target_id: int | None
-    components: RewardComponents
-    reward: float
-    credit: TokenCredit
+    tactics: tuple[TacticReward, ...]
+
+    @property
+    def known(self) -> list[RewardParts]:
+        return [tactic.parts for tactic in self.tactics if tactic.parts is not None]
+
+    @property
+    def score(self) -> float | None:
+        """The mean reward of the tactics with a known reward."""
+        known = self.known
+        return sum(parts.total for parts in known) / len(known) if known else None
+
+    @property
+    def complete(self) -> bool:
+        return all(tactic.label not in (TacticLabel.FAILING, TacticLabel.MASKED) for tactic in self.tactics)
 
 
 @dataclass(frozen=True)
@@ -89,185 +71,90 @@ class PolicyGroup:
     problem_name: str
     node_id: int
     goals: tuple[str, ...]
-    node_class: NodeClass
-    # False when the expansion was cut off by the budget or stopped at a proof.
-    complete: bool
     samples: tuple[GroupSample, ...]
 
     @property
     def sample_count(self) -> int:
         return sum(sample.multiplicity for sample in self.samples)
 
-    @property
-    def mean_reward(self) -> float:
-        return sum(sample.reward * sample.multiplicity for sample in self.samples) / self.sample_count
 
-    @property
-    def has_mixed_rewards(self) -> bool:
-        return len({sample.reward for sample in self.samples}) > 1
-
-
-def global_value(target_id: int, labels: GraphLabels, backed_up: Mapping[int, float], config: RewardConfig) -> float:
-    match labels.node_classes[target_id]:
-        case NodeClass.PROOF_GRAPH:
-            if config.mode == RewardMode.OUTCOME_ONLY:
-                return 1.0
-            steps = labels.remaining_steps[target_id]
-            assert steps is not None
-            return 1.0 + config.shorter_proof_bonus / (1 + steps)
-        case NodeClass.EXPANDED_OFF_GRAPH if config.use_backed_up_values and config.mode == RewardMode.DENSE:
-            return backed_up.get(target_id, 0.0)
-        case _:
-            return 0.0
-
-
-def failure_reward(edge: EdgeLabel, config: RewardConfig) -> float:
-    if edge.effective_kind == EdgeKind.UNVERIFIED_PROOF:
-        return config.lean_error_reward
-    match edge.failure_kind:
-        case None:
-            return 0.0
-        case FailureKind.HEARTBEAT_TIMEOUT:
-            return config.heartbeat_timeout_reward
-        case FailureKind.WALL_CLOCK_TIMEOUT:
-            return config.wall_clock_timeout_reward
-        case FailureKind.UNPARSED:
-            return config.unparsed_sample_reward
-        case FailureKind.ERROR | FailureKind.FORBIDDEN | FailureKind.UNKNOWN_IDENTIFIER | FailureKind.REPL_FAILURE:
-            return config.lean_error_reward
-
-
-def shaping(parent_id: int, target_id: int, estimates: Sequence[ValueEstimate | None], config: RewardConfig) -> float:
-    parent = estimates[parent_id]
-    target = estimates[target_id]
-    if parent is None or target is None:
+def off_graph_value(
+    node_id: int | None, labels: GraphLabels, estimates: Sequence[ValueEstimate | None], config: RewardConfig
+) -> float:
+    """G = μ · q of an expanded off-graph state: q averages its expanded descendants, else its own estimate."""
+    if node_id is None or not config.value_share:
         return 0.0
-    return config.shaping_weight * (parent.remaining_steps - target.remaining_steps)
+    estimate = value_part(node_id, labels.expanded_descendants.get(node_id, ()), estimates, None)
+    return 0.0 if estimate is None else config.value_share * estimate.proof_probability
 
 
-def sample_components(
-    edge: EdgeLabel,
-    record: TreeRecord,
-    labels: GraphLabels,
-    estimates: Sequence[ValueEstimate | None],
-    backed_up: Mapping[int, float],
-    config: RewardConfig,
-) -> tuple[RewardComponents, RewardComponents | None]:
-    """The sample's components and those of its valid prefix alone (None when no state was reached)."""
-    if config.mode == RewardMode.OUTCOME_ONLY:
-        if edge.target_id is None or edge.effective_kind == EdgeKind.UNVERIFIED_PROOF:
-            return RewardComponents(0.0, 0.0, 0.0, 0.0, 0.0, 0.0), None
-        reached = 0.0 if edge.effective_kind.is_no_progress else global_value(edge.target_id, labels, backed_up, config)
-        prefix = RewardComponents(0.0, 0.0, 0.0, 0.0, 0.0, reached)
-        return RewardComponents(0.0, 0.0, 0.0, 0.0, 0.0, 0.0 if edge.failure_kind is not None else reached), prefix
-    failure = failure_reward(edge, config)
-    if edge.target_id is None or edge.effective_kind == EdgeKind.UNVERIFIED_PROOF:
-        return RewardComponents(failure, 0.0, 0.0, 0.0, 0.0, 0.0), None
-    no_progress = edge.effective_kind.is_no_progress
-    parent_goals = len(record.nodes[edge.parent_id].goals)
-    target_goals = len(record.nodes[edge.target_id].goals)
-    prefix = RewardComponents(
-        failure=0.0,
-        no_progress=config.no_progress_reward if no_progress else 0.0,
-        already_seen=config.already_seen_reward
-        if edge.effective_kind in (EdgeKind.SIBLING_STATE, EdgeKind.TRANSPOSITION)
-        else 0.0,
-        shaping=shaping(edge.parent_id, edge.target_id, estimates, config),
-        goals_closed=0.0 if no_progress else config.goal_closed_bonus * max(0, parent_goals - target_goals),
-        global_value=0.0 if no_progress else global_value(edge.target_id, labels, backed_up, config),
-    )
-    return replace(prefix, failure=failure), prefix
+def reward_parts(global_value: float, local_value: float, config: RewardConfig) -> RewardParts:
+    local = min(1.0, max(-1.0, local_value))
+    return RewardParts((1 - config.local_share) * global_value, config.local_share * local)
 
 
-def total_reward(components: RewardComponents, config: RewardConfig) -> float:
-    if config.mode == RewardMode.OUTCOME_ONLY:
-        return components.global_value
-    return components.local + config.global_weight * components.global_value
+def tactic_reward(outcome: TacticOutcome, config: RewardConfig, off_graph_global: float = 0.0) -> TacticReward:
+    """`off_graph_global`: G of an off-graph tactic's state (`off_graph_value`)."""
+    match outcome.label:
+        case TacticLabel.PROOF_GRAPH:
+            parts = reward_parts(1.0, config.goal_closed_bonus * outcome.goals_closed, config)
+        case TacticLabel.OFF_GRAPH:
+            parts = reward_parts(off_graph_global, 0.0, config)
+        case TacticLabel.NO_PROGRESS | TacticLabel.REDUNDANT_HYPOTHESIS:
+            parts = reward_parts(0.0, config.no_progress_local, config)
+        case TacticLabel.FAILING:
+            parts = reward_parts(0.0, config.failure_local, config)
+        case TacticLabel.UNKNOWN | TacticLabel.MASKED:
+            parts = None
+    return TacticReward(outcome.label, parts)
 
 
 def group_sample(
     edges: Sequence[EdgeLabel],
-    record: TreeRecord,
+    outcomes: Sequence[TacticOutcome],
     labels: GraphLabels,
     estimates: Sequence[ValueEstimate | None],
-    backed_up: Mapping[int, float],
     config: RewardConfig,
 ) -> GroupSample:
-    edge = edges[0]
-    components, prefix = sample_components(edge, record, labels, estimates, backed_up, config)
     return GroupSample(
-        text=edge.text.strip(),
-        edge_ids=tuple(member.edge_id for member in edges),
-        multiplicity=sum(member.sample_count for member in edges),
-        kind=edge.effective_kind,
-        target_id=edge.target_id,
-        components=components,
-        reward=total_reward(components, config),
-        credit=TokenCredit(
-            applied_tactics=edge.applied_tactics,
-            total_tactics=edge.total_tactics,
-            first_failing_tactic=None if edge.failure_kind is None else edge.applied_tactics,
-            prefix_state_id=edge.target_id,
-            prefix_reward=None if prefix is None else total_reward(prefix, config),
-            prefix_components=prefix,
+        text=edges[0].text.strip(),
+        edge_ids=tuple(edge.edge_id for edge in edges),
+        multiplicity=sum(edge.sample_count for edge in edges),
+        kind=edges[0].effective_kind,
+        tactics=tuple(
+            tactic_reward(
+                outcome,
+                config,
+                off_graph_value(outcome.node_id, labels, estimates, config)
+                if outcome.label == TacticLabel.OFF_GRAPH
+                else 0.0,
+            )
+            for outcome in outcomes
         ),
     )
-
-
-def backed_up_values(targets: Sequence[ValueTarget]) -> dict[int, float]:
-    """The value part q of off-graph targets averaged over expanded descendants."""
-    return {
-        target.node_id: target.value_part.proof_probability
-        for target in targets
-        if target.source == TargetSource.OFF_GRAPH and target.expanded_descendants and target.value_part is not None
-    }
 
 
 def policy_groups(
     record: TreeRecord,
     labels: GraphLabels,
+    tactics: Mapping[int, Sequence[TacticOutcome]],
     estimates: Sequence[ValueEstimate | None],
-    targets: Sequence[ValueTarget],
     config: RewardConfig,
 ) -> list[PolicyGroup]:
-    """One group per expanded node with policy samples; infrastructure failures are left out."""
-    backed_up = backed_up_values(targets)
+    """One group per expanded proof-graph node with policy samples; `tactics` from `policy_tactics`."""
     groups = []
     for node_id, edges in sorted(labels.edges_by_parent().items()):
+        if labels.node_classes[node_id] != NodeClass.PROOF_GRAPH:
+            continue
         by_text: dict[str, list[EdgeLabel]] = {}
         for edge in edges:
             if edge.source == StepSource.POLICY and edge.effective_kind != EdgeKind.INFRASTRUCTURE_FAILURE:
                 by_text.setdefault(edge.text.strip(), []).append(edge)
         if not by_text:
             continue
-        node = record.nodes[node_id]
-        groups.append(
-            PolicyGroup(
-                problem_name=record.problem_name,
-                node_id=node_id,
-                goals=node.goals,
-                node_class=labels.node_classes[node_id],
-                complete=node.status != NodeStatus.OPEN and not is_proving_expansion(edges, labels),
-                samples=tuple(
-                    group_sample(members, record, labels, estimates, backed_up, config) for members in by_text.values()
-                ),
-            )
+        samples = tuple(
+            group_sample(members, tactics[members[0].executed_edge_id], labels, estimates, config)
+            for members in by_text.values()
         )
+        groups.append(PolicyGroup(record.problem_name, node_id, record.nodes[node_id].goals, samples))
     return groups
-
-
-def is_proving_expansion(edges: Sequence[EdgeLabel], labels: GraphLabels) -> bool:
-    return any(
-        edge.kind == EdgeKind.NEW_STATE and edge.target_id is not None and labels.remaining_steps[edge.target_id] == 0
-        for edge in edges
-    )
-
-
-def normalized_advantages(group: PolicyGroup) -> tuple[float, ...]:
-    """Reward minus the group mean over its samples, divided by the standard deviation; all 0 without spread."""
-    mean = group.mean_reward
-    variance = sum(sample.multiplicity * (sample.reward - mean) ** 2 for sample in group.samples) / group.sample_count
-    if variance == 0:
-        return tuple(0.0 for _ in group.samples)
-    deviation = math.sqrt(variance)
-    return tuple((sample.reward - mean) / deviation for sample in group.samples)

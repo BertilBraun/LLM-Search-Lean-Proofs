@@ -3,10 +3,11 @@ from pathlib import Path
 
 import pytest
 
-from lean_search.policy.prompts import render_prompt
+from lean_search.policy.prompts import END_OF_TURN, render_prompt
 from lean_search.rl.policy_data import ExpansionTexts, SampledCompletion
 from lean_search.rl.token_credit import CharacterSpan
 from lean_search.search import StepSource, TreeRecord
+from lean_search.search.texts import SampledTokens
 
 # Every character of the prompts and completions in these tests has a code point under this.
 VOCABULARY_SIZE = 9000
@@ -27,6 +28,9 @@ class CharacterTokenizer:
 
     def encode(self, text: str, *, add_special_tokens: bool) -> list[int]:
         return [DEAD_TOKEN] if text == "dead" else [ord(character) for character in text]
+
+    def decode(self, token_ids: Sequence[int], *, skip_special_tokens: bool) -> str:
+        return "".join(chr(token) for token in token_ids)
 
     def __call__(
         self, text: str, *, add_special_tokens: bool, return_offsets_mapping: bool
@@ -56,9 +60,12 @@ def save_tiny_model(directory: Path) -> Path:
 
 
 def sampled(edge_id: int, explanation: str, block: str) -> SampledCompletion:
+    """One tactic per block, with token ids (one per character) and log-probabilities as the search records them."""
     text = f"{explanation}\n\n```lean\n{block}\n```"
     start = text.index("```lean\n") + len("```lean\n")
-    return SampledCompletion(edge_id, text, (CharacterSpan(start, start + len(block)),))
+    token_ids = tuple(ord(character) for character in text + END_OF_TURN)
+    tokens = SampledTokens(token_ids, tuple(-1.0 for _ in token_ids))
+    return SampledCompletion(edge_id, text, (CharacterSpan(start, start + len(block)),), tokens=tokens)
 
 
 def expansion_texts(record: TreeRecord) -> list[ExpansionTexts]:
@@ -72,5 +79,5 @@ def expansion_texts(record: TreeRecord) -> list[ExpansionTexts]:
         )
         if completions:
             prompt = render_prompt(tokenizer, node.goals, visible=True)
-            texts.append(ExpansionTexts(record.problem_name, node.node_id, prompt, completions))
+            texts.append(ExpansionTexts(record.problem_name, node.node_id, prompt, completions, temperature=0.8))
     return texts

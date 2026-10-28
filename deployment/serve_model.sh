@@ -7,7 +7,8 @@
 # The model is served under <name>. Prefix caching and LoRA are on; adapters are loaded at runtime through
 # POST /v1/load_lora_adapter and then requested by their adapter name. Sampling defaults are vLLM's, not the
 # model's generation_config.json, so every request states its own parameters. Later arguments override earlier
-# ones, e.g. --no-enable-lora for a merged model.
+# ones, e.g. --no-enable-lora for a merged model; GRPO policy servers add --logprobs-mode processed_logprobs so the
+# recorded log-probabilities are those of the tempered distribution the trainer compares against (deployment/README.md).
 # Log: $LEAN_SEARCH_RUNS/servers/<name>.log, process group id: <name>.pid. Stop with stop_model.sh <name>.
 # Overrides: MAX_MODEL_LEN (8192), GPU_MEMORY_UTILIZATION (0.90), MAX_NUM_SEQS and MAX_NUM_BATCHED_TOKENS (vLLM
 # defaults), MAX_LORA_RANK (64), MAX_LORAS (4), SLEEP_MODE=1 (--enable-sleep-mode, for /sleep and /wake_up),

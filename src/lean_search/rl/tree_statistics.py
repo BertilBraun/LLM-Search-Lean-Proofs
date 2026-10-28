@@ -1,13 +1,15 @@
-"""Per-tree counts of the labelled search graph, its value targets and GRPO groups, summable into run totals."""
+"""Per-tree counts of the labelled search graph, its tactics, proofs, value targets and GRPO groups, summable."""
 
 import dataclasses
 from collections import Counter
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
-from lean_search.rl.grpo_groups import PolicyGroup, RewardConfig
-from lean_search.search.graph_labels import EdgeKind, EdgeLabel, GraphLabels, NodeClass
-from lean_search.search.records import TreeRecord
+from lean_search.rl.advantages import CreditMode, group_advantages
+from lean_search.rl.grpo_groups import PolicyGroup
+from lean_search.search.graph_labels import EdgeKind, EdgeLabel, GraphLabels, NodeClass, is_verified_proof
+from lean_search.search.records import NodeRecord, TreeRecord
+from lean_search.search.tactic_labels import TacticLabelCounts, TacticOutcome
 from lean_search.search.tree import NodeStatus, StepSource
 from lean_search.value.graph_targets import TargetSource, ValueTarget
 
@@ -100,15 +102,25 @@ class GraphStatistics:
     off_graph_subtree_sizes: SizeHistogram
     # Expanded nodes including the node itself, for every expanded node.
     expanded_subtree_sizes: SizeHistogram
+    # Tactics of every policy sample (infrastructure failures left out) and of the groups' samples, sample-weighted.
+    policy_tactics: TacticLabelCounts
+    group_tactics: TacticLabelCounts
     groups: int
     group_samples: int
-    groups_with_mixed_rewards: int
-    outcome_groups_with_mixed_rewards: int
-    local_reward: float
+    # Groups with a non-zero per-tactic advantage.
+    groups_with_signal: int
+    # Sums of (1 − λ) · G and λ · L over the groups' known tactics, sample-weighted.
     global_reward: float
-    # Positive local reward on samples whose state reached is off the proof graph.
-    positive_local_reward: float
-    positive_local_reward_off_proof_graph: float
+    local_reward: float
+    # Verified proofs, and their tactics and blocks along the tree path that found them.
+    proofs: int
+    proof_tactics: int
+    proof_blocks: int
+    # Expansions after the first proof, the proofs and proof-graph nodes they created, and exploration draws.
+    harvest_expansions: int
+    harvest_proofs: int
+    harvest_proof_graph_nodes: int
+    exploration_expansions: int
 
 
 @dataclass(frozen=True)
@@ -129,14 +141,34 @@ def is_into_proof_graph(edge: EdgeLabel, labels: GraphLabels) -> bool:
     )
 
 
+def path_tactics(record: TreeRecord, node: NodeRecord) -> int:
+    tactics = 0
+    while node.edge_id is not None:
+        tactics += record.edges[node.edge_id].applied_tactics
+        assert node.parent_id is not None
+        node = record.nodes[node.parent_id]
+    return tactics
+
+
+def is_harvested(record: TreeRecord, node: NodeRecord) -> bool:
+    """Created by one of the expansions after the first proof."""
+    accounting = record.result.accounting
+    first_harvest = accounting.expansions - accounting.harvest_expansions
+    return (
+        accounting.harvest_expansions > 0
+        and node.edge_id is not None
+        and record.edges[node.edge_id].expansion_index >= first_harvest
+    )
+
+
 def graph_statistics(
     record: TreeRecord,
     labels: GraphLabels,
     targets: Sequence[ValueTarget],
+    tactics: Mapping[int, Sequence[TacticOutcome]],
     groups: Sequence[PolicyGroup],
-    outcome_groups: Sequence[PolicyGroup],
-    reward_config: RewardConfig,
 ) -> GraphStatistics:
+    """`tactics` from `policy_tactics`, `groups` from `policy_groups`."""
     on_path = {node.node_id for node in record.nodes if node.status == NodeStatus.PROVED}
     policy = [edge for edge in labels.edges if edge.source == StepSource.POLICY]
     into_proof = [edge for edge in labels.edges if is_into_proof_graph(edge, labels)]
@@ -147,11 +179,16 @@ def graph_statistics(
     )
     off_graph = [target for target in targets if target.source == TargetSource.OFF_GRAPH]
     samples = [sample for group in groups for sample in group.samples]
-    local = [sample.components.local * sample.multiplicity for sample in samples]
-    off_graph_samples = [
-        sample.target_id is None or labels.node_classes[sample.target_id] != NodeClass.PROOF_GRAPH for sample in samples
+    known = [(parts, sample.multiplicity) for sample in samples for parts in sample.known]
+    policy_samples = [
+        edge
+        for edge in policy
+        if edge.effective_kind != EdgeKind.INFRASTRUCTURE_FAILURE
+        for _ in range(edge.sample_count)
     ]
+    proofs = [node for node in record.nodes if is_verified_proof(node)]
     proof_graph_nodes = class_count(labels, NodeClass.PROOF_GRAPH)
+    accounting = record.result.accounting
     return GraphStatistics(
         trees=1,
         solved_trees=int(record.result.proved),
@@ -186,24 +223,33 @@ def graph_statistics(
         expanded_subtree_sizes=SizeHistogram.of(
             1 + len(descendants) for descendants in labels.expanded_descendants.values()
         ),
+        policy_tactics=TacticLabelCounts.of(
+            outcome.label for edge in policy_samples for outcome in tactics[edge.executed_edge_id]
+        ),
+        group_tactics=TacticLabelCounts.of(
+            tactic.label for sample in samples for tactic in sample.tactics for _ in range(sample.multiplicity)
+        ),
         groups=len(groups),
         group_samples=sum(group.sample_count for group in groups),
-        groups_with_mixed_rewards=sum(group.has_mixed_rewards for group in groups),
-        outcome_groups_with_mixed_rewards=sum(group.has_mixed_rewards for group in outcome_groups),
-        local_reward=sum(local),
-        global_reward=sum(
-            reward_config.global_weight * sample.components.global_value * sample.multiplicity for sample in samples
+        groups_with_signal=sum(group_advantages(group).has_signal(CreditMode.PER_TACTIC) for group in groups),
+        global_reward=sum(parts.global_part * weight for parts, weight in known),
+        local_reward=sum(parts.local_part * weight for parts, weight in known),
+        proofs=len(proofs),
+        proof_tactics=sum(path_tactics(record, node) for node in proofs),
+        proof_blocks=sum(node.depth for node in proofs),
+        harvest_expansions=accounting.harvest_expansions,
+        harvest_proofs=sum(is_harvested(record, node) for node in proofs),
+        harvest_proof_graph_nodes=sum(
+            node_class == NodeClass.PROOF_GRAPH and is_harvested(record, node)
+            for node, node_class in zip(record.nodes, labels.node_classes, strict=True)
         ),
-        positive_local_reward=sum(max(0.0, value) for value in local),
-        positive_local_reward_off_proof_graph=sum(
-            max(0.0, value) for value, off in zip(local, off_graph_samples, strict=True) if off
-        ),
+        exploration_expansions=accounting.exploration_expansions,
     )
 
 
 def summed(first: object, second: object) -> object:
     match first:
-        case EdgeKindCounts() | SizeHistogram() | GraphStatistics():
+        case EdgeKindCounts() | TacticLabelCounts() | SizeHistogram() | GraphStatistics():
             return type(first)(
                 **{
                     field.name: summed(getattr(first, field.name), getattr(second, field.name))

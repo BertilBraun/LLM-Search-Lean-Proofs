@@ -1,149 +1,89 @@
-"""GRPO rewards mixed AlphaZero-style from the group samples' components, and their group-relative advantages."""
+"""Group-relative advantages: each known tactic's reward and each sample's score minus the group's baseline."""
 
-import math
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from enum import StrEnum
 
-from lean_search.rl.grpo_groups import (
-    GroupSample,
-    PolicyGroup,
-    RewardComponents,
-    RewardConfig,
-    RewardMode,
-    total_reward,
-)
+from lean_search.rl.grpo_groups import GroupSample, PolicyGroup, RewardParts
+
+# Advantages below this count as zero when deciding whether a group carries a signal.
+ZERO_ADVANTAGE = 1e-12
 
 
-class AdvantageScale(StrEnum):
-    # Mean-centering only (Dr. GRPO): local-only groups keep advantages proportional to the local share.
-    NONE = "none"
-    # GRPO's division by the group's reward standard deviation.
-    STANDARD_DEVIATION = "standard_deviation"
-
-
-@dataclass(frozen=True)
-class AdvantageConfig:
-    # lambda in reward = (1 - lambda) * G + lambda * clip(L, -1, 1).
-    local_share: float = 0.15
-    scale: AdvantageScale = AdvantageScale.NONE
-    # With STANDARD_DEVIATION: the smallest divisor, against near-identical rewards turning into large advantages.
-    standard_deviation_floor: float = 0.1
-
-
-@dataclass(frozen=True)
-class MixedReward:
-    # G in [0, 1] (slightly more for short proofs with RewardConfig.shorter_proof_bonus).
-    global_value: float
-    # L clipped to [-1, 1]; 0 in the outcome-only control.
-    local: float
-    total: float
+class CreditMode(StrEnum):
+    # Tactic tokens get their tactic's reward minus the baseline, the explanation the sample's score minus it.
+    PER_TACTIC = "per_tactic"
+    # Every sampled token gets the sample's score minus the baseline (the single-step comparison).
+    SEQUENCE = "sequence"
 
 
 @dataclass(frozen=True)
 class SampleAdvantages:
-    # (reward - group mean) / scale.
-    overall: float
-    # (prefix reward - group mean) / scale; None when no tactic of the block reached a state.
-    prefix: float | None
-    # (reward - prefix reward) / scale, the overall advantage without a prefix; None when the block ran completely.
-    error: float | None
+    # Score minus baseline; None without a known score.
+    sequence: float | None
+    # Per executed tactic: reward minus baseline; None for unknown and masked tactics.
+    tactics: tuple[float | None, ...]
+    # The closing fence and end of turn: the last tactic's advantage after a complete block, else None.
+    closing: float | None
 
 
 @dataclass(frozen=True)
 class GroupAdvantages:
-    rewards: tuple[MixedReward, ...]
-    advantages: tuple[SampleAdvantages, ...]
-    scale: float
-    # Sample-weighted sums of |global part| and |local part| of the overall advantages.
+    # The multiplicity-weighted mean score of the samples with a known score.
+    baseline: float | None
+    samples: tuple[SampleAdvantages, ...]
+    # Multiplicity-weighted sums over known tactics of |(1 − λ)(G − b_G)| and |λ(L − b_L)|, which add up to R − b.
     global_magnitude: float
     local_magnitude: float
 
-    @property
-    def has_mixed_rewards(self) -> bool:
-        return len({reward.total for reward in self.rewards}) > 1
-
-    @property
-    def has_global_signal(self) -> bool:
-        return len({reward.global_value for reward in self.rewards}) > 1
-
-
-def mixed_reward(components: RewardComponents, local_share: float) -> MixedReward:
-    local = min(1.0, max(-1.0, components.local))
-    global_value = components.global_value
-    return MixedReward(global_value, local, (1 - local_share) * global_value + local_share * local)
-
-
-def prefix_components(sample: GroupSample, config: RewardConfig) -> RewardComponents | None:
-    """The valid prefix's components: the sample's without the failure (outcome-only: G of the state reached)."""
-    prefix_reward = sample.credit.prefix_reward
-    if prefix_reward is None:
-        return None
-    if sample.credit.prefix_components is not None:
-        return sample.credit.prefix_components
-    match config.mode:
-        case RewardMode.DENSE:
-            prefix = replace(sample.components, failure=0.0)
-        case RewardMode.OUTCOME_ONLY:
-            prefix = RewardComponents(0.0, 0.0, 0.0, 0.0, 0.0, prefix_reward)
-    assert math.isclose(total_reward(prefix, config), prefix_reward, abs_tol=1e-9), (sample.text, prefix_reward)
-    return prefix
+    def has_signal(self, mode: CreditMode) -> bool:
+        values = [sample.sequence for sample in self.samples]
+        if mode == CreditMode.PER_TACTIC:
+            values += [value for sample in self.samples for value in sample.tactics]
+        return any(value is not None and abs(value) > ZERO_ADVANTAGE for value in values)
 
 
 def weighted_mean(values: Sequence[float], weights: Sequence[int]) -> float:
     return sum(value * weight for value, weight in zip(values, weights, strict=True)) / sum(weights)
 
 
-def group_advantages(group: PolicyGroup, reward_config: RewardConfig, config: AdvantageConfig) -> GroupAdvantages:
-    rewards = tuple(mixed_reward(sample.components, config.local_share) for sample in group.samples)
-    multiplicities = [sample.multiplicity for sample in group.samples]
-    mean = weighted_mean([reward.total for reward in rewards], multiplicities)
-    match config.scale:
-        case AdvantageScale.NONE:
-            scale = 1.0
-        case AdvantageScale.STANDARD_DEVIATION:
-            variance = weighted_mean([(reward.total - mean) ** 2 for reward in rewards], multiplicities)
-            scale = max(math.sqrt(variance), config.standard_deviation_floor)
-    global_mean = weighted_mean([reward.global_value for reward in rewards], multiplicities)
-    local_mean = weighted_mean([reward.local for reward in rewards], multiplicities)
-    global_parts = [abs((1 - config.local_share) * (reward.global_value - global_mean)) / scale for reward in rewards]
-    local_parts = [abs(config.local_share * (reward.local - local_mean)) / scale for reward in rewards]
-    return GroupAdvantages(
-        rewards=rewards,
-        advantages=tuple(
-            sample_advantages(sample, reward, mean, scale, reward_config, config)
-            for sample, reward in zip(group.samples, rewards, strict=True)
-        ),
-        scale=scale,
-        global_magnitude=sum(part * weight for part, weight in zip(global_parts, multiplicities, strict=True)),
-        local_magnitude=sum(part * weight for part, weight in zip(local_parts, multiplicities, strict=True)),
+def mean_parts(known: Sequence[RewardParts]) -> RewardParts:
+    return RewardParts(
+        sum(parts.global_part for parts in known) / len(known), sum(parts.local_part for parts in known) / len(known)
     )
 
 
-def sample_advantages(
-    sample: GroupSample,
-    reward: MixedReward,
-    mean: float,
-    scale: float,
-    reward_config: RewardConfig,
-    config: AdvantageConfig,
-) -> SampleAdvantages:
-    overall = (reward.total - mean) / scale
-    components = prefix_components(sample, reward_config)
-    if components is None:
-        prefix_total = None
-        prefix = None
-    else:
-        prefix_total = mixed_reward(components, config.local_share).total
-        prefix = (prefix_total - mean) / scale
-    if sample.credit.first_failing_tactic is None:
-        return SampleAdvantages(overall, prefix, None)
-    error = overall if prefix_total is None else (reward.total - prefix_total) / scale
-    return SampleAdvantages(overall, prefix, error)
+def sample_advantages(sample: GroupSample, baseline: float | None) -> SampleAdvantages:
+    score = sample.score
+    if baseline is None:
+        return SampleAdvantages(None, tuple(None for _ in sample.tactics), None)
+    tactics = tuple(None if tactic.parts is None else tactic.parts.total - baseline for tactic in sample.tactics)
+    return SampleAdvantages(
+        None if score is None else score - baseline,
+        tactics,
+        tactics[-1] if sample.complete and tactics else None,
+    )
+
+
+def group_advantages(group: PolicyGroup) -> GroupAdvantages:
+    scored = [(sample, mean_parts(sample.known)) for sample in group.samples if sample.known]
+    if not scored:
+        return GroupAdvantages(None, tuple(sample_advantages(sample, None) for sample in group.samples), 0.0, 0.0)
+    weights = [sample.multiplicity for sample, _ in scored]
+    global_baseline = weighted_mean([parts.global_part for _, parts in scored], weights)
+    local_baseline = weighted_mean([parts.local_part for _, parts in scored], weights)
+    baseline = global_baseline + local_baseline
+    known = [(parts, sample.multiplicity) for sample, _ in scored for parts in sample.known]
+    return GroupAdvantages(
+        baseline=baseline,
+        samples=tuple(sample_advantages(sample, baseline) for sample in group.samples),
+        global_magnitude=sum(abs(parts.global_part - global_baseline) * weight for parts, weight in known),
+        local_magnitude=sum(abs(parts.local_part - local_baseline) * weight for parts, weight in known),
+    )
 
 
 def local_share_of_advantages(groups: Sequence[GroupAdvantages]) -> float:
-    """The fraction of the summed |advantage| that comes from the local term."""
+    """The fraction of the summed |tactic advantage| that comes from the local term."""
     local = sum(group.local_magnitude for group in groups)
     total = local + sum(group.global_magnitude for group in groups)
     return local / total if total else 0.0

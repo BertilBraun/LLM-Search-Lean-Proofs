@@ -11,12 +11,13 @@ pytest.importorskip("transformers")
 pytest.importorskip("peft")
 
 from lean_search.expert_iteration.serving import LoopPaths, ModelVersion, record_published  # noqa: E402
-from lean_search.rl.grpo_groups import RewardMode  # noqa: E402
+from lean_search.rl.advantages import CreditMode  # noqa: E402
 from lean_search.rl.policy_trainer import GrpoConfig  # noqa: E402
 from lean_search.rl.training_phase import (  # noqa: E402
     PhaseInputs,
     PhaseOutcome,
     TrainingPhaseConfig,
+    grpo_phase_record,
     label_phase_data,
     publish_phase,
     run_training_phase,
@@ -51,8 +52,14 @@ def test_shipped_phase_configs_train_both_models(path: Path) -> None:
     assert config.policy is not None and config.value is not None
 
 
-def test_control_config_uses_the_outcome_only_reward() -> None:
-    assert load(CONFIG_DIRECTORY / "phase_outcome_only.toml").reward.mode == RewardMode.OUTCOME_ONLY
+def test_sequence_credit_config_differs_only_in_the_credit() -> None:
+    per_tactic = load(CONFIG_DIRECTORY / "phase.toml")
+    sequence = load(CONFIG_DIRECTORY / "phase_sequence_credit.toml")
+    assert per_tactic.policy is not None and sequence.policy is not None
+    expected = dataclasses.replace(
+        per_tactic.policy, data=dataclasses.replace(per_tactic.policy.data, credit=CreditMode.SEQUENCE)
+    )
+    assert sequence == dataclasses.replace(per_tactic, policy=expected)
 
 
 def phase_tree() -> TreeRecord:
@@ -70,7 +77,9 @@ def phase(tmp_path_factory: pytest.TempPathFactory) -> tuple[PhaseOutcome, Path]
     model = save_tiny_model(tmp_path_factory.mktemp("tiny") / "model")
     record = phase_tree()
     config = TrainingPhaseConfig(
-        policy=GrpoConfig(model=str(model), lora=LORA, optimization=OPTIMIZATION, scoring_micro_batch_tokens=65536),
+        policy=GrpoConfig(
+            model=str(model), lora=LORA, optimization=OPTIMIZATION, passes_per_phase=1, scoring_micro_batch_tokens=65536
+        ),
         value=GraphValueConfig(model=str(model), lora=LORA, optimization=OPTIMIZATION),
     )
     provenance = TreeProvenance("benchmark", SearchGuidance.VALUE_FREE, None, "")
@@ -94,6 +103,13 @@ def test_phase_writes_both_adapters_and_its_outcome(phase: tuple[PhaseOutcome, P
 def test_phase_trains_only_the_root_group_with_its_three_samples(phase: tuple[PhaseOutcome, Path]) -> None:
     outcome, _ = phase
     assert outcome.policy is not None and outcome.policy.data.sequences == 3 * 2
+
+
+def test_phase_record_for_the_dashboard(phase: tuple[PhaseOutcome, Path]) -> None:
+    outcome, _ = phase
+    assert outcome.policy is not None
+    record = grpo_phase_record(outcome.policy, sampling_seconds=600.0)
+    assert (record.groups_trained, record.tactics.proof_graph, record.tactics.failing) == (1, 1, 1)
 
 
 class RecordingPublisher:

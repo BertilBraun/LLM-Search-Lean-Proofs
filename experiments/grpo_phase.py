@@ -1,12 +1,13 @@
 """One search-tree GRPO training phase on one GPU: GRPO of the policy and/or the value model on labelled trees.
 
     python experiments/grpo_phase.py --config experiments/configs/grpo/phase.toml --trees runs/<run>/trees \
-        --texts runs/<run>/expansion_texts.jsonl --run-name grpo_phase_0001 [--part policy|value]
+        --texts runs/<run>/expansion_texts.jsonl --run-name grpo_phase_0001 [--part policy|value] \
+        [--metrics-run runs/<loop> --phase 12 --sampling-seconds 1500]
 
 Writes the adapters to $LEAN_SEARCH_CHECKPOINTS/<run-name>/{policy,value}/adapter, the step records next to them and
 the phase's outcome (data metrics, training results, the value gate) to phase.json there. The policy texts come from
 the tree records (`TreeRecord.expansions`) and any --texts files. The replay files and the value benchmark are
-optional.
+optional. With --metrics-run the policy outcome is appended to that run's dashboard metrics (the grpo family).
 """
 
 import argparse
@@ -18,9 +19,10 @@ from pathlib import Path
 import torch
 import transformers
 
+from lean_search.monitoring.store import LoopContext, MetricsWriter
 from lean_search.reasoning.dataset import read_examples as read_reasoning_examples
 from lean_search.rl.policy_data import read_expansion_texts
-from lean_search.rl.training_phase import PhaseInputs, TrainingPhaseConfig, run_training_phase
+from lean_search.rl.training_phase import PhaseInputs, TrainingPhaseConfig, grpo_phase_record, run_training_phase
 from lean_search.search import read_tree
 from lean_search.search.records import from_json_object
 from lean_search.training.math_data import read_solutions
@@ -41,6 +43,9 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--value-benchmark", type=Path, help="a value benchmark; without it no value model is accepted")
     parser.add_argument("--part", choices=("policy", "value"), help="train only this model")
     parser.add_argument("--run-name", required=True)
+    parser.add_argument("--metrics-run", type=Path, help="a loop run directory whose dashboard metrics get the phase")
+    parser.add_argument("--sampling-seconds", type=float, help="the search time behind the phase's trees")
+    parser.add_argument("--phase", type=int, help="the loop phase the metrics line belongs to")
     return parser.parse_args()
 
 
@@ -80,6 +85,9 @@ def main() -> None:
     print(f"{outcome.trees} trees, {outcome.groups} groups", flush=True)
     if outcome.policy is not None:
         print(f"policy: {outcome.policy.data}\n{outcome.policy.result}", flush=True)
+        if arguments.metrics_run is not None:
+            writer = MetricsWriter(arguments.metrics_run, LoopContext(phase=arguments.phase))
+            writer.write(grpo_phase_record(outcome.policy, arguments.sampling_seconds))
     if outcome.value is not None:
         accepted = "accepted" if outcome.value.accepted else "not accepted"
         print(f"value ({accepted}): {outcome.value.result}", flush=True)

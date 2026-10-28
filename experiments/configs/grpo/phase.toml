@@ -1,23 +1,21 @@
-# A search-tree GRPO phase (experiments/grpo_phase.py): the dense signal. Rewards mix AlphaZero-style,
-# (1 - 0.15) * G + 0.15 * clip(L, -1, 1), advantages are centred within each sibling group without dividing by its
-# standard deviation, and each policy token gets the credit of its part of the sample (explanation, valid prefix,
-# first failing tactic; the rest masked). The policy adapter applies to the merged starting policy (`model`), which
-# is also the KL reference; the loop fills in initial_adapter (the published adapters) per phase.
+# A search-tree GRPO phase (experiments/grpo_phase.py, DESIGN.md "Policy update: GRPO over sibling groups"). Groups
+# are the policy samples of expanded proof-graph nodes; every tactic earns R = (1 - 0.15) * G + 0.15 * L from the
+# state it reaches, a sample's score is the mean R of its known tactics, and advantages are R (tactic tokens) or the
+# score (explanation) minus the group's mean score, without dividing by a standard deviation. Every recorded sample
+# trains on its sampled tokens at the sampling temperature, two passes per phase. The policy adapter applies to the
+# merged starting policy (`model`), which is also the KL reference; the loop fills in initial_adapter per phase.
 
 [reward]
-mode = "dense"
-lean_error_reward = -1.0
-# Samples without a usable block (e.g. repetition loops cut off at the token cap) score like a Lean error.
-unparsed_sample_reward = -1.0
-heartbeat_timeout_reward = -1.0
-wall_clock_timeout_reward = -1.0
-no_progress_reward = -0.5
-already_seen_reward = 0.0
-shaping_weight = 0.1
+local_share = 0.15
+# L of the first failing tactic (errors and timeouts) and of a sample without a usable block (e.g. a repetition loop
+# cut off at the token cap).
+failure_local = -1.0
+# L of a tactic without progress (unchanged, back to an earlier state) or adding only redundant hypotheses.
+no_progress_local = -0.5
+# L per goal a proof-graph tactic closes.
 goal_closed_bonus = 0.1
-shorter_proof_bonus = 0.0
-# Off until a value model passed the gate.
-use_backed_up_values = false
+# mu: expanded off-graph states earn G = mu * q; 0.15 once a value model passed the gate.
+value_share = 0.0
 
 [value_targets]
 # y = (1 - mu) * z + mu * q per expanded state: z the concrete label (1 with exact steps on the proof graph, 0 off
@@ -40,6 +38,8 @@ half_weight_expanded_nodes = 4.0
 model = "/workspace/checkpoints/grpo_start/merged"
 initial_adapter = ""
 sequences_per_step = 64
+# Two passes if training time allows (the dashboard's training vs sampling time); 1 is allowed.
+passes_per_phase = 2
 warmup_steps = 5
 clip_low = 0.2
 clip_high = 0.28
@@ -48,9 +48,14 @@ reference = "starting_weights"
 normalization_tokens = 256
 replay_weight = 0.1
 replay_sequences_per_step = 8
-max_prompt_tokens = 2048
-max_completion_tokens = 1088
-credit = "per_token"
+# No length filter; a recorded sample longer than the servers' context is a bug.
+max_sequence_tokens = 8192
+
+[policy.data]
+# "sequence": every sampled token gets the sample's score minus the baseline (phase_sequence_credit.toml).
+credit = "per_tactic"
+# For records written before the sampling temperature was kept.
+default_temperature = 0.8
 
 [policy.lora]
 rank = 64
@@ -62,20 +67,11 @@ method = "lora"
 learning_rate = 1e-5
 minimum_learning_rate_ratio = 1.0
 max_gradient_norm = 1.0
-epochs = 1
 micro_batch_tokens = 16384
 gradient_checkpointing = true
 packing = true
 compile_layers = true
 seed = 0
-
-[policy.advantages]
-local_share = 0.15
-scale = "none"
-
-[policy.group_weights]
-global_signal_weight = 1.0
-local_only_weight = 1.0
 
 [policy_replay]
 lean_examples = 256

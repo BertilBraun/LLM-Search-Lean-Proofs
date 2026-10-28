@@ -52,6 +52,7 @@ class GraphBuilder:
         total_tactics: int = 1,
         repeat_of: int | None = None,
         sample_count: int = 1,
+        tactic_goals: tuple[tuple[str, ...], ...] = (),
     ) -> Edge:
         self.expand(parent)
         return self.tree.add_edge(
@@ -68,6 +69,7 @@ class GraphBuilder:
             failure=failure,
             repeat_of=repeat_of,
             sample_count=sample_count,
+            tactic_goals=tactic_goals,
         )
 
     def child(
@@ -80,6 +82,7 @@ class GraphBuilder:
         failure_after: int | None = None,
         sample_count: int = 1,
         tactics: int = 1,
+        tactic_goals: tuple[tuple[str, ...], ...] = (),
     ) -> Node:
         """`failure_after`: the block's first n tactics applied, then the next one failed; else `tactics` applied."""
         step = text or f"step {self.tree.next_node_id()}"
@@ -93,6 +96,7 @@ class GraphBuilder:
             applied_tactics=tactics if failure_after is None else failure_after,
             total_tactics=tactics if failure_after is None else failure_after + 2,
             sample_count=sample_count,
+            tactic_goals=tactic_goals,
         )
         child = self.tree.add_child(parent, edge.edge_id, step, source, -1.0, proof_state(*goals), 0.0, 0.0)
         child.value_estimate = value
@@ -105,6 +109,7 @@ class GraphBuilder:
         text: str | None = None,
         source: StepSource = StepSource.POLICY,
         tactics: int = 1,
+        tactic_goals: tuple[tuple[str, ...], ...] = (),
     ) -> Edge:
         return self.edge(
             parent,
@@ -114,6 +119,7 @@ class GraphBuilder:
             target_id=target.node_id,
             applied_tactics=tactics,
             total_tactics=tactics,
+            tactic_goals=tactic_goals,
         )
 
     def failure(

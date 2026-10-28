@@ -1,10 +1,11 @@
-"""Label recorded search trees as graphs and report edge kinds, the proof graph, value targets and GRPO groups.
+"""Label recorded search trees as graphs and report edge kinds, the proof graph, tactics, value targets and groups.
 
     python experiments/search_graph_report.py --trees runs/phase5_expansions_visible_student/trees \
         --output runs/search_graph_report_visible_student
 
 Reads <directory>/*.json.gz for each --trees directory; with --output writes summary.json (run totals and per-tree
-statistics) and README.md there. Search-time value estimates come from each node's recorded h.
+statistics) and README.md there. Search-time value estimates come from each node's recorded h. Trees written before
+`Edge.tactic_goals` know only each edge's final state (src/lean_search/rl/README.md, "Per-tactic labels").
 """
 
 import argparse
@@ -13,11 +14,12 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from lean_search.rl.grpo_groups import RewardConfig, RewardMode, policy_groups
+from lean_search.rl.grpo_groups import RewardConfig, policy_groups
 from lean_search.rl.tree_statistics import GraphStatistics, TreeStatistics, graph_statistics, total_statistics
 from lean_search.search import read_tree
 from lean_search.search.graph_labels import label_graph
 from lean_search.search.summary import markdown_table
+from lean_search.search.tactic_labels import TacticLabelCounts, policy_tactics
 from lean_search.value.graph_targets import RemainingStepsReadout, ValueTargetConfig, recorded_estimates, value_targets
 
 
@@ -46,22 +48,25 @@ def parse_arguments() -> argparse.Namespace:
 def run_report(
     directory: Path, readout: RemainingStepsReadout, target_config: ValueTargetConfig, reward_config: RewardConfig
 ) -> RunReport:
-    outcome_config = dataclasses.replace(reward_config, mode=RewardMode.OUTCOME_ONLY)
     trees = []
     for path in sorted(directory.glob("*.json.gz")):
         record = read_tree(path)
         labels = label_graph(record)
         estimates = recorded_estimates(record, readout)
         targets = value_targets(record, labels, estimates, target_config)
-        groups = policy_groups(record, labels, estimates, targets, reward_config)
-        outcome_groups = policy_groups(record, labels, estimates, targets, outcome_config)
-        statistics = graph_statistics(record, labels, targets, groups, outcome_groups, reward_config)
+        tactics = policy_tactics(record, labels)
+        groups = policy_groups(record, labels, tactics, estimates, reward_config)
+        statistics = graph_statistics(record, labels, targets, tactics, groups)
         trees.append(TreeStatistics(record.problem_name, statistics))
     return RunReport(str(directory), total_statistics([tree.statistics for tree in trees]), tuple(trees))
 
 
 def share(count: float, total: float) -> str:
     return f"{count:,.0f} ({count / total:.1%})" if total else "0"
+
+
+def tactic_shares(counts: TacticLabelCounts) -> list[str]:
+    return [share(getattr(counts, field.name), counts.total) for field in dataclasses.fields(counts)]
 
 
 def render_run(run: RunReport) -> str:
@@ -180,24 +185,34 @@ def render_run(run: RunReport) -> str:
             ],
         ),
         markdown_table(
+            ["Proofs", "per solved tree", "Tactics per proof", "Blocks per proof", "Harvest expansions", "Explored"],
             [
-                "GRPO groups",
-                "Samples",
-                "Mixed rewards (dense)",
-                "Mixed rewards (outcome only)",
-                "Local reward",
-                "Global reward (beta G)",
-                "Positive local reward off the proof graph",
+                [
+                    total.proofs,
+                    f"{total.proofs / max(1, total.solved_trees):.2f}",
+                    f"{total.proof_tactics / max(1, total.proofs):.2f}",
+                    f"{total.proof_blocks / max(1, total.proofs):.2f}",
+                    total.harvest_expansions,
+                    total.exploration_expansions,
+                ]
             ],
+        ),
+        markdown_table(
+            ["Tactics", *(field.name for field in dataclasses.fields(TacticLabelCounts)), "Total"],
+            [
+                ["every policy sample", *tactic_shares(total.policy_tactics), f"{total.policy_tactics.total:,}"],
+                ["group samples", *tactic_shares(total.group_tactics), f"{total.group_tactics.total:,}"],
+            ],
+        ),
+        markdown_table(
+            ["GRPO groups", "Samples", "With a signal", "Global reward (1 − λ) G", "Local reward λ L"],
             [
                 [
                     total.groups,
                     total.group_samples,
-                    share(total.groups_with_mixed_rewards, total.groups),
-                    share(total.outcome_groups_with_mixed_rewards, total.groups),
-                    f"{total.local_reward:,.1f}",
+                    share(total.groups_with_signal, total.groups),
                     f"{total.global_reward:,.1f}",
-                    share(total.positive_local_reward_off_proof_graph, total.positive_local_reward),
+                    f"{total.local_reward:,.1f}",
                 ]
             ],
         ),
