@@ -1,4 +1,4 @@
-"""GRPO training sequences: each recorded policy sample of a group, tokenized with its per-token advantages."""
+"""GRPO training sequences: each recorded completion of a group sample, as sampled, with its per-token advantages."""
 
 import json
 from collections.abc import Iterable, Iterator, Mapping, Sequence
@@ -8,25 +8,23 @@ from typing import Protocol
 
 from lean_search.policy.prompts import END_OF_TURN, ChatTemplate
 from lean_search.rl.advantages import (
-    AdvantageConfig,
+    CreditMode,
     GroupAdvantages,
     SampleAdvantages,
     group_advantages,
     local_share_of_advantages,
 )
-from lean_search.rl.grpo_groups import PolicyGroup, RewardConfig
-from lean_search.rl.token_credit import CreditMode, TokenSegment, token_credits
+from lean_search.rl.grpo_groups import GroupSample, PolicyGroup
+from lean_search.rl.token_credit import (
+    TokenSegment,
+    inserted_token_indices,
+    sampled_token_offsets,
+    token_credits,
+)
 from lean_search.search.records import from_json_object, to_json
+from lean_search.search.tactic_labels import TacticLabelCounts
 from lean_search.search.texts import ExpansionTexts, SampledCompletion
 from lean_search.training.sft_data import SftExample, TokenizedExample
-
-
-@dataclass(frozen=True)
-class GroupWeightConfig:
-    # Groups whose samples differ in G, the global term.
-    global_signal_weight: float = 1.0
-    # Groups whose samples differ only in the local term.
-    local_only_weight: float = 1.0
 
 
 class PolicyTokenizer(ChatTemplate, Protocol):
@@ -34,9 +32,18 @@ class PolicyTokenizer(ChatTemplate, Protocol):
 
     def encode(self, text: str, *, add_special_tokens: bool) -> list[int]: ...
 
+    def decode(self, token_ids: Sequence[int], *, skip_special_tokens: bool) -> str: ...
+
     def __call__(
         self, text: str, *, add_special_tokens: bool, return_offsets_mapping: bool
     ) -> Mapping[str, Sequence[object]]: ...
+
+
+@dataclass(frozen=True)
+class PolicyDataConfig:
+    credit: CreditMode = CreditMode.PER_TACTIC
+    # The sampling temperature of records written before it was kept.
+    default_temperature: float = 0.8
 
 
 @dataclass(frozen=True)
@@ -48,39 +55,47 @@ class PolicySequence:
     # Per completion token.
     advantages: tuple[float, ...]
     trained: tuple[bool, ...]
-    weight: float
-    explanation_tokens: int
-    block_tokens: int
-    masked_tokens: int
+    # The sampler's log-probability per completion token (None where inserted); empty when re-tokenized.
+    sampler_log_probabilities: tuple[float | None, ...]
+    temperature: float
+    # The answer was forced at the token cap (the harness inserted the opening).
+    forced: bool
+    # Records without token ids: the text tokenized again.
+    retokenized: bool
+    segments: tuple[TokenSegment, ...]
 
     @property
     def token_count(self) -> int:
         return self.tokenized.token_count
 
+    def segment_tokens(self, segment: TokenSegment) -> int:
+        return self.segments.count(segment)
+
 
 @dataclass(frozen=True)
 class PolicyDataMetrics:
     groups: int
-    groups_with_mixed_rewards: int
-    groups_with_global_signal: int
-    # Policy samples (multiplicities) in all groups, and the sample-weighted means of the mixed reward's terms.
+    # Groups with a non-zero advantage, the only ones trained.
+    groups_trained: int
+    # Policy samples (multiplicities) in all groups.
     samples: int
-    mean_reward: float
+    # Tactics of the trained groups' samples by credit label, sample-weighted.
+    tactics: TacticLabelCounts
+    # Sample-weighted means of (1 − λ) · G and λ · L over the known tactics of all groups.
     mean_global_reward: float
     mean_local_reward: float
-    # Of the summed |advantage| of the trained groups, the share from the local term.
+    # Of the summed |tactic advantage| of the trained groups, the share from the local term.
     local_advantage_share: float
     sequences: int
-    sequences_over_length: int
     # Group samples whose edges have no recorded completion text.
     samples_without_text: int
+    retokenized_sequences: int
+    # Recorded tokens that did not decode to the recorded text: trained with sequence-level credit.
+    token_mismatch_sequences: int
+    forced_sequences: int
     mean_explanation_tokens: float
-    mean_block_tokens: float
-    masked_token_share: float
-
-    @property
-    def mixed_reward_share(self) -> float:
-        return self.groups_with_mixed_rewards / self.groups if self.groups else 0.0
+    mean_tactics_per_sample: float
+    untrained_token_share: float
 
 
 @dataclass(frozen=True)
@@ -106,18 +121,33 @@ def read_expansion_texts(path: Path) -> Iterator[ExpansionTexts]:
                 yield from_json_object(ExpansionTexts, json.loads(line))
 
 
-def group_weight(advantages: GroupAdvantages, config: GroupWeightConfig) -> float:
-    """0 for a group whose samples all earned the same reward, as in the mainstream recipes."""
-    if not advantages.has_mixed_rewards:
-        return 0.0
-    return config.global_signal_weight if advantages.has_global_signal else config.local_only_weight
+@dataclass(frozen=True)
+class CompletionTokens:
+    token_ids: tuple[int, ...]
+    # None when the recorded tokens do not decode to the recorded text.
+    offsets: tuple[tuple[int, int], ...] | None
+    inserted: frozenset[int]
+    sampler_log_probabilities: tuple[float | None, ...]
+    retokenized: bool
 
 
-def completion_offsets(tokenizer: PolicyTokenizer, text: str) -> tuple[tuple[int, ...], tuple[tuple[int, int], ...]]:
+def completion_tokens(tokenizer: PolicyTokenizer, completion: SampledCompletion) -> CompletionTokens:
+    """The recorded tokens; records written before tokens were kept tokenize the text again."""
+    tokens = completion.tokens
+    if tokens.token_ids:
+        offsets = sampled_token_offsets(tokenizer, completion)
+        return CompletionTokens(
+            tokens.token_ids, offsets, inserted_token_indices(completion), tokens.log_probabilities, False
+        )
+    text = completion.text + END_OF_TURN if completion.ended_turn else completion.text
     encoded = tokenizer(text, add_special_tokens=False, return_offsets_mapping=True)
-    input_ids = tuple(int(token) for token in encoded["input_ids"])
-    offsets = tuple((int(start), int(end)) for start, end in encoded["offset_mapping"])
-    return input_ids, offsets
+    return CompletionTokens(
+        tuple(int(token) for token in encoded["input_ids"]),
+        tuple((int(start), int(end)) for start, end in encoded["offset_mapping"]),
+        frozenset(),
+        (),
+        True,
+    )
 
 
 def policy_sequence(
@@ -125,115 +155,110 @@ def policy_sequence(
     group: PolicyGroup,
     prompt_ids: Sequence[int],
     completion: SampledCompletion,
-    first_failing_tactic: int | None,
+    temperature: float,
     advantages: SampleAdvantages,
-    credit_mode: CreditMode,
-    weight: float,
-) -> PolicySequence:
-    text = completion.text + END_OF_TURN if completion.ended_turn else completion.text
-    completion_ids, offsets = completion_offsets(tokenizer, text)
-    credits = token_credits(offsets, completion.tactic_spans, first_failing_tactic, advantages, credit_mode)
+    credit: CreditMode,
+) -> tuple[PolicySequence, bool]:
+    """The sequence, and whether its tokens failed to decode to its text (then all get the sequence credit)."""
+    tokens = completion_tokens(tokenizer, completion)
+    offsets = tokens.offsets
+    mismatch = offsets is None
+    if offsets is None:
+        offsets = tuple((0, 0) for _ in tokens.token_ids)
+    spans = () if mismatch else completion.tactic_spans
+    credits = token_credits(offsets, spans, tokens.inserted, advantages, credit)
     example = SftExample("grpo", f"{group.problem_name}#{group.node_id}", completion.edge_id, group.goals, "")
-    segments = credits.segments
-    return PolicySequence(
+    sequence = PolicySequence(
         problem_name=group.problem_name,
         node_id=group.node_id,
         edge_id=completion.edge_id,
-        tokenized=TokenizedExample(example, (*prompt_ids, *completion_ids), len(prompt_ids)),
+        tokenized=TokenizedExample(example, (*prompt_ids, *tokens.token_ids), len(prompt_ids)),
         advantages=credits.advantages,
         trained=credits.trained,
-        weight=weight,
-        explanation_tokens=segments.count(TokenSegment.EXPLANATION),
-        block_tokens=len(segments) - segments.count(TokenSegment.EXPLANATION),
-        masked_tokens=segments.count(TokenSegment.MASKED),
+        sampler_log_probabilities=tokens.sampler_log_probabilities,
+        temperature=temperature,
+        forced=bool(tokens.inserted),
+        retokenized=tokens.retokenized,
+        segments=credits.segments,
     )
-
-
-def fits(sequence: PolicySequence, max_prompt_tokens: int, max_completion_tokens: int) -> bool:
-    tokenized = sequence.tokenized
-    return (
-        tokenized.prompt_token_count <= max_prompt_tokens and tokenized.completion_token_count <= max_completion_tokens
-    )
+    return sequence, mismatch
 
 
 def build_policy_data(
     groups: Sequence[PolicyGroup],
     texts: Sequence[ExpansionTexts],
     tokenizer: PolicyTokenizer,
-    reward_config: RewardConfig,
-    advantage_config: AdvantageConfig,
-    credit_mode: CreditMode,
-    weights: GroupWeightConfig,
-    max_prompt_tokens: int,
-    max_completion_tokens: int,
+    config: PolicyDataConfig,
 ) -> PolicyData:
-    """Sequences of every group with mixed rewards; each recorded completion of a sample's edges is one sequence."""
+    """Every recorded completion of a group with a signal is one sequence; groups whose advantages are all 0 drop."""
     texts_by_node = {(expansion.problem_name, expansion.node_id): expansion for expansion in texts}
+    all_advantages = [group_advantages(group) for group in groups]
     sequences: list[PolicySequence] = []
-    all_advantages = [group_advantages(group, reward_config, advantage_config) for group in groups]
-    trained_advantages: list[GroupAdvantages] = []
-    over_length = 0
+    trained_groups: list[tuple[PolicyGroup, GroupAdvantages]] = []
     without_text = 0
+    mismatches = 0
     for group, advantages in zip(groups, all_advantages, strict=True):
-        weight = group_weight(advantages, weights)
-        if weight == 0:
+        if not advantages.has_signal(config.credit):
             continue
-        trained_advantages.append(advantages)
+        trained_groups.append((group, advantages))
         expansion = texts_by_node.get((group.problem_name, group.node_id))
         completions = () if expansion is None else expansion.completions
         prompt_ids = [] if expansion is None else tokenizer.encode(expansion.prompt, add_special_tokens=False)
-        for sample, sample_advantages in zip(group.samples, advantages.advantages, strict=True):
+        temperature = config.default_temperature
+        if expansion is not None and expansion.temperature is not None:
+            temperature = expansion.temperature
+        for sample, sample_advantages in zip(group.samples, advantages.samples, strict=True):
             sample_completions = [completion for completion in completions if completion.edge_id in sample.edge_ids]
             if not sample_completions:
                 without_text += sample.multiplicity
             for completion in sample_completions:
-                sequence = policy_sequence(
-                    tokenizer,
-                    group,
-                    prompt_ids,
-                    completion,
-                    sample.credit.first_failing_tactic,
-                    sample_advantages,
-                    credit_mode,
-                    weight,
+                sequence, mismatch = policy_sequence(
+                    tokenizer, group, prompt_ids, completion, temperature, sample_advantages, config.credit
                 )
-                if fits(sequence, max_prompt_tokens, max_completion_tokens):
-                    sequences.append(sequence)
-                else:
-                    over_length += 1
-    metrics = data_metrics(groups, all_advantages, trained_advantages, sequences, over_length, without_text)
+                sequences.append(sequence)
+                mismatches += mismatch
+    metrics = data_metrics(groups, trained_groups, sequences, without_text, mismatches)
     return PolicyData(tuple(sequences), metrics)
+
+
+def weighted_samples(groups: Iterable[PolicyGroup]) -> list[GroupSample]:
+    return [sample for group in groups for sample in group.samples for _ in range(sample.multiplicity)]
 
 
 def data_metrics(
     groups: Sequence[PolicyGroup],
-    all_advantages: Sequence[GroupAdvantages],
-    trained_advantages: Sequence[GroupAdvantages],
+    trained_groups: Sequence[tuple[PolicyGroup, GroupAdvantages]],
     sequences: Sequence[PolicySequence],
-    over_length: int,
     without_text: int,
+    mismatches: int,
 ) -> PolicyDataMetrics:
-    samples = sum(group.sample_count for group in groups)
-    rewards = [
-        (reward, sample.multiplicity)
-        for group, advantages in zip(groups, all_advantages, strict=True)
-        for sample, reward in zip(group.samples, advantages.rewards, strict=True)
-    ]
-    completion_tokens = sum(sequence.tokenized.completion_token_count for sequence in sequences)
+    samples = weighted_samples(groups)
+    known = [parts for sample in samples for parts in sample.known]
+    trained_samples = weighted_samples(group for group, _ in trained_groups)
+    completion_tokens_total = sum(sequence.tokenized.completion_token_count for sequence in sequences)
+    untrained = sum(
+        not trained
+        for sequence in sequences
+        for trained, segment in zip(sequence.trained, sequence.segments, strict=True)
+        if segment != TokenSegment.INSERTED
+    )
+    inserted = sum(sequence.segment_tokens(TokenSegment.INSERTED) for sequence in sequences)
     count = max(1, len(sequences))
     return PolicyDataMetrics(
         groups=len(groups),
-        groups_with_mixed_rewards=sum(advantages.has_mixed_rewards for advantages in all_advantages),
-        groups_with_global_signal=sum(advantages.has_global_signal for advantages in all_advantages),
-        samples=samples,
-        mean_reward=sum(reward.total * weight for reward, weight in rewards) / max(1, samples),
-        mean_global_reward=sum(reward.global_value * weight for reward, weight in rewards) / max(1, samples),
-        mean_local_reward=sum(reward.local * weight for reward, weight in rewards) / max(1, samples),
-        local_advantage_share=local_share_of_advantages(trained_advantages),
+        groups_trained=len(trained_groups),
+        samples=len(samples),
+        tactics=TacticLabelCounts.of(tactic.label for sample in trained_samples for tactic in sample.tactics),
+        mean_global_reward=sum(parts.global_part for parts in known) / max(1, len(known)),
+        mean_local_reward=sum(parts.local_part for parts in known) / max(1, len(known)),
+        local_advantage_share=local_share_of_advantages([advantages for _, advantages in trained_groups]),
         sequences=len(sequences),
-        sequences_over_length=over_length,
         samples_without_text=without_text,
-        mean_explanation_tokens=sum(sequence.explanation_tokens for sequence in sequences) / count,
-        mean_block_tokens=sum(sequence.block_tokens for sequence in sequences) / count,
-        masked_token_share=sum(sequence.masked_tokens for sequence in sequences) / max(1, completion_tokens),
+        retokenized_sequences=sum(sequence.retokenized for sequence in sequences),
+        token_mismatch_sequences=mismatches,
+        forced_sequences=sum(sequence.forced for sequence in sequences),
+        mean_explanation_tokens=sum(sequence.segment_tokens(TokenSegment.EXPLANATION) for sequence in sequences)
+        / count,
+        mean_tactics_per_sample=sum(len(sample.tactics) for sample in trained_samples) / max(1, len(trained_samples)),
+        untrained_token_share=untrained / max(1, completion_tokens_total - inserted),
     )

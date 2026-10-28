@@ -81,7 +81,8 @@ to `policy.json`.
 
 Every request asks vLLM for `logprobs` with `return_tokens_as_token_ids`, so each `Sample` carries its token ids and
 their log-probabilities (`SampledTokens`, `search/texts.py`), as vLLM reports them: its default log-probability mode
-is the raw model distribution, before temperature and top-p. A sample that ended its turn ends with the end-of-turn
+is the raw model distribution, before temperature and top-p (GRPO policy servers run with `--logprobs-mode
+processed_logprobs`, `deployment/README.md`). A sample that ended its turn ends with the end-of-turn
 token; a sample stopped by a stop string (`Sample.stop_string`) ends with the tokens that wrote it, though the text
 does not contain it. The tree records keep them per completion (`SampledCompletion.tokens`, log-probabilities rounded to
 4 decimals) with the request's `temperature` and `top_p` (`ExpansionTexts`), so the trainer trains on the sampled tokens

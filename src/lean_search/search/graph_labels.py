@@ -5,8 +5,11 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
+from lean_search.lean.text import normalize_goal
 from lean_search.search.records import NodeRecord, TreeRecord
 from lean_search.search.tree import Edge, EdgeOutcome, FailureKind, NodeStatus, StepSource
+
+type GoalKey = tuple[str, ...]
 
 
 class EdgeKind(StrEnum):
@@ -210,14 +213,44 @@ def edge_labels(record: TreeRecord) -> tuple[EdgeLabel, ...]:
     return tuple(labels)
 
 
-def forward_successors(edges: Sequence[EdgeLabel]) -> dict[int, dict[int, int]]:
+def goal_key(goals: Sequence[str]) -> GoalKey:
+    return tuple(normalize_goal(goal) for goal in goals)
+
+
+def nodes_by_goal_key(record: TreeRecord) -> dict[GoalKey, int]:
+    """Nodes with goals by their own key and by the last (pre-`rename_i`) tactic state of every edge reaching them."""
+    nodes: dict[GoalKey, int] = {}
+    for node in record.nodes:
+        if node.goals:
+            nodes.setdefault(goal_key(node.goals), node.node_id)
+    for edge in record.edges:
+        if edge.target_id is not None and edge.tactic_goals and edge.tactic_goals[-1]:
+            nodes.setdefault(goal_key(edge.tactic_goals[-1]), edge.target_id)
+    return nodes
+
+
+def add_successor(successors: dict[int, dict[int, int]], source: int, target: int, tactics: int) -> None:
+    targets = successors.setdefault(source, {})
+    targets[target] = min(tactics, targets.get(target, tactics))
+
+
+def forward_successors(record: TreeRecord, edges: Sequence[EdgeLabel]) -> dict[int, dict[int, int]]:
     """A partial block counts the tactics of its valid prefix, a proving block those run until the proof."""
     successors: dict[int, dict[int, int]] = {}
+    nodes = nodes_by_goal_key(record)
     for edge in edges:
-        if edge.kind.is_forward:
-            assert edge.target_id is not None
-            targets = successors.setdefault(edge.parent_id, {})
-            targets[edge.target_id] = min(edge.applied_tactics, targets.get(edge.target_id, edge.applied_tactics))
+        if not edge.kind.is_forward:
+            continue
+        assert edge.target_id is not None
+        add_successor(successors, edge.parent_id, edge.target_id, edge.applied_tactics)
+        # An intermediate tactic state that is another node's splits the edge at that node.
+        executed = record.edges[edge.edge_id]
+        before = ancestor_ids(record.nodes, edge.parent_id) | {edge.parent_id}
+        for index, goals in enumerate(executed.tactic_goals[:-1]):
+            node_id = nodes.get(goal_key(goals))
+            if node_id is not None and node_id not in before and node_id != edge.target_id:
+                add_successor(successors, edge.parent_id, node_id, index + 1)
+                add_successor(successors, node_id, edge.target_id, edge.applied_tactics - index - 1)
     return successors
 
 
@@ -304,7 +337,7 @@ def node_class(
 
 def label_graph(record: TreeRecord) -> GraphLabels:
     edges = edge_labels(record)
-    successors = forward_successors(edges)
+    successors = forward_successors(record, edges)
     on_proof_graph = proof_distances(record, reverse(successors))
     dead_ends = dead_end_ids(record, edges, on_proof_graph, successors)
     expanded = tuple(node.expansion_index is not None for node in record.nodes)

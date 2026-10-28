@@ -22,6 +22,7 @@ from lean_search.monitoring.families import (
 )
 from lean_search.monitoring.store import LoopContext, MetricsWriter
 from lean_search.rl.tree_statistics import EdgeKindCounts, GraphStatistics, SizeHistogram
+from lean_search.search.tactic_labels import TacticLabelCounts
 from lean_search.value.benchmark import (
     BenchmarkMetrics,
     CalibrationMetrics,
@@ -66,6 +67,11 @@ CONTROL_PROFILE = DemoProfile(control=True, minif2f_gain=7.0, held_out_gain=0.02
 def counts(total: int, shares: dict[str, float]) -> EdgeKindCounts:
     scale = total / sum(shares.values())
     return EdgeKindCounts(**{kind: round(share * scale) for kind, share in shares.items()})
+
+
+def tactic_counts(total: int, shares: dict[str, float]) -> TacticLabelCounts:
+    scale = total / sum(shares.values())
+    return TacticLabelCounts(**{label: round(share * scale) for label, share in shares.items()})
 
 
 def scaled(values: EdgeKindCounts, factor: float) -> EdgeKindCounts:
@@ -211,25 +217,46 @@ class DemoRun:
 
     def write_grpo(self, moment: float) -> None:
         learned = self.progress(moment)
-        groups = round(900 + self.noise(60))
+        groups = round(240 + self.noise(20))
+        trained_share = 0.77 - 0.1 * learned + self.noise(0.02)
+        samples = groups * 8
         spike = 0.03 if self.random.random() < 0.04 else 0.0
+        tactics = tactic_counts(
+            round(samples * trained_share * (2.2 + 0.4 * learned)),
+            {
+                "proof_graph": 0.13 + 0.08 * learned,
+                "off_graph": 0.025,
+                "unknown": 0.2,
+                "no_progress": 0.015 + (0.0 if self.profile.control else 0.01 * learned),
+                "redundant_hypothesis": 0.004,
+                "failing": 0.32 - 0.06 * learned,
+                "masked": 0.3 - 0.04 * learned,
+            },
+        )
+        training_seconds = self.schedule.training_minutes * 60 * (1 + self.noise(0.05))
         self.writer.write(
             GrpoPhase(
                 groups=groups,
-                group_samples=groups * 7,
-                mixed_reward_group_share=0.46 - 0.08 * learned + self.noise(0.02),
-                mean_local_reward=0.0 if self.profile.control else -0.32 + 0.18 * learned + self.noise(0.02),
-                mean_global_reward=0.55 + 0.25 * learned + self.noise(0.03),
-                off_proof_graph_local_reward_share=0.0
-                if self.profile.control
-                else 0.36 - 0.06 * learned + self.noise(0.015),
+                group_samples=samples,
+                mixed_reward_group_share=trained_share,
+                mean_local_reward=-0.1 + 0.03 * learned + self.noise(0.005),
+                mean_global_reward=0.3 + 0.15 * learned + self.noise(0.02),
                 kl_to_behaviour_policy=max(0.0, 0.015 + 0.01 * learned + abs(self.noise(0.004)) + spike),
                 clip_fraction=max(0.0, 0.06 + 0.04 * learned + self.noise(0.01)),
                 mean_explanation_tokens=121 - 14 * learned + self.noise(3),
                 mean_block_tactics=2.1 + 0.5 * learned + self.noise(0.05),
                 policy_loss=-0.02 + self.noise(0.01),
-                trained_tokens=round(groups * 7 * 180),
-                training_seconds=self.schedule.training_minutes * 60 * (1 + self.noise(0.05)),
+                trained_tokens=round(samples * trained_share * 180),
+                training_seconds=training_seconds,
+                groups_trained=round(groups * trained_share),
+                sequences=round(samples * trained_share),
+                tactics=tactics,
+                local_advantage_share=0.16 + self.noise(0.01),
+                sampler_log_probability_difference=self.noise(0.002) - 0.001,
+                sampler_absolute_log_probability_difference=0.012 + abs(self.noise(0.002)),
+                sampler_kl=0.0008 + abs(self.noise(0.0002)),
+                forced_answers_kept=round(samples * trained_share * 0.027 * (1 - 0.5 * learned)),
+                sampling_seconds=(self.schedule.phase_minutes - self.schedule.training_minutes) * 60,
             ),
             record_time=moment,
         )
@@ -267,7 +294,9 @@ class DemoRun:
         )
         nodes = edges.new_state + trees
         expanded = round(trees * 48)
-        groups = round(expanded * 0.95)
+        groups = round(solved * (3.2 + 1.2 * learned))
+        harvest = round(solved * 12)
+        proofs = solved + round(harvest * (0.15 + 0.1 * learned))
         graph = GraphStatistics(
             trees=trees,
             solved_trees=solved,
@@ -297,14 +326,34 @@ class DemoRun:
             expanded_without_target=round(expanded * 0.15),
             off_graph_subtree_sizes=histogram(self.random, round(expanded * 0.66), 3.0),
             expanded_subtree_sizes=histogram(self.random, expanded, 4.0),
+            policy_tactics=tactic_counts(
+                round(samples * 1.8),
+                {
+                    "proof_graph": 0.006 + 0.01 * learned,
+                    "off_graph": 0.054,
+                    "unknown": 0.166,
+                    "no_progress": 0.036 + (0.0 if self.profile.control else 0.02 * learned),
+                    "redundant_hypothesis": 0.015,
+                    "failing": 0.45 - 0.05 * learned,
+                    "masked": 0.27 - 0.03 * learned,
+                },
+            ),
+            group_tactics=tactic_counts(
+                round(groups * 8 * 2.2),
+                {"proof_graph": 0.13 + 0.08 * learned, "unknown": 0.2, "failing": 0.32, "masked": 0.3},
+            ),
             groups=groups,
-            group_samples=groups * 7,
-            groups_with_mixed_rewards=round(groups * (0.46 - 0.08 * learned)),
-            outcome_groups_with_mixed_rewards=round(groups * 0.12),
-            local_reward=samples * (-0.3 + 0.15 * learned),
-            global_reward=samples * (0.5 + 0.2 * learned),
-            positive_local_reward=samples * 0.08,
-            positive_local_reward_off_proof_graph=samples * 0.08 * (0.36 - 0.06 * learned),
+            group_samples=groups * 8,
+            groups_with_signal=round(groups * (0.77 - 0.1 * learned)),
+            global_reward=groups * 8 * (0.3 + 0.15 * learned),
+            local_reward=groups * 8 * (-0.1 + 0.03 * learned),
+            proofs=proofs,
+            proof_tactics=round(proofs * (3.1 - 0.4 * learned + self.noise(0.1))),
+            proof_blocks=round(proofs * (1.6 - 0.2 * learned + self.noise(0.05))),
+            harvest_expansions=harvest,
+            harvest_proofs=proofs - solved,
+            harvest_proof_graph_nodes=round(harvest * (0.6 + 0.2 * learned)),
+            exploration_expansions=round(expanded * 0.1 + self.noise(2)),
         )
         policy_total = policy_samples.total
         forced = round(policy_total * 0.004)

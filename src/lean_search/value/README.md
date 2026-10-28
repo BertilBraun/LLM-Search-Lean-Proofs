@@ -119,7 +119,7 @@ expanded state gets `y = (1 − μ) · z + μ · q` (`value_share` = μ; 0 until
 
 | Node | z (concrete label) | q (value part) | Weight |
 |---|---|---|---|
-| proof graph | 1, exact steps (fewest top-level tactics over new-state, sibling or transposition edges to a verified proof) | as below | `proof_graph_weight` |
+| proof graph | 1, exact steps (fewest top-level tactics over new-state, sibling or transposition edges to a verified proof; an edge whose intermediate tactic state, `Edge.tactic_goals`, is another node's state also routes through that node) | as below | `proof_graph_weight` |
 | expanded off the graph, solved or unsolved tree (dead ends included) | 0 ("no proof within this budget") | mean over the expanded descendants (each once, at its fewest tactics): proof probability, and distance + h; the state's own estimate without any | `off_graph_weight · n / (n + half_weight_expanded_nodes)`, n the state and its expanded descendants |
 | never expanded | — | — | no target |
 

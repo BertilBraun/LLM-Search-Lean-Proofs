@@ -9,6 +9,7 @@ from enum import StrEnum
 from typing import ClassVar
 
 from lean_search.rl.tree_statistics import GraphStatistics
+from lean_search.search.tactic_labels import TacticLabelCounts
 from lean_search.value.benchmark import BenchmarkMetrics
 
 
@@ -68,20 +69,39 @@ class FixedTargets:
 @dataclass(frozen=True)
 class GrpoPhase:
     family: ClassVar[str] = "grpo"
+    # Groups at proof-graph nodes and their policy samples.
     groups: int
     group_samples: int
+    # Groups with a non-zero advantage (the trained ones), as a share of all groups.
     mixed_reward_group_share: float
+    # Means of λ · L and (1 − λ) · G over the known tactics.
     mean_local_reward: float
     mean_global_reward: float
-    # Share of the positive local reward earned on states off the proof graph.
-    off_proof_graph_local_reward_share: float
     kl_to_behaviour_policy: float
     clip_fraction: float
     mean_explanation_tokens: float
+    # Executed tactics per sample.
     mean_block_tactics: float
     policy_loss: float
     trained_tokens: int
+    # Scoring and training.
     training_seconds: float
+    groups_trained: int = 0
+    sequences: int = 0
+    # Tactics of the trained groups' samples by credit label.
+    tactics: TacticLabelCounts = field(default_factory=TacticLabelCounts)
+    # Of the summed |tactic advantage|, the share from the local term.
+    local_advantage_share: float = 0.0
+    # The trainer's log-probabilities before the first update minus vLLM's recorded ones: mean, mean absolute, k3 KL.
+    sampler_log_probability_difference: float = 0.0
+    sampler_absolute_log_probability_difference: float = 0.0
+    sampler_kl: float = 0.0
+    # Samples whose answer was forced at the token cap, trained with the inserted text masked.
+    forced_answers_kept: int = 0
+    # Sequences from records without token ids, tokenized again.
+    retokenized_sequences: int = 0
+    # The searches that produced the phase's data; with training_seconds it decides one or two passes.
+    sampling_seconds: float | None = None
 
 
 @dataclass(frozen=True)

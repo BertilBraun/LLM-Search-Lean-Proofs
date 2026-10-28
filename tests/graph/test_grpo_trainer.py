@@ -9,17 +9,17 @@ torch = pytest.importorskip("torch")
 pytest.importorskip("transformers")
 pytest.importorskip("peft")
 
-from lean_search.rl.advantages import AdvantageConfig  # noqa: E402
-from lean_search.rl.policy_data import GroupWeightConfig, PolicySequence, build_policy_data  # noqa: E402
+from lean_search.rl.policy_data import PolicyDataConfig, PolicySequence, build_policy_data  # noqa: E402
 from lean_search.rl.policy_trainer import (  # noqa: E402
     CompletionTokenScores,
     GrpoConfig,
     GrpoStepRecord,
     ReferencePolicy,
     completion_log_probabilities,
+    plan_grpo_steps,
+    sampler_agreement,
     train_grpo,
 )
-from lean_search.rl.token_credit import CreditMode  # noqa: E402
 from lean_search.rl.training_phase import TrainingPhaseConfig, label_phase_data  # noqa: E402
 from lean_search.search import TreeRecord  # noqa: E402
 from lean_search.training.sft import LoraSettings, OptimizationConfig, load_trainable_model  # noqa: E402
@@ -40,20 +40,10 @@ def policy_tree() -> TreeRecord:
 
 def sequences() -> tuple[PolicySequence, ...]:
     record = policy_tree()
-    config = TrainingPhaseConfig()
-    labelled = label_phase_data([record], config)
-    data = build_policy_data(
-        labelled.groups,
-        expansion_texts(record),
-        CharacterTokenizer(),
-        config.reward,
-        AdvantageConfig(),
-        CreditMode.PER_TOKEN,
-        GroupWeightConfig(),
-        max_prompt_tokens=1000,
-        max_completion_tokens=1000,
-    )
-    return data.sequences
+    labelled = label_phase_data([record], TrainingPhaseConfig())
+    return build_policy_data(
+        labelled.groups, expansion_texts(record), CharacterTokenizer(), PolicyDataConfig()
+    ).sequences
 
 
 @pytest.fixture(scope="module")
@@ -75,7 +65,7 @@ def perturbed_adapter(tiny_model: Path, tmp_path_factory: pytest.TempPathFactory
     return directory
 
 
-def grpo_config(model: Path, epochs: int, **changes: object) -> GrpoConfig:
+def grpo_config(model: Path, passes: int, **changes: object) -> GrpoConfig:
     config = GrpoConfig(
         model=str(model),
         lora=LORA,
@@ -83,11 +73,11 @@ def grpo_config(model: Path, epochs: int, **changes: object) -> GrpoConfig:
             learning_rate=1e-2,
             warmup_fraction=0.0,
             minimum_learning_rate_ratio=1.0,
-            epochs=epochs,
             micro_batch_tokens=8192,
             gradient_checkpointing=False,
         ),
         sequences_per_step=8,
+        passes_per_phase=passes,
         scoring_micro_batch_tokens=8192,
     )
     return dataclasses.replace(config, **changes)
@@ -105,7 +95,10 @@ def summed_log_probabilities(model: Path, adapter: str) -> list[float]:
     )
     causal_model.eval()
     examples = [sequence.tokenized for sequence in sequences()]
-    scores = completion_log_probabilities(CompletionTokenScores(causal_model), examples, 8192, False, 0, CPU)
+    temperatures = [sequence.temperature for sequence in sequences()]
+    scores = completion_log_probabilities(
+        CompletionTokenScores(causal_model), examples, temperatures, 8192, False, 0, CPU
+    )
     return [score.sum().item() for score in scores]
 
 
@@ -115,7 +108,7 @@ def test_the_root_group_trains_both_completions_of_both_samples() -> None:
 
 def test_training_raises_the_better_sample_against_the_failing_one(tiny_model: Path, tmp_path: Path) -> None:
     before = summed_log_probabilities(tiny_model, "")
-    train(grpo_config(tiny_model, epochs=10), tmp_path / "adapter")
+    train(grpo_config(tiny_model, passes=10), tmp_path / "adapter")
     after = summed_log_probabilities(tiny_model, str(tmp_path / "adapter"))
     good = [index for index, sequence in enumerate(sequences()) if sequence.advantages[0] > 0]
     bad = [index for index, sequence in enumerate(sequences()) if sequence.advantages[0] < 0]
@@ -124,14 +117,14 @@ def test_training_raises_the_better_sample_against_the_failing_one(tiny_model: P
 
 
 def test_first_step_starts_at_the_data_collecting_policy(tiny_model: Path, tmp_path: Path) -> None:
-    records = train(grpo_config(tiny_model, epochs=1), tmp_path / "adapter")
+    records = train(grpo_config(tiny_model, passes=1), tmp_path / "adapter")
     assert records[0].kl_to_data_policy == pytest.approx(0.0, abs=1e-4)
 
 
 def test_kl_to_the_starting_weights_measures_the_published_adapter(
     tiny_model: Path, perturbed_adapter: Path, tmp_path: Path
 ) -> None:
-    config = grpo_config(tiny_model, epochs=1, initial_adapter=str(perturbed_adapter))
+    config = grpo_config(tiny_model, passes=1, initial_adapter=str(perturbed_adapter))
     assert train(config, tmp_path / "adapter")[0].kl_to_reference > 1e-3
 
 
@@ -139,14 +132,44 @@ def test_kl_to_the_phase_start_is_zero_before_the_first_update(
     tiny_model: Path, perturbed_adapter: Path, tmp_path: Path
 ) -> None:
     config = grpo_config(
-        tiny_model, epochs=1, initial_adapter=str(perturbed_adapter), reference=ReferencePolicy.PHASE_START
+        tiny_model, passes=1, initial_adapter=str(perturbed_adapter), reference=ReferencePolicy.PHASE_START
     )
     assert train(config, tmp_path / "adapter")[0].kl_to_reference == pytest.approx(0.0, abs=1e-4)
 
 
 def test_replay_examples_report_their_nll(tiny_model: Path, tmp_path: Path) -> None:
-    config = grpo_config(tiny_model, epochs=1, replay_sequences_per_step=2, replay_weight=0.5)
+    config = grpo_config(tiny_model, passes=1, replay_sequences_per_step=2, replay_weight=0.5)
     replay = [sequence.tokenized for sequence in sequences()[:2]]
     records: list[GrpoStepRecord] = []
     train_grpo(config, 0, sequences(), replay, CPU, tmp_path / "adapter", records.append)
     assert records[0].replay_nll > 0
+
+
+def test_log_probabilities_divide_the_logits_by_the_temperature(tiny_model: Path) -> None:
+    _, causal_model = load_trainable_model(str(tiny_model), OptimizationConfig(gradient_checkpointing=False), LORA, CPU)
+    causal_model.eval()
+    example = sequences()[0].tokenized
+    (scores,) = completion_log_probabilities(CompletionTokenScores(causal_model), [example], [0.5], 8192, False, 0, CPU)
+    with torch.no_grad():
+        logits = causal_model(input_ids=torch.tensor([example.input_ids])).logits[0, :-1].float()
+    targets = torch.tensor(example.input_ids[1:])
+    expected = torch.log_softmax(logits / 0.5, dim=-1).gather(-1, targets[:, None])[:, 0][
+        example.prompt_token_count - 1 :
+    ]
+    assert torch.allclose(scores, expected, atol=1e-2)
+
+
+def test_sampler_agreement_compares_the_recorded_log_probabilities() -> None:
+    recorded = sequences()
+    old = [torch.full((sequence.tokenized.completion_token_count,), -0.75) for sequence in recorded]
+    assert sampler_agreement(recorded, old).mean_difference == pytest.approx(-0.75 - -1.0)
+
+
+@pytest.mark.parametrize(("passes", "steps"), [(1, 1), (2, 2)])
+def test_passes_per_phase(tiny_model: Path, passes: int, steps: int) -> None:
+    assert len(plan_grpo_steps(sequences(), grpo_config(tiny_model, passes=passes))) == steps
+
+
+def test_a_sequence_beyond_the_servers_context_is_a_bug(tiny_model: Path, tmp_path: Path) -> None:
+    with pytest.raises(AssertionError):
+        train(grpo_config(tiny_model, passes=1, max_sequence_tokens=10), tmp_path / "adapter")

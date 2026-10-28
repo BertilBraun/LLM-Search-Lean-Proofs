@@ -1,9 +1,18 @@
-# The control run (DESIGN.md "Control run"): phase.toml's policy training with the outcome-only signal, G from the
-# proof graph alone (1 on it, 0 elsewhere, no local term), one advantage for every token of a sample. The value model
-# trains as in the dense run.
+# The single-step comparison's sequence-level credit (DESIGN.md "Order of work", cheap tests): phase.toml with every
+# sampled token of a sample getting its score minus the group's baseline instead of per-tactic credit. Generated from
+# phase.toml; keep the two identical apart from [policy.data] credit.
 
 [reward]
-mode = "outcome_only"
+local_share = 0.15
+# L of the first failing tactic (errors and timeouts) and of a sample without a usable block (e.g. a repetition loop
+# cut off at the token cap).
+failure_local = -1.0
+# L of a tactic without progress (unchanged, back to an earlier state) or adding only redundant hypotheses.
+no_progress_local = -0.5
+# L per goal a proof-graph tactic closes.
+goal_closed_bonus = 0.1
+# mu: expanded off-graph states earn G = mu * q; 0.15 once a value model passed the gate.
+value_share = 0.0
 
 [value_targets]
 # y = (1 - mu) * z + mu * q per expanded state: z the concrete label (1 with exact steps on the proof graph, 0 off
@@ -26,6 +35,8 @@ half_weight_expanded_nodes = 4.0
 model = "/workspace/checkpoints/grpo_start/merged"
 initial_adapter = ""
 sequences_per_step = 64
+# Two passes if training time allows (the dashboard's training vs sampling time); 1 is allowed.
+passes_per_phase = 2
 warmup_steps = 5
 clip_low = 0.2
 clip_high = 0.28
@@ -34,9 +45,14 @@ reference = "starting_weights"
 normalization_tokens = 256
 replay_weight = 0.1
 replay_sequences_per_step = 8
-max_prompt_tokens = 2048
-max_completion_tokens = 1088
+# No length filter; a recorded sample longer than the servers' context is a bug.
+max_sequence_tokens = 8192
+
+[policy.data]
+# "sequence": every sampled token gets the sample's score minus the baseline (phase_sequence_credit.toml).
 credit = "sequence"
+# For records written before the sampling temperature was kept.
+default_temperature = 0.8
 
 [policy.lora]
 rank = 64
@@ -48,16 +64,11 @@ method = "lora"
 learning_rate = 1e-5
 minimum_learning_rate_ratio = 1.0
 max_gradient_norm = 1.0
-epochs = 1
 micro_batch_tokens = 16384
 gradient_checkpointing = true
 packing = true
 compile_layers = true
 seed = 0
-
-[policy.advantages]
-local_share = 0.15
-scale = "none"
 
 [policy_replay]
 lean_examples = 256
@@ -66,7 +77,12 @@ math_examples = 128
 [value]
 model = "Qwen/Qwen3.5-2B"
 initial_adapter = "/workspace/checkpoints/phase3_value_v0/adapter"
+retrain_from_base = false
+smoothing_sigma = 0.5
+bin_mass_weight = 1.0
 ranking_weight = 0.5
+ranking_score = "log_odds"
+ranking_temperature = 1.0
 max_pairs_per_tree = 64
 replay_share = 0.1
 
@@ -75,6 +91,7 @@ method = "lora"
 learning_rate = 5e-5
 warmup_fraction = 0.05
 minimum_learning_rate_ratio = 1.0
+max_gradient_norm = 1.0
 epochs = 1
 micro_batch_tokens = 32768
 micro_batches_per_step = 1
@@ -82,3 +99,14 @@ gradient_checkpointing = true
 packing = true
 compile_layers = true
 seed = 0
+
+[value.source_shares]
+proof_graph = 0.4
+off_graph = 0.6
+
+[value.gate]
+min_ranking_gain = 0.01
+max_separation_drop = 0.02
+max_brier_increase = 0.01
+# A benchmark built from value-model-guided trees fails the gate ("warn" only reports it).
+guided_trees = "refuse"

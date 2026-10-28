@@ -12,6 +12,7 @@ from lean_search.monitoring.families import (
     ValueBenchmarkResult,
 )
 from lean_search.rl.tree_statistics import EdgeKindCounts, GraphStatistics, SizeHistogram
+from lean_search.search.tactic_labels import TacticLabelCounts
 from lean_search.value.benchmark import (
     BenchmarkMetrics,
     CalibrationMetrics,
@@ -22,7 +23,13 @@ from lean_search.value.benchmark import (
     StepMetrics,
 )
 
-ZERO_BY_TYPE = {int: 0, float: 0.0, EdgeKindCounts: EdgeKindCounts(), SizeHistogram: SizeHistogram()}
+ZERO_BY_TYPE = {
+    int: 0,
+    float: 0.0,
+    EdgeKindCounts: EdgeKindCounts(),
+    TacticLabelCounts: TacticLabelCounts(),
+    SizeHistogram: SizeHistogram(),
+}
 
 
 def graph_statistics(policy_samples: EdgeKindCounts) -> GraphStatistics:
@@ -66,7 +73,6 @@ def grpo_phase(kl: float = 0.01, clip_fraction: float = 0.05, mixed_share: float
         mixed_reward_group_share=mixed_share,
         mean_local_reward=-0.2,
         mean_global_reward=0.6,
-        off_proof_graph_local_reward_share=0.3,
         kl_to_behaviour_policy=kl,
         clip_fraction=clip_fraction,
         mean_explanation_tokens=120.0,

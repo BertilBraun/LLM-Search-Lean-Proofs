@@ -201,6 +201,12 @@ with `[policy] model = "policy-merged"` (no adapter) on ports 8100/8101 and `[va
 8200/8201. A second instance on a GPU sees the first one's memory: if it fails with "Free memory ... is less than
 desired", lower its `GPU_MEMORY_UTILIZATION` (0.25) and `MAX_NUM_SEQS` (96 is plenty for prefill-only value requests).
 
+Policy servers of the GRPO loop also get `--logprobs-mode processed_logprobs` (vLLM 0.31): the recorded
+log-probabilities are then those of the distribution actually sampled (after temperature; top-p is 1.0), which the
+GRPO trainer compares with its own, computed at the same temperature (`src/lean_search/rl/README.md`, "Trainer").
+vLLM's default reports the raw distribution before temperature. Value servers keep the default: their bins are read
+from raw log-probabilities.
+
 Publishing a new policy or value version without a restart (`serve_model.sh` turns on vLLM's dev-mode endpoints,
 listening on 127.0.0.1 only; `lean_search.policy.server_control`):
 

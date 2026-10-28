@@ -1,95 +1,109 @@
-import dataclasses
-
 import pytest
-from rl_samples import DENSE, components, group, sample
+from rl_samples import FAILING, MASKED, NO_PROGRESS, OFF_GRAPH, PROOF_GRAPH, REDUNDANT, UNKNOWN, group, sample
 
-from lean_search.rl.advantages import (
-    AdvantageConfig,
-    AdvantageScale,
-    group_advantages,
-    local_share_of_advantages,
-    mixed_reward,
-)
-from lean_search.rl.grpo_groups import RewardComponents, RewardMode
+from lean_search.rl.advantages import CreditMode, group_advantages, local_share_of_advantages
 
-CONFIG = AdvantageConfig(local_share=0.15)
-OUTCOME = dataclasses.replace(DENSE, mode=RewardMode.OUTCOME_ONLY)
+PROOF_REWARD = 0.85
+OFF_GRAPH_REWARD = 0.0
+NO_PROGRESS_REWARD = -0.075
+FAILING_REWARD = -0.15
 
 
-def test_mixed_reward_weighs_global_and_local_terms() -> None:
-    assert mixed_reward(components(shaping=0.2, global_value=1.0), 0.15).total == pytest.approx(0.85 + 0.15 * 0.2)
-
-
-def test_local_term_is_clipped_to_minus_one() -> None:
-    assert mixed_reward(components(failure=-1.0, shaping=-0.3), 0.15).local == -1.0
-
-
-def test_advantages_are_centred_on_the_sample_weighted_mean() -> None:
+def example() -> list[float | None]:
+    """The advantages of every tactic of the DESIGN's example at the root of xpeeq7, in order."""
     advantages = group_advantages(
         group(
-            sample("a", components(global_value=1.0), multiplicity=3),
-            sample("b", components(failure=-1.0), reached=False, first_failing_tactic=0),
-        ),
-        DENSE,
-        CONFIG,
+            sample("A", PROOF_GRAPH, PROOF_GRAPH, PROOF_GRAPH, closed=1),
+            sample("B", PROOF_GRAPH, FAILING, MASKED),
+            sample("C", UNKNOWN, FAILING, MASKED),
+            sample("D", REDUNDANT),
+        )
     )
-    assert 3 * advantages.advantages[0].overall + advantages.advantages[1].overall == pytest.approx(0.0)
+    return [value for item in advantages.samples for value in item.tactics]
 
 
-def test_local_only_group_keeps_advantages_proportional_to_the_local_share() -> None:
-    advantages = group_advantages(
-        group(sample("a", components()), sample("b", components(failure=-1.0), reached=False, first_failing_tactic=0)),
-        DENSE,
-        CONFIG,
-    )
-    assert advantages.advantages[0].overall == pytest.approx(0.075)
+def test_design_example_signs() -> None:
+    signs = ["+" if value > 0 else "-" if value < 0 else "0" for value in example() if value is not None]
+    assert signs == ["+", "+", "+", "+", "-", "-", "-"]
 
 
-def test_standard_deviation_scale_normalizes_a_local_only_group() -> None:
-    config = dataclasses.replace(CONFIG, scale=AdvantageScale.STANDARD_DEVIATION, standard_deviation_floor=0.0)
-    advantages = group_advantages(
-        group(sample("a", components()), sample("b", components(failure=-1.0), reached=False, first_failing_tactic=0)),
-        DENSE,
-        config,
-    )
-    assert advantages.advantages[0].overall == pytest.approx(1.0)
-
-
-def test_overall_advantage_is_prefix_plus_error_for_a_partial_block() -> None:
-    partial = sample("p", components(failure=-1.0, shaping=0.3, global_value=1.0), first_failing_tactic=1)
-    advantages = group_advantages(group(partial, sample("q", components())), DENSE, CONFIG).advantages[0]
-    assert advantages.overall == pytest.approx(advantages.prefix + advantages.error)
-
-
-def test_error_advantage_is_the_failure_penalty_after_a_valid_prefix() -> None:
-    partial = sample("p", components(failure=-1.0, shaping=0.3, global_value=1.0), first_failing_tactic=1)
-    advantages = group_advantages(group(partial, sample("q", components())), DENSE, CONFIG).advantages[0]
-    assert advantages.error == pytest.approx(0.15 * (-0.7 - 0.3))
-
-
-def test_error_advantage_without_a_prefix_is_the_overall_advantage() -> None:
-    failed = sample("f", components(failure=-1.0), reached=False, first_failing_tactic=0)
-    advantages = group_advantages(group(failed, sample("q", components())), DENSE, CONFIG).advantages[0]
-    assert advantages.error == advantages.overall
-
-
-def test_outcome_only_prefix_gets_the_global_value_of_the_state_reached() -> None:
-    partial = sample("p", components(), first_failing_tactic=1, config=OUTCOME)
-    partial = dataclasses.replace(partial, credit=dataclasses.replace(partial.credit, prefix_reward=1.0))
-    advantages = group_advantages(group(partial, sample("q", components(), config=OUTCOME)), OUTCOME, CONFIG)
-    assert advantages.advantages[0].prefix == pytest.approx(0.85 * 1.0)
+def test_design_example_leaves_the_unknown_and_masked_tactics_untrained() -> None:
+    assert [index for index, value in enumerate(example()) if value is None] == [5, 6, 8]
 
 
 @pytest.mark.parametrize(
-    ("second", "share"),
-    [(components(failure=-1.0), 1.0), (components(global_value=1.0), 0.0)],
+    ("labels", "score"),
+    [
+        ((PROOF_GRAPH,), PROOF_REWARD),
+        ((OFF_GRAPH,), OFF_GRAPH_REWARD),
+        ((NO_PROGRESS,), NO_PROGRESS_REWARD),
+        ((REDUNDANT,), NO_PROGRESS_REWARD),
+        ((FAILING,), FAILING_REWARD),
+        ((PROOF_GRAPH, FAILING, MASKED), (PROOF_REWARD + FAILING_REWARD) / 2),
+        ((UNKNOWN, PROOF_GRAPH), PROOF_REWARD),
+    ],
+    ids=["proof graph", "off graph", "no progress", "redundant", "failing", "partial", "unknown left out"],
+)
+def test_sample_score_is_the_mean_of_its_known_tactics(labels: tuple, score: float) -> None:
+    assert sample("s", *labels).score == pytest.approx(score)
+
+
+def test_closing_a_goal_earns_the_bonus() -> None:
+    assert sample("s", PROOF_GRAPH, closed=2).score == pytest.approx(PROOF_REWARD + 0.15 * 0.2)
+
+
+def test_sample_with_only_unknown_tactics_has_no_score() -> None:
+    assert sample("s", UNKNOWN, UNKNOWN).score is None
+
+
+def test_baseline_is_the_multiplicity_weighted_mean_score() -> None:
+    advantages = group_advantages(group(sample("a", PROOF_GRAPH, multiplicity=3), sample("b", FAILING)))
+    assert advantages.baseline == pytest.approx((3 * PROOF_REWARD + FAILING_REWARD) / 4)
+
+
+def test_unknown_sample_stays_out_of_the_baseline() -> None:
+    advantages = group_advantages(group(sample("a", PROOF_GRAPH), sample("b", FAILING), sample("c", UNKNOWN)))
+    assert advantages.baseline == pytest.approx((PROOF_REWARD + FAILING_REWARD) / 2)
+
+
+def test_unknown_sample_gets_no_sequence_advantage() -> None:
+    advantages = group_advantages(group(sample("a", PROOF_GRAPH), sample("b", FAILING), sample("c", UNKNOWN)))
+    assert advantages.samples[2].sequence is None
+
+
+def test_tactic_advantage_is_its_reward_minus_the_baseline() -> None:
+    advantages = group_advantages(group(sample("a", PROOF_GRAPH, FAILING, MASKED), sample("b", PROOF_GRAPH)))
+    baseline = ((PROOF_REWARD + FAILING_REWARD) / 2 + PROOF_REWARD) / 2
+    assert advantages.samples[0].tactics[1] == pytest.approx(FAILING_REWARD - baseline)
+
+
+@pytest.mark.parametrize(
+    ("labels", "has_closing"),
+    [((PROOF_GRAPH, PROOF_GRAPH), True), ((PROOF_GRAPH, FAILING, MASKED), False), ((PROOF_GRAPH, UNKNOWN), False)],
+)
+def test_closing_tokens_take_the_last_tactic_of_a_complete_block(labels: tuple, has_closing: bool) -> None:
+    advantages = group_advantages(group(sample("a", *labels), sample("b", FAILING)))
+    assert (advantages.samples[0].closing is not None) is has_closing
+
+
+@pytest.mark.parametrize(
+    ("second", "signal"),
+    [(sample("b", PROOF_GRAPH), False), (sample("b", FAILING), True), (sample("b", UNKNOWN), False)],
+    ids=["identical", "different", "unknown"],
+)
+def test_group_signal(second: object, signal: bool) -> None:
+    assert group_advantages(group(sample("a", PROOF_GRAPH), second)).has_signal(CreditMode.PER_TACTIC) is signal
+
+
+def test_equal_scores_with_different_tactics_carry_a_per_tactic_signal_only() -> None:
+    advantages = group_advantages(group(sample("a", PROOF_GRAPH, FAILING), sample("b", FAILING, PROOF_GRAPH)))
+    assert (advantages.has_signal(CreditMode.PER_TACTIC), advantages.has_signal(CreditMode.SEQUENCE)) == (True, False)
+
+
+@pytest.mark.parametrize(
+    ("first", "second", "share"),
+    [(sample("a", FAILING), sample("b", NO_PROGRESS), 1.0), (sample("a", PROOF_GRAPH), sample("b", OFF_GRAPH), 0.0)],
     ids=["local only", "global only"],
 )
-def test_local_share_of_advantages(second: RewardComponents, share: float) -> None:
-    advantages = group_advantages(group(sample("a", components()), sample("b", second)), DENSE, CONFIG)
-    assert local_share_of_advantages([advantages]) == pytest.approx(share)
-
-
-def test_group_without_reward_spread_has_no_mixed_rewards() -> None:
-    advantages = group_advantages(group(sample("a", components()), sample("b", components())), DENSE, CONFIG)
-    assert not advantages.has_mixed_rewards
+def test_local_share_of_advantages(first: object, second: object, share: float) -> None:
+    assert local_share_of_advantages([group_advantages(group(first, second))]) == pytest.approx(share)

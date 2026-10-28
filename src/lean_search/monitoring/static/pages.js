@@ -18,6 +18,16 @@ const EDGE_GROUPS = (prefix) => [
   { label: "Repeat", field: `${prefix}repeat` },
 ];
 
+const TACTIC_LABELS = (prefix) => [
+  { label: "Proof graph", field: `${prefix}proof_graph` },
+  { label: "Off graph", field: `${prefix}off_graph` },
+  { label: "Unknown", field: `${prefix}unknown` },
+  { label: "No progress", field: `${prefix}no_progress` },
+  { label: "Redundant hypothesis", field: `${prefix}redundant_hypothesis` },
+  { label: "Failing", field: `${prefix}failing` },
+  { label: "Masked", field: `${prefix}masked` },
+];
+
 const FIXED = {
   minif2f: {
     title: "miniF2F-valid solved", subtitle: "fixed search budget, by policy version; dashed: control run",
@@ -47,13 +57,25 @@ const GRPO = {
     thresholds: [{ key: "max_clip_fraction", label: "max" }], series: [{ label: "clip", field: "clip_fraction" }],
   },
   mixed: {
-    title: "Groups with mixed rewards", subtitle: "groups that carry a signal", family: "grpo", unit: "share",
+    title: "Groups trained", subtitle: "share of proof-graph groups with a non-zero advantage", family: "grpo", unit: "share",
     thresholds: [{ key: "min_mixed_group_share", label: "min" }], compare: true,
-    series: [{ label: "mixed", field: "mixed_reward_group_share" }],
+    series: [{ label: "trained", field: "mixed_reward_group_share" }],
   },
   rewards: {
-    title: "Mean reward, local vs global", family: "grpo", unit: "number",
-    series: [{ label: "local", field: "mean_local_reward" }, { label: "global (β·G)", field: "mean_global_reward" }],
+    title: "Mean reward per known tactic, local vs global", family: "grpo", unit: "number",
+    series: [{ label: "local (λ·L)", field: "mean_local_reward" }, { label: "global ((1 − λ)·G)", field: "mean_global_reward" }],
+  },
+  tactics: {
+    title: "Trained tactics by credit label", subtitle: "share of the trained groups' tactics", family: "grpo", kind: "stacked",
+    series: TACTIC_LABELS("tactics."),
+  },
+  sampler: {
+    title: "Sampler vs trainer log-probabilities", subtitle: "per sampled token, before the first update", family: "grpo", unit: "number",
+    series: [
+      { label: "mean |difference|", field: "sampler_absolute_log_probability_difference" },
+      { label: "mean difference", field: "sampler_log_probability_difference" },
+      { label: "KL (k3)", field: "sampler_kl" },
+    ],
   },
 };
 
@@ -115,22 +137,16 @@ export const PAGES = [
     title: "Policy / GRPO",
     families: ["grpo"],
     sections: [
-      { title: "Stability", charts: [GRPO.kl, GRPO.clip] },
+      { title: "Stability", charts: [GRPO.kl, GRPO.clip, GRPO.sampler] },
       {
         title: "Signal",
         charts: [
           GRPO.mixed,
-          {
-            title: "Mixed groups, dense vs outcome-only rewards", subtitle: "same searched groups", family: "search", unit: "share",
-            series: [
-              { label: "dense", field: "graph.groups_with_mixed_rewards", over: "graph.groups" },
-              { label: "outcome only", field: "graph.outcome_groups_with_mixed_rewards", over: "graph.groups" },
-            ],
-          },
+          GRPO.tactics,
           GRPO.rewards,
           {
-            title: "Local reward earned off the proof graph", subtitle: "share of positive local reward", family: "grpo", unit: "share",
-            compare: true, series: [{ label: "off proof graph", field: "off_proof_graph_local_reward_share" }],
+            title: "Local share of the advantages", subtitle: "of the summed |tactic advantage|; λ = 0.15", family: "grpo", unit: "share",
+            compare: true, series: [{ label: "local", field: "local_advantage_share" }],
           },
         ],
       },
@@ -140,8 +156,18 @@ export const PAGES = [
           { title: "Explanation length", family: "grpo", unit: "number", compare: true, series: [{ label: "tokens", field: "mean_explanation_tokens" }] },
           { title: "Block length", subtitle: "top-level tactics per sample", family: "grpo", unit: "number", compare: true, series: [{ label: "tactics", field: "mean_block_tactics" }] },
           { title: "Policy loss", family: "grpo", unit: "number", series: [{ label: "loss", field: "policy_loss" }] },
-          { title: "Training time per phase", family: "grpo", unit: "seconds", series: [{ label: "training", field: "training_seconds" }] },
-          { title: "Groups per phase", family: "grpo", unit: "count", series: [{ label: "groups", field: "groups" }, { label: "samples", field: "group_samples" }] },
+          {
+            title: "Forced answers kept", subtitle: "share of trained sequences; the inserted text is masked", family: "grpo", unit: "share",
+            series: [{ label: "forced", field: "forced_answers_kept", over: "sequences" }],
+          },
+          {
+            title: "Training vs sampling time per phase", subtitle: "decides one or two passes", family: "grpo", unit: "seconds",
+            series: [{ label: "training", field: "training_seconds" }, { label: "sampling", field: "sampling_seconds" }],
+          },
+          {
+            title: "Groups per phase", family: "grpo", unit: "count",
+            series: [{ label: "groups", field: "groups" }, { label: "trained", field: "groups_trained" }],
+          },
         ],
       },
     ],
@@ -224,6 +250,10 @@ export const PAGES = [
           { title: "All edges by kind", subtitle: "policy and automation sweep", family: "search", kind: "stacked", series: EDGE_GROUPS("graph.edges.") },
           { title: "Automation sweep edges", family: "search", kind: "stacked", series: EDGE_GROUPS("graph.automation_edges.") },
           SEARCH.noProgress,
+          {
+            title: "Policy tactics by credit label", subtitle: "every policy sample's tactics", family: "search", kind: "stacked",
+            series: TACTIC_LABELS("graph.policy_tactics."),
+          },
         ],
       },
       {
@@ -264,6 +294,37 @@ export const PAGES = [
           {
             title: "Dead ends", subtitle: "share of expanded nodes", family: "search", unit: "share", compare: true,
             series: [{ label: "dead ends", field: "graph.dead_ends", over: "graph.expanded_nodes" }],
+          },
+        ],
+      },
+      {
+        title: "Proofs and harvesting",
+        charts: [
+          {
+            title: "Proof length", subtitle: "per found proof", family: "search", unit: "number", compare: true,
+            series: [
+              { label: "tactics", field: "graph.proof_tactics", over: "graph.proofs" },
+              { label: "blocks", field: "graph.proof_blocks", over: "graph.proofs" },
+            ],
+          },
+          {
+            title: "Proofs per solved problem", family: "search", unit: "number",
+            series: [{ label: "proofs", field: "graph.proofs", over: "graph.solved_trees" }],
+          },
+          {
+            title: "Proof-graph nodes", subtitle: "share of all nodes", family: "search", unit: "share",
+            series: [{ label: "proof graph", field: "graph.proof_graph_nodes", over: "graph.nodes" }],
+          },
+          {
+            title: "Harvest yield", subtitle: "per expansion after the first proof", family: "search", unit: "number",
+            series: [
+              { label: "proofs", field: "graph.harvest_proofs", over: "graph.harvest_expansions" },
+              { label: "proof-graph nodes", field: "graph.harvest_proof_graph_nodes", over: "graph.harvest_expansions" },
+            ],
+          },
+          {
+            title: "ε-picks", subtitle: "share of expansions drawn among the top 8", family: "search", unit: "share",
+            series: [{ label: "explored", field: "graph.exploration_expansions", over: "graph.expanded_nodes" }],
           },
         ],
       },

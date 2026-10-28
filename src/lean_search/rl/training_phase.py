@@ -11,12 +11,15 @@ import torch
 
 from lean_search.expert_iteration.serving import LoopPaths, ModelVersion, Publisher, read_current, record_published
 from lean_search.expert_iteration.shards import now
+from lean_search.monitoring.families import GrpoPhase
 from lean_search.reasoning.dataset import ReasoningExample, tokenize_reasoning_example
 from lean_search.rl.grpo_groups import PolicyGroup, RewardConfig, policy_groups
 from lean_search.rl.policy_data import ExpansionTexts, PolicyDataMetrics, PolicyTokenizer, build_policy_data
 from lean_search.rl.policy_trainer import GrpoConfig, GrpoStepRecord, GrpoTrainingResult, train_grpo
+from lean_search.rl.tree_statistics import GraphStatistics, graph_statistics, total_statistics
 from lean_search.search.graph_labels import label_graph
 from lean_search.search.records import TreeRecord, to_json
+from lean_search.search.tactic_labels import policy_tactics
 from lean_search.training.math_data import MathSolution, tokenize_math_solution
 from lean_search.training.sft_data import TokenizedExample
 from lean_search.value.benchmark import LabelledTree, ValueBenchmark
@@ -50,8 +53,7 @@ class PolicyReplayConfig:
 
 @dataclass(frozen=True)
 class TrainingPhaseConfig:
-    # The owner's local scale: Lean errors and heartbeat timeouts -1, no progress -0.5, before clipping L to [-1, 1].
-    reward: RewardConfig = field(default_factory=lambda: RewardConfig(no_progress_reward=-0.5))
+    reward: RewardConfig = field(default_factory=RewardConfig)
     readout: RemainingStepsReadout = field(default_factory=RemainingStepsReadout)
     # value_share (μ) stays 0 until a value model passed the gate.
     value_targets: ValueTargetConfig = field(
@@ -79,6 +81,8 @@ class PhaseInputs:
 class LabelledPhaseData:
     trees: tuple[LabelledTree, ...]
     groups: tuple[PolicyGroup, ...]
+    # Summed over the trees, for the search family of the dashboard.
+    statistics: GraphStatistics
 
 
 @dataclass(frozen=True)
@@ -112,13 +116,17 @@ def label_phase_data(records: Sequence[TreeRecord], config: TrainingPhaseConfig)
     """Value targets from the recorded estimates (the value version that ran the search) and the GRPO groups."""
     trees = []
     groups: list[PolicyGroup] = []
+    statistics = []
     for record in records:
         labels = label_graph(record)
         estimates = recorded_estimates(record, config.readout)
         targets = value_targets(record, labels, estimates, config.value_targets)
+        tactics = policy_tactics(record, labels)
+        tree_groups = policy_groups(record, labels, tactics, estimates, config.reward)
         trees.append(LabelledTree(record, labels, targets))
-        groups.extend(policy_groups(record, labels, estimates, targets, config.reward))
-    return LabelledPhaseData(tuple(trees), tuple(groups))
+        groups.extend(tree_groups)
+        statistics.append(graph_statistics(record, labels, targets, tactics, tree_groups))
+    return LabelledPhaseData(tuple(trees), tuple(groups), total_statistics(statistics))
 
 
 def chosen[T](items: Sequence[T], count: int, seed: str) -> list[T]:
@@ -155,20 +163,8 @@ def train_policy_phase(
     directory: Path,
     on_step: Callable[[GrpoStepRecord], None],
 ) -> PolicyOutcome:
-    data = build_policy_data(
-        labelled.groups,
-        inputs.texts,
-        tokenizer,
-        config.reward,
-        grpo.advantages,
-        grpo.credit,
-        grpo.group_weights,
-        grpo.max_prompt_tokens,
-        grpo.max_completion_tokens,
-    )
-    replay = policy_replay_examples(
-        tokenizer, inputs, config.policy_replay, grpo.max_prompt_tokens + grpo.max_completion_tokens
-    )
+    data = build_policy_data(labelled.groups, inputs.texts, tokenizer, grpo.data)
+    replay = policy_replay_examples(tokenizer, inputs, config.policy_replay, grpo.max_sequence_tokens)
     adapter = directory / "adapter"
     result = train_grpo(grpo, tokenizer.pad_token_id, data.sequences, replay, device, adapter, on_step)
     return PolicyOutcome(str(adapter), data.metrics, len(replay), result)
@@ -240,6 +236,36 @@ def run_training_phase(
     outcome = PhaseOutcome(len(labelled.trees), len(labelled.groups), policy, value)
     (output_directory / "phase.json").write_text(to_json(outcome), encoding="utf-8")
     return outcome
+
+
+def grpo_phase_record(policy: PolicyOutcome, sampling_seconds: float | None) -> GrpoPhase:
+    """The phase's line of the dashboard's grpo family; `sampling_seconds` is the search time behind the data."""
+    data = policy.data
+    result = policy.result
+    return GrpoPhase(
+        groups=data.groups,
+        group_samples=data.samples,
+        mixed_reward_group_share=data.groups_trained / data.groups if data.groups else 0.0,
+        mean_local_reward=data.mean_local_reward,
+        mean_global_reward=data.mean_global_reward,
+        kl_to_behaviour_policy=result.final_kl_to_data_policy,
+        clip_fraction=result.final_clip_fraction,
+        mean_explanation_tokens=data.mean_explanation_tokens,
+        mean_block_tactics=data.mean_tactics_per_sample,
+        policy_loss=result.final_policy_loss,
+        trained_tokens=result.trained_tokens,
+        training_seconds=result.scoring_seconds + result.training_seconds,
+        groups_trained=data.groups_trained,
+        sequences=data.sequences,
+        tactics=data.tactics,
+        local_advantage_share=data.local_advantage_share,
+        sampler_log_probability_difference=result.sampler_agreement.mean_difference,
+        sampler_absolute_log_probability_difference=result.sampler_agreement.mean_absolute_difference,
+        sampler_kl=result.sampler_agreement.kl_sampler_to_trainer,
+        forced_answers_kept=data.forced_sequences,
+        retokenized_sequences=data.retokenized_sequences,
+        sampling_seconds=sampling_seconds,
+    )
 
 
 def publish_phase(paths: LoopPaths, publisher: Publisher, outcome: PhaseOutcome, trigger: str) -> ModelVersion:

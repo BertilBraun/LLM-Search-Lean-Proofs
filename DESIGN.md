@@ -550,13 +550,27 @@ at 50k 9 stop on heartbeats and 1 fails fast (median 8.6 s, 133 s), at 100k 5 he
   The sampling cap of 1,024 explanation tokens stays (90% of samples are below 760 tokens).
 - **Optimization** (implemented defaults): PPO-style clipped objective per token, clip range [1 − 0.2, 1 + 0.28];
   old log-probabilities from the trainer's own weights before the phase's first update (the published version
-  that collected most of the data; no recorded vLLM log-probabilities); KL (k3 estimator) measured to the
-  data-collecting policy and to the starting weights, penalty coefficient 0; loss normalized as Σ weight · token
+  that collected most of the data), logged against the recorded vLLM log-probabilities; KL (k3 estimator) measured
+  to the data-collecting policy and to the starting weights, penalty coefficient 0; loss normalized as Σ token
   loss / (sequences in the step × 256), so there is no per-sequence mean and no length bias; LoRA rank 64,
-  learning rate 1e-5, 64 sequences per step, two passes per phase if training time allows (above); NLL replay
-  (Lean SFT and math) at weight 0.1; single GPU.
+  learning rate 1e-5, 64 sequences per step, `passes_per_phase` 2 (1 allowed); NLL replay (Lean SFT and math) at
+  weight 0.1; single GPU.
 - **No control run** (decided 2026-10-28): a second full loop is out of budget. The credit comparison happens in
   the single-step test.
+- **Implemented** (2026-10-29; `src/lean_search/rl/README.md`, `search/tactic_labels.py`): per-tactic labels from
+  `Edge.tactic_goals` matched to nodes by goal key (proof graph, off graph, unknown, no progress, redundant
+  hypothesis, failing, masked), with the proof graph at tactic granularity (an edge whose intermediate state is
+  another node's routes through it); groups only at expanded proof-graph nodes; the credit table above (closing
+  bonus 0.1 per goal, μ = `value_share` 0); unknown tactics untrained and samples without a known score outside the
+  baseline; tactics mapped to tokens by decoding the recorded token ids (tokens before the first tactic's span are
+  the explanation, the gap before a tactic is that tactic's, tokens after the last tactic the closing part);
+  `credit = "sequence"` (`phase_sequence_credit.toml`) for the single-step comparison; the trainer on the recorded
+  tokens at the recorded temperature, inserted text masked, no length filter (only an assert at the servers'
+  context). Old trees without token ids are tokenized again (offline only, counted). On the visible student's 244
+  old-format trees (no tactic states, n = 16, no harvesting): 216 groups (1.26 per solved tree), 166 with a
+  non-zero advantage; group tactics 12.8% proof graph, 2.5% off graph, 20.1% unknown, 1.5% no progress, 0.4%
+  redundant, 32.0% failing, 30.6% masked (unflattened blocks); 11.8% of group samples have no known score; the
+  local term carries 17.6% of the summed |advantage|.
 
 ### Value model
 
@@ -664,13 +678,12 @@ foundation of everything above, so it comes first.
    WSL development environment with direct downloads; graph labelling (proof graph, edge kinds, statistics); value
    targets, sibling pairs, value benchmark without circularity and fresh scoring; GRPO trainer with per-token credit
    and the outcome-only control; value trainer and gate; the dashboard (self-built, open by default); the harness
-   (heartbeats, flattening, `rename_i`, identifier check, full sample texts, unparsed samples). Remaining
-   (decided 2026-10-28): per-tactic states in the harness and per-tactic labels (proof graph, no progress including
-   redundant hypotheses); policy groups only at proof-graph nodes with per-tactic credit; the μ-mix of value
-   targets and G; harvesting and ε-exploration in the new search; recorded token ids and log-probabilities, the
-   temperature in the trainer, no length filter, masked forced text; two passes per phase as a setting; the data
-   rewrite (flattening, chunks, descriptive renaming); the probe set; the loop integration (search → label → train
-   → publish, metrics for the dashboard); the cheap tests below.
+   (heartbeats, flattening, `rename_i`, identifier check, full sample texts, unparsed samples). Done since
+   (2026-10-29): per-tactic states, per-tactic labels and credit, groups only at proof-graph nodes, the μ-mix,
+   harvesting and ε-exploration, recorded tokens and log-probabilities with the temperature in the trainer, no
+   length filter, two passes as a setting, the dashboard metrics of proofs, harvesting and credit labels.
+   Remaining: the data rewrite (flattening, chunks, descriptive renaming); the probe set; the loop integration
+   (search → label → train → publish, writing the metrics); the cheap tests below.
 2. **New node**: rebuild, smoke tests, the heartbeat replay test, baselines with the new settings (student v2,
    value v0), timings of search, training and the probe.
 3. **Cheap tests before the loop**: the naming A/B (two short fine-tunes); single-step GRPO on the 512 states with
@@ -731,6 +744,10 @@ Paper names in the last three rows are from memory and still need checking befor
   temperature, the exact weights by subtree size, the expansion budget of the fixed miniF2F evaluation, the gate
   thresholds.
 - Whether flattening plus mixed step lengths bring the failure rate of long blocks (9+ lines: ~80%) down.
+- Not implemented: the "not valid Lean" negative from any tree (Policy update, first bullet). It needs a classifier
+  of failure messages into the tiers of the error analysis (syntax errors and unknown constants vs the rest), which
+  the code does not have yet; the identifier check's `UNKNOWN_IDENTIFIER` alone mixes unknown constants with
+  unknown hypothesis names. Then: those samples as separate single-sample terms with a small negative advantage.
 
 ## Known issues (backlog)
 - Resolved: search generation cost is charged per batch (`CandidateBatch`), when the expander yields it. Runs before

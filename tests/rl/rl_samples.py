@@ -1,51 +1,30 @@
-import dataclasses
+from lean_search.rl.grpo_groups import GroupSample, PolicyGroup, RewardConfig, tactic_reward
+from lean_search.search.graph_labels import EdgeKind
+from lean_search.search.tactic_labels import TacticLabel, TacticOutcome
 
-from lean_search.rl.grpo_groups import (
-    GroupSample,
-    PolicyGroup,
-    RewardComponents,
-    RewardConfig,
-    TokenCredit,
-    total_reward,
-)
-from lean_search.search.graph_labels import EdgeKind, NodeClass
-
-DENSE = RewardConfig(no_progress_reward=-0.5)
-
-
-def components(*, failure: float = 0.0, shaping: float = 0.0, global_value: float = 0.0) -> RewardComponents:
-    return RewardComponents(failure, 0.0, 0.0, shaping, 0.0, global_value)
+REWARDS = RewardConfig()
+PROOF_GRAPH = TacticLabel.PROOF_GRAPH
+OFF_GRAPH = TacticLabel.OFF_GRAPH
+UNKNOWN = TacticLabel.UNKNOWN
+NO_PROGRESS = TacticLabel.NO_PROGRESS
+REDUNDANT = TacticLabel.REDUNDANT_HYPOTHESIS
+FAILING = TacticLabel.FAILING
+MASKED = TacticLabel.MASKED
 
 
-def sample(
-    text: str,
-    parts: RewardComponents,
-    *,
-    first_failing_tactic: int | None = None,
-    reached: bool = True,
-    multiplicity: int = 1,
-    edge_id: int = 0,
-    config: RewardConfig = DENSE,
-) -> GroupSample:
-    """A sample whose valid prefix (when `reached`) earned its components without the failure."""
-    prefix = dataclasses.replace(parts, failure=0.0)
+def sample(text: str, *labels: TacticLabel, multiplicity: int = 1, edge_id: int = 0, closed: int = 0) -> GroupSample:
+    """A sample whose tactics carry these labels; the last one closes `closed` goals."""
+    outcomes = [TacticOutcome(label) for label in labels]
+    if closed:
+        outcomes[-1] = TacticOutcome(labels[-1], goals_closed=closed)
     return GroupSample(
         text=text,
         edge_ids=(edge_id,),
         multiplicity=multiplicity,
-        kind=EdgeKind.NEW_STATE if reached else EdgeKind.LEAN_ERROR,
-        target_id=1 if reached else None,
-        components=parts,
-        reward=total_reward(parts, config),
-        credit=TokenCredit(
-            applied_tactics=0 if first_failing_tactic is None else first_failing_tactic,
-            total_tactics=3,
-            first_failing_tactic=first_failing_tactic,
-            prefix_state_id=1 if reached else None,
-            prefix_reward=total_reward(prefix, config) if reached else None,
-        ),
+        kind=EdgeKind.NEW_STATE,
+        tactics=tuple(tactic_reward(outcome, REWARDS) for outcome in outcomes),
     )
 
 
 def group(*samples: GroupSample, node_id: int = 0) -> PolicyGroup:
-    return PolicyGroup("p", node_id, ("⊢ p",), NodeClass.EXPANDED_OFF_GRAPH, True, samples)
+    return PolicyGroup("p", node_id, ("⊢ p",), samples)

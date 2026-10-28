@@ -1,13 +1,36 @@
+from collections.abc import Sequence
+
 import pytest
 
-from lean_search.rl.advantages import SampleAdvantages
-from lean_search.rl.token_credit import CharacterSpan, CreditMode, TokenSegment, token_credits, token_segments
+from lean_search.rl.advantages import CreditMode, SampleAdvantages
+from lean_search.rl.token_credit import (
+    TokenSegment,
+    decoded_offsets,
+    inserted_token_indices,
+    sampled_token_offsets,
+    token_credits,
+)
+from lean_search.search.texts import CharacterSpan, InsertedSpan, SampledCompletion, SampledTokens, TokenSpan
 
 EXPLANATION = "Introduce x, then normalize.\n\n```lean\n"
 BLOCK = "intro x\nsimp\nring"
 COMPLETION = EXPLANATION + BLOCK + "\n```<|im_end|>"
-ADVANTAGES = SampleAdvantages(overall=0.5, prefix=0.8, error=-0.3)
-E, P, R, M = TokenSegment.EXPLANATION, TokenSegment.PREFIX, TokenSegment.ERROR, TokenSegment.MASKED
+ADVANTAGES = SampleAdvantages(sequence=0.5, tactics=(0.8, -0.3, None), closing=None)
+
+
+class ByteDecoder:
+    """Token i is the i-th UTF-8 byte of a text, so a multi-byte character spans several tokens."""
+
+    def __init__(self, text: str) -> None:
+        self.data = text.encode()
+
+    def decode(self, token_ids: Sequence[int], *, skip_special_tokens: bool) -> str:
+        return bytes(self.data[index] for index in token_ids).decode(errors="replace")
+
+
+class CharacterDecoder:
+    def decode(self, token_ids: Sequence[int], *, skip_special_tokens: bool) -> str:
+        return "".join(chr(token) for token in token_ids)
 
 
 def character_offsets(text: str) -> list[tuple[int, int]]:
@@ -24,99 +47,113 @@ def spans(text: str, *tactics: str) -> list[CharacterSpan]:
     return found
 
 
-def segments_of(text: str, tactic_spans: list[CharacterSpan], first_failing: int | None) -> str:
-    """One letter per character: E explanation, P prefix, R error, M masked."""
-    segments = token_segments(character_offsets(text), tactic_spans, first_failing)
-    return "".join({E: "E", P: "P", R: "R", M: "M"}[segment] for segment in segments)
-
-
-def segment_at(text: str, needle: str, first_failing: int | None) -> set[TokenSegment]:
-    tactic_spans = spans(text, "intro x", "simp", "ring")
-    segments = token_segments(character_offsets(text), tactic_spans, first_failing)
-    start = text.index(needle)
-    return set(segments[start : start + len(needle)])
+def credits_at(needle: str, advantages: SampleAdvantages = ADVANTAGES, mode: CreditMode = CreditMode.PER_TACTIC):
+    credits = token_credits(
+        character_offsets(COMPLETION), spans(COMPLETION, "intro x", "simp", "ring"), frozenset(), advantages, mode
+    )
+    start = COMPLETION.index(needle)
+    return credits, range(start, start + len(needle))
 
 
 @pytest.mark.parametrize(
-    ("needle", "first_failing", "segment"),
+    ("needle", "segment", "advantage", "trained"),
     [
-        ("Introduce", None, E),
-        ("```lean", None, E),
-        ("intro x", None, P),
-        ("ring", None, P),
-        ("<|im_end|>", None, P),
-        ("Introduce", 0, E),
-        ("intro x", 0, R),
-        ("simp", 0, M),
-        ("<|im_end|>", 0, M),
-        ("intro x", 1, P),
-        ("simp", 1, R),
-        ("ring", 1, M),
-        ("```<|im_end|>", 1, M),
+        ("Introduce", TokenSegment.EXPLANATION, 0.5, True),
+        ("```lean", TokenSegment.EXPLANATION, 0.5, True),
+        ("intro x", TokenSegment.TACTIC, 0.8, True),
+        ("simp", TokenSegment.TACTIC, -0.3, True),
+        ("ring", TokenSegment.TACTIC, 0.0, False),
+        ("```<|im_end|>", TokenSegment.CLOSING, 0.0, False),
     ],
 )
-def test_segment_of_each_part(needle: str, first_failing: int | None, segment: TokenSegment) -> None:
-    assert segment_at(COMPLETION, needle, first_failing) == {segment}
+def test_token_credit_of_each_part(needle: str, segment: TokenSegment, advantage: float, trained: bool) -> None:
+    credits, positions = credits_at(needle)
+    found = {(credits.segments[index], credits.advantages[index], credits.trained[index]) for index in positions}
+    assert found == {(segment, advantage, trained)}
+
+
+def test_closing_tokens_of_a_complete_block_get_the_last_tactic_advantage() -> None:
+    complete = SampleAdvantages(sequence=0.5, tactics=(0.8, 0.2, 0.4), closing=0.4)
+    credits, positions = credits_at("<|im_end|>", complete)
+    assert {credits.advantages[index] for index in positions} == {0.4}
 
 
 def test_newline_between_tactics_belongs_to_the_next_tactic() -> None:
-    newline = EXPLANATION.__len__() + len("intro x")
-    segments = token_segments(character_offsets(COMPLETION), spans(COMPLETION, "intro x", "simp", "ring"), 1)
-    assert segments[newline] == R
+    credits, positions = credits_at("\nsimp")
+    assert credits.advantages[positions[0]] == -0.3
 
 
-def test_flattened_have_keeps_its_valid_prefix_and_blames_the_nested_step() -> None:
-    text = "```lean\nhave h : x = 1 := by\n  simp\nlinarith\n```"
-    tactic_spans = spans(text, "have h : x = 1", "simp", "linarith")
-    assert segments_of(text, tactic_spans, 1) == "E" * 8 + "P" * 14 + "R" * 13 + "M" * 13
-
-
-def test_token_straddling_two_tactics_takes_the_first() -> None:
-    offsets = [(0, 3), (3, 9), (9, 12)]
-    assert token_segments(offsets, [CharacterSpan(0, 5), CharacterSpan(6, 12)], 1) == (P, P, R)
-
-
-def test_without_spans_every_token_is_explanation() -> None:
-    assert set(token_segments(character_offsets(COMPLETION), [], 0)) == {E}
-
-
-@pytest.mark.parametrize(("first_failing", "expected"), [(None, 0.8), (1, -0.3)])
-def test_tactic_token_advantage(first_failing: int | None, expected: float) -> None:
-    text = COMPLETION
-    credits = token_credits(
-        character_offsets(text), spans(text, "intro x", "simp", "ring"), first_failing, ADVANTAGES, CreditMode.PER_TOKEN
-    )
-    assert credits.advantages[text.index("simp")] == expected
-
-
-def test_explanation_tokens_get_the_overall_advantage() -> None:
-    credits = token_credits(
-        character_offsets(COMPLETION), spans(COMPLETION, "intro x", "simp", "ring"), 1, ADVANTAGES, CreditMode.PER_TOKEN
-    )
-    assert set(credits.advantages[: len(EXPLANATION)]) == {0.5}
-
-
-def test_masked_tokens_are_not_trained() -> None:
-    credits = token_credits(
-        character_offsets(COMPLETION), spans(COMPLETION, "intro x", "simp", "ring"), 1, ADVANTAGES, CreditMode.PER_TOKEN
-    )
-    assert not credits.trained[COMPLETION.index("ring")]
-
-
-def test_prefix_without_a_reached_state_falls_back_to_the_overall_advantage() -> None:
-    advantages = SampleAdvantages(overall=-0.4, prefix=None, error=None)
+def test_sequence_credit_gives_every_token_the_sequence_advantage() -> None:
     credits = token_credits(
         character_offsets(COMPLETION),
         spans(COMPLETION, "intro x", "simp", "ring"),
-        None,
-        advantages,
-        CreditMode.PER_TOKEN,
+        frozenset(),
+        ADVANTAGES,
+        CreditMode.SEQUENCE,
     )
-    assert set(credits.advantages) == {-0.4}
+    assert set(credits.advantages) == {0.5}
 
 
-def test_sequence_credit_trains_every_token_with_the_overall_advantage() -> None:
-    credits = token_credits(
-        character_offsets(COMPLETION), spans(COMPLETION, "intro x", "simp", "ring"), 0, ADVANTAGES, CreditMode.SEQUENCE
+def test_without_a_span_per_tactic_every_token_gets_the_sequence_advantage() -> None:
+    credits = token_credits(character_offsets(COMPLETION), [], frozenset(), ADVANTAGES, CreditMode.PER_TACTIC)
+    assert set(credits.advantages) == {0.5}
+
+
+def test_inserted_tokens_are_never_trained() -> None:
+    credits = token_credits(character_offsets(COMPLETION), [], frozenset({0, 1}), ADVANTAGES, CreditMode.SEQUENCE)
+    assert (credits.trained[:3], credits.segments[:2]) == (
+        (False, False, True),
+        (TokenSegment.INSERTED, TokenSegment.INSERTED),
     )
-    assert (set(credits.advantages), set(credits.trained)) == ({0.5}, {True})
+
+
+def test_bytes_of_one_character_share_its_range() -> None:
+    text = "a⊢b"
+    offsets, decoded = decoded_offsets(ByteDecoder(text), range(len(text.encode())))
+    assert (offsets, decoded) == ([(0, 1), (1, 2), (1, 2), (1, 2), (2, 3)], text)
+
+
+def forced(text: str, opening: str, fence: str) -> SampledCompletion:
+    """A sample whose opening the harness inserted (with tokens) and whose closing fence it appended (without)."""
+    cut = text.index(opening)
+    token_text = text[: len(text) - len(fence)] + "<|im_end|>"
+    opening_tokens = TokenSpan(cut, cut + len(opening))
+    return SampledCompletion(
+        0,
+        text,
+        (),
+        tokens=SampledTokens(
+            tuple(ord(character) for character in token_text),
+            tuple(None if cut <= index < cut + len(opening) else -0.1 for index in range(len(token_text))),
+            (
+                InsertedSpan(CharacterSpan(cut, cut + len(opening)), opening_tokens),
+                InsertedSpan(
+                    CharacterSpan(len(text) - len(fence), len(text)), TokenSpan(len(token_text), len(token_text))
+                ),
+            ),
+        ),
+    )
+
+
+FORCED = forced("Thinking on and on.\n\n```lean\nsimp\n```", "\n\n```lean\n", "\n```")
+
+
+def test_end_of_turn_after_the_inserted_fence_starts_past_it() -> None:
+    offsets = sampled_token_offsets(CharacterDecoder(), FORCED)
+    end_of_turn = len(FORCED.text) - len("\n```")
+    assert offsets is not None and offsets[end_of_turn][0] == len(FORCED.text)
+
+
+def test_tokens_before_the_inserted_fence_keep_their_positions() -> None:
+    offsets = sampled_token_offsets(CharacterDecoder(), FORCED)
+    assert offsets is not None and offsets[3] == (3, 4)
+
+
+def test_tokens_that_do_not_decode_to_the_text_have_no_offsets() -> None:
+    mismatched = SampledCompletion(0, "simp", (), tokens=SampledTokens((ord("x"),), (-0.1,)))
+    assert sampled_token_offsets(CharacterDecoder(), mismatched) is None
+
+
+def test_inserted_token_indices_cover_the_inserted_opening() -> None:
+    cut = FORCED.text.index("\n\n```lean\n")
+    assert inserted_token_indices(FORCED) == frozenset(range(cut, cut + len("\n\n```lean\n")))
