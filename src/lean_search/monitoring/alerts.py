@@ -1,4 +1,6 @@
-"""Warning rules over a run's metric families; thresholds come from the dashboard config."""
+"""Warning rules over a run's metric families; thresholds come from the dashboard config, except the loop's own health
+checks (clip fraction, KL to the starting policy, held-out states, search budget, ...), whose thresholds and alerts the
+loop writes into the `health` family."""
 
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -33,7 +35,6 @@ class AlertThresholds:
     max_no_progress_share: float = 0.35
     no_progress_rise: float = 0.05
     max_kl: float = 0.05
-    max_clip_fraction: float = 0.2
     max_repetition_loop_share: float = 0.02
     repetition_loop_rise: float = 0.005
     min_math500_visible: float = 0.80
@@ -149,10 +150,6 @@ def high_kl(reader: RunReader, thresholds: AlertThresholds, now: float) -> Alert
     return latest_above(reader, "grpo", "kl_to_behaviour_policy", "KL", thresholds.max_kl, "policy")
 
 
-def high_clip_fraction(reader: RunReader, thresholds: AlertThresholds, now: float) -> Alert | None:
-    return latest_above(reader, "grpo", "clip_fraction", "Clip fraction", thresholds.max_clip_fraction, "policy")
-
-
 def math_retention(reader: RunReader, thresholds: AlertThresholds, now: float) -> Alert | None:
     measured = present(reader.series("fixed_targets").columns.get("math500_visible", []))
     if not measured:
@@ -258,7 +255,6 @@ RULES = (
     no_progress,
     repetition_loops,
     high_kl,
-    high_clip_fraction,
     math_retention,
     few_mixed_groups,
     idle_gpus,
@@ -270,8 +266,21 @@ RULES = (
 )
 
 SEVERITY_ORDER = {Severity.CRITICAL: 0, Severity.WARNING: 1, Severity.INFO: 2}
+# The loop's health check severities (`families.HealthSeverity`); its thresholds live in the loop config.
+HEALTH_SEVERITIES = {"stop": Severity.CRITICAL, "warning": Severity.WARNING, "note": Severity.INFO}
+
+
+def loop_health(reader: RunReader) -> list[Alert]:
+    """The alerts of the latest phase's health check (rl/health_checks.py), which the loop also logged."""
+    latest = reader.series("health").latest
+    if latest is None:
+        return []
+    return [
+        Alert(HEALTH_SEVERITIES[alert["severity"]], alert["title"], alert["detail"], "training")
+        for alert in latest["fields"]["alerts"]
+    ]
 
 
 def run_alerts(reader: RunReader, thresholds: AlertThresholds, now: float) -> list[Alert]:
-    alerts = [alert for rule in RULES if (alert := rule(reader, thresholds, now)) is not None]
+    alerts = [alert for rule in RULES if (alert := rule(reader, thresholds, now)) is not None] + loop_health(reader)
     return sorted(alerts, key=lambda alert: SEVERITY_ORDER[alert.severity])

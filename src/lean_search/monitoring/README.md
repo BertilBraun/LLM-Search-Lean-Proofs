@@ -21,7 +21,7 @@ the record. With `tensorboard=True` every numeric field is also logged as the sc
 |---|---|---|---|
 | `status` | `LoopStatus` | every heartbeat | loop state, searches running, statements and proofs (cumulative and per hour), last publish time, heartbeat interval, searches a server failed and statements dropped after repeated failures (this session) |
 | `system` | `SystemUsage` | `record-system`, every 30 s | per-GPU utilization, memory and power; cgroup cores used and available; Lean REPL cores; throttling; memory used, the limit and what is available; private memory of the Lean REPLs (total, p90) and the vLLM processes; size and free space of the fullest filesystem of the run and its checkpoints; hourly price and money spent |
-| `fixed_targets` | `FixedTargets` | after evaluations (`grpo_evaluate.py`) | miniF2F-valid solved / problems at the fixed budget, the probe set solved (by difficulty stratum, at its budget), held-out per-sample success, MATH-500 visible and thinking, the evaluation's wall time, searches stopped on the wall clock; a probe slot's part (`probe_slot`, `probe_part`) and the last three slots together (`probe_rolling_*`, the whole set); a repeated run's solved, difference and discordant problems against the first run (`probe_repeat_*`, per part); version 0 is the baseline |
+| `fixed_targets` | `FixedTargets` | after evaluations (`grpo_evaluate.py`) | miniF2F-valid solved / problems at the fixed budget, the probe set solved (by difficulty stratum, at its budget), held-out per-sample success and valid-Lean rate, MATH-500 visible and thinking, the evaluation's wall time, searches stopped on the wall clock; a probe slot's part (`probe_slot`, `probe_part`) and the last three slots together (`probe_rolling_*`, the whole set); a repeated run's solved, difference and discordant problems against the first run (`probe_repeat_*`, per part); version 0 is the baseline |
 | `grpo` | `GrpoPhase` | per training phase (`training_phase.grpo_phase_record`) | proof-graph groups, trained groups (non-zero advantage) and their share, trained tactics by credit label, mean local and global reward per known tactic, local share of the advantages, KL to the data-collecting policy, clip fraction, mean probability ratio and clip fraction of the positive- and negative-advantage tokens per pass, sampler-vs-trainer log-probability difference (overall and by sampling age: the version trained from minus the version that sampled), forced answers kept, explanation and block length, loss, tokens, training and sampling time |
 | `value_phase` | `ValuePhase` | per phase (the loop, from the phase's labelled trees) | μ in effect; `PhaseValueMetrics`: the value targets' label distribution per bin by source and tree outcome (exact steps unsmoothed), the serving model's recorded predictions of the same states and of the never-expanded frontier (mean per bin, p_dead and expected-steps histograms), calibration on expanded states (reliability bins, ECE, Brier), remaining-steps MAE and Spearman on proof-graph states |
 | `value_training` | `ValueTraining` | per value retrain | the value version that publishes it, window trees, loss, the window's label distribution per bin by source (smoothed as trained) and the v0 replay's |
@@ -29,6 +29,8 @@ the record. With `tensorboard=True` every numeric field is also logged as the sc
 | `value_arm` | `ValueArmResult` | per value arm (`grpo_evaluate.py --value-arm`) | slot and part, solved with v0 and with the published value model, and `PairedDifference`s (runs, problems, problems solved by one arm only, the paired solve-rate difference with its exact McNemar interval, one-sided p-values) for this slot and pooled over the same published value model and over every one; worse (the alert) |
 | `search` | `SearchPhase` | per phase | `GraphStatistics` summed over the phase's trees (edge kinds of all / policy / automation edges and policy samples, proof graph, dead ends, value targets by source, tactics by credit label, groups, rewards, proofs with their tactics and blocks, harvest yield, ε-picks), failure tiers, Lean seconds per expansion, forced answers, repetition loops, block length |
 | `curriculum` | `CurriculumPhase` | per phase | difficulty band, pool and verified statements, attempts and solved by difficulty band and by stage |
+| `budget` | `BudgetPhase` | per phase, after its evaluations (`rl/budget_signals.py`) | trees, solved trees, trainable groups, the expansion budget, solves in its last quarter (count, share, share pooled over the last phases and its threshold), solved searches by expansions to the first proof and by proof length (buckets, means), the curriculum difficulty of solved (mean, median, p90) and searched statements |
+| `health` | `PhaseHealth` | per phase, after its evaluations (`rl/health_checks.py`) | the phase and its version; `measured.*` (KL to the starting policy, clip fraction, distinct blocks and texts per expansion, explanation tokens, cut-off and repetition-loop shares, held-out valid-Lean rate and success), `thresholds.*` (the limits the loop judged it against, None until their reference exists), the alerts (check, severity, title, detail), whether it stopped the loop, the last good version |
 | `timing` | `PhaseTiming` | per phase | sampling, training (the whole job), publishing and evaluation seconds; trees trained on; searches paused; the pause segment by segment (`pause.*`: drain, server sleep, trainer start, preparation, policy load, compile, scoring, policy and value training, merge, write, publish, wake, resume; `rl/README.md`, "Timing") |
 
 The reader flattens nested dataclasses and dicts to dotted column names (`graph.policy_samples.no_progress`,
@@ -45,12 +47,15 @@ default, or a new dataclass with its own `family`.
   numeric field such as `probe_slot`), a unit and its series (a column, a sum, a ratio `over` another column or a
   column prefix, or one series per column of a prefix); `compare: true` overlays the other runs (`--compare
   control=<dir>`) dashed, `baseline: true` draws the first value as a reference, `thresholds` read the alert
-  thresholds, `references` are fixed lines. A `histogram` chart draws lists of numbers from a family's latest record
-  as grouped bars per category (`series: [{label, path, family, normalize}]`), a `reliability` chart lists of
-  reliability bins (`curves: [{label, path, family}]`; a series or curve may read another family's latest record).
-  Every detail page also
-  lists all columns of its families with sparklines, so a new field is visible without touching the frontend.
+  thresholds, `references` are fixed lines, and a series with `dashed: true` draws a column dashed (the `health`
+  family's per-phase thresholds). A `histogram` chart draws lists of numbers from a family's latest record as grouped
+  bars per category (`series: [{label, path, family, normalize}]`), a `reliability` chart lists of reliability bins
+  (`curves: [{label, path, family}]`; a series or curve may read another family's latest record). Every detail page
+  also lists all columns of its families with sparklines, so a new field is visible without touching the frontend.
 - Alerts (`alerts.py`, thresholds in `experiments/configs/dashboard/dashboard.toml`): loop silent, no publish,
-  no-progress share rising or high, repetition loops, KL and clip fraction high, MATH-500 below its minimum or
-  dropping from the baseline, few groups with mixed rewards, GPUs underused, curriculum solve rate off its band,
-  the published value model worse than v0 in its value arms, host memory low, disk almost full, searches failing on a server.
+  no-progress share rising or high, repetition loops, KL to the data-collecting policy high, MATH-500 below its minimum
+  or dropping from the baseline, few groups with mixed rewards, GPUs underused, curriculum solve rate off its band,
+  the published value model worse than v0 in its value arms, host memory low, disk almost full, searches failing on a
+  server. Plus the latest phase's alerts of the loop's own health checks (the `health` family: KL to the starting
+  policy, clip fraction, distinct samples, explanation length, cut-off samples, held-out valid Lean and success, search
+  budget; their thresholds are the loop config's `[health]`, and a hard stop is critical), on the Training page.

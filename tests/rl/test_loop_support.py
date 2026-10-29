@@ -23,7 +23,7 @@ from lean_search.rl.evaluation import (
     value_arm_result,
 )
 from lean_search.rl.fixed_targets import first_problems_by_stratum, probe_part
-from lean_search.rl.loop_config import EvaluationTarget, ValueArmConfig
+from lean_search.rl.loop_config import EvaluationTarget, SamplingConfig, ValueArmConfig
 from lean_search.rl.renaming import (
     RenamedStatement,
     StatementRenamings,
@@ -31,8 +31,9 @@ from lean_search.rl.renaming import (
     read_renamings,
     write_renamings,
 )
-from lean_search.rl.search_models import evaluation_run_config, run_config_text
+from lean_search.rl.search_models import evaluation_run_config, run_config_text, training_run_config
 from lean_search.rl.tree_store import TreeStore
+from lean_search.rl.tree_summary import TreeSummary
 from lean_search.search import Accounting, RunConfig, SearchResult, StopReason, tree_record
 from lean_search.search.config import parse_run_config
 
@@ -54,6 +55,16 @@ def test_a_run_config_reads_back_from_its_text() -> None:
 def test_evaluations_search_without_harvesting_or_exploration(part: str) -> None:
     config = evaluation_run_config(template(), EvaluationTarget(16, 600.0, 8))
     assert not getattr(config.search, part).enabled
+
+
+def test_the_loops_searches_use_its_expansion_budget() -> None:
+    sampling = SamplingConfig("template.toml", max_expansions=32)
+    assert training_run_config(template(), sampling).search.max_expansions == 32
+
+
+def test_the_loops_searches_keep_a_repl_each() -> None:
+    sampling = SamplingConfig("template.toml", concurrency=12)
+    assert training_run_config(template(), sampling).lean.pool_size == 12
 
 
 def test_evaluations_search_at_their_budget() -> None:
@@ -87,11 +98,18 @@ def test_held_out_states_record_per_sample_success() -> None:
     assert fixed_targets_record(summary).held_out_success == 0.25
 
 
+def test_held_out_states_record_the_valid_lean_rate() -> None:
+    summary = EvaluationSummary(
+        EvaluationKind.HELD_OUT_STATES, "states_v0001", 1, 0, 512, 1024, (), 1, 512, 0, 0.0, 0.0, "", "", samples=4096
+    )
+    assert fixed_targets_record(dataclasses.replace(summary, valid_samples=2048)).held_out_valid_rate == 0.5
+
+
 def test_tree_store_reads_back_its_index(tmp_path: Path) -> None:
     result = SearchResult(PROBLEM.name, True, StopReason.PROVED, None, (), (), Accounting(proofs=1), None, 0, 1)
     record = tree_record(solved_tree(PROBLEM), PROBLEM.formal_statement, result)
     store = TreeStore(tmp_path)
-    store.add(record, 2, 1, 1.5)
+    store.add(record, 2, 1, 1.5, TreeSummary(32, 3, 1, 1))
     assert TreeStore(tmp_path).phase_entries(2) == store.entries
 
 

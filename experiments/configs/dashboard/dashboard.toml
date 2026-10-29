@@ -15,7 +15,6 @@ max_minutes_since_publish = 90.0
 max_no_progress_share = 0.35
 no_progress_rise = 0.05
 max_kl = 0.05
-max_clip_fraction = 0.2
 max_repetition_loop_share = 0.02
 repetition_loop_rise = 0.005
 min_math500_visible = 0.80

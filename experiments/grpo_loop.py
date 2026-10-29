@@ -9,6 +9,8 @@
     python experiments/grpo_loop.py --config ... report              # solve rate per phase (the overfit curve)
     python experiments/grpo_loop.py --config ... request-evaluation --target minif2f
     python experiments/grpo_loop.py --config ... set-value-share 0.15    # μ from the next phase that trains; 0: off
+    python experiments/grpo_loop.py --config ... rollback [--version N]  # after a health stop: N's policy, newly
+    python experiments/grpo_loop.py --config ... clear-health-stop       # after a health stop: keep the current version
 
 init records version 0 (the [initial] adapters merged into full weights) and refuses an existing loop. run copies the
 config to $LEAN_SEARCH_RUNS/<name>/loop.toml (the evaluation jobs read it), resumes an interrupted phase, and writes
@@ -16,7 +18,8 @@ the dashboard's metrics under $LEAN_SEARCH_RUNS/<name>/metrics/ (experiments/das
 asks the running loop to evaluate a fixed target at its next phase pause (the probe: its next slot); without a running
 loop use experiments/grpo_evaluate.py. set-value-share writes μ (value_share in [reward] and [value_targets] of every
 phase) to $LEAN_SEARCH_RUNS/<name>/value_share.json, which the loop reads each time a phase starts training; until it
-is set, μ is 0.
+is set, μ is 0. After the health check's hard stop (health_stop.json, src/lean_search/rl/README.md, "Health checks")
+the loop refuses to start until rollback or clear-health-stop ran.
 """
 
 import argparse
@@ -41,6 +44,7 @@ from lean_search.expert_iteration.serving import (
 from lean_search.monitoring.store import MetricsWriter
 from lean_search.rl.evaluation import EvaluationKind
 from lean_search.rl.fixed_sets import read_fixed_set
+from lean_search.rl.health_checks import clear_health_stop, health_stop_text, publish_rollback, read_health_stop
 from lean_search.rl.loop import (
     GrpoLoop,
     GrpoLoopPaths,
@@ -62,7 +66,7 @@ from lean_search.rl.loop_services import (
     serve_commands,
 )
 from lean_search.rl.renaming import load_renamings
-from lean_search.rl.search_models import served_run_config
+from lean_search.rl.search_models import served_run_config, training_run_config
 from lean_search.rl.statement_sources import CurriculumStatements, FixedStatements, StatementSource
 from lean_search.rl.tree_store import TreeStore
 from lean_search.search import RunConfig, load_run_config
@@ -89,6 +93,9 @@ def parse_arguments() -> argparse.Namespace:
     request.add_argument("--target", type=EvaluationKind, choices=list(EvaluationKind), required=True)
     value_share = commands.add_parser("set-value-share")
     value_share.add_argument("value_share", type=float, help="μ in [0, 1]; 0 turns it off")
+    rollback = commands.add_parser("rollback")
+    rollback.add_argument("--version", type=int, help="default: the last good version of the health stop")
+    commands.add_parser("clear-health-stop")
     return parser.parse_args()
 
 
@@ -101,11 +108,9 @@ def publisher(config: GrpoLoopConfig, paths: GrpoLoopPaths) -> MergedPublisher:
 
 
 def search_run_config(config: GrpoLoopConfig) -> RunConfig:
-    """The search template on the loop's servers, one REPL per concurrent search."""
+    """The search template on the loop's servers at the loop's budget, one REPL per concurrent search."""
     template = served_run_config(load_run_config(REPOSITORY_DIRECTORY / config.sampling.search_config), config.serving)
-    concurrency = config.sampling.concurrency
-    lean = dataclasses.replace(template.lean, pool_size=concurrency, concurrency=concurrency)
-    return dataclasses.replace(template, lean=lean)
+    return training_run_config(template, config.sampling)
 
 
 def statement_source(config: GrpoLoopConfig, paths: GrpoLoopPaths) -> StatementSource:
@@ -210,6 +215,25 @@ async def run(config: GrpoLoopConfig, paths: GrpoLoopPaths) -> None:
         await loop.run(stop)
 
 
+def rollback(config: GrpoLoopConfig, paths: GrpoLoopPaths, version: int | None) -> None:
+    """With the loop stopped: the version's policy adapter published as a new version (merged on the CPU), the health
+    stop cleared; the loop then continues training from that adapter."""
+    stop = read_health_stop(paths.health_stop)
+    if version is None and stop is None:
+        raise SystemExit("No health stop recorded: name the version to roll back to with --version.")
+    target = stop.last_good_version if version is None else version
+    published = publish_rollback(paths.models, publisher(config, paths), target)
+    print(f"Version {published.version} serves version {target}'s policy ({published.policy_adapter}).")
+    if stop is not None:
+        print(f"Health stop kept as {clear_health_stop(paths.health_stop)}; start the loop again.")
+
+
+def clear_stop(paths: GrpoLoopPaths) -> None:
+    if read_health_stop(paths.health_stop) is None:
+        raise SystemExit("No health stop recorded.")
+    print(f"Health stop kept as {clear_health_stop(paths.health_stop)}; the loop continues with the current version.")
+
+
 def status(paths: GrpoLoopPaths) -> None:
     versions = read_versions(paths.models)
     store = TreeStore(paths.trees)
@@ -227,6 +251,9 @@ def status(paths: GrpoLoopPaths) -> None:
         print(f"last phase: {lines[-1] if lines else None}")
     requests = sorted(path.name for path in paths.requests.glob("*")) if paths.requests.exists() else []
     print(f"requested evaluations: {requests}")
+    stop = read_health_stop(paths.health_stop)
+    if stop is not None:
+        print(health_stop_text(stop))
 
 
 def report(paths: GrpoLoopPaths) -> None:
@@ -273,6 +300,10 @@ def main() -> None:
         case "set-value-share":
             set_value_share(paths, arguments.value_share)
             print(f"μ = {arguments.value_share} from the next phase that starts training ({paths.value_share}).")
+        case "rollback":
+            rollback(config, paths, arguments.version)
+        case "clear-health-stop":
+            clear_stop(paths)
     sys.stdout.flush()
 
 

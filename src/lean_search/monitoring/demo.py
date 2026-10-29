@@ -10,14 +10,21 @@ from dataclasses import dataclass
 
 from lean_search.monitoring.families import (
     BandOutcome,
+    BudgetPhase,
     CurriculumPhase,
     FailureTiers,
     FixedTargets,
     GrpoPhase,
+    HealthAlert,
+    HealthCheck,
+    HealthMeasurements,
+    HealthSeverity,
+    HealthThresholds,
     LoopState,
     LoopStatus,
     PairedDifference,
     PauseSegments,
+    PhaseHealth,
     PhaseTiming,
     SearchPhase,
     SystemUsage,
@@ -270,6 +277,8 @@ class DemoRun:
         self.write_value_phase(moment)
         self.write_grpo(moment + 240)
         self.write_timing(moment + 270)
+        self.write_budget(moment + 275)
+        self.write_health(moment + 276)
         self.phase += 1
         self.last_publish = moment + 270
         if self.phase % self.schedule.value_every_phases == 0:
@@ -314,6 +323,91 @@ class DemoRun:
                 trees=round(62 + self.noise(5)),
                 searches_paused=round(100 + self.noise(6)),
                 pause=pause,
+            ),
+            record_time=moment,
+        )
+
+    def write_budget(self, moment: float) -> None:
+        learned = self.progress(moment)
+        trees = round(180 + self.noise(10))
+        solved = round(trees * (0.5 + self.noise(0.03)))
+        late = 0.06 + 0.06 * learned + self.noise(0.01)
+        shares = (0.45, 0.12, 0.1, 0.1, 0.08, 0.06, late, 0.0, 0.0, 0.0)
+        self.writer.write(
+            BudgetPhase(
+                trees=trees,
+                solved_trees=solved,
+                trainable_groups=round(solved * (3.2 + 1.2 * learned)),
+                expansion_budget=32,
+                late_solves=round(solved * late),
+                late_solve_share=late,
+                recent_late_solve_share=late - 0.005,
+                recent_phases=min(self.phase + 1, 3),
+                max_late_solve_share=0.1,
+                expansions_to_solve={
+                    bucket: round(solved * share)
+                    for bucket, share in zip(
+                        ("1", "2", "3-4", "5-8", "9-16", "17-24", "25-32", "33-48", "49-64", "65+"), shares, strict=True
+                    )
+                },
+                mean_expansions_to_solve=4.5 + 2 * learned + self.noise(0.3),
+                proof_steps={
+                    bucket: round(solved * share)
+                    for bucket, share in zip(
+                        ("1", "2", "3", "4-5", "6-8", "9+"), (0.4, 0.2, 0.15, 0.12, 0.08, 0.05), strict=True
+                    )
+                },
+                mean_proof_steps=2.6 + 0.8 * learned + self.noise(0.1),
+                mean_difficulty_solved=self.band_low + 0.3 + self.noise(0.05),
+                median_difficulty_solved=self.band_low + 0.25,
+                p90_difficulty_solved=self.band_low + 0.9,
+                mean_difficulty_searched=self.band_low + 0.5,
+            ),
+            record_time=moment,
+        )
+
+    def write_health(self, moment: float) -> None:
+        learned = self.progress(moment)
+        evaluated = (self.phase + 1) % self.schedule.evaluation_every_phases == 0
+        kl = 0.002 + 0.02 * learned + abs(self.noise(0.001))
+        alerts = ()
+        if kl > 0.02:
+            alerts = (
+                HealthAlert(
+                    HealthCheck.KL_TO_STARTING_POLICY,
+                    HealthSeverity.WARNING,
+                    "KL to the starting policy high",
+                    f"KL to the starting policy {kl:.3g} > 0.02 per token.",
+                ),
+            )
+        self.writer.write(
+            PhaseHealth(
+                phase=self.phase + 1,
+                policy_version=self.phase + 1,
+                measured=HealthMeasurements(
+                    kl_to_starting_policy=kl,
+                    clip_fraction=max(0.0, 0.01 + 0.03 * learned + self.noise(0.005)),
+                    distinct_samples_per_expansion=6.8 - 0.8 * learned + self.noise(0.1),
+                    distinct_texts_per_expansion=7.95 + self.noise(0.02),
+                    mean_explanation_tokens=121 - 14 * learned + self.noise(3),
+                    cut_off_share=0.004 + abs(self.noise(0.001)),
+                    repetition_loop_share=0.002 + abs(self.noise(0.0005)),
+                    held_out_valid_rate=0.72 + 0.02 * learned + self.noise(0.005) if evaluated else None,
+                    held_out_success=0.421 + self.profile.held_out_gain * learned if evaluated else None,
+                ),
+                thresholds=HealthThresholds(
+                    max_kl_to_starting_policy=0.02,
+                    max_clip_fraction=0.1,
+                    min_distinct_samples_per_expansion=5.1,
+                    min_explanation_tokens=60.0,
+                    max_explanation_tokens=242.0,
+                    max_cut_off_share=0.014,
+                    min_held_out_valid_rate=0.648,
+                    stop_held_out_valid_rate=0.504,
+                    min_held_out_success=0.379,
+                ),
+                alerts=alerts,
+                last_good_version=self.phase + 1 if evaluated else 0,
             ),
             record_time=moment,
         )

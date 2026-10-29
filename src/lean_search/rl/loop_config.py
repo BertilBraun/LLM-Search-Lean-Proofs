@@ -34,6 +34,10 @@ class StatementsConfig:
 class SamplingConfig:
     # The run config template of every search (budgets, harvesting, ε); its server URLs come from [serving].
     search_config: str
+    # Expansions per search (the template's harvesting comes on top), overriding the template's: the loop's training
+    # searches only; the evaluations keep their own. Raise it by editing the loop config and restarting the loop when
+    # the budget signals (rl/budget_signals.py) show solves crowding into its last quarter.
+    max_expansions: int = 32
     # Concurrent searches, each holding a Lean REPL; most wait on the GPUs, so this may exceed the core count.
     concurrency: int = 112
     status_seconds: float = 30.0
@@ -56,11 +60,12 @@ class LoopTrainingConfig:
     # The GPUs that train, data-parallel (torchrun, one rank each) when several; servers on them sleep while a phase
     # trains, servers on the others stay loaded and idle (every search is paused).
     gpus: tuple[int, ...] = (0,)
-    # A phase starts once `min_sampling_minutes` of sampling produced `min_solved_trees` solved trees, or after
-    # `max_sampling_minutes` with at least one.
-    min_sampling_minutes: float = 15.0
-    max_sampling_minutes: float = 30.0
-    min_solved_trees: int = 100
+    # A phase starts once `min_sampling_minutes` of sampling produced `min_trainable_groups` groups the policy trains on
+    # (proof-graph nodes of solved trees with a policy proof and a non-zero advantage, counted as each tree finishes),
+    # or after `max_sampling_minutes` with at least one.
+    min_sampling_minutes: float = 45.0
+    max_sampling_minutes: float = 90.0
+    min_trainable_groups: int = 300
     check_seconds: float = 30.0
     # The value model trains every this many phases (0 never) on the trees of the last `value_window_phases` phases,
     # continuing the last value adapter trained; every one is published with the next version.
@@ -158,6 +163,33 @@ class RetentionConfig:
 
 
 @dataclass(frozen=True)
+class HealthConfig:
+    # Relative limits compare with the mean of the first this many phases (version 0's samples, the first updates).
+    reference_phases: int = 2
+    # Per token, k3; version 0's is 0. At lr 1e-5 review F expects 1e-4 to 1e-3 after 5-10 phases.
+    max_kl_to_starting_policy: float = 0.02
+    # Of the last pass's trained tokens; PPO runs usually stay below 0.1-0.2, this loop's small steps far below.
+    max_clip_fraction: float = 0.1
+    # Fractions of the reference phases' mean: fewer distinct samples is collapse, explanations shrinking or growing
+    # a drift of the visible reasoning.
+    min_distinct_samples_fraction: float = 0.75
+    min_explanation_fraction: float = 0.5
+    max_explanation_fraction: float = 2.0
+    # The cut-off share may reach this multiple of the reference, and at least the reference plus `min_cut_off_rise`.
+    max_cut_off_factor: float = 2.0
+    min_cut_off_rise: float = 0.01
+    # Fractions of version 0's held-out evaluation.
+    min_held_out_valid_fraction: float = 0.9
+    min_held_out_success_fraction: float = 0.9
+    # Below this fraction of version 0's held-out valid-Lean rate the loop stops after the phase; 0 never stops.
+    stop_held_out_valid_fraction: float = 0.7
+    # The share of solves in the budget's last quarter, pooled over the last `late_solve_phases` phases, above which
+    # a larger `sampling.max_expansions` is suggested.
+    max_late_solve_share: float = 0.10
+    late_solve_phases: int = 3
+
+
+@dataclass(frozen=True)
 class GrpoLoopConfig:
     # The run directory $LEAN_SEARCH_RUNS/<name>; checkpoints under $LEAN_SEARCH_CHECKPOINTS/<name>_phase_<k>.
     name: str
@@ -171,6 +203,7 @@ class GrpoLoopConfig:
     # Descriptive hypothesis names at search time (loop, probe, miniF2F), for a policy trained on named data.
     renaming: RenamingConfig = field(default_factory=RenamingConfig)
     retention: RetentionConfig = field(default_factory=RetentionConfig)
+    health: HealthConfig = field(default_factory=HealthConfig)
 
     def released_servers(self) -> tuple[ServerEndpoint, ...]:
         """Servers on the training GPUs: asleep while a phase trains."""
@@ -195,8 +228,14 @@ def parse_loop_config(text: str) -> GrpoLoopConfig:
     if config.statements.kind == StatementSourceKind.FIXED and not config.statements.fixed:
         raise ValueError('statements.kind = "fixed" needs statements.fixed.')
     training = config.training
-    if not 0 < training.min_sampling_minutes <= training.max_sampling_minutes or training.min_solved_trees < 1:
-        raise ValueError("training needs 0 < min_sampling_minutes <= max_sampling_minutes and min_solved_trees >= 1.")
+    if not 0 < training.min_sampling_minutes <= training.max_sampling_minutes or training.min_trainable_groups < 1:
+        raise ValueError(
+            "training needs 0 < min_sampling_minutes <= max_sampling_minutes and min_trainable_groups >= 1."
+        )
+    if sampling.max_expansions < 1:
+        raise ValueError("sampling.max_expansions must be at least 1.")
+    if config.health.reference_phases < 1 or config.health.late_solve_phases < 1:
+        raise ValueError("health needs reference_phases >= 1 and late_solve_phases >= 1.")
     if training.value_every_phases and training.value_window_phases < 1:
         raise ValueError("training.value_window_phases must be at least 1.")
     evaluation = config.evaluation

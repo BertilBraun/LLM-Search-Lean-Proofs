@@ -16,7 +16,13 @@ import httpx
 
 from lean_search.corpora.records import StatementRecord
 from lean_search.data import Problem
-from lean_search.expert_iteration.serving import MergedPublisher, ModelVersion, record_published
+from lean_search.expert_iteration.serving import (
+    MergedPublisher,
+    ModelVersion,
+    read_current,
+    record_published,
+    write_json_atomically,
+)
 from lean_search.lean import ProofState
 from lean_search.monitoring.families import ValueArmResult
 from lean_search.monitoring.store import MetricsWriter
@@ -92,7 +98,7 @@ phase_config = "unused.toml"
 gpus = [0, 1]
 min_sampling_minutes = 1.0
 max_sampling_minutes = 2.0
-min_solved_trees = 2
+min_trainable_groups = 2
 check_seconds = 0.01
 value_every_phases = 1
 
@@ -313,20 +319,39 @@ class FakeServers:
 
 @dataclass
 class FakeEvaluations:
-    """Each run with the phase it ran in; value arms find the published value model worse when asked."""
+    """Each run with the phase it ran in; value arms find the published value model worse when asked. Held-out
+    runs report the rates in `held_out_rates` in order (later runs repeat the last), written where the loop's health
+    check reads them."""
 
     runs: list[tuple[EvaluationRun, int]] = field(default_factory=list)
     value_arm_worse: bool = False
+    # (valid-Lean rate, per-sample success) per held-out run.
+    held_out_rates: list[tuple[float, float]] = field(default_factory=lambda: [(0.8, 0.4)])
+    paths: GrpoLoopPaths | None = None
 
     async def evaluate(self, run: EvaluationRun, phase: int) -> EvaluationSummary:
         self.runs.append((run, phase))
         summary = dataclasses.replace(
             zero(EvaluationSummary), kind=run.kind, problems=10, solved=4 + run.repeat, slot=run.slot
         )
+        if run.kind == EvaluationKind.HELD_OUT_STATES:
+            return self.held_out_summary(summary, run)
         if run.value_arm:
             assert run.slot is not None
             result = dataclasses.replace(zero(ValueArmResult), slot=run.slot, worse=self.value_arm_worse)
             return dataclasses.replace(summary, value_arm=result)
+        return summary
+
+    def held_out_summary(self, summary: EvaluationSummary, run: EvaluationRun) -> EvaluationSummary:
+        valid_rate, success = self.held_out_rates[0]
+        if len(self.held_out_rates) > 1:
+            self.held_out_rates.pop(0)
+        summary = dataclasses.replace(summary, samples=1000, valid_samples=round(1000 * valid_rate))
+        summary = dataclasses.replace(summary, solved=round(1000 * success))
+        if self.paths is not None:
+            version = read_current(self.paths.models).version
+            directory = self.paths.evaluation_directory(run, version)
+            write_json_atomically(directory / "summary.json", summary)
         return summary
 
     def slots(self, value_arm: bool = False) -> list[tuple[int | None, int]]:
@@ -424,7 +449,9 @@ def loop_world(
     if scorer is not None:
         scorer.events = searcher.events
     servers.down = searcher.servers_down
-    return LoopWorld(config, paths, searcher, trainer, servers, evaluations or FakeEvaluations(), scorer)
+    evaluations = evaluations or FakeEvaluations()
+    evaluations.paths = paths
+    return LoopWorld(config, paths, searcher, trainer, servers, evaluations, scorer)
 
 
 def record_version_zero(world: LoopWorld) -> None:

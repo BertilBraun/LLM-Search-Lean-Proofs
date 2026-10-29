@@ -83,7 +83,7 @@ for package in json.load(open(sys.argv[1]))["packages"]:
         echo "Fetching ${name} at ${revision}"
         rm -rf "${directory}"
         git init -q "${directory}"
-        git -C "${directory}" remote add origin "${url}"
+        git -C "${directory}" remote add origin "${github_proxy}${url}"
         git -C "${directory}" fetch -q --depth 1 origin "${revision}"
         git -C "${directory}" checkout -q --detach FETCH_HEAD
     done

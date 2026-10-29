@@ -90,6 +90,8 @@ class FixedTargets:
     # Per-sample success on the held-out states.
     held_out_success: float | None = None
     held_out_states: int | None = None
+    # Per sample on the held-out states: the block runs completely in Lean.
+    held_out_valid_rate: float | None = None
     math500_visible: float | None = None
     math500_thinking: float | None = None
     # The probe set (held-out pool statements, stratified by difficulty) at its small budget.
@@ -318,6 +320,122 @@ class PhaseTiming:
     pause: PauseSegments = field(default_factory=PauseSegments)
 
 
+@dataclass(frozen=True)
+class BudgetPhase:
+    """How the phase's searches used their expansion budget and what they solved (rl/budget_signals.py): a budget too
+    small for the harder proofs shows as solves crowding into its last quarter."""
+
+    family: ClassVar[str] = "budget"
+    trees: int
+    solved_trees: int
+    # Groups the policy trains on, the phase trigger's count.
+    trainable_groups: int
+    # The searches' expansion budget (the largest, should it have changed within the phase).
+    expansion_budget: int
+    # Solved trees whose first proof came in the last quarter of their budget (expansions 25-32 of 32), and their share
+    # of the solved trees with a known first-proof expansion.
+    late_solves: int
+    late_solve_share: float | None
+    # That share pooled over the last `recent_phases` phases, this one included, and its alert threshold.
+    recent_late_solve_share: float | None
+    recent_phases: int
+    max_late_solve_share: float
+    # Solved trees by the expansion of their first proof ("25-32": 25 to 32), and the mean.
+    expansions_to_solve: dict[str, int] = field(default_factory=dict)
+    mean_expansions_to_solve: float | None = None
+    # Solved trees by the top-level tactics of their shortest proof on the proof graph, and the mean.
+    proof_steps: dict[str, int] = field(default_factory=dict)
+    mean_proof_steps: float | None = None
+    # The curriculum's difficulty estimate of the solved statements, and of every searched one.
+    mean_difficulty_solved: float | None = None
+    median_difficulty_solved: float | None = None
+    p90_difficulty_solved: float | None = None
+    mean_difficulty_searched: float | None = None
+
+
+@dataclass(frozen=True)
+class HealthMeasurements:
+    """A phase's training-stability signals (rl/health_checks.py); None when not measured in this phase."""
+
+    # KL (k3, per token) of the trained policy to the starting policy and the clip fraction, both of the last pass.
+    kl_to_starting_policy: float | None = None
+    clip_fraction: float | None = None
+    # Per policy expansion of the phase's searches (n = 8 samples): distinct blocks (identical ones run once), and
+    # distinct sample texts.
+    distinct_samples_per_expansion: float | None = None
+    distinct_texts_per_expansion: float | None = None
+    # Explanation tokens of the trained samples.
+    mean_explanation_tokens: float | None = None
+    # Policy samples cut off at the token cap (their answer forced), and those repeating their own text.
+    cut_off_share: float | None = None
+    repetition_loop_share: float | None = None
+    # The held-out states, when evaluated after this phase: samples whose block runs completely in Lean, and that
+    # succeed.
+    held_out_valid_rate: float | None = None
+    held_out_success: float | None = None
+
+
+@dataclass(frozen=True)
+class HealthThresholds:
+    """The limits a phase was judged against; the relative ones are None until their reference exists (version 0's
+    held-out evaluation, the mean of the first phases)."""
+
+    max_kl_to_starting_policy: float
+    max_clip_fraction: float
+    min_distinct_samples_per_expansion: float | None = None
+    min_explanation_tokens: float | None = None
+    max_explanation_tokens: float | None = None
+    max_cut_off_share: float | None = None
+    min_held_out_valid_rate: float | None = None
+    # Below this the loop stops after the phase.
+    stop_held_out_valid_rate: float | None = None
+    min_held_out_success: float | None = None
+
+
+class HealthCheck(StrEnum):
+    KL_TO_STARTING_POLICY = "kl_to_starting_policy"
+    CLIP_FRACTION = "clip_fraction"
+    DISTINCT_SAMPLES = "distinct_samples"
+    EXPLANATION_LENGTH = "explanation_length"
+    CUT_OFF_SAMPLES = "cut_off_samples"
+    HELD_OUT_VALID_LEAN = "held_out_valid_lean"
+    HELD_OUT_SUCCESS = "held_out_success"
+    SEARCH_BUDGET = "search_budget"
+
+
+class HealthSeverity(StrEnum):
+    # The loop stopped after the phase.
+    STOP = "stop"
+    WARNING = "warning"
+    # A suggestion, e.g. a larger search budget.
+    NOTE = "note"
+
+
+@dataclass(frozen=True)
+class HealthAlert:
+    check: HealthCheck
+    severity: HealthSeverity
+    title: str
+    detail: str
+
+
+@dataclass(frozen=True)
+class PhaseHealth:
+    """A phase's health checks: what was measured, the limits, the alerts (also in loop.log) and the rollback target."""
+
+    family: ClassVar[str] = "health"
+    phase: int
+    # The version the phase published.
+    policy_version: int
+    measured: HealthMeasurements
+    thresholds: HealthThresholds
+    alerts: tuple[HealthAlert, ...] = ()
+    # The held-out valid-Lean rate fell below its stop threshold: the loop stopped after this phase.
+    hard_stop: bool = False
+    # The newest version whose held-out evaluation stayed above the stop threshold (0 before any): the rollback target.
+    last_good_version: int = 0
+
+
 FAMILIES = (
     LoopStatus,
     SystemUsage,
@@ -330,4 +448,6 @@ FAMILIES = (
     SearchPhase,
     CurriculumPhase,
     PhaseTiming,
+    BudgetPhase,
+    PhaseHealth,
 )

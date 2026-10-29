@@ -380,6 +380,9 @@ expensive); per-tactic against sequence-level credit is compared only in the che
 ### The loop
 
 1. Search a batch of curriculum statements with best-first / A* search, **n = 8 samples per expansion** (not 16),
+   **32 expansions per search** (decided 2026-10-29, review F M4: expansions 17-64 added 8 of 171 solves in the visible
+   run; the probe stays at 16, miniF2F at 64; `[sampling] max_expansions`, raised mid-run by a restart when the budget
+   signals below show harder proofs cut off),
    without raising the sampling temperature (0.8). Exploration over which state is expanded next: with probability
    **ε = 0.1** the search picks uniformly among the **top 8 frontier states** by priority instead of the best one
    (never fully random; off in evaluations). Reason: only expanded states get value labels and the value model
@@ -395,12 +398,24 @@ expensive); per-tactic against sequence-level credit is compared only in the che
    every 4 phases ("Value model") in a pause–train–publish phase, **two passes over the phase's data** if training
    time allows (PPO clipping exists for this reuse; decided 2026-10-28, depending on the measured ratio of training
    to sampling time; 1 or 2 is a setting, there is no control run to compare them).
-5. Publish after every training phase (15–30 min of sampling: at least 15 min and 100 solved trees, at most 30 min).
-   Watch the clip fraction and the KL between the data-collecting policy and the current one; if they rise, publish
-   more often or train on smaller batches.
+5. Publish after every training phase. A phase's sampling ends once it has **300 trainable groups** (groups at
+   proof-graph nodes of solved trees with a policy proof and a non-zero advantage, counted per finished tree), after
+   at least 45 and at most 90 minutes (decided 2026-10-29, review F M4: the pause's fixed costs are paid per phase;
+   before: 15–30 min and 100 solved trees). Watch the clip fraction and the KL to the data-collecting and to the
+   starting policy (health checks below); if they rise, lower the learning rate or train on smaller batches.
 6. The curriculum keeps the solve rate around 30–70%, so groups carry signal and trees are balanced between
    solved and unsolved. Hard problems absorbing most of the budget is expected; the curriculum and escalation
    stages bound it.
+7. **Health checks per phase** (decided 2026-10-29; `src/lean_search/rl/README.md`, "Health checks and budget
+   signals"): KL to the starting policy, clip fraction, distinct samples per expansion, held-out valid-Lean rate and
+   per-sample success (whenever the held-out states run), explanation length and the share of samples cut off at the
+   token cap, each with a configurable alert threshold (absolute, or relative to version 0's held-out evaluation or the
+   first two phases; first guesses, calibrated on the first phases), in `loop.log` and on the dashboard. **Hard stop**:
+   a held-out valid-Lean rate below 0.7 × version 0's stops the loop after the phase, records the last good version
+   (its adapter is kept) and refuses to restart until it is rolled back to (`grpo_loop.py rollback`) or the stop is
+   cleared. **Budget signals**: share of solves in the last quarter of the budget (expansions 25–32), expansions to
+   the first proof, proof lengths and the curriculum difficulty of solved statements per phase; a note suggests a
+   larger budget when the last-quarter share exceeds 10% over the last 3 phases.
 
 **GPU layout** (decided 2026-10-29; reviews C and D estimated ~35–55% GPU use for the earlier layout, GPU 0 only
 training and GPUs 1–3 serving but idle while it trained): while sampling, all four GPUs serve the merged policy (62%
@@ -917,6 +932,9 @@ from day one:
 - proofs (decided 2026-10-28): proof length in tactics and in blocks, proofs per solved problem, the share of
   proof-graph nodes, harvest yield (proofs and proof-graph nodes per harvest expansion), the share of ε-picks;
 - time: training vs sampling per phase (decides one or two passes) and every pause segment;
+- health and budget (decided 2026-10-29, the Training page): each health check's signal with its threshold, the
+  latest phase's alerts in the alert list; solves in the budget's last quarter, expansions to the first proof, proof
+  lengths and the difficulty of solved statements per phase, trainable groups per phase;
 - system: host memory (limit, available, Lean REPL private memory total and p90, vLLM private memory), server
   failures and statements given up;
 - fixed targets (above): the probe per slot and over the last three slots, per stratum, with wall-clock stops and
@@ -942,10 +960,11 @@ Paper names in the last three rows are from memory and still need checking befor
 - Owner decisions (2026-10-29): implemented: no value gate (every retrained value model is published; the
   benchmark, scored through the value servers during sampling, and the paired value arms are dashboard trends only,
   with an alert when the value model is worse than v0), μ a manual switch starting at 0 (`grpo_loop.sh value-share`),
-  the probe in rotating thirds every ~2 h, per-phase value metrics from the training searches. Being implemented: a
-  persistent trainer with in-memory weight handoff; phases ending at 300 trainable groups within 45–90 min;
-  32 expansions per loop search with budget signals; per-phase health checks (alerts, a hard stop on a valid-Lean
-  collapse); learning rate 1e-5 vs 3e-5 decided by the single-step test on the node.
+  the probe in rotating thirds every ~2 h, per-phase value metrics from the training searches; phases ending at 300
+  trainable groups within 45–90 min; 32 expansions per loop search with budget signals; per-phase health checks
+  (alerts, a hard stop on a valid-Lean collapse with rollback), their thresholds calibrated in the first phases. Being
+  implemented: a persistent trainer with in-memory weight handoff; learning rate 1e-5 vs 3e-5 decided by the
+  single-step test on the node.
 - Serving precision: fp16-merged vs bf16-merged vs unmerged LoRA, decided by the node test against fp32.
 - Whether the four-GPU pause pays for its fixed segments (else `gpus = [0]`), and whether a persistent trainer is
   worth its host memory.
