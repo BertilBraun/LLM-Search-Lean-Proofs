@@ -28,7 +28,8 @@ compile_layers = true
 seed = 0
 
 [evaluation]
-interval_steps = 50
+# Each evaluation (greedy generation on the main rank) takes 8-10 minutes; the probe and MATH-500 decide the A/B.
+interval_steps = 140
 validation_examples = 2000
 micro_batch_tokens = 16384
 generation_examples = 256
