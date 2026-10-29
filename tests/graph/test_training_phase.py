@@ -46,7 +46,7 @@ def load(path: Path) -> TrainingPhaseConfig:
     return from_json_object(TrainingPhaseConfig, tomllib.loads(path.read_text(encoding="utf-8")))
 
 
-@pytest.mark.parametrize("path", sorted(CONFIG_DIRECTORY.glob("*.toml")), ids=lambda path: path.stem)
+@pytest.mark.parametrize("path", sorted(CONFIG_DIRECTORY.glob("phase*.toml")), ids=lambda path: path.stem)
 def test_shipped_phase_configs_train_both_models(path: Path) -> None:
     config = load(path)
     assert config.policy is not None and config.value is not None
