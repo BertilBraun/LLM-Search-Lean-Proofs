@@ -1,6 +1,6 @@
 """Merge an adapter and swap running vLLM servers to it in place, or free and restore the servers' GPUs.
 
-    python experiments/publish_weights.py merge --adapter <adapter> --output <merged> [--device cuda:0]
+    python experiments/publish_weights.py merge --adapter <adapter> --output <merged> [--device cuda:0|--dtype float16]
     python experiments/publish_weights.py publish --weights <merged> --server-url http://127.0.0.1:8100/v1 ...
     python experiments/publish_weights.py release --server-url ...      # sleep: weights and KV cache freed
     python experiments/publish_weights.py restore --weights <merged> --server-url ...
@@ -18,7 +18,7 @@ import json
 import time
 from pathlib import Path
 
-from lean_search.policy.adapters import difference_adapter, merge_adapter
+from lean_search.policy.adapters import difference_adapter, merge_adapter, merge_adapter_fp16
 from lean_search.policy.server_control import publish_weights, release_gpu, replace_adapter, restore_gpu
 
 
@@ -30,6 +30,12 @@ def parse_arguments() -> argparse.Namespace:
     merge.add_argument("--adapter", type=Path, required=True)
     merge.add_argument("--output", type=Path, required=True)
     merge.add_argument("--device", default="cpu")
+    merge.add_argument(
+        "--dtype",
+        choices=["bfloat16", "float16"],
+        default="bfloat16",
+        help="float16: merged in fp32 on the CPU, then cast",
+    )
     for name in ("publish", "restore"):
         command = commands.add_parser(name)
         command.add_argument("--weights", type=Path, required=True)
@@ -62,6 +68,9 @@ def main() -> None:
     arguments = parse_arguments()
     started = time.monotonic()
     match arguments.command:
+        case "merge" if arguments.dtype == "float16":
+            merge_adapter_fp16(arguments.base_model, arguments.adapter, arguments.output)
+            print(json.dumps({"merge_seconds": time.monotonic() - started}))
         case "merge":
             merge_adapter(arguments.base_model, arguments.adapter, arguments.output, arguments.device)
             print(json.dumps({"merge_seconds": time.monotonic() - started}))
