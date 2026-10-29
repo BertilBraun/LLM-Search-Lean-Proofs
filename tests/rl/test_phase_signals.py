@@ -23,6 +23,7 @@ from lean_search.rl.health_checks import (
     clear_health_stop,
     health_alerts,
     health_thresholds,
+    healthy_versions,
     held_out_rates,
     measurements,
     phase_health,
@@ -43,6 +44,7 @@ from lean_search.search.texts import (
     SampledTokens,
     TokenSpan,
 )
+from lean_search.search.tree import Failure, FailureKind
 
 PROBLEM = Problem("test.t0", Split.VALID, "", "theorem t0 : True := by", "", "")
 LOOP = "This line repeats itself again and again.\n"
@@ -88,6 +90,16 @@ def test_a_solved_tree_records_its_first_proofs_expansion() -> None:
 
 def test_each_block_of_an_expansion_counts_once() -> None:
     assert (summary_of(record()).policy_expansions, summary_of(record()).distinct_blocks) == (1, 2)
+
+
+def test_the_blocks_lean_judged_leave_out_infrastructure_failures() -> None:
+    tree = record()
+    failed = dataclasses.replace(tree.edges[0], failure=Failure(FailureKind.REPL_FAILURE, "crashed"))
+    assert summary_of(dataclasses.replace(tree, edges=(failed, tree.edges[1]))).judged_blocks == 1
+
+
+def test_a_block_that_ran_completely_is_valid() -> None:
+    assert (summary_of(record()).judged_blocks, summary_of(record()).valid_blocks) == (2, 1)
 
 
 def test_policy_samples_count_the_merged_samples() -> None:
@@ -162,12 +174,16 @@ def test_the_budget_line_sums_the_trainable_groups() -> None:
     assert budget_record([entry(solved_at=1, groups=3), entry(solved_at=2, groups=4)]).trainable_groups == 7
 
 
-def summarized(policy_expansions: int, samples: int, distinct_blocks: int, cut_off: int) -> TreeEntry:
+def summarized(
+    policy_expansions: int, samples: int, distinct_blocks: int, cut_off: int, valid_blocks: int = 0
+) -> TreeEntry:
     summary = TreeSummary(
         policy_expansions=policy_expansions,
         policy_samples=samples,
         distinct_blocks=distinct_blocks,
         cut_off_samples=cut_off,
+        judged_blocks=distinct_blocks,
+        valid_blocks=valid_blocks,
     )
     return dataclasses.replace(entry(), summary=summary)
 
@@ -175,6 +191,11 @@ def summarized(policy_expansions: int, samples: int, distinct_blocks: int, cut_o
 def test_distinct_samples_are_averaged_over_the_phases_expansions() -> None:
     entries = [summarized(2, 16, 10, 0), summarized(2, 16, 6, 0)]
     assert measurements(None, entries, None).distinct_samples_per_expansion == 4.0
+
+
+def test_the_valid_block_rate_is_per_judged_block() -> None:
+    entries = [summarized(2, 16, 10, 0, valid_blocks=8), summarized(2, 16, 10, 0, valid_blocks=6)]
+    assert measurements(None, entries, None).valid_block_rate == 0.7
 
 
 def test_the_cut_off_share_is_per_policy_sample() -> None:
@@ -207,9 +228,20 @@ def test_held_out_rates_are_per_sample() -> None:
     assert held_out_rates(summary) == HeldOutRates(0.7, 0.4)
 
 
-def health_record(phase: int, distinct: float = 6.0, cut_off: float = 0.002, last_good: int = 0) -> PhaseHealth:
-    measured = HealthMeasurements(distinct_samples_per_expansion=distinct, cut_off_share=cut_off)
-    return PhaseHealth(phase, phase, measured, HealthThresholds(0.02, 0.1), (), False, last_good)
+def health_record(
+    phase: int,
+    distinct: float = 6.0,
+    cut_off: float = 0.002,
+    held_out_valid_rate: float | None = None,
+    rolled_back_to: int | None = None,
+) -> PhaseHealth:
+    measured = HealthMeasurements(
+        distinct_samples_per_expansion=distinct,
+        cut_off_share=cut_off,
+        held_out_valid_rate=held_out_valid_rate,
+        valid_block_rate=0.8,
+    )
+    return PhaseHealth(phase, phase, measured, HealthThresholds(0.02, 0.1), rolled_back_to=rolled_back_to)
 
 
 def reference(*records: PhaseHealth) -> HealthMeasurements | None:
@@ -230,12 +262,17 @@ def test_the_cut_off_threshold_rises_at_least_by_its_minimum() -> None:
     assert thresholds.max_cut_off_share == pytest.approx(0.012)
 
 
+def test_the_valid_block_threshold_is_a_fraction_of_the_first_phases() -> None:
+    thresholds = health_thresholds(CONFIG, reference(health_record(1), health_record(2)), None)
+    assert thresholds.min_valid_block_rate == pytest.approx(0.68)
+
+
 def test_the_stop_threshold_is_a_fraction_of_version_zeros_valid_lean_rate() -> None:
     assert health_thresholds(CONFIG, None, HeldOutRates(0.8, 0.4)).stop_held_out_valid_rate == pytest.approx(0.56)
 
 
-THRESHOLDS = HealthThresholds(0.02, 0.1, 5.0, 60.0, 240.0, 0.02, 0.72, 0.56, 0.36)
-HEALTHY = HealthMeasurements(0.01, 0.05, 6.0, 8.0, 120.0, 0.01, 0.005, 0.78, 0.4)
+THRESHOLDS = HealthThresholds(0.02, 0.1, 5.0, 60.0, 240.0, 0.02, 0.72, 0.56, 0.36, 0.68)
+HEALTHY = HealthMeasurements(0.001, 0.05, 6.0, 8.0, 120.0, 0.01, 0.005, 0.78, 0.4, 0.8)
 QUIET_BUDGET = BudgetPhase(100, 50, 200, 32, 1, 0.02, 0.02, 3, 0.1)
 
 
@@ -259,6 +296,7 @@ def test_a_healthy_phase_has_no_alerts() -> None:
         ({"held_out_valid_rate": 0.6}, HealthCheck.HELD_OUT_VALID_LEAN),
         ({"held_out_valid_rate": 0.5}, HealthCheck.HELD_OUT_VALID_LEAN),
         ({"held_out_success": 0.3}, HealthCheck.HELD_OUT_SUCCESS),
+        ({"valid_block_rate": 0.6}, HealthCheck.VALID_BLOCKS),
     ],
 )
 def test_a_signal_beyond_its_threshold_alerts(change: dict[str, float], check: HealthCheck) -> None:
@@ -285,32 +323,70 @@ def test_the_budget_note_waits_for_its_phases() -> None:
     assert checks(HEALTHY, budget) == []
 
 
-def health_of(valid_rate: float | None, history: list[PhaseHealth] | None = None) -> PhaseHealth:
+def health_of(
+    valid_rate: float | None, history: list[PhaseHealth] | None = None, config: HealthConfig = CONFIG
+) -> PhaseHealth:
     measured = dataclasses.replace(HEALTHY, held_out_valid_rate=valid_rate)
-    return phase_health(5, 4, measured, history or [], HeldOutRates(0.8, 0.4), QUIET_BUDGET, CONFIG)
+    return phase_health(5, 4, measured, history or [], HeldOutRates(0.8, 0.4), QUIET_BUDGET, config)
+
+
+HEALTHY_PHASE_2 = health_record(2, held_out_valid_rate=0.78)
 
 
 def test_a_passing_held_out_evaluation_becomes_the_last_good_version() -> None:
     assert health_of(0.78).last_good_version == 4
 
 
-def test_a_held_out_collapse_is_a_hard_stop() -> None:
-    assert health_of(0.5).hard_stop
+def test_a_held_out_warning_is_not_a_good_version() -> None:
+    assert health_of(0.6, [HEALTHY_PHASE_2]).last_good_version == 2
+
+
+def test_a_first_held_out_collapse_rolls_back_to_the_last_good_version() -> None:
+    assert health_of(0.5, [HEALTHY_PHASE_2]).rolled_back_to == 2
+
+
+def test_a_first_held_out_collapse_keeps_the_loop_running() -> None:
+    assert not health_of(0.5).hard_stop
+
+
+def test_a_collapse_within_the_window_of_a_rollback_stops_the_loop() -> None:
+    assert health_of(0.5, [HEALTHY_PHASE_2, health_record(3, rolled_back_to=2)]).hard_stop
+
+
+def test_a_collapse_after_the_window_of_a_rollback_rolls_back_again() -> None:
+    config = dataclasses.replace(CONFIG, rollback_window_phases=1)
+    assert health_of(0.5, [HEALTHY_PHASE_2, health_record(3, rolled_back_to=2)], config).rolled_back_to == 2
+
+
+def test_without_rollbacks_a_collapse_stops_the_loop() -> None:
+    assert health_of(0.5, config=dataclasses.replace(CONFIG, rollback_window_phases=0)).hard_stop
+
+
+@pytest.mark.parametrize(("rollback_window_phases", "action"), [(4, "rolled back to v0"), (0, "loop stopped")])
+def test_a_collapse_alert_names_its_action(rollback_window_phases: int, action: str) -> None:
+    health = health_of(0.5, config=dataclasses.replace(CONFIG, rollback_window_phases=rollback_window_phases))
+    assert [alert.title for alert in health.alerts] == [f"Held-out valid Lean collapsed: {action}"]
 
 
 def test_a_held_out_collapse_keeps_the_earlier_last_good_version() -> None:
-    assert health_of(0.5, [health_record(3, last_good=2)]).last_good_version == 2
+    assert health_of(0.5, [HEALTHY_PHASE_2]).last_good_version == 2
 
 
 def test_a_phase_without_a_held_out_evaluation_keeps_the_last_good_version() -> None:
-    assert health_of(None, [health_record(3, last_good=2)]).last_good_version == 2
+    assert health_of(None, [HEALTHY_PHASE_2]).last_good_version == 2
+
+
+def test_the_healthy_versions_have_a_held_out_evaluation_without_an_alert() -> None:
+    warned = health_of(0.6, [HEALTHY_PHASE_2])
+    history = [HEALTHY_PHASE_2, health_record(3), warned, health_record(6, held_out_valid_rate=0.8)]
+    assert healthy_versions(history) == [2, 6]
 
 
 def test_the_health_history_keeps_the_last_record_of_a_phase(tmp_path: Path) -> None:
     path = tmp_path / "health.jsonl"
-    append_health(path, health_record(1, last_good=0))
-    append_health(path, health_record(1, last_good=3))
-    assert read_health_history(path) == [health_record(1, last_good=3)]
+    append_health(path, health_record(1))
+    append_health(path, health_record(1, held_out_valid_rate=0.8))
+    assert read_health_history(path) == [health_record(1, held_out_valid_rate=0.8)]
 
 
 def test_a_cleared_health_stop_is_kept_beside_it(tmp_path: Path) -> None:

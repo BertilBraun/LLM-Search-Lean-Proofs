@@ -59,9 +59,11 @@ from lean_search.expert_iteration.serving import (
 )
 from lean_search.expert_iteration.toml_text import toml_text
 from lean_search.monitoring.families import (
+    HealthCheck,
     LoopState,
     LoopStatus,
     PauseSegments,
+    PhaseHealth,
     PhaseTiming,
     ValueArmResult,
     ValueBenchmarkTrend,
@@ -76,14 +78,18 @@ from lean_search.rl.budget_signals import budget_phase_record
 from lean_search.rl.evaluation import EvaluationKind, EvaluationRun, EvaluationSummary, read_summary, value_arm_text
 from lean_search.rl.fixed_targets import target_config
 from lean_search.rl.health_checks import (
+    HeldOutRates,
     append_health,
     health_stop_text,
+    healthy_versions,
     held_out_rates,
     last_good_version,
     measurements,
     phase_health,
+    publish_rollback,
     read_health_history,
     read_health_stop,
+    rollback_trigger,
     write_health_stop,
 )
 from lean_search.rl.loop_config import EvaluationTarget, EvaluationValueModel, GrpoLoopConfig
@@ -695,6 +701,7 @@ class GrpoLoop:
             if stop.is_set():
                 return
         await self.run_evaluations(self.due_evaluations(at_start=True), self.progress.phase - 1, at_start=True)
+        self.check_hard_stop_baseline()
         await self.prepare_training()
         self.schedule_benchmark_scoring()
         self.sampling_since = self.clock()
@@ -932,9 +939,11 @@ class GrpoLoop:
         if self.search_metrics is not None:
             await self.search_metrics
             self.search_metrics = None
-        hard_stop = await asyncio.to_thread(self.check_health, phase, kinds)
+        health = await asyncio.to_thread(self.check_health, phase)
+        if health.rolled_back_to is not None:
+            await self.roll_back(phase, health.rolled_back_to)
         self.close_phase(phase, kinds, evaluation_seconds)
-        if hard_stop:
+        if health.hard_stop:
             assert self.stop is not None
             self.stop.set()
             return
@@ -1012,39 +1021,79 @@ class GrpoLoop:
     async def log_host_memory(self, moment: str) -> None:
         self.log(f"Host memory {moment}: {await asyncio.to_thread(self.host_memory)}")
 
-    def check_health(self, phase: int, kinds: Sequence[EvaluationKind]) -> bool:
-        """Writes the phase's budget and health lines and logs the alerts; True when the loop must stop (then
-        health_stop.json names the last good version)."""
+    def check_health(self, phase: int) -> PhaseHealth:
+        """Writes the phase's budget and health lines and logs the alerts. The held-out rates are those of the version
+        the phase published, when the held-out states evaluated it (so a restart judges the phase alike). A collapse
+        sets the rollback (`rolled_back_to`) or the stop (health_stop.json names the last good version); a drop of the
+        sampled blocks' valid Lean requests the held-out states for the next pause."""
         health = self.config.health
         budget = budget_phase_record(self.store.entries, phase, health.late_solve_phases, health.max_late_solve_share)
         self.writer.write(budget)
-        current = read_current(self.paths.models)
+        published = next(
+            version for version in read_versions(self.paths.models) if version.trigger == phase_trigger(phase)
+        )
         outcome_path = self.paths.phase_checkpoints(phase) / PHASE_OUTCOME_FILE
         outcome = read_phase_outcome(outcome_path) if outcome_path.exists() else None
-        held_out = None
-        if EvaluationKind.HELD_OUT_STATES in kinds:
-            held_out = held_out_rates(self.held_out_summary(current.version))
-        version_zero_path = self.held_out_summary_path(0)
-        version_zero = held_out_rates(read_summary(version_zero_path)) if version_zero_path.exists() else None
+        held_out = self.held_out_rates(published.version)
+        version_zero = self.held_out_rates(0)
+        if held_out is not None and version_zero is None:
+            self.log("Alert: version 0's held-out evaluation is missing: the held-out checks and the hard stop are off")
         measured = measurements(outcome, self.store.phase_entries(phase), held_out)
         history = read_health_history(self.paths.health)
-        record = phase_health(phase, current.version, measured, history, version_zero, budget, health)
+        record = phase_health(phase, published.version, measured, history, version_zero, budget, health)
         append_health(self.paths.health, record)
         self.writer.write(record)
         for alert in record.alerts:
             self.log(f"Health of phase {phase} ({alert.severity}, {alert.check}): {alert.detail}")
         if not record.alerts:
             self.log(f"Health of phase {phase}: no alerts")
-        if not record.hard_stop:
-            return False
-        self.log(health_stop_text(write_health_stop(self.paths.health_stop, record)))
-        return True
+        if held_out is None and any(alert.check == HealthCheck.VALID_BLOCKS for alert in record.alerts):
+            request_evaluation(self.paths, EvaluationKind.HELD_OUT_STATES)
+        if record.hard_stop:
+            self.log(health_stop_text(write_health_stop(self.paths.health_stop, record)))
+        return record
+
+    async def roll_back(self, phase: int, version: int) -> None:
+        """After a collapse: the version's policy adapter published again as a new version (merged on the CPU) and
+        served; the searches continue with it and the next phase trains on from it. A restart that finds the
+        rollback recorded only serves it."""
+        trigger = rollback_trigger(version, phase)
+        current = read_current(self.paths.models)
+        if current.trigger != trigger:
+            current = await asyncio.to_thread(publish_rollback, self.paths.models, self.publisher, version, trigger)
+            await asyncio.to_thread(self.prune_adapters)
+        await self.servers.serve(current)
+        self.served_value_weights = current.value_weights
+        self.served_version = current.version
+        self.searcher.serving(current.version)
+        self.log(
+            f"Alert: the held-out valid Lean collapsed after phase {phase}: rolled back to version {version}'s policy "
+            f"as version {current.version}, the searches continue; a second collapse within "
+            f"{self.config.health.rollback_window_phases} phases stops the loop"
+        )
 
     def held_out_summary_path(self, version: int) -> Path:
         return self.paths.evaluation_directory(EvaluationRun(EvaluationKind.HELD_OUT_STATES), version) / "summary.json"
 
-    def held_out_summary(self, version: int) -> EvaluationSummary:
-        return read_summary(self.held_out_summary_path(version))
+    def held_out_rates(self, version: int) -> HeldOutRates | None:
+        """The version's held-out evaluation, if one ran."""
+        path = self.held_out_summary_path(version)
+        return held_out_rates(read_summary(path)) if path.exists() else None
+
+    def check_hard_stop_baseline(self) -> None:
+        """With the held-out states on a schedule and the hard stop on, version 0's held-out evaluation must exist
+        with valid samples, or the hard stop could never fire."""
+        held_out = self.config.evaluation.held_out_states
+        if not (held_out.every_hours and self.config.health.stop_held_out_valid_fraction):
+            return
+        version_zero = self.held_out_rates(0)
+        if version_zero is None or version_zero.valid_rate == 0:
+            raise RuntimeError(
+                f"Version 0's held-out evaluation ({self.held_out_summary_path(0)}) is missing or has no valid "
+                "samples, so the hard stop could never fire. Run it with version 0 served ([evaluation."
+                "held_out_states] at_start = true on a fresh loop, or grpo_evaluate.py --target held_out_states), or "
+                "turn the hard stop off ([health] stop_held_out_valid_fraction = 0)."
+            )
 
     def value_window(self, phase: int) -> tuple[Path, ...]:
         """The tree directories the value model trains on when it is due this phase; none when it is not."""
@@ -1203,9 +1252,11 @@ class GrpoLoop:
         if not retention.adapter_versions:
             return
         versions = read_versions(self.paths.models)
-        # The health check's rollback target stays, however old.
-        good = versions[last_good_version(read_health_history(self.paths.health))]
-        kept = kept_adapters(versions, retention.adapter_versions, [self.progress.value_adapter, good.policy_adapter])
+        # The rollback target and the last healthy versions stay, however old.
+        history = read_health_history(self.paths.health)
+        healthy = {last_good_version(history), *healthy_versions(history)[-retention.healthy_versions :]}
+        in_use = [self.progress.value_adapter, *(versions[version].policy_adapter for version in sorted(healthy))]
+        kept = kept_adapters(versions, retention.adapter_versions, in_use)
         phases = (self.paths.phase_checkpoints(number) for number in range(1, self.progress.phase + 1))
         removed = prune_phase_adapters(phases, kept)
         if removed:

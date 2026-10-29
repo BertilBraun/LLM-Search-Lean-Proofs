@@ -369,15 +369,15 @@ class DemoRun:
     def write_health(self, moment: float) -> None:
         learned = self.progress(moment)
         evaluated = (self.phase + 1) % self.schedule.evaluation_every_phases == 0
-        kl = 0.002 + 0.02 * learned + abs(self.noise(0.001))
+        kl = 0.0005 + 0.005 * learned + abs(self.noise(0.0003))
         alerts = ()
-        if kl > 0.02:
+        if kl > 0.005:
             alerts = (
                 HealthAlert(
                     HealthCheck.KL_TO_STARTING_POLICY,
                     HealthSeverity.WARNING,
                     "KL to the starting policy high",
-                    f"KL to the starting policy {kl:.3g} > 0.02 per token.",
+                    f"KL to the starting policy {kl:.3g} > 0.005 per token.",
                 ),
             )
         self.writer.write(
@@ -394,9 +394,10 @@ class DemoRun:
                     repetition_loop_share=0.002 + abs(self.noise(0.0005)),
                     held_out_valid_rate=0.72 + 0.02 * learned + self.noise(0.005) if evaluated else None,
                     held_out_success=0.421 + self.profile.held_out_gain * learned if evaluated else None,
+                    valid_block_rate=0.78 - 0.03 * learned + self.noise(0.01),
                 ),
                 thresholds=HealthThresholds(
-                    max_kl_to_starting_policy=0.02,
+                    max_kl_to_starting_policy=0.005,
                     max_clip_fraction=0.1,
                     min_distinct_samples_per_expansion=5.1,
                     min_explanation_tokens=60.0,
@@ -405,6 +406,7 @@ class DemoRun:
                     min_held_out_valid_rate=0.648,
                     stop_held_out_valid_rate=0.504,
                     min_held_out_success=0.379,
+                    min_valid_block_rate=0.66,
                 ),
                 alerts=alerts,
                 last_good_version=self.phase + 1 if evaluated else 0,

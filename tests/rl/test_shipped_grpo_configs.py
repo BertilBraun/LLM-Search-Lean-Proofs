@@ -222,3 +222,17 @@ def test_the_loop_stops_below_70_percent_of_version_zeros_valid_lean_rate() -> N
 
 def test_the_loop_measures_the_minif2f_baseline_before_its_first_phase() -> None:
     assert loop("grpo/loop.toml").evaluation.minif2f.at_start
+
+
+def test_the_loop_runs_the_held_out_states_with_every_probe_slot() -> None:
+    evaluation = loop("grpo/loop.toml").evaluation
+    assert evaluation.held_out_states.every_hours == evaluation.probe.every_hours
+
+
+def test_the_loop_rolls_back_on_a_first_collapse() -> None:
+    assert loop("grpo/loop.toml").health.rollback_window_phases > 0
+
+
+def test_the_smoke_loop_runs_the_held_out_states_after_every_phase() -> None:
+    evaluation = loop("grpo/loop_smoke.toml").evaluation
+    assert evaluation.held_out_states.every_hours == evaluation.probe.every_hours

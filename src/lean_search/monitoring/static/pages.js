@@ -302,7 +302,7 @@ const HEALTH = {
     ],
   },
   heldOut: {
-    title: "Held-out states", subtitle: "per sample, after the phases they ran; dashed: alert and stop thresholds (fractions of version 0's)", family: "health", x: "phase", unit: "share",
+    title: "Held-out states", subtitle: "per sample, after the phases they ran; dashed: alert and collapse thresholds (fractions of version 0's; a collapse rolls back)", family: "health", x: "phase", unit: "share",
     series: [
       { label: "valid Lean", field: "measured.held_out_valid_rate" },
       { label: "success", field: "measured.held_out_success" },
@@ -310,6 +310,10 @@ const HEALTH = {
       limit("stop", "stop_held_out_valid_rate"),
       limit("min success", "min_held_out_success"),
     ],
+  },
+  validBlocks: {
+    title: "Sampled blocks' valid Lean", subtitle: "share of the phase's policy blocks that ran completely, free every phase; below the dashed line the held-out states run at the next pause", family: "health", x: "phase", unit: "share",
+    series: [{ label: "valid", field: "measured.valid_block_rate" }, limit("min", "min_valid_block_rate")],
   },
   explanation: {
     title: "Explanation length", subtitle: "trained samples' explanation tokens; dashed: the band around the first phases", family: "health", x: "phase", unit: "number",
@@ -629,7 +633,7 @@ export const PAGES = [
     title: "Training",
     families: ["health", "budget"],
     sections: [
-      { title: "Health checks", charts: [HEALTH.kl, HEALTH.clip, HEALTH.heldOut, HEALTH.distinct, HEALTH.explanation, HEALTH.cutOff] },
+      { title: "Health checks", charts: [HEALTH.kl, HEALTH.clip, HEALTH.heldOut, HEALTH.validBlocks, HEALTH.distinct, HEALTH.explanation, HEALTH.cutOff] },
       {
         title: "Search budget",
         charts: [BUDGET.lateSolves, BUDGET.expansions, BUDGET.meanExpansions, BUDGET.proofSteps, BUDGET.meanProofSteps, BUDGET.difficulty, BUDGET.groups],

@@ -389,6 +389,9 @@ class HealthMeasurements:
     # succeed.
     held_out_valid_rate: float | None = None
     held_out_success: float | None = None
+    # Of the phase's distinct policy blocks Lean judged (infrastructure failures left out), those that ran completely:
+    # the held-out states' valid-Lean criterion on the training trees, free every phase.
+    valid_block_rate: float | None = None
 
 
 @dataclass(frozen=True)
@@ -403,9 +406,10 @@ class HealthThresholds:
     max_explanation_tokens: float | None = None
     max_cut_off_share: float | None = None
     min_held_out_valid_rate: float | None = None
-    # Below this the loop stops after the phase.
+    # Below this the held-out valid Lean collapsed: a rollback, or the loop stops.
     stop_held_out_valid_rate: float | None = None
     min_held_out_success: float | None = None
+    min_valid_block_rate: float | None = None
 
 
 class HealthCheck(StrEnum):
@@ -417,10 +421,11 @@ class HealthCheck(StrEnum):
     HELD_OUT_VALID_LEAN = "held_out_valid_lean"
     HELD_OUT_SUCCESS = "held_out_success"
     SEARCH_BUDGET = "search_budget"
+    VALID_BLOCKS = "valid_blocks"
 
 
 class HealthSeverity(StrEnum):
-    # The loop stopped after the phase.
+    # The held-out valid Lean collapsed: the loop rolled back or stopped after the phase.
     STOP = "stop"
     WARNING = "warning"
     # A suggestion, e.g. a larger search budget.
@@ -446,10 +451,13 @@ class PhaseHealth:
     measured: HealthMeasurements
     thresholds: HealthThresholds
     alerts: tuple[HealthAlert, ...] = ()
-    # The held-out valid-Lean rate fell below its stop threshold: the loop stopped after this phase.
+    # The held-out valid Lean collapsed within `rollback_window_phases` of a rollback (or with rollbacks off): the loop
+    # stopped after this phase.
     hard_stop: bool = False
-    # The newest version whose held-out evaluation stayed above the stop threshold (0 before any): the rollback target.
+    # The newest version whose held-out evaluation raised no held-out alert (0 before any): the rollback target.
     last_good_version: int = 0
+    # The held-out valid Lean collapsed: this version's policy was published again and the searches continued.
+    rolled_back_to: int | None = None
 
 
 FAMILIES = (

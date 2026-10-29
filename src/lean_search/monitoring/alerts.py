@@ -253,6 +253,23 @@ def server_failures(reader: RunReader, thresholds: AlertThresholds, now: float) 
     return Alert(Severity.WARNING, "Server failures", detail, "system")
 
 
+def rolled_back(reader: RunReader, thresholds: AlertThresholds, now: float) -> Alert | None:
+    """The loop rolled back after a held-out collapse (rl/health_checks.py): shown for the rest of the run."""
+    health = reader.series("health")
+    if "rolled_back_to" not in health.columns:
+        return None
+    pairs = zip(health.columns["phase"], health.columns["rolled_back_to"], strict=True)
+    rollbacks = [(phase, target) for phase, target in pairs if target is not None]
+    if not rollbacks:
+        return None
+    phase, target = rollbacks[-1]
+    detail = (
+        f"{len(rollbacks)} rollbacks after a held-out valid-Lean collapse, the last after phase {phase:.0f} to version "
+        f"{target:.0f}'s policy; the searches continued. Check the learning rate (loop.log, Training page)."
+    )
+    return Alert(Severity.WARNING, "Policy rolled back", detail, "training")
+
+
 def loop_errors(reader: RunReader, thresholds: AlertThresholds, now: float) -> Alert | None:
     """Errors the loop logs and survives: a failed value benchmark scoring, a tree whose summary failed."""
     status = reader.series("status")
@@ -282,6 +299,7 @@ RULES = (
     low_disk,
     server_failures,
     loop_errors,
+    rolled_back,
 )
 
 SEVERITY_ORDER = {Severity.CRITICAL: 0, Severity.WARNING: 1, Severity.INFO: 2}

@@ -174,14 +174,18 @@ class RetentionConfig:
     # use (the value adapter the next value training continues); older ones are deleted after each publish, ~0.5 GB of
     # fp32 policy adapter per phase. 0 keeps every adapter. Merged weights: only the current version's and version 0's.
     adapter_versions: int = 5
+    # The policy adapters of the last this many versions whose held-out evaluation raised no held-out alert stay too:
+    # the automatic rollback's target and the alternatives to it.
+    healthy_versions: int = 3
 
 
 @dataclass(frozen=True)
 class HealthConfig:
     # Relative limits compare with the mean of the first this many phases (version 0's samples, the first updates).
     reference_phases: int = 2
-    # Per token, k3; version 0's is 0. At lr 1e-5 review F expects 1e-4 to 1e-3 after 5-10 phases.
-    max_kl_to_starting_policy: float = 0.02
+    # Per token, k3; version 0's is 0. Review F expects 1e-4 to 1e-3 after 5-10 phases at lr 1e-5: 0.005 alerts on a
+    # policy moving several times faster than planned (0.02 would fire only on a collapse).
+    max_kl_to_starting_policy: float = 0.005
     # Of the last pass's trained tokens; PPO runs usually stay below 0.1-0.2, this loop's small steps far below.
     max_clip_fraction: float = 0.1
     # Fractions of the reference phases' mean: fewer distinct samples is collapse, explanations shrinking or growing
@@ -195,8 +199,15 @@ class HealthConfig:
     # Fractions of version 0's held-out evaluation.
     min_held_out_valid_fraction: float = 0.9
     min_held_out_success_fraction: float = 0.9
-    # Below this fraction of version 0's held-out valid-Lean rate the loop stops after the phase; 0 never stops.
+    # Below this fraction of version 0's held-out valid-Lean rate the held-out valid Lean collapsed (0: never): the
+    # loop publishes the last healthy version's policy again and continues sampling, and stops only when it collapses
+    # again within `rollback_window_phases` phases of that rollback (0: stop at the first collapse).
     stop_held_out_valid_fraction: float = 0.7
+    rollback_window_phases: int = 4
+    # Below this fraction of the reference phases' valid-block rate (the sampled blocks that run completely in Lean, a
+    # free per-phase early warning) the held-out states run at the next pause. Lower than the held-out warning: the
+    # rate falls with longer blocks too.
+    min_valid_block_fraction: float = 0.85
     # The share of solves in the budget's last quarter, pooled over the last `late_solve_phases` phases, above which
     # a larger `sampling.max_expansions` is suggested.
     max_late_solve_share: float = 0.10
