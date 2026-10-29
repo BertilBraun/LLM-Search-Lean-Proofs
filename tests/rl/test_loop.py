@@ -23,7 +23,7 @@ from lean_search.expert_iteration.pool import problem_name
 from lean_search.expert_iteration.serving import ModelVersion, read_current, read_versions, write_json_atomically
 from lean_search.monitoring.families import PauseSegments, ValueArmResult
 from lean_search.monitoring.store import RunReader
-from lean_search.rl.evaluation import EvaluationKind, EvaluationRun
+from lean_search.rl.evaluation import EvaluationKind, EvaluationRun, EvaluationSummary
 from lean_search.rl.loop import (
     GIB,
     GrpoLoop,
@@ -33,6 +33,7 @@ from lean_search.rl.loop import (
     earlier_value_arm_results,
     evaluation_due,
     phase_config_text,
+    probe_baseline_differences,
     read_progress,
     read_value_share,
     request_evaluation,
@@ -335,6 +336,42 @@ def test_a_value_arm_pools_with_every_other_value_arm(tmp_path: Path) -> None:
     paths = GrpoLoopPaths(tmp_path, tmp_path, tmp_path, "loop")
     own = [write_value_arm(paths, slot) for slot in (0, 2, 4)][-1]
     assert [result.slot for result in earlier_value_arm_results(paths, own)] == [0, 2]
+
+
+def write_probe_run(paths: GrpoLoopPaths, slot: int, version: int, solved: int, repeat: int = 0) -> None:
+    run = EvaluationRun(EvaluationKind.PROBE, slot, repeat)
+    summary = dataclasses.replace(zero(EvaluationSummary), problems=10, solved=solved, slot=slot)
+    write_json_atomically(paths.evaluation_directory(run, version) / "summary.json", summary)
+
+
+def baseline_world(root: Path, slots: dict[int, int]) -> GrpoLoopPaths:
+    """Version 0's two runs of each part (solved 4 and 6 of 10: a mean of 0.5), then the given slots' solved counts."""
+    paths = GrpoLoopPaths(root, root, root, "loop")
+    for part in range(3):
+        write_probe_run(paths, part, 0, 4)
+        write_probe_run(paths, part, 0, 6, repeat=1)
+    for slot, solved in slots.items():
+        write_probe_run(paths, slot, slot, solved)
+    return paths
+
+
+LOOP_EVALUATION = parse_loop_config(LOOP_TOML).evaluation
+EVALUATION = dataclasses.replace(LOOP_EVALUATION, probe=dataclasses.replace(LOOP_EVALUATION.probe, baseline_runs=2))
+
+
+def test_a_probe_slot_is_compared_with_version_zeros_runs_of_its_part(tmp_path: Path) -> None:
+    paths = baseline_world(tmp_path, {4: 7})
+    assert probe_baseline_differences(paths, EVALUATION, 4).this_slot == pytest.approx(0.2)
+
+
+def test_the_baseline_difference_of_the_last_slots_takes_each_part_once(tmp_path: Path) -> None:
+    paths = baseline_world(tmp_path, {3: 5, 4: 7, 5: 9})
+    assert probe_baseline_differences(paths, EVALUATION, 5).last_slots == pytest.approx(0.2)
+
+
+def test_the_baseline_difference_of_the_last_slots_waits_for_every_part(tmp_path: Path) -> None:
+    paths = baseline_world(tmp_path, {4: 7, 5: 9})
+    assert probe_baseline_differences(paths, EVALUATION, 5).last_slots is None
 
 
 PROBE_EVERY_PHASE = LOOP_TOML.replace(

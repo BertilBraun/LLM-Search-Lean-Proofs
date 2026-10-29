@@ -50,6 +50,7 @@ from lean_search.rl.fixed_targets import evaluate_target
 from lean_search.rl.loop import (
     GrpoLoopPaths,
     earlier_value_arm_results,
+    probe_baseline_differences,
     read_progress,
     value_adapter_version,
     value_version,
@@ -132,8 +133,10 @@ async def evaluate(arguments: argparse.Namespace) -> None:
             comparison = compare_repeats(read_results(first.results), read_results(EvaluationPaths(directory).results))
             EvaluationPaths(directory).comparison.write_text(to_json(comparison), encoding="utf-8")
             log(repeat_text(comparison))
-        rolling = None if run.slot is None or run.repeat else last_slots(config, paths, run.slot)
-        writer.write(fixed_targets_record(summary, comparison, rolling))
+        first_run_of_slot = run.slot is not None and not run.repeat
+        rolling = last_slots(config, paths, run.slot) if first_run_of_slot else None
+        baseline = probe_baseline_differences(paths, config.evaluation, run.slot) if first_run_of_slot else None
+        writer.write(fixed_targets_record(summary, comparison, rolling, baseline))
     with (paths.directory / "evaluations.jsonl").open("a", encoding="utf-8") as handle:
         handle.write(to_json(summary) + "\n")
     log(

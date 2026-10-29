@@ -55,6 +55,16 @@ const FIXED = {
       { label: "last three slots", field: "probe_rolling_solved", over: "probe_rolling_problems" },
     ],
   },
+  probeDifference: {
+    title: "Probe set against version 0",
+    subtitle: "each slot's solve rate minus version 0's two runs of the same third (the thirds' difficulty cancels), and its mean over the last three slots",
+    family: "fixed_targets", x: "probe_slot", unit: "share", compare: true, allTime: true,
+    references: [{ value: 0, label: "version 0", kind: "baseline" }],
+    series: [
+      { label: "slot minus v0", field: "probe_baseline_difference" },
+      { label: "last three slots", field: "probe_rolling_baseline_difference" },
+    ],
+  },
   probeBands: {
     title: "Probe set by difficulty, last three slots", subtitle: "solve rate per stratum over the whole set",
     family: "fixed_targets", x: "probe_slot", unit: "share", compare: true, allTime: true,
@@ -382,7 +392,7 @@ export const PAGES = [
     families: [],
     sections: [
       { title: "Status", tiles: "overview" },
-      { title: "Fixed targets", charts: [FIXED.probe, FIXED.minif2f, FIXED.heldOut, FIXED.math] },
+      { title: "Fixed targets", charts: [FIXED.probeDifference, FIXED.probe, FIXED.minif2f, FIXED.heldOut, FIXED.math] },
       { title: "RL health", charts: [GRPO.kl, GRPO.clip, GRPO.mixed, GRPO.rewards] },
       { title: "Training health", charts: [HEALTH.kl, HEALTH.heldOut, HEALTH.distinct, BUDGET.lateSolves] },
       { title: "Value health", charts: [VALUE.share, VALUE.benchmarkVersusV0, VALUE.armPooled, VALUE.phaseCalibration] },
@@ -674,6 +684,7 @@ export const PAGES = [
       {
         title: "Fixed targets",
         charts: [
+          FIXED.probeDifference,
           FIXED.probe,
           FIXED.probeBands,
           FIXED.probeSlotBands,

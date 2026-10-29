@@ -12,6 +12,7 @@ import dataclasses
 import datetime
 import json
 import math
+import statistics
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -221,6 +222,27 @@ def rolling_probe(summaries: Sequence[EvaluationSummary]) -> RollingProbe:
     )
 
 
+@dataclass(frozen=True)
+class BaselineDifferences:
+    """A probe slot's solve rate minus the mean of version 0's runs of the same part (the same problems), so the
+    parts' difficulty cancels; and the mean of that over the last slots, each part once (None until they all have
+    one)."""
+
+    this_slot: float | None
+    last_slots: float | None
+
+
+def baseline_difference(summary: EvaluationSummary, baseline: Sequence[EvaluationSummary]) -> float | None:
+    if not baseline:
+        return None
+    return summary.solve_rate - statistics.fmean(run.solve_rate for run in baseline)
+
+
+def mean_or_none(values: Sequence[float | None]) -> float | None:
+    known = [value for value in values if value is not None]
+    return statistics.fmean(known) if values and len(known) == len(values) else None
+
+
 def binomial_upper_tail(successes: int, trials: int) -> float:
     """P(X >= successes) for X ~ Binomial(trials, 1/2)."""
     return sum(math.comb(trials, count) for count in range(successes, trials + 1)) / 2**trials
@@ -360,9 +382,13 @@ def band_outcomes(outcomes: Sequence[StratumOutcome]) -> dict[str, BandOutcome]:
 
 
 def fixed_targets_record(
-    summary: EvaluationSummary, comparison: RepeatComparison | None = None, rolling: RollingProbe | None = None
+    summary: EvaluationSummary,
+    comparison: RepeatComparison | None = None,
+    rolling: RollingProbe | None = None,
+    baseline: BaselineDifferences | None = None,
 ) -> FixedTargets:
-    """`comparison`: a repeated run against the first; `rolling`: a probe slot's last slots, each part once."""
+    """`comparison`: a repeated run against the first; `rolling`: a probe slot's last slots, each part once;
+    `baseline`: a probe slot against version 0's runs of its part."""
     match summary.kind:
         case EvaluationKind.PROBE if comparison is not None:
             return FixedTargets(
@@ -388,6 +414,8 @@ def fixed_targets_record(
                 probe_rolling_solved=None if rolling is None else rolling.solved,
                 probe_rolling_problems=None if rolling is None else rolling.problems,
                 probe_rolling_by_difficulty={} if rolling is None else band_outcomes(rolling.by_stratum),
+                probe_baseline_difference=None if baseline is None else baseline.this_slot,
+                probe_rolling_baseline_difference=None if baseline is None else baseline.last_slots,
             )
         case EvaluationKind.MINIF2F:
             return FixedTargets(

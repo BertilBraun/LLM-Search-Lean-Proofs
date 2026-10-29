@@ -451,12 +451,21 @@ class DemoRun:
             probe_slot=slot,
             probe_part=slot % PROBE_PARTS,
         )
+        baseline = self.probe_slots[slot % PROBE_PARTS] if slot >= PROBE_PARTS else record
+        record = dataclasses.replace(
+            record,
+            probe_baseline_difference=((record.probe_solved or 0) - (baseline.probe_solved or 0))
+            / PROBE_PART_PROBLEMS
+            / len(PROBE_STRATA),
+        )
         window = [*self.probe_slots[-(PROBE_PARTS - 1) :], record] if slot >= PROBE_PARTS - 1 else []
         if window:
             record = dataclasses.replace(
                 record,
                 probe_rolling_solved=sum(part.probe_solved or 0 for part in window),
                 probe_rolling_problems=sum(part.probe_problems or 0 for part in window),
+                probe_rolling_baseline_difference=sum(part.probe_baseline_difference or 0.0 for part in window)
+                / len(window),
                 probe_rolling_by_difficulty={
                     stratum: BandOutcome(
                         sum(part.probe_by_difficulty[stratum].attempts for part in window),

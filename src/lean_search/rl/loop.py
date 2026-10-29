@@ -75,7 +75,16 @@ from lean_search.policy.adapters import handed_off_weights
 from lean_search.policy.server_control import PhaseSeconds
 from lean_search.rl.advantages import CreditMode
 from lean_search.rl.budget_signals import budget_phase_record
-from lean_search.rl.evaluation import EvaluationKind, EvaluationRun, EvaluationSummary, read_summary, value_arm_text
+from lean_search.rl.evaluation import (
+    BaselineDifferences,
+    EvaluationKind,
+    EvaluationRun,
+    EvaluationSummary,
+    baseline_difference,
+    mean_or_none,
+    read_summary,
+    value_arm_text,
+)
 from lean_search.rl.fixed_targets import target_config
 from lean_search.rl.health_checks import (
     HeldOutRates,
@@ -92,7 +101,7 @@ from lean_search.rl.health_checks import (
     rollback_trigger,
     write_health_stop,
 )
-from lean_search.rl.loop_config import EvaluationTarget, EvaluationValueModel, GrpoLoopConfig
+from lean_search.rl.loop_config import EvaluationConfig, EvaluationTarget, EvaluationValueModel, GrpoLoopConfig
 from lean_search.rl.phase_metrics import search_phase_record
 from lean_search.rl.retention import kept_adapters, prune_phase_adapters
 from lean_search.rl.statement_sources import FedStatement, StatementSource
@@ -554,6 +563,32 @@ def earlier_value_arm_results(paths: GrpoLoopPaths, own: Path) -> list[ValueArmR
         for path in sorted(paths.evaluations.glob(pattern))
         if path.parent != own
     ]
+
+
+def part_baseline(paths: GrpoLoopPaths, evaluation: EvaluationConfig, part: int) -> list[EvaluationSummary]:
+    """Version 0's runs of the probe part before the first phase (its slot is the part's number), those that exist."""
+    runs = [
+        paths.evaluation_directory(EvaluationRun(EvaluationKind.PROBE, part, repeat), 0) / "summary.json"
+        for repeat in range(evaluation.probe.baseline_runs)
+    ]
+    return [read_summary(path) for path in runs if path.exists()]
+
+
+def slot_baseline_difference(paths: GrpoLoopPaths, evaluation: EvaluationConfig, slot: int) -> float | None:
+    directory = paths.probe_slot_directory(slot)
+    if directory is None:
+        return None
+    baseline = part_baseline(paths, evaluation, slot % evaluation.probe_parts)
+    return baseline_difference(read_summary(directory / "summary.json"), baseline)
+
+
+def probe_baseline_differences(paths: GrpoLoopPaths, evaluation: EvaluationConfig, slot: int) -> BaselineDifferences:
+    """The slot against version 0's runs of its part, and the mean of that over the last `probe_parts` slots."""
+    first = slot - evaluation.probe_parts + 1
+    last_slots = (
+        [slot_baseline_difference(paths, evaluation, number) for number in range(first, slot + 1)] if first >= 0 else []
+    )
+    return BaselineDifferences(slot_baseline_difference(paths, evaluation, slot), mean_or_none(last_slots))
 
 
 class GrpoLoop:

@@ -114,6 +114,10 @@ class FixedTargets:
     probe_rolling_solved: int | None = None
     probe_rolling_problems: int | None = None
     probe_rolling_by_difficulty: dict[str, BandOutcome] = field(default_factory=dict)
+    # The slot's solve rate minus the mean of version 0's runs of the same part, so the parts' difficulty cancels
+    # (no sawtooth across the parts), and that difference averaged over the last `probe_parts` slots.
+    probe_baseline_difference: float | None = None
+    probe_rolling_baseline_difference: float | None = None
     # A repeated run against the first run of the version: solved, difference, problems solved by one only.
     probe_repeat_solved: int | None = None
     probe_repeat_difference: int | None = None
