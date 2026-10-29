@@ -1,6 +1,7 @@
 """JSON records: typed loading of dataclasses from JSON/TOML data and the per-theorem search-tree record."""
 
 import dataclasses
+import functools
 import gzip
 import json
 import types
@@ -95,9 +96,13 @@ def write_tree(path: Path, record: TreeRecord) -> None:
         file.write(to_json(record))
 
 
-def read_tree(path: Path) -> TreeRecord:
+def read_tree(path: Path, texts: bool = True) -> TreeRecord:
+    """Without `texts` the policy's sample texts (`expansions`, most of a record) are dropped before conversion."""
     with gzip.open(path, "rt", encoding="utf-8") as file:
-        return from_json_object(TreeRecord, json.load(file))
+        data = json.load(file)
+    if not texts:
+        data.pop("expansions", None)
+    return from_json_object(TreeRecord, data)
 
 
 def read_results(path: Path) -> list[SearchResult]:
@@ -122,7 +127,9 @@ def _convert(type_hint: object, data: object, location: str) -> object:
         if not isinstance(data, list | tuple):
             raise ValueError(f"{location}: expected a list, got {data!r}")
         element_type = arguments[0]
-        elements = [_convert(element_type, element, f"{location}[{index}]") for index, element in enumerate(data)]
+        elements = _primitive_elements(element_type, data)
+        if elements is None:
+            elements = [_convert(element_type, element, f"{location}[{index}]") for index, element in enumerate(data)]
         return tuple(elements) if origin is tuple else elements
     assert isinstance(type_hint, type), type_hint
     if dataclasses.is_dataclass(type_hint):
@@ -139,10 +146,28 @@ def _convert(type_hint: object, data: object, location: str) -> object:
     return data
 
 
+def _primitive_elements(element_type: object, data: list | tuple) -> list | None:
+    """The converted elements when all are JSON primitives the element type takes; None leaves them to `_convert`
+    (which also names a wrong one)."""
+    found = {type(element) for element in data}
+    if element_type in (int, str, bool) and found <= {element_type}:
+        return list(data)
+    if element_type is float and found <= {float, int}:
+        return [float(element) for element in data]
+    if element_type == float | None and found <= {float, int, types.NoneType}:
+        return [None if element is None else float(element) for element in data]
+    return None
+
+
+@functools.cache
+def _dataclass_fields(target: type) -> tuple[dict[str, dataclasses.Field], dict[str, object]]:
+    return {field.name: field for field in dataclasses.fields(target)}, typing.get_type_hints(target)
+
+
 def _convert_dataclass(target: type, data: object, location: str) -> object:
     if not isinstance(data, dict):
         raise ValueError(f"{location}: expected a table, got {data!r}")
-    fields = {field.name: field for field in dataclasses.fields(target)}
+    fields, hints = _dataclass_fields(target)
     unknown = sorted(set(data) - set(fields))
     if unknown:
         raise ValueError(f"{location}: unknown keys {unknown}")
@@ -153,5 +178,4 @@ def _convert_dataclass(target: type, data: object, location: str) -> object:
     )
     if missing:
         raise ValueError(f"{location}: missing keys {missing}")
-    hints = typing.get_type_hints(target)
     return target(**{name: _convert(hints[name], value, f"{location}.{name}") for name, value in data.items()})

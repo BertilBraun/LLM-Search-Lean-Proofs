@@ -10,8 +10,9 @@ the phase's outcome (data metrics, training results, the value gate, the job's t
 --merge-adapters the new policy adapter and an accepted value adapter are also merged into their bases on the GPUs
 (<adapter>/../merged), which the GRPO loop's publisher takes over. The policy texts come from the tree records
 (`TreeRecord.expansions`). The value model trains on --value-trees (the loop's window of recent phases, --trees among
-them; default --trees). The replay files and the value benchmark are optional. With --metrics-run the policy outcome
-is appended to that run's dashboard metrics (the grpo family).
+them; default --trees), which only the main rank reads (without the other phases' texts) and turns into the value data
+it sends to the other ranks. The replay files and the value benchmark are optional. With --metrics-run the policy
+outcome is appended to that run's dashboard metrics (the grpo family).
 """
 
 import argparse
@@ -70,9 +71,7 @@ def value_records(arguments: argparse.Namespace, phase_records: list[TreeRecord]
     records = list(phase_records) if set(arguments.trees) & set(arguments.value_trees) else []
     for directory in arguments.value_trees:
         if directory not in arguments.trees:
-            records += [
-                dataclasses.replace(read_tree(path), expansions=()) for path in sorted(directory.glob("*.json.gz"))
-            ]
+            records += [read_tree(path, texts=False) for path in sorted(directory.glob("*.json.gz"))]
     return records
 
 
@@ -90,7 +89,9 @@ def main() -> None:
         math_replay=list(read_solutions(arguments.math_replay)) if arguments.math_replay else [],
         value_replay=list(read_value_examples(arguments.value_replay)) if arguments.value_replay else [],
         value_benchmark=read_benchmark(arguments.value_benchmark) if arguments.value_benchmark else None,
-        value_records=value_records(arguments, records) if config.value and arguments.value_trees else [],
+        value_records=value_records(arguments, records)
+        if config.value and arguments.value_trees and ranks.is_main
+        else [],
     )
     policy_tokenizer = transformers.AutoTokenizer.from_pretrained(config.policy.model) if config.policy else None
     value_tokenizer = transformers.AutoTokenizer.from_pretrained(config.value.model) if config.value else None

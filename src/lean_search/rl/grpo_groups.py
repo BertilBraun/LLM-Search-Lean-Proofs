@@ -21,10 +21,11 @@ class RewardConfig:
     no_progress_local: float = -1.0
     # L per goal a tactic on the proof graph closes.
     goal_closed_bonus: float = 0.1
-    # δ: a proof-graph state earns this per remaining step it is closer to a proof than the group's node.
+    # δ: a proof-graph state earns this per remaining step it is closer to a proof than the group's node (negative
+    # when farther), its global part never below the best off-graph state's (1 − λ) · μ.
     progress_per_step: float = 0.2
-    # c: the advantage of a failing, no-progress or redundant tactic after the first; its block's prefix is kept, so
-    # only its tokens are wasted. Continuing pays when P(next tactic correct) > c / (c + δ).
+    # c: the advantage of a failing, no-progress or redundant tactic other than the block's anchor; the block's prefix
+    # is kept, so only its tokens are wasted. Against errors alone, continuing pays when P(correct) > c / (c + δ).
     wasted_tactic_cost: float = 0.1
     # μ: an expanded off-graph state earns G = μ · q, q its value part; 0 until a value model passed the gate.
     value_share: float = 0.0
@@ -51,13 +52,17 @@ class RewardParts:
         return RewardParts(self.global_part - other.global_part, self.local_part - other.local_part)
 
 
+# Labels of a tactic reaching a state with a reward.
+REACHED_STATE_LABELS = (TacticLabel.PROOF_GRAPH, TacticLabel.OFF_GRAPH)
+
+
 @dataclass(frozen=True)
 class TacticReward:
     label: TacticLabel
     # R of the state reached; None for unknown and masked tactics, which earn nothing.
     parts: RewardParts | None
-    # After the first tactic, judged within the block: R minus the most recent earlier state's R, or −c for a wasted
-    # tactic. None: judged against the group's baseline (the first tactic, or no earlier state of the block known).
+    # Judged within the block: R minus the most recent earlier state's R, or −c for a wasted tactic. None with parts:
+    # the block's anchor, judged against the group's first-tactic baseline.
     gain: RewardParts | None = None
 
 
@@ -75,12 +80,16 @@ class GroupSample:
         return [tactic.parts for tactic in self.tactics if tactic.parts is not None]
 
     @property
+    def anchor_parts(self) -> RewardParts | None:
+        """R of the block's first state with a reward, else of its first tactic when that one failed or was a no-op."""
+        return next((tactic.parts for tactic in self.tactics if tactic.parts is not None and tactic.gain is None), None)
+
+    @property
     def score_parts(self) -> RewardParts | None:
-        """The last tactic judged against the baseline plus every gain: the final state's R minus the wasted costs."""
-        anchors = [tactic.parts for tactic in self.tactics if tactic.parts is not None and tactic.gain is None]
-        if not anchors:
+        """The anchor plus every gain: the final state's R minus the wasted costs."""
+        score = self.anchor_parts
+        if score is None:
             return None
-        score = anchors[-1]
         for tactic in self.tactics:
             if tactic.gain is not None:
                 score += tactic.gain
@@ -141,8 +150,10 @@ def tactic_reward(
     match outcome.label:
         case TacticLabel.PROOF_GRAPH:
             assert outcome.remaining_steps is not None
-            progress = RewardParts(config.progress_per_step * (node_steps - outcome.remaining_steps), 0.0)
-            parts = reward_parts(1.0, config.goal_closed_bonus * outcome.goals_closed, config) + progress
+            progress = config.progress_per_step * (node_steps - outcome.remaining_steps)
+            on_graph = reward_parts(1.0, config.goal_closed_bonus * outcome.goals_closed, config)
+            best_off_graph = reward_parts(config.value_share, 0.0, config)
+            parts = RewardParts(max(on_graph.global_part + progress, best_off_graph.global_part), on_graph.local_part)
         case TacticLabel.OFF_GRAPH:
             parts = reward_parts(off_graph_global, 0.0, config)
         case TacticLabel.NO_PROGRESS | TacticLabel.REDUNDANT_HYPOTHESIS:
@@ -155,13 +166,15 @@ def tactic_reward(
 
 
 def judged_in_block(rewards: Sequence[TacticReward], config: RewardConfig) -> tuple[TacticReward, ...]:
-    """Each tactic after the first with its gain over the most recent earlier state of the block with a reward."""
+    """The anchor (the first tactic reaching a state with a reward, else the first tactic) keeps no gain; a later
+    state's tactic gains over the most recent earlier state with a reward, any other wasted tactic costs c."""
+    anchor = next((index for index, reward in enumerate(rewards) if reward.label in REACHED_STATE_LABELS), 0)
     judged = []
     state: RewardParts | None = None
     for index, reward in enumerate(rewards):
         gain = None
         match reward.label:
-            case TacticLabel.FAILING | TacticLabel.NO_PROGRESS | TacticLabel.REDUNDANT_HYPOTHESIS if index > 0:
+            case TacticLabel.FAILING | TacticLabel.NO_PROGRESS | TacticLabel.REDUNDANT_HYPOTHESIS if index != anchor:
                 gain = RewardParts(0.0, -config.wasted_tactic_cost)
             case TacticLabel.PROOF_GRAPH | TacticLabel.OFF_GRAPH:
                 assert reward.parts is not None

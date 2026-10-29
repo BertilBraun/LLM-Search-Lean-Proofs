@@ -41,11 +41,13 @@ search metrics' `graph.groups_without_policy_proof`); a policy sample repeating 
 policy's. Identical texts are merged (multiplicity = the samples behind them). Each tactic gets
 `R = (1 − λ) · G + λ · L` (`RewardConfig`, λ = `local_share` = 0.15, L clipped to [−1, 1]), and a proof-graph state
 δ (`progress_per_step` = 0.2) per remaining step it is closer to a proof than the group's node, `δ · (d(node) − d(s))`
-(part of the global part; negative for a proof-graph state farther away):
+(part of the global part; negative for a proof-graph state farther away, but the global part never falls below the
+best off-graph state's, (1 − λ) · μ, so a valid detour on the proof graph never scores below leaving it: from 5 steps
+farther on it earns what an off-graph state does, and as a first tactic still more than a Lean error):
 
 | Label | G | L | R |
 |---|---|---|---|
-| proof graph | 1 | `goal_closed_bonus` (0.1) per goal closed | 0.85 + 0.2 per step of progress + 0.015 per goal |
+| proof graph | 1 | `goal_closed_bonus` (0.1) per goal closed | 0.85 + 0.2 per step of progress + 0.015 per goal, global part ≥ (1 − λ) · μ |
 | off graph | μ · q (`value_share`, 0 until a value model passed the gate; q averages the state's expanded descendants, else its own estimate) | 0 | 0 before the gate |
 | no progress, redundant hypothesis | 0 | `no_progress_local` (−1, as a failure: a no-op wastes the sample too) | −0.15 |
 | failing | 0 | `failure_local` (−1) | −0.15 |
@@ -59,21 +61,38 @@ the first decides only whether the block gets further than the state before it (
 
 | Tactic | Advantage |
 |---|---|
-| the first (its failure or no-op included) | R − b |
-| a later one reaching a state with a reward (proof graph, off graph) | R(s_i) − R(s_j), s_j the most recent earlier state of the block with a reward: δ per step gained on the proof graph (plus its goal bonus), the whole drop when it leaves the proof graph |
-| a later one with no earlier state with a reward | R − b, as the first |
-| a later failing, no-progress or redundant one | −c (`wasted_tactic_cost` = 0.1, a local part in the local share): the prefix is kept, only its tokens are wasted |
+| the anchor: the first reaching a state with a reward (proof graph, off graph), else the first tactic when it failed or made no progress | R − b₁ |
+| a later one reaching a state with a reward | R(s_i) − R(s_j), s_j the most recent earlier state of the block with a reward: δ per step gained on the proof graph (plus its goal bonus), the whole drop when it leaves the proof graph |
+| any other failing, no-progress or redundant one (a no-op before the anchor included) | −c (`wasted_tactic_cost` = 0.1, a local part in the local share): the prefix is kept, only its tokens are wasted |
 | unknown, masked | untrained |
 
-A sample's score is its final state's R minus c per wasted later tactic (`GroupSample.score_parts`: the last tactic
-judged against b plus every gain, so the advantages of a block's tactics add up to score − b); a sample whose first
-tactic fails scores that tactic's R, one without a state with a reward or a first-tactic failure has no score. The
-baseline b is the multiplicity-weighted mean score of the group's samples with a score. No division by a standard
+A sample's score is its final state's R minus c per wasted tactic (`GroupSample.score_parts`: the anchor's R plus
+every gain); a sample whose first tactic fails or makes no progress, with no state with a reward after it, scores
+that tactic's R (minus c per later wasted one), one without a state with a reward or such a first tactic has no score.
+The baseline b is the multiplicity-weighted mean score of the group's samples with a score, the first-tactic baseline
+b₁ the same mean of their anchors' R (`GroupSample.anchor_parts`, `GroupAdvantages.first_tactic_baseline`). The
+explanation gets score − b and a block's tactic advantages add up to score − b₁: b − b₁ is the group's mean progress
+after the anchor (minus the wasted costs), which the later tactics' gains carry. Judged against b, the anchor was
+charged that progress, so a correct first tactic shared by every proof got a negative advantage whenever most samples
+proved in one multi-tactic block (6 of 8 in one 4-tactic block at d = 4: −0.16, now +0.30). No division by a standard
 deviation. Groups whose advantages are all zero are dropped (`GroupAdvantages.has_signal`).
 
-Stopping after t_i keeps s_i, the reference point of t_{i+1}, so the closing tokens get 0; continuing gets
-δ · steps gained when t_{i+1} is correct and −c when it fails, and pays when P(correct) > c / (c + δ) = 1/3. The
-closing tokens are trained with advantage 0 rather than masked: the loss divides by a fixed sequences × 256 tokens,
+Scale with the node's distance d: the anchor's advantage spans one state's R and later tactics get ±δ per step,
+whatever d; only the explanation's score − b grows, with the progress samples make within one block (bounded by
+block length, not by d). Simulated groups of 8 with blocks of 1–6 tactics, each tactic correct with probability 85%
+(50%): mean |anchor advantage| 0.10–0.11 (0.51) at every d; mean |explanation advantage| 0.11 at d = 1 and 0.27–0.28
+at d ≥ 7 (0.51–0.54 at every d); the local share of the tactic advantages 0.14 at d = 1 and 0.06 at d ≥ 7
+(0.14–0.15). Progress is not normalized per group: the wider spread at deep nodes comes from samples that differ by several
+real steps, and dividing δ by d would raise the continue threshold below at deep nodes and push their blocks short.
+
+Stopping after t_i keeps s_i, the reference point of t_{i+1}, so the closing tokens get 0. Continuing gets δ · steps
+gained when t_{i+1} is correct, −c when it fails or makes no progress, nothing when its state is unknown, and the
+whole drop R(s_i) − R(off) ≈ 0.85 + δ · progress when it is valid but leaves the proof graph for a well-explored
+off-graph state or a dead end. So it pays when δ · P(correct) − c · P(error) − drop · P(valid off graph) > 0: the
+threshold P(correct) > c / (c + δ) = 1/3 holds only when the alternative to a correct tactic is a Lean error. With 5%
+valid off-graph steps it is about 0.49. A valid step off the graph thus costs about 10× a later error; this follows
+what the search keeps (the error leaves the proof-graph prefix as the child) and stopping still beats deliberate
+errors, but it pushes blocks shorter than 1/3 suggests: watch the block length and continue rate. The closing tokens are trained with advantage 0 rather than masked: the loss divides by a fixed sequences × 256 tokens,
 so a zero-advantage token adds no gradient and changes no other token's weight; it only keeps the stop decision
 under the KL term (`kl_coefficient`, 0 by default) and in the per-token metrics, as a decision with a known neutral
 value. After a failure the closing follows masked tactics and stays untrained.
@@ -107,7 +126,11 @@ and in older records), carried to every sequence (`PolicySequence.policy_version
 ## Trainer (`policy_trainer.py`)
 
 PPO-clipped objective per token, clip [1 − 0.2, 1 + 0.28], loss Σ token loss / (sequences in the step × 256), KL (k3)
-to the data-collecting policy and to the starting policy reported, NLL replay. Log-probabilities divide the logits by
+to the data-collecting policy and to the starting policy reported, NLL replay. The KL to the starting policy only feeds
+a metric while `kl_coefficient` is 0, so its log-probabilities are scored on `reference_sequences` (256) sequences per
+phase (a seeded draw; all of them with a KL penalty). Each step and pass also reports the mean probability ratio and
+clip fraction of the positive- and of the negative-advantage tokens (`SignedRatios`, `GrpoTrainingResult.ratios_by_pass`,
+the dashboard's `ratios_by_pass`): an update going the right way lifts the first above 1 and pushes the second below. Log-probabilities divide the logits by
 each sample's recorded temperature (`ExpansionTexts.temperature`; `PolicyDataConfig.default_temperature` for old
 records). The output layer runs in fp32 per chunk of 512 positions (hidden states and weight upcast, autocast off),
 in the scoring and the training forward alike: bf16 logits step by 0.125 at |logit| 16–32, and one step moves a PPO
@@ -129,6 +152,12 @@ update of 1e-5, 88% of elements unchanged, 28% of the update kept). Its rank and
 (`[policy.lora]` is unused). The KL reference (`reference = "starting_weights"`) is `model` with `reference_adapter`,
 the starting policy's adapter: equal to the old log-probabilities while the phase continues that adapter (version 0),
 else scored with it loaded next to the trained adapter, which alone trains again afterwards.
+
+After each stage (labelling, policy, value, merge) the job runs the garbage collector and empties the CUDA cache
+(`training_phase.released_memory`): `module.compile()` stores a compiled wrapper of the module's own call on it, so a
+compiled layer refers to itself and only the cyclic collector frees a stage's model, which would otherwise stay on the
+GPU through the value training, the gate and the merges. `PhaseOutcome.memory` records the allocated and reserved GPU
+memory after each stage (the largest rank's).
 
 ## Metrics
 
@@ -216,7 +245,8 @@ with fakes for them (`tests/rl/loop_fakes.py`) and real Lean for the start-state
 
 - **Cadence and data**: every `training.value_every_phases` (4) phases the training job trains the value model on the
   trees of the last `value_window_phases` (8) phases (`TrainingRequest.value_trees`, `grpo_phase.py --value-trees`;
-  the other phases' records are read without their texts), continuing the last value adapter trained, accepted or not
+  only the main rank reads them, the other phases' records without their texts, `read_tree(texts=False)`, and sends
+  the tokenized value data to the other ranks), continuing the last value adapter trained, accepted or not
   (`LoopProgress.value_adapter`; the published one before the first), with 10% v0 replay
   (`training.value_replay = "value/v0/train.jsonl"`: v0's own training data, `phase3_value_data.py --name v0`, the
   exact remaining steps of traced train-split proofs; on the node under `$LEAN_SEARCH_DATA`, restored from the
@@ -258,7 +288,7 @@ segments; the training job's come from its `phase.json` (`TrainerTimings`, the m
 | `preparation` | job | labelling the trees, building the policy sequences, replay and value data |
 | `policy_load` | job | loading the 4B base with the adapter (and torch.compile's wrappers) |
 | `compile` | job | one scoring and one training micro-batch on the shortest sequence before scoring, which compile the compiled layers (`compile_warm_up`; 0 without `compile_layers`) |
-| `scoring` | job | the old (and, when it differs, reference) log-probabilities, sharded |
+| `scoring` | job | the old (and, when it differs, the reference's on `reference_sequences`) log-probabilities, sharded |
 | `policy_training` | job | the policy steps (both passes, replay included) |
 | `value_training` | job | the value model's load, compilation, steps and adapter save |
 | `gate` | job | the gate's two benchmark scorings (main rank) |
@@ -290,8 +320,9 @@ The node has about 128 GB of RAM (check the cgroup limit, `system.memory_total_g
 search (`sampling.concurrency`, 112) whose private memory grows from ~0.25 GiB after the import by ~0.25 MiB per proof
 state, restarted at 1 GiB when released and at 2 GiB in any case (`lean/repl.py`; the Mathlib .olean mappings are
 shared and not counted); an evaluation job's own pool (`evaluation.<target>.concurrency`, 64) next to the paused
-searches; the eight vLLM processes; the training job's ranks (each reads and labels the phase's trees; the weights load
-straight to the GPUs); and the loop process, which merges a published version on the CPU only when the job did not
+searches; the eight vLLM processes; the training job's ranks (each reads and labels the phase's trees, about 13 MiB
+per tree with its texts in a synthetic unsolved-tree test; the main rank alone also the value window, about 1.4 MiB per
+tree without texts, and the others only receive its value data; the weights load straight to the GPUs); and the loop process, which merges a published version on the CPU only when the job did not
 merge it on the GPUs. The budget:
 
     loop concurrency × p90 REPL memory + evaluation concurrency × p90 REPL memory + vLLM private memory + merge

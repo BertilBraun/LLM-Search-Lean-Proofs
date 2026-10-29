@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import ClassVar
 
-from lean_search.rl.policy_data import SamplerAgreement
+from lean_search.rl.policy_data import SamplerAgreement, SignedRatios
 from lean_search.rl.tree_statistics import GraphStatistics
 from lean_search.search.tactic_labels import TacticLabelCounts
 from lean_search.value.benchmark import BenchmarkMetrics
@@ -130,6 +130,9 @@ class GrpoPhase:
     sampler_kl: float = 0.0
     # The same by sampling age: the version trained from minus the version that sampled ("0": current data).
     sampler_by_age: dict[str, SamplerAgreement] = field(default_factory=dict)
+    # Ratio to the phase-start policy and clip fraction of the positive- and negative-advantage tokens, by pass ("1",
+    # "2"): the earliest sign of whether the update goes the right way.
+    ratios_by_pass: dict[str, SignedRatios] = field(default_factory=dict)
     # Samples whose answer was forced at the token cap, trained with the inserted text masked.
     forced_answers_kept: int = 0
     # Sequences from records without token ids, tokenized again.

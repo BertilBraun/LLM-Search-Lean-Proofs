@@ -2,6 +2,7 @@ import dataclasses
 import json
 from pathlib import Path
 
+import pytest
 from search_trees import add_child, new_tree
 
 from lean_search.search import (
@@ -120,3 +121,28 @@ def test_tree_record_keeps_the_value_distribution(tmp_path: Path) -> None:
     tree.root.value_distribution = (0.5, 0, 0, 0, 0, 0, 0, 0.25, 0.25)
     write_tree(tmp_path / "t.json.gz", tree_record(tree, "theorem t : p := by", RESULT))
     assert read_tree(tmp_path / "t.json.gz").nodes[0].value_distribution == (0.5, 0, 0, 0, 0, 0, 0, 0.25, 0.25)
+
+
+def test_reading_without_texts_leaves_out_only_the_expansions(tmp_path: Path) -> None:
+    tree = new_tree("⊢ p")
+    child = add_child(tree, tree.root, ("⊢ q",), step="intros")
+    completion = SampledCompletion(0, "Explain.\n\n```lean\nintros\n```", (CharacterSpan(19, 25),), False, TOKENS)
+    tree.expansion_texts.append(ExpansionTexts("t", child.node_id, "<prompt>", (completion,), 0.8, 1.0))
+    record = tree_record(tree, "theorem t : p := by", RESULT)
+    write_tree(tmp_path / "t.json.gz", record)
+    assert read_tree(tmp_path / "t.json.gz", texts=False) == dataclasses.replace(record, expansions=())
+
+
+def test_whole_numbers_in_a_list_of_optional_floats_read_as_floats() -> None:
+    tokens = from_json_object(SampledTokens, {"token_ids": [1, 2], "log_probabilities": [0, None]})
+    assert [type(value) for value in tokens.log_probabilities] == [float, type(None)]
+
+
+@pytest.mark.parametrize(
+    "data",
+    [{"token_ids": [1, "2"]}, {"token_ids": [1, True]}, {"token_ids": [1], "log_probabilities": ["0.5"]}],
+    ids=["string", "boolean", "string log-probability"],
+)
+def test_a_wrong_element_in_a_list_of_numbers_is_rejected(data: dict[str, object]) -> None:
+    with pytest.raises(ValueError, match=r"SampledTokens\.\w+\[\d\]"):
+        from_json_object(SampledTokens, data)
