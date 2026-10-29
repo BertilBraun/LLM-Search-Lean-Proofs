@@ -4,7 +4,7 @@ import pytest
 from graph_trees import GraphBuilder
 from tactic_trees import CONSTRUCTOR, COPY, FIRST_THEN_FAILING, PROOF, example_tree
 
-from lean_search.rl.grpo_groups import GroupSample, PolicyGroup, RewardConfig, policy_groups
+from lean_search.rl.grpo_groups import GroupSample, PolicyGroup, RewardConfig, TreeGroups, policy_groups
 from lean_search.search import FailureKind, StepSource, TreeRecord
 from lean_search.search.graph_labels import label_graph
 from lean_search.search.tactic_labels import policy_tactics
@@ -12,11 +12,18 @@ from lean_search.value.graph_targets import RemainingStepsReadout, recorded_esti
 
 READOUT = RemainingStepsReadout()
 CONFIG = RewardConfig()
+# The example's off-graph state is expanded once.
+SINGLE_EXPANSION_EVIDENCE = dataclasses.replace(CONFIG, off_graph_min_expanded_nodes=1)
+
+
+def tree_groups(record: TreeRecord, config: RewardConfig = CONFIG) -> TreeGroups:
+    labels = label_graph(record)
+    tactics = policy_tactics(record, labels, config.off_graph_min_expanded_nodes)
+    return policy_groups(record, labels, tactics, recorded_estimates(record, READOUT), config)
 
 
 def groups(record: TreeRecord, config: RewardConfig = CONFIG) -> list[PolicyGroup]:
-    labels = label_graph(record)
-    return policy_groups(record, labels, policy_tactics(record, labels), recorded_estimates(record, READOUT), config)
+    return list(tree_groups(record, config).groups)
 
 
 def root_sample(text: str, config: RewardConfig = CONFIG) -> GroupSample:
@@ -48,12 +55,16 @@ def test_failing_tactic_after_a_proof_graph_tactic() -> None:
     assert tactic_rewards(FIRST_THEN_FAILING) == pytest.approx([0.85, -0.15, None])
 
 
-def test_redundant_hypothesis_scores_as_no_progress() -> None:
-    assert tactic_rewards(COPY) == pytest.approx([-0.075])
+def test_redundant_hypothesis_scores_as_a_failure() -> None:
+    assert tactic_rewards(COPY) == pytest.approx([-0.15])
 
 
 def test_expanded_off_graph_state_is_neutral_before_the_gate() -> None:
-    assert tactic_rewards(CONSTRUCTOR) == pytest.approx([0.0])
+    assert tactic_rewards(CONSTRUCTOR, SINGLE_EXPANSION_EVIDENCE) == pytest.approx([0.0])
+
+
+def test_off_graph_state_with_too_few_expanded_nodes_earns_nothing() -> None:
+    assert tactic_rewards(CONSTRUCTOR) == [None]
 
 
 def test_expanded_off_graph_state_earns_its_value_part_after_the_gate() -> None:
@@ -62,8 +73,9 @@ def test_expanded_off_graph_state_earns_its_value_part_after_the_gate() -> None:
     builder.child(off_graph, "⊢ r")
     proof = builder.child(builder.root, text="close")
     labels = label_graph(record := builder.record(proof))
-    config = dataclasses.replace(CONFIG, value_share=0.15)
-    (root,) = policy_groups(record, labels, policy_tactics(record, labels), recorded_estimates(record, READOUT), config)
+    config = dataclasses.replace(SINGLE_EXPANSION_EVIDENCE, value_share=0.15)
+    tactics = policy_tactics(record, labels, config.off_graph_min_expanded_nodes)
+    (root,) = policy_groups(record, labels, tactics, recorded_estimates(record, READOUT), config).groups
     (detour,) = [sample for sample in root.samples if sample.text == "detour"]
     expected = 0.85 * 0.15 * READOUT.estimate(4.0).proof_probability
     assert detour.tactics[0].parts is not None and detour.tactics[0].parts.total == pytest.approx(expected)
@@ -94,3 +106,29 @@ def test_group_holds_only_policy_samples_without_infrastructure_failures() -> No
     proof = builder.child(builder.root, text="close")
     (root,) = groups(builder.record(proof))
     assert [sample.text for sample in root.samples] == ["close"]
+
+
+def sweep_proof_tree() -> TreeRecord:
+    """The sweep proves the root; the policy's samples fail or reach a never-expanded state."""
+    builder = GraphBuilder("⊢ p")
+    builder.failure(builder.root, text="linarith")
+    builder.child(builder.root, "⊢ q", text="detour")
+    proof = builder.child(builder.root, text="omega", source=StepSource.AUTOMATION)
+    return builder.record(proof)
+
+
+def test_group_without_a_policy_proof_is_left_out() -> None:
+    assert tree_groups(sweep_proof_tree()) == TreeGroups(groups=(), without_policy_proof=1)
+
+
+def test_group_without_a_policy_proof_stays_when_not_required() -> None:
+    config = dataclasses.replace(CONFIG, require_policy_proof=False)
+    assert [group.node_id for group in groups(sweep_proof_tree(), config)] == [0]
+
+
+def test_policy_sample_repeating_the_sweep_proof_counts_as_a_policy_proof() -> None:
+    builder = GraphBuilder("⊢ p")
+    builder.failure(builder.root, text="linarith")
+    proof = builder.child(builder.root, text="omega", source=StepSource.AUTOMATION)
+    builder.repeat(builder.root, builder.tree.edges[proof.edge_id])
+    assert [group.node_id for group in groups(builder.record(proof))] == [0]

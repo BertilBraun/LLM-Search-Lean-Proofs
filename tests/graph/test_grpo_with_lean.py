@@ -10,6 +10,7 @@ from lean_search.data import Problem, Split
 from lean_search.lean import LeanRepl, LeanReplConfig
 from lean_search.lean.repl import PROJECT_DIRECTORY, REPL_BINARY
 from lean_search.policy.prompts import END_OF_TURN, normalized_block
+from lean_search.rl.grpo_groups import RewardConfig
 from lean_search.rl.policy_data import PolicyData, PolicyDataConfig, build_policy_data
 from lean_search.rl.training_phase import TrainingPhaseConfig, label_phase_data
 from lean_search.search import (
@@ -86,7 +87,8 @@ async def record() -> AsyncIterator[TreeRecord]:
 
 def labels_of(record: TreeRecord, block: str) -> tuple[TacticLabel, ...]:
     (edge,) = [edge for edge in record.edges if edge.text == block]
-    return tuple(outcome.label for outcome in policy_tactics(record, label_graph(record))[edge.edge_id])
+    tactics = policy_tactics(record, label_graph(record), RewardConfig().off_graph_min_expanded_nodes)
+    return tuple(outcome.label for outcome in tactics[edge.edge_id])
 
 
 @pytest.mark.parametrize(

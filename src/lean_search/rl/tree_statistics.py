@@ -6,7 +6,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
 from lean_search.rl.advantages import CreditMode, group_advantages
-from lean_search.rl.grpo_groups import PolicyGroup
+from lean_search.rl.grpo_groups import TreeGroups
 from lean_search.search.graph_labels import EdgeKind, EdgeLabel, GraphLabels, NodeClass, is_verified_proof
 from lean_search.search.records import NodeRecord, TreeRecord
 from lean_search.search.tactic_labels import TacticLabelCounts, TacticOutcome
@@ -109,6 +109,8 @@ class GraphStatistics:
     group_samples: int
     # Groups with a non-zero per-tactic advantage.
     groups_with_signal: int
+    # Groups at proof-graph nodes left out because no policy sample reached the proof graph (not in `groups`).
+    groups_without_policy_proof: int
     # Sums of (1 − λ) · G and λ · L over the groups' known tactics, sample-weighted.
     global_reward: float
     local_reward: float
@@ -166,9 +168,9 @@ def graph_statistics(
     labels: GraphLabels,
     targets: Sequence[ValueTarget],
     tactics: Mapping[int, Sequence[TacticOutcome]],
-    groups: Sequence[PolicyGroup],
+    tree_groups: TreeGroups,
 ) -> GraphStatistics:
-    """`tactics` from `policy_tactics`, `groups` from `policy_groups`."""
+    """`tactics` from `policy_tactics`, `tree_groups` from `policy_groups`."""
     on_path = {node.node_id for node in record.nodes if node.status == NodeStatus.PROVED}
     policy = [edge for edge in labels.edges if edge.source == StepSource.POLICY]
     into_proof = [edge for edge in labels.edges if is_into_proof_graph(edge, labels)]
@@ -178,6 +180,7 @@ def graph_statistics(
         expanded and bool(node.goals) for expanded, node in zip(labels.expanded, record.nodes, strict=True)
     )
     off_graph = [target for target in targets if target.source == TargetSource.OFF_GRAPH]
+    groups = tree_groups.groups
     samples = [sample for group in groups for sample in group.samples]
     known = [(parts, sample.multiplicity) for sample in samples for parts in sample.known]
     policy_samples = [
@@ -232,6 +235,7 @@ def graph_statistics(
         groups=len(groups),
         group_samples=sum(group.sample_count for group in groups),
         groups_with_signal=sum(group_advantages(group).has_signal(CreditMode.PER_TACTIC) for group in groups),
+        groups_without_policy_proof=tree_groups.without_policy_proof,
         global_reward=sum(parts.global_part * weight for parts, weight in known),
         local_reward=sum(parts.local_part * weight for parts, weight in known),
         proofs=len(proofs),

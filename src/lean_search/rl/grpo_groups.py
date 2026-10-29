@@ -16,12 +16,16 @@ class RewardConfig:
     local_share: float = 0.15
     # L of the first failing tactic (errors and timeouts) and of a sample without a usable block.
     failure_local: float = -1.0
-    # L of a tactic without progress or adding only redundant hypotheses.
-    no_progress_local: float = -0.5
+    # L of a tactic without progress or adding only redundant hypotheses: a wasted sample, like a failure.
+    no_progress_local: float = -1.0
     # L per goal a tactic on the proof graph closes.
     goal_closed_bonus: float = 0.1
     # μ: an expanded off-graph state earns G = μ · q, q its value part; 0 until a value model passed the gate.
     value_share: float = 0.0
+    # An expanded off-graph state with fewer expanded nodes in its subtree (itself included) is unknown, not off graph.
+    off_graph_min_expanded_nodes: int = 4
+    # Only groups with a policy sample reaching the proof graph; the automation sweep's children do not count.
+    require_policy_proof: bool = True
 
 
 @dataclass(frozen=True)
@@ -76,6 +80,17 @@ class PolicyGroup:
     @property
     def sample_count(self) -> int:
         return sum(sample.multiplicity for sample in self.samples)
+
+    @property
+    def has_policy_proof(self) -> bool:
+        return any(tactic.label == TacticLabel.PROOF_GRAPH for sample in self.samples for tactic in sample.tactics)
+
+
+@dataclass(frozen=True)
+class TreeGroups:
+    groups: tuple[PolicyGroup, ...]
+    # Groups left out by `require_policy_proof`.
+    without_policy_proof: int
 
 
 def off_graph_value(
@@ -140,7 +155,7 @@ def policy_groups(
     tactics: Mapping[int, Sequence[TacticOutcome]],
     estimates: Sequence[ValueEstimate | None],
     config: RewardConfig,
-) -> list[PolicyGroup]:
+) -> TreeGroups:
     """One group per expanded proof-graph node with policy samples; `tactics` from `policy_tactics`."""
     groups = []
     for node_id, edges in sorted(labels.edges_by_parent().items()):
@@ -157,4 +172,5 @@ def policy_groups(
             for members in by_text.values()
         )
         groups.append(PolicyGroup(record.problem_name, node_id, record.nodes[node_id].goals, samples))
-    return groups
+    kept = tuple(group for group in groups if group.has_policy_proof or not config.require_policy_proof)
+    return TreeGroups(kept, len(groups) - len(kept))

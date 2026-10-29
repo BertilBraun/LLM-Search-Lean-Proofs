@@ -31,7 +31,7 @@ def statistics_of(record: TreeRecord) -> GraphStatistics:
     labels = label_graph(record)
     estimates = recorded_estimates(record, READOUT)
     targets = value_targets(record, labels, estimates, ValueTargetConfig())
-    tactics = policy_tactics(record, labels)
+    tactics = policy_tactics(record, labels, REWARDS.off_graph_min_expanded_nodes)
     groups = policy_groups(record, labels, tactics, estimates, REWARDS)
     return graph_statistics(record, labels, targets, tactics, groups)
 
@@ -88,7 +88,7 @@ def test_edge_kind_counts_cover_every_kind() -> None:
 
 @pytest.mark.parametrize(
     ("field", "count"),
-    [("proof_graph", 6), ("off_graph", 1), ("unknown", 2), ("no_progress", 1), ("redundant_hypothesis", 1)],
+    [("proof_graph", 6), ("off_graph", 0), ("unknown", 3), ("no_progress", 1), ("redundant_hypothesis", 1)],
 )
 def test_policy_tactic_counts_of_the_example(field: str, count: int) -> None:
     assert getattr(statistics_of(example_tree()).policy_tactics, field) == count
@@ -97,6 +97,13 @@ def test_policy_tactic_counts_of_the_example(field: str, count: int) -> None:
 def test_group_tactics_count_only_the_groups() -> None:
     example = statistics_of(example_tree())
     assert example.policy_tactics.failing - example.group_tactics.failing == 1
+
+
+def test_groups_left_out_without_a_policy_proof_are_counted() -> None:
+    builder = GraphBuilder("⊢ p")
+    builder.failure(builder.root, text="linarith")
+    proof = builder.child(builder.root, text="omega", source=StepSource.AUTOMATION)
+    assert statistics_of(builder.record(proof)).groups_without_policy_proof == 1
 
 
 def test_size_histogram_buckets() -> None:
