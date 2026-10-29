@@ -73,6 +73,7 @@ max_num_seqs = 96
 [sampling]
 # n = 8, harvesting and ε on, heartbeat limits, flattening; server URLs come from [serving].
 search_config = "experiments/configs/grpo/search/visible_student_v2.toml"
+max_expansions = 32
 # One REPL per search; most searches wait on the GPUs. Tune by the first hour (Lean cores and memory on the
 # dashboard's system page; a REPL holds 0.25-2 GiB of private memory).
 concurrency = 112
@@ -84,12 +85,9 @@ gpus = [0, 1, 2, 3]
 # Each statement is searched about once per phase (300 statements, 112 concurrent searches).
 min_sampling_minutes = 10.0
 max_sampling_minutes = 20.0
-min_solved_trees = 30
+min_trainable_groups = 100
 check_seconds = 30.0
 value_every_phases = 0
-value_share_after_gate = 0.15
-# grpo_fixed_sets.py gate-benchmark; under $LEAN_SEARCH_RUNS.
-value_benchmark = "grpo_gate/benchmark.json.gz"
 # Under $LEAN_SEARCH_DATA: the starting policy's flat SFT data (data_rewrite.py build) and its math solutions.
 lean_replay = "reasoning/visible_student_v3_numbered/train.jsonl"
 math_replay = "reasoning/visible_student_v3_numbered/math.jsonl"
@@ -107,7 +105,9 @@ held_out_states_file = "phase5_eval_visible_student_v2_visible/states.jsonl"
 # replay their proof states on the next request. Memory budget: src/lean_search/rl/README.md, "Host memory".
 paused_repl_memory_gib = 0.0
 
-# Only when requested (grpo_loop.py request-evaluation --target probe).
+# Only when requested (grpo_loop.py request-evaluation --target probe), the whole set at once.
+probe_parts = 1
+
 [evaluation.probe]
 max_expansions = 16
 max_wall_seconds = 3600.0

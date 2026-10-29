@@ -380,6 +380,9 @@ expensive); per-tactic against sequence-level credit is compared only in the che
 ### The loop
 
 1. Search a batch of curriculum statements with best-first / A* search, **n = 8 samples per expansion** (not 16),
+   **32 expansions per search** (decided 2026-10-29, review F M4: expansions 17-64 added 8 of 171 solves in the visible
+   run; the probe stays at 16, miniF2F at 64; `[sampling] max_expansions`, raised mid-run by a restart when the budget
+   signals below show harder proofs cut off),
    without raising the sampling temperature (0.8). Exploration over which state is expanded next: with probability
    **ε = 0.1** the search picks uniformly among the **top 8 frontier states** by priority instead of the best one
    (never fully random; off in evaluations). Reason: only expanded states get value labels and the value model
@@ -395,24 +398,36 @@ expensive); per-tactic against sequence-level credit is compared only in the che
    every 4 phases ("Value model") in a pause–train–publish phase, **two passes over the phase's data** if training
    time allows (PPO clipping exists for this reuse; decided 2026-10-28, depending on the measured ratio of training
    to sampling time; 1 or 2 is a setting, there is no control run to compare them).
-5. Publish after every training phase (15–30 min of sampling: at least 15 min and 100 solved trees, at most 30 min).
-   Watch the clip fraction and the KL between the data-collecting policy and the current one; if they rise, publish
-   more often or train on smaller batches.
+5. Publish after every training phase. A phase's sampling ends once it has **300 trainable groups** (groups at
+   proof-graph nodes of solved trees with a policy proof and a non-zero advantage, counted per finished tree), after
+   at least 45 and at most 90 minutes (decided 2026-10-29, review F M4: the pause's fixed costs are paid per phase;
+   before: 15–30 min and 100 solved trees). Watch the clip fraction and the KL to the data-collecting and to the
+   starting policy (health checks below); if they rise, lower the learning rate or train on smaller batches.
 6. The curriculum keeps the solve rate around 30–70%, so groups carry signal and trees are balanced between
    solved and unsolved. Hard problems absorbing most of the budget is expected; the curriculum and escalation
    stages bound it.
+7. **Health checks per phase** (decided 2026-10-29; `src/lean_search/rl/README.md`, "Health checks and budget
+   signals"): KL to the starting policy, clip fraction, distinct samples per expansion, held-out valid-Lean rate and
+   per-sample success (whenever the held-out states run), explanation length and the share of samples cut off at the
+   token cap, each with a configurable alert threshold (absolute, or relative to version 0's held-out evaluation or the
+   first two phases; first guesses, calibrated on the first phases), in `loop.log` and on the dashboard. **Hard stop**:
+   a held-out valid-Lean rate below 0.7 × version 0's stops the loop after the phase, records the last good version
+   (its adapter is kept) and refuses to restart until it is rolled back to (`grpo_loop.py rollback`) or the stop is
+   cleared. **Budget signals**: share of solves in the last quarter of the budget (expansions 25–32), expansions to
+   the first proof, proof lengths and the curriculum difficulty of solved statements per phase; a note suggests a
+   larger budget when the last-quarter share exceeds 10% over the last 3 phases.
 
 **GPU layout** (decided 2026-10-29; reviews C and D estimated ~35–55% GPU use for the earlier layout, GPU 0 only
 training and GPUs 1–3 serving but idle while it trained): while sampling, all four GPUs serve the merged policy (62%
 of memory) and the merged value model (28%). At the training stage every search pauses at the pause gate (requests
 wait, trees and REPL states stay), all servers sleep (level 2, weights and KV cache freed), all four GPUs train
-data-parallel (`torchrun`, one rank per GPU; policy, then the value model and its gate), the new adapters are merged
+data-parallel (`torchrun`, one rank per GPU; policy, then the value model), the new adapters are merged
 on the GPUs, and the servers wake with the new weights. A data-parallel step equals the one-GPU step (same global
 loss normalization, LoRA gradients summed before clipping). One-GPU training (`training.gpus = [0]`: GPU 0's servers
 sleep, the others stay loaded, idle and swap in place) is the configurable fallback. Every pause segment is timed
-(drain, server sleep, trainer start, preparation, loads, compile, scoring, policy and value training, gate, merge,
+(drain, server sleep, trainer start, preparation, loads, compile, scoring, policy and value training, merge,
 write, publish, wake, resume; `rl/README.md`, "Timing"). Estimate before the node: ~10–15 min per pause on one GPU,
-of which training compute 4–8 min; on four GPUs the compute shrinks about fourfold while start, loads, compile, gate,
+of which training compute 4–8 min; on four GPUs the compute shrinks about fourfold while start, loads, compile,
 merges and wake do not (an estimated 5–8 min of fixed part); GPU utilization ~80–87%.
 
 **Persistent trainer** (decided 2026-10-29, built): one training job for the whole loop, a rank per GPU, keeps its
@@ -552,9 +567,9 @@ at 50k 9 stop on heartbeats and 1 fails fast (median 8.6 s, 133 s), at 100k 5 he
   influence stays at about 15–20%; the proof graph decides):
   - `G` (global) = `(1 − μ) · z + μ · q` with **μ = 0.15** (decided 2026-10-27): `z` is the concrete label, 1 if
     the state reached lies on the proof graph and 0 otherwise; `q` is the value part (the averaged estimate below, or
-    the child's own estimate if it has no expanded subtree). μ = 0 until a value model passed both gates
-    ("Benchmark and gate"), so G is the concrete label alone; afterwards the value model contributes at most
-    0.85 · 0.15 ≈ 13% of the reward. Dead ends are not a separate case (z = 0).
+    the child's own estimate if it has no expanded subtree). μ is a manual switch (decided 2026-10-29, "Benchmark and
+    value trends"): 0 until the owner turns it on, so G is the concrete label alone; at 0.15 the value model
+    contributes at most 0.85 · 0.15 ≈ 13% of the reward. Dead ends are not a separate case (z = 0).
   - **Progress on the proof graph** (decided 2026-10-29): a proof-graph state earns δ = 0.2 per remaining step it is
     closer to a proof than the group's node, `δ · (d(node) − d(s))` with d the exact remaining top-level tactics
     (negative for a proof-graph state farther away), added to the global part. Before, every proof-graph state was
@@ -729,25 +744,27 @@ foundation of everything above, so it comes first.
 - **The value model in the loop** (decided 2026-10-29; before, it retrained every phase from the published adapter on
   that phase's trees alone, so a rejected model's data was lost): it retrains **every 4 phases on the trees of the
   last 8 phases**, continuing the last adapter trained (accepted or not), with **10% replay of v0's training data**
-  (exact remaining steps of traced proofs). A candidate is published only after gate (a) ("Benchmark and gate").
+  (exact remaining steps of traced proofs). Every retrained value model is published with the next version and
+  searched with (decided 2026-10-29: no gate, "Benchmark and value trends").
 - **Guards against a self-reinforcing loop**: the concrete label carries 85% of every target and is never
   overwritten; leaf values come from the value version that ran the search (a frozen target network); best-first
   search replaces optimistic estimates of expanded nodes by their children's values; per-batch source shares and a
   cap on targets per tree, so large unsolved trees do not dominate; the 10% v0 replay; retraining from the base
-  checkpoint is a setting (`retrain_from_base`, off); the two gates below.
+  checkpoint is a setting (`retrain_from_base`, off); μ stays 0 unless turned on by hand, and the benchmark and
+  value-arm trends below show a value model going wrong.
 - **Not done**: extra searches only to label states (AlphaZero does not need them either).
 - **Implemented** (`src/lean_search/value/graph_targets.py`, `ranking.py`, `graph_trainer.py`): weighted soft
   cross-entropy on the bins plus the ranking loss (0.5 × softplus of the negative score difference), pair members
   in the same micro-batch, learning rate 5e-5, at most 64 targets and 64 pairs per tree. The μ-mix and pairs of this
   section are implemented (2026-10-28): the bin target is `(1 − μ) · bins(z) + μ · bins(q)` (z: smoothed exact steps
   on the proof graph, all-dead off it; q: its proof probability over the step bins at its steps, the rest dead), so
-  `1 − p_dead` is y; `value_share` (μ) is 0 in the GRPO phase configs until the loop turns it on; off-graph
+  `1 − p_dead` is y; `value_share` (μ) is 0 in the GRPO phase configs, and the loop sets it per phase; off-graph
   weight `0.5 · n / (n + 4)` for n expanded nodes in the subtree; per-step source shares proof graph 0.4, off graph
   0.6. Remaining steps and q's distance count top-level tactics (`applied_tactics` per edge). On the visible student's
   244 trees: 287 proof-graph and 4,535 off-graph targets (4,303 from unsolved trees), q from descendants for 2,949,
   the own estimate for 1,873; proof-graph steps median 2 tactics (mean 3.8) vs 1 block (mean 2.0).
 
-### Benchmark and gate
+### Benchmark and value trends
 
 - A fixed value benchmark of a few thousand states from search graphs of the current policy, including
   never-expanded children. Metrics: ranking among siblings (proof-graph child above its siblings), calibration of
@@ -764,63 +781,78 @@ foundation of everything above, so it comes first.
   Spearman 0.65 for remaining steps, but p_dead ≈ 1e-7 on every state and dead AUC 0.47: it never predicts dead.
 - Implemented (`src/lean_search/value/README.md`, "Value benchmark"): each benchmark records its runs' provenance
   and refuses value-model-guided trees (configurable to a warning), models are scored fresh through vLLM into stored
-  per-state bin distributions, recorded h is ranking/steps only and flagged when circular, and the gate scores both
-  adapters fresh. Benchmark trees: `experiments/configs/value_benchmark_search.toml`. Proof-graph children rarely
-  have a dead-end sibling (2 such pairs among 4,228 states of the row-2 v2 trees; ~50 proof-over-expanded and ~160
-  expanded-over-dead-end pairs), so the AUC over proof-graph and dead-end states carries more weight than the
-  proof-over-dead-end pair accuracy.
-- **Two gates** (decided 2026-10-29, replacing point thresholds of +0.01 pair accuracy, −0.02 AUC and +0.01 Brier
-  checked every phase, which a model no better than v0 would pass by noise within a few phases, and which rewarded a
-  meaningful p_dead rather than a better frontier order):
-  - **(a) Publishing**: the candidate and the published model are scored fresh on the gate benchmark (the gate set,
-    searched once value-free); the statistic is the candidate's share of labelled sibling pairs whose proof-graph
-    child gets the lower h (the quantity A* orders its frontier by; ties count half) minus the published model's,
-    with a **paired cluster bootstrap over problems** (5,000 resamples, fixed seed). The candidate passes when the
-    lower 95% bound is above 0. AUC, Brier, pair accuracy by p_dead and Spearman are kept as diagnostics only (v0's
-    p_dead ≈ 1e-7 everywhere, so any p_dead metric favours every new model).
-  - **(b) A/B search**: every 12 h of loop time (or on request) the current policy searches 250 probe problems at the
-    probe's budget twice, with v0 and with the published value model, paired per problem, exact McNemar test.
-    Compared with v0, not with the previous model: v0 is the fixed reference, and successive small steps would each
-    be below the A/B's noise.
-  - **μ = 0.15 switches on** only after a model passed (a) and (b) found the published model better than v0 at
-    p < 0.05 (one-sided exact McNemar, pooled over the A/Bs of the same published model; 2026-10-29, after review E:
-    the earlier "≥ 1 problem ahead and not worse" passed identical arms ~48% of the time, this rule ~4%). Before that
-    every phase trains with μ = 0. When (b) finds the published model worse than v0 at p < 0.05, v0's value model is
-    published again and μ is off.
+  per-state bin distributions, and recorded h is ranking/steps only and flagged when circular. Benchmark trees:
+  `experiments/configs/value_benchmark_search.toml`; the loop's benchmark is the gate set's (`grpo/gate_search.toml`,
+  unchanged). Proof-graph children rarely have a dead-end sibling (2 such pairs among 4,228 states of the row-2 v2
+  trees; ~50 proof-over-expanded and ~160 expanded-over-dead-end pairs), so the AUC over proof-graph and dead-end
+  states carries more weight than the proof-over-dead-end pair accuracy.
+- **No value gate** (decided 2026-10-29 by the owner, replacing the two gates of the same day: a bootstrap gate (a) on
+  publishing and an A/B search (b) that switched μ on or reverted to v0; from AlphaZero experience gating did not
+  help): every retrained value model (every 4 phases, window of 8) is published with the next version and used by
+  the searches. The statistics stay, as trends on the dashboard, and nothing acts on them automatically.
+  - **Benchmark trend**: once a new value model is served, the loop scores the benchmark through the value servers
+    while the searches run (the search's own scoring path; ~30–60 s of value-server load per retrain instead of a
+    segment of the training pause), keeps the scores per value version (`value_benchmark/scores_v<k>.json.gz`) and
+    writes, per value version: the share of labelled sibling pairs whose proof-graph child gets the lower h (the
+    quantity A* orders its frontier by; ties count half), its difference to v0's and to the previous value model's
+    with a **paired cluster bootstrap over problems** (5,000 resamples, fixed seed, 95% percentile interval), and the
+    diagnostics (AUC, Brier and ECE on expanded states, pair accuracy by kind, Spearman and MAE of the steps, the
+    predicted distributions). A scoring the servers fail is retried after the next phase; the phase's pause waits for
+    a scoring in flight.
+  - **Value arm** (replacing the 250-problem A/B every 12 h): every other probe slot ("Fixed targets") searches its
+    third again with the published value model and the same policy version, paired per problem with the slot's run
+    with v0. Per slot and pooled (over the slots of the same published value model, and of every value model): the
+    paired solve-rate difference with McNemar's exact interval (Clopper–Pearson on the problems one arm solved,
+    conditional on their number) and one-sided exact McNemar p-values. An **alert** (dashboard and `loop.log`) only
+    when the published value model is worse than v0 at p < 0.05, pooled over its own value arms; nothing changes on
+    its own.
+  - **μ is a manual switch, starting at 0**: `deployment/grpo_loop.sh value-share 0.15` (`grpo_loop.py
+    set-value-share`) writes `value_share.json` in the run directory; the loop reads it each time a phase starts
+    training, so it takes effect from the next phase to train (0 turns it off). The μ in effect is on the
+    `value_phase` line of every phase and in `phases.jsonl`.
+- **Free per-phase value metrics** (no extra search): from each phase's labelled training trees and the bins the
+  serving value model recorded, the `value_phase` line holds the label distribution per bin (targets by source and
+  tree outcome, exact steps unsmoothed) next to the predicted distribution of the same states (and of the
+  never-expanded frontier: mean per bin, p_dead per tenth, expected steps given alive), the calibration of the proof
+  probability against z on expanded states (reliability bins, ECE, Brier), and the remaining-steps MAE and Spearman on
+  proof-graph states, whose exact steps (the shortest route to a proof) do not depend on the order the search found
+  them in. Each retrain also records the label distribution of its window (smoothed as trained) and the v0 replay.
 - **Evaluations with a fixed value model** (decided 2026-10-29): the probe and miniF2F always search with v0 as the
   value model (the value servers swap to v0's kept merged weights and back), so they measure the policy alone; the
-  held-out states use no value model.
-- The dashboard's value page shows per retrain the label distribution of the window's targets per bin and source,
-  the predicted distributions (mean per bin, p_dead histogram, expected steps) of the candidate and the published
-  model on the benchmark and of the serving model on the phase's states, the calibration of the proof probability
-  against z on expanded states, the gate difference with its interval and the A/B results.
-- **Measured weakness of gate (a)**: on the value-free row-2 trees (miniF2F-valid, 244 trees) the benchmark gives
-  only ~52 labelled pairs over 13 problems; in simulations on that structure the 95% half-width is 0.08–0.17, a
-  candidate without a real gain passes in 2–4% of retrains, and a gain of +0.10 passes only 22–61% of the time. The
-  gate set's 402 problems give about 1.6 times the pairs. **Open (owner)**: (i) wider gate searches (e.g. 16 samples
-  per expansion, a larger budget; ~1–2 h on the node) for more pairs, or (ii) the A/B (b) as the real decision and
-  the bootstrap only as a regression pre-filter.
+  held-out states use no value model. The value arm is the one exception, by design.
+- **Measured weakness of the pair statistic**: on the value-free row-2 trees (miniF2F-valid, 244 trees) the
+  benchmark gives only ~52 labelled pairs over 13 problems; in simulations on that structure the 95% half-width is
+  0.08–0.17, and a gain of +0.10 lies above zero in only 22–61% of retrains. The gate set's 402 problems give about 1.6
+  times the pairs. A trend over retrains is read more reliably than one interval; the gate search stays as it is
+  (decided 2026-10-29: no wider search for now).
 
 ### Fixed targets
 
 - **Probe set** (decided 2026-10-28): about 500 held-out pool problems, stratified easy / medium / hard by the
-  curriculum's difficulty estimate (not mostly easy; 501 problems), searched at a small budget (16 expansions)
-  every ~6 hours of loop time inside the loop's pause: about 5,000 expansions, estimated 40–60 min on 4× 3090 at
-  n = 8 (from the old 2× 3090 node: 4,577 expansions at n = 16 in 124 min; GPUs were the bottleneck), ~10% of
-  compute; 300 problems (~25 min) if that is too much. Small budgets because RL improves efficiency first (126 of
-  166 miniF2F solves came at the first expansion). **Validity** (decided 2026-10-29): the per-problem wall cap is
-  3,600 s, an emergency stop only, so the expansions are the budget and the probe does not measure load; wall-clock
-  stops are counted and reported and should be zero. Evaluation concurrency is 64. **Version 0's probe runs twice**
-  (independent runs) to measure the run-to-run noise later versions are judged against. The value model is fixed
-  to v0 ("Benchmark and gate").
+  curriculum's difficulty estimate (not mostly easy; 501 problems), searched at a small budget (16 expansions) with v0
+  as the value model. Small budgets because RL improves efficiency first (126 of 166 miniF2F solves came at the first
+  expansion). **Rhythm** (decided 2026-10-29, for a smoother trend at the same cost): the set is split into three
+  stratified parts (every third problem of each stratum, ~167 problems each), and every ~2 hours of loop time a
+  **slot** searches the next part, attached to the phase pause as before; the whole set is covered every ~6 hours,
+  ~1,670 expansions per slot, estimated 13–20 min on 4× 3090 at n = 8 (the whole set: about 5,000 expansions, 40–60
+  min, from the old 2× 3090 node's 4,577 expansions at n = 16 in 124 min; GPUs were the bottleneck), ~10–15% of
+  compute as before. The dashboard draws each slot's point and a rolling curve over the last three slots (the whole
+  set, each problem once, across their policy versions), per stratum too. **Validity** (decided 2026-10-29): the
+  per-problem wall cap is 3,600 s, an emergency stop only, so the expansions are the budget and the probe does not
+  measure load; wall-clock stops are counted and reported and should be zero. Evaluation concurrency is 64.
+  **Version 0's probe runs twice** (independent runs) to measure the run-to-run noise later versions are judged
+  against: before the first phase all three parts run twice (slots 0–2), the per-part differences and discordant
+  problems are on the dashboard and their sums in `loop.log`. **Value arm**: every other slot also searches its part
+  with the published value model ("Benchmark and value trends"), ~13–20 min every ~4 hours, about the cost of the
+  A/B it replaces (2 × 250 problems every 12 h).
 - **miniF2F-valid** at the full budget (64 expansions, n = 8; ~1–1.5 h) at the start, at milestones and at the end
   (the baseline before phase 1 automatically, the others on request; not on a clock), also with v0 as the value model.
 - Per-sample success on the 512 held-out states with every probe (no value model). MATH-500 retention (visible and
   thinking) at milestones, run separately (`reasoning_retention.py`; not in the loop). Curves over training, not
   just a final score. Baselines are re-measured on the new node with the new settings (n = 8, heartbeat limits,
   flattening), since the old numbers used n = 16 and wall-clock limits.
-- The value gate's benchmark comes from a separate held-out problem set (searched once without a value model, ~1–2
-  h), so value models are not selected on the evaluation set and the gate gets enough pairs.
+- The value benchmark comes from a separate held-out problem set (the gate set, searched once without a value model,
+  ~1–2 h), so value models are not judged on the evaluation set and the pair statistic gets enough pairs.
 - Timings are measured in the first hour on the node.
 
 ### Order of work
@@ -846,12 +878,14 @@ foundation of everything above, so it comes first.
    Qwen3.5-4B, policy version per expansion, replay from the rewritten data); visible chunk explanations by the
    teacher; the loop systems (process groups, server-failure re-queue, host memory budget, probe wall cap and
    repeated baseline, original names for value in the naming A/B); all four GPUs serving and training data-parallel
-   with timed pause segments; the value model in the loop (recorded bins, windowed retraining, the bootstrap gate,
-   the A/B against v0, v0 for evaluations, value diagnostics). After reviews E and F: the curriculum judged on the
-   statements fed first, the one-sided pooled A/B with a revert to v0, the server check and restart, torchrun's
-   workers stopped with their job, the REPLs stopped before training, adapter retention and a disk metric, and the
-   node check and smoke cycle (`grpo/loop_smoke.toml`). Details: `src/lean_search/rl/README.md`. Nothing ran
-   on a GPU or a vLLM server yet: the first-hour checks of `deployment/README.md` come first.
+   with timed pause segments; the value model in the loop (recorded bins, windowed retraining, v0 for evaluations,
+   value diagnostics). After reviews E and F: the curriculum judged on the statements fed first, the server check and
+   restart, torchrun's workers stopped with their job, the REPLs stopped before training, adapter retention and a disk
+   metric, and the node check and smoke cycle (`grpo/loop_smoke.toml`). Owner decisions of 2026-10-29: no value gate
+   (every retrained value model published, the benchmark scored through the value servers as a trend), μ a manual
+   switch, the probe in rotating thirds every ~2 h with a paired value arm every other slot, per-phase value metrics
+   from the training searches. Details: `src/lean_search/rl/README.md`. Nothing ran on a GPU or a vLLM server yet:
+   the first-hour checks of `deployment/README.md` come first.
 2. **New node**: the node check (disk, `/dev/shm`, a 4-rank NCCL all-reduce), rebuild, smoke tests, the heartbeat
    replay test, the loop's smoke cycle (one hour, every stage and evaluation at a tiny size), baselines with the new
    settings (student v2, value v0). First-hour checks (`deployment/README.md`, "GRPO loop"): `grpo_loop.sh check` (recorded tokens and
@@ -869,10 +903,9 @@ foundation of everything above, so it comes first.
 4. **SFT stage**: rewritten data (re-trace the selected proofs flat), the teacher's chunk explanations in the
    naming run (~9,500, ~15–20 min on 4 GPUs), the naming the A/B picked, a gentle fine-tune continuing v2's adapter
    on raw Qwen3.5-4B; the starting policy.
-5. **Value gate benchmark**: the gate set searched once by the starting policy without a value model (~1–2 h; wider
-   if the owner picks option (i) in "Benchmark and gate").
-6. **GRPO loop** with μ = 0 (proof graph only); the value model retrains in the loop every 4 phases, and μ = 0.15
-   switches on only after gate (a) passed and the A/B (b) found the published model better than v0.
+5. **Value benchmark**: the gate set searched once by the starting policy without a value model (~1–2 h).
+6. **GRPO loop** with μ = 0 (proof graph only); the value model retrains in the loop every 4 phases and is always
+   published; μ is turned on by hand when the owner decides (`grpo_loop.sh value-share`).
 7. Write-up on the homepage: the ladder, the RL curves, what the dense signal adds.
 
 ### Dashboard
@@ -893,10 +926,12 @@ from day one:
   repeat); a rising no-progress share is an early warning of reward hacking;
 - failures by tier (malformed, invalid in the state, valid but failing, timeout) per policy sample, block lengths,
   repeats of failed sweep tactics, forced answers and repetition loops;
-- value (decided 2026-10-29): per retrain the gate difference with its bootstrap interval and both models' benchmark
-  metrics, the label distribution of the window's targets per bin and source, the predicted distributions (mean per
-  bin, p_dead histogram, expected steps) and the calibration of the proof probability on expanded states; the A/B
-  search results against v0;
+- value (decided 2026-10-29): μ in effect per phase; per phase from the training searches the label and the
+  predicted distribution per bin and source, p_dead and expected-steps histograms, calibration on expanded states and
+  the remaining-steps error and Spearman on the proof graph; per served value model the benchmark trend (pairs ordered
+  by h, against v0 and the previous model with bootstrap intervals, AUC, Brier, calibration, Spearman); per value-arm
+  slot the paired difference to v0 and its pooled values with exact intervals, and the alert when worse; per retrain
+  the window's label distribution and the training loss;
 - GRPO: share of groups with mixed rewards, groups left out without a policy proof, reward split into local and
   global, tactics by credit label (proof graph, off graph, unknown, no progress, redundant hypothesis, failing,
   masked), KL and clip fraction, the sampler-vs-trainer log-probability mismatch overall and by sampling age,
@@ -906,9 +941,13 @@ from day one:
 - proofs (decided 2026-10-28): proof length in tactics and in blocks, proofs per solved problem, the share of
   proof-graph nodes, harvest yield (proofs and proof-graph nodes per harvest expansion), the share of ε-picks;
 - time: training vs sampling per phase (decides one or two passes) and every pause segment;
+- health and budget (decided 2026-10-29, the Training page): each health check's signal with its threshold, the
+  latest phase's alerts in the alert list; solves in the budget's last quarter, expansions to the first proof, proof
+  lengths and the difficulty of solved statements per phase, trainable groups per phase;
 - system: host memory (limit, available, Lean REPL private memory total and p90, vLLM private memory), server
   failures and statements given up;
-- fixed targets (above), with wall-clock stops and the version-0 repeat's difference and discordant problems.
+- fixed targets (above): the probe per slot and over the last three slots, per stratum, with wall-clock stops and
+  the version-0 repeat's difference and discordant problems per part.
 
 ### Relation to other recipes
 
@@ -927,11 +966,14 @@ Paper names in the last three rows are from memory and still need checking befor
 ### Open
 
 - Hardware offers within the budget.
-- Owner decisions (2026-10-29, being implemented): no value gate (every retrained value model is published; the
-  benchmark and the paired value-arm evaluations are dashboard trends only; μ a manual switch starting at 0); a
-  persistent trainer with in-memory weight handoff; phases ending at 300 trainable groups within 45–90 min;
-  32 expansions per loop search with budget signals; per-phase health checks (alerts, a hard stop on a valid-Lean
-  collapse); learning rate 1e-5 vs 3e-5 decided by the single-step test on the node.
+- Owner decisions (2026-10-29): implemented: no value gate (every retrained value model is published; the
+  benchmark, scored through the value servers during sampling, and the paired value arms are dashboard trends only,
+  with an alert when the value model is worse than v0), μ a manual switch starting at 0 (`grpo_loop.sh value-share`),
+  the probe in rotating thirds every ~2 h, per-phase value metrics from the training searches; phases ending at 300
+  trainable groups within 45–90 min; 32 expansions per loop search with budget signals; per-phase health checks
+  (alerts, a hard stop on a valid-Lean collapse with rollback), their thresholds calibrated in the first phases; a
+  persistent trainer with in-memory weight handoff (built, not yet run on a GPU). Open: learning rate 1e-5 vs 3e-5
+  decided by the single-step test on the node.
 - Serving precision: fp16-merged vs bf16-merged vs unmerged LoRA, decided by the node test against fp32.
 - Whether the four-GPU pause with the persistent trainer meets its ~1 min fixed part on the node (smoke cycle: pause
   segments, `compiled_graphs` 0 after the first phase, the wake's memory next to the parked ranks' CUDA contexts, the

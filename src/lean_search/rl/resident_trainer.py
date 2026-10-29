@@ -47,7 +47,7 @@ from lean_search.search.records import from_json_object, to_json
 from lean_search.training.data_parallel import Ranks, broadcast_from_main, largest
 from lean_search.training.math_data import MathSolution
 from lean_search.training.resident import HostDirectories, ResidentModel, build_resident_model
-from lean_search.value.benchmark import LabelledTree, read_benchmark
+from lean_search.value.benchmark import LabelledTree
 from lean_search.value.graph_trainer import value_initial_adapter
 from lean_search.value.labels import ValueExample
 
@@ -78,14 +78,12 @@ class LoopProcess:
 
 @dataclass(frozen=True)
 class ResidentInputs:
-    """What every phase reads, loaded once: the replay data, and the value benchmark's path (read per value phase on
-    the main rank, which alone scores the gate)."""
+    """The replay data every phase uses, loaded once."""
 
     lean_replay: Sequence[ReasoningExample] = ()
     math_replay: Sequence[MathSolution] = ()
     # Only the main rank's, which builds the value data.
     value_replay: Sequence[ValueExample] = ()
-    value_benchmark: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -263,19 +261,13 @@ class TrainerRank:
             self.start_preparation(Path(command.trees), config_text)
             self.log(f"Preparing phase {command.phase} from {command.trees}")
 
-    def value_window(
-        self, command: TrainerCommand, config: TrainingPhaseConfig
-    ) -> tuple[list[LabelledTree], list[LabelledTree]]:
-        """The window's trees labelled (without texts), and those of the phase itself among them."""
+    def value_window(self, command: TrainerCommand, config: TrainingPhaseConfig) -> list[LabelledTree]:
+        """The window's trees labelled, read without their texts."""
         window: list[LabelledTree] = []
-        phase_trees: list[LabelledTree] = []
         for directory in command.value_trees or (command.trees,):
             records = [read_tree(path, texts=False) for path in sorted(Path(directory).glob(TREE_PATTERN))]
-            labelled = list(label_value_trees(records, config))
-            window += labelled
-            if directory == command.trees:
-                phase_trees = labelled
-        return window, phase_trees
+            window += label_value_trees(records, config)
+        return window
 
     def merge(self, merges: Sequence[Merge]) -> tuple[float, float]:
         """Each new adapter merged on one rank's GPU (in turn) into host memory; the slowest rank's merging and
@@ -338,8 +330,7 @@ class TrainerRank:
         if config.value is not None:
             value, window_seconds = self.train_value(command, config, inputs, output / "value")
             preparation_seconds += window_seconds
-            if broadcast_from_main(value.accepted, self.ranks):
-                merges.append(Merge(ModelKind.VALUE, PremergedWeights(config.value.model, value.adapter)))
+            merges.append(Merge(ModelKind.VALUE, PremergedWeights(config.value.model, value.adapter)))
             memory.append(released_memory(TrainingStage.VALUE, self.device, self.ranks))
         merge_seconds, handoff_seconds = self.merge(merges)
         memory.append(released_memory(TrainingStage.MERGE, self.device, self.ranks))
@@ -372,12 +363,7 @@ class TrainerRank:
         without texts); the outcome and the seconds the window took."""
         assert config.value is not None
         started = time.perf_counter()
-        window: Sequence[LabelledTree] = ()
-        phase_trees: Sequence[LabelledTree] = ()
-        if self.ranks.is_main:
-            window, phase_trees = self.value_window(command, config)
-            benchmark = self.inputs.value_benchmark
-            inputs = dataclasses.replace(inputs, value_benchmark=read_benchmark(benchmark) if benchmark else None)
+        window: Sequence[LabelledTree] = self.value_window(command, config) if self.ranks.is_main else ()
         window_seconds = time.perf_counter() - started
         tokenizer = self.tokenizers[ModelKind.VALUE]
         value_model = self.models[ModelKind.VALUE]
@@ -385,7 +371,6 @@ class TrainerRank:
             config,
             config.value,
             window,
-            phase_trees,
             inputs,
             tokenizer,
             tokenizer.pad_token_id,

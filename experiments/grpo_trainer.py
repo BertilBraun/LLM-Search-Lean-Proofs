@@ -2,7 +2,7 @@
 
     [torchrun --standalone --nproc-per-node 4] experiments/grpo_trainer.py --channel runs/<loop>/training/trainer \
         --host-directory /dev/shm/lean_search/<loop> --loop-process-id <pid> --loop-start-ticks <ticks> \
-        [--lean-replay ...] [--math-replay ...] [--value-replay ...] [--value-benchmark ...]
+        [--lean-replay ...] [--math-replay ...] [--value-replay ...]
 
 Started by the loop with `[training] persistent = true` (loop_services.PersistentTrainer), which sends its commands
 through the channel directory (rl/trainer_channel.py). The ranks build the policy and value models once, keep them
@@ -36,7 +36,6 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--lean-replay", type=Path, help="reasoning data set JSON lines (Lean SFT replay)")
     parser.add_argument("--math-replay", type=Path, help="math solutions JSON lines")
     parser.add_argument("--value-replay", type=Path, help="v0 value examples JSON lines")
-    parser.add_argument("--value-benchmark", type=Path, help="a value benchmark; without it no value model is accepted")
     return parser.parse_args()
 
 
@@ -53,7 +52,6 @@ def main() -> None:
         value_replay=list(read_value_examples(arguments.value_replay))
         if arguments.value_replay and ranks.is_main
         else [],
-        value_benchmark=arguments.value_benchmark,
     )
     channel = TrainerChannel(arguments.channel)
     barrier(ranks)

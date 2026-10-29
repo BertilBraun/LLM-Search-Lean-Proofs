@@ -1,4 +1,6 @@
-"""Warning rules over a run's metric families; thresholds come from the dashboard config."""
+"""Warning rules over a run's metric families; thresholds come from the dashboard config, except the loop's own health
+checks (clip fraction, KL to the starting policy, held-out states, search budget, ...), whose thresholds and alerts the
+loop writes into the `health` family."""
 
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -33,7 +35,6 @@ class AlertThresholds:
     max_no_progress_share: float = 0.35
     no_progress_rise: float = 0.05
     max_kl: float = 0.05
-    max_clip_fraction: float = 0.2
     max_repetition_loop_share: float = 0.02
     repetition_loop_rise: float = 0.005
     min_math500_visible: float = 0.80
@@ -42,7 +43,6 @@ class AlertThresholds:
     min_gpu_utilization: float = 60.0
     min_solve_rate: float = 0.3
     max_solve_rate: float = 0.7
-    failed_gates_in_a_row: int = 3
     min_available_memory_share: float = 0.15
     min_free_disk_gib: float = 50.0
 
@@ -150,10 +150,6 @@ def high_kl(reader: RunReader, thresholds: AlertThresholds, now: float) -> Alert
     return latest_above(reader, "grpo", "kl_to_behaviour_policy", "KL", thresholds.max_kl, "policy")
 
 
-def high_clip_fraction(reader: RunReader, thresholds: AlertThresholds, now: float) -> Alert | None:
-    return latest_above(reader, "grpo", "clip_fraction", "Clip fraction", thresholds.max_clip_fraction, "policy")
-
-
 def math_retention(reader: RunReader, thresholds: AlertThresholds, now: float) -> Alert | None:
     measured = present(reader.series("fixed_targets").columns.get("math500_visible", []))
     if not measured:
@@ -207,13 +203,18 @@ def solve_rate_off_target(reader: RunReader, thresholds: AlertThresholds, now: f
     return Alert(Severity.INFO, "Curriculum off target", detail, "curriculum")
 
 
-def failing_gates(reader: RunReader, thresholds: AlertThresholds, now: float) -> Alert | None:
-    passed = present(reader.series("value").columns.get("gate_passed", []))
-    count = thresholds.failed_gates_in_a_row
-    if len(passed) < count or any(passed[-count:]):
+def worse_value_model(reader: RunReader, thresholds: AlertThresholds, now: float) -> Alert | None:
+    """The value arms of the published value model, pooled, find it worse than v0 (the loop's own significance)."""
+    arms = reader.series("value_arm")
+    if not latest(arms.columns.get("worse", [])):
         return None
-    detail = f"The last {count} value candidates failed the gate."
-    return Alert(Severity.INFO, "Value gate failing", detail, "value")
+    version = latest(arms.columns.get("published_value_version", [])) or 0.0
+    p_value = latest(arms.columns.get("same_value_version.worse_p_value", [])) or 0.0
+    detail = (
+        f"Value v{version:.0f} solves fewer probe problems than v0 in its value arms (pooled one-sided p = "
+        f"{p_value:.3f}). Nothing changes on its own."
+    )
+    return Alert(Severity.WARNING, "Value model worse than v0", detail, "value")
 
 
 def low_host_memory(reader: RunReader, thresholds: AlertThresholds, now: float) -> Alert | None:
@@ -254,20 +255,32 @@ RULES = (
     no_progress,
     repetition_loops,
     high_kl,
-    high_clip_fraction,
     math_retention,
     few_mixed_groups,
     idle_gpus,
     solve_rate_off_target,
-    failing_gates,
+    worse_value_model,
     low_host_memory,
     low_disk,
     server_failures,
 )
 
 SEVERITY_ORDER = {Severity.CRITICAL: 0, Severity.WARNING: 1, Severity.INFO: 2}
+# The loop's health check severities (`families.HealthSeverity`); its thresholds live in the loop config.
+HEALTH_SEVERITIES = {"stop": Severity.CRITICAL, "warning": Severity.WARNING, "note": Severity.INFO}
+
+
+def loop_health(reader: RunReader) -> list[Alert]:
+    """The alerts of the latest phase's health check (rl/health_checks.py), which the loop also logged."""
+    latest = reader.series("health").latest
+    if latest is None:
+        return []
+    return [
+        Alert(HEALTH_SEVERITIES[alert["severity"]], alert["title"], alert["detail"], "training")
+        for alert in latest["fields"]["alerts"]
+    ]
 
 
 def run_alerts(reader: RunReader, thresholds: AlertThresholds, now: float) -> list[Alert]:
-    alerts = [alert for rule in RULES if (alert := rule(reader, thresholds, now)) is not None]
+    alerts = [alert for rule in RULES if (alert := rule(reader, thresholds, now)) is not None] + loop_health(reader)
     return sorted(alerts, key=lambda alert: SEVERITY_ORDER[alert.severity])

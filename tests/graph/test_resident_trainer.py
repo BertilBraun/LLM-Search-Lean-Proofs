@@ -46,6 +46,7 @@ from lean_search.rl.training_phase import (  # noqa: E402
     run_training_phase,
 )
 from lean_search.rl.tree_store import TreeStore  # noqa: E402
+from lean_search.rl.tree_summary import TreeSummary  # noqa: E402
 from lean_search.search import TreeRecord  # noqa: E402
 from lean_search.training.data_parallel import SINGLE_PROCESS  # noqa: E402
 from lean_search.training.resident import HostDirectories, build_resident_model  # noqa: E402
@@ -156,7 +157,7 @@ class TwoPhases:
 def write_trees(directory: Path, records: list[TreeRecord]) -> Path:
     store = TreeStore(directory)
     for record in records:
-        store.add(record, 1, 0, None)
+        store.add(record, 1, 0, None, TreeSummary())
     return store.phase_directory(1)
 
 
@@ -277,12 +278,12 @@ def test_a_resident_phase_after_the_reference_was_first_scored_compiles_nothing(
 def test_preparation_while_sampling_builds_the_phases_policy_data(tmp_path: Path) -> None:
     records = [phase_tree("r"), phase_tree("s")]
     store = TreeStore(tmp_path / "trees")
-    store.add(records[0], 1, 0, None)
+    store.add(records[0], 1, 0, None, TreeSummary())
     config = TrainingPhaseConfig(policy=GrpoConfig(model="unused"))
     config_text = toml_text(without_none(dataclasses.asdict(config)))
     tokenizer = CharacterTokenizer()
     preparation = PhasePreparation(store.phase_directory(1), config_text, tokenizer)
-    store.add(records[1], 1, 0, None)
+    store.add(records[1], 1, 0, None, TreeSummary())
     prepared = combined_policy_data(preparation.finish())
     expected = build_policy_data(label_phase_data(records, config).policy_trees, tokenizer, PolicyDataConfig())
     assert prepared == expected

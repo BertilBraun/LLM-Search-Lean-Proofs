@@ -1,4 +1,5 @@
-"""The GRPO loop's outside world for tests: searches, training job, vLLM servers and evaluation jobs as fakes."""
+"""The GRPO loop's outside world for tests: searches, training job, vLLM servers, evaluation jobs and the value
+benchmark's scoring as fakes."""
 
 import asyncio
 import dataclasses
@@ -16,16 +17,29 @@ import httpx
 
 from lean_search.corpora.records import StatementRecord
 from lean_search.data import Problem
-from lean_search.expert_iteration.serving import MergedPublisher, ModelVersion, record_published
+from lean_search.expert_iteration.serving import (
+    MergedPublisher,
+    ModelVersion,
+    read_current,
+    record_published,
+    write_json_atomically,
+)
 from lean_search.lean import ProofState
-from lean_search.monitoring.families import ValueAbResult
+from lean_search.monitoring.families import ValueArmResult
 from lean_search.monitoring.store import MetricsWriter
 from lean_search.policy.adapters import PREMERGED_MARKER, PremergedWeights, handed_off_weights, handoff_directory
 from lean_search.policy.server_control import PhaseSeconds
-from lean_search.rl.evaluation import EvaluationKind, EvaluationSummary
+from lean_search.rl.evaluation import EvaluationKind, EvaluationRun, EvaluationSummary
 from lean_search.rl.fixed_sets import HeldOutStatement, Stratum
-from lean_search.rl.loop import PHASE_OUTCOME_FILE, GrpoLoop, GrpoLoopPaths, ReleasedLeanMemory, TrainingRequest
-from lean_search.rl.loop_config import EvaluationValueModel, GrpoLoopConfig, parse_loop_config
+from lean_search.rl.loop import (
+    PHASE_OUTCOME_FILE,
+    GrpoLoop,
+    GrpoLoopPaths,
+    ReleasedLeanMemory,
+    TrainingRequest,
+    ValueBenchmarkScoring,
+)
+from lean_search.rl.loop_config import GrpoLoopConfig, parse_loop_config
 from lean_search.rl.statement_sources import FixedStatements
 from lean_search.rl.training_phase import PhaseOutcome, PolicyOutcome, TrainerTimings, ValueOutcome
 from lean_search.search import (
@@ -40,7 +54,7 @@ from lean_search.search import (
     StopReason,
 )
 from lean_search.search.records import to_json
-from lean_search.value.gate_statistics import GateResult
+from lean_search.value.benchmark import BenchmarkScores, ValueBenchmark, benchmark_fingerprint
 
 REPOSITORY_DIRECTORY = Path(__file__).resolve().parents[2]
 PHASE_TEMPLATE = (REPOSITORY_DIRECTORY / "experiments/configs/grpo/phase.toml").read_text(encoding="utf-8")
@@ -86,9 +100,8 @@ phase_config = "unused.toml"
 gpus = [0, 1]
 min_sampling_minutes = 1.0
 max_sampling_minutes = 2.0
-min_solved_trees = 2
+min_trainable_groups = 2
 check_seconds = 0.01
-value_benchmark = "gate/benchmark.json.gz"
 value_every_phases = 1
 
 [evaluation.probe]
@@ -225,10 +238,9 @@ class FakeSearcher:
 
 @dataclass
 class FakeTrainer:
-    """Writes phase.json as the training job does: a new policy adapter, a value adapter that passes when asked;
-    with a `handoff` root, also the new adapters' merges there, as the persistent job leaves them in host memory."""
+    """Writes phase.json as the training job does: a new policy adapter, and a value adapter when one trains; with a
+    `handoff` root, also the new adapters' merges there, as the persistent job leaves them in host memory."""
 
-    value_passes: bool = False
     fail_phases: set[int] = field(default_factory=set)
     requests: list[TrainingRequest] = field(default_factory=list)
     prepared: list[TrainingRequest] = field(default_factory=list)
@@ -254,17 +266,14 @@ class FakeTrainer:
         policy = dataclasses.replace(zero(PolicyOutcome), adapter=str(request.output_directory / "policy/adapter"))
         value = None
         if request.train_value:
-            gate = dataclasses.replace(zero(GateResult), passed=self.value_passes)
-            value = dataclasses.replace(
-                zero(ValueOutcome), adapter=str(request.output_directory / "value/adapter"), gate=gate
-            )
+            value = dataclasses.replace(zero(ValueOutcome), adapter=str(request.output_directory / "value/adapter"))
         trees = len(list(request.trees.glob("*.json.gz")))
         outcome = PhaseOutcome(trees=trees, groups=1, policy=policy, value=value, timings=self.timings)
         for adapter in (policy.adapter, *([] if value is None else [value.adapter])):
             Path(adapter).mkdir(parents=True, exist_ok=True)
         if self.handoff is not None:
             hand_off(self.handoff, PremergedWeights(self.policy_base_model, policy.adapter))
-            if value is not None and value.accepted:
+            if value is not None:
                 hand_off(self.handoff, PremergedWeights(self.value_base_model, value.adapter))
         (request.output_directory / PHASE_OUTCOME_FILE).write_text(to_json(outcome), encoding="utf-8")
         return outcome
@@ -335,24 +344,68 @@ class FakeServers:
 
 @dataclass
 class FakeEvaluations:
-    # First runs of a version; repeated runs in `repeats`.
-    runs: list[tuple[EvaluationKind, int]] = field(default_factory=list)
-    repeats: list[tuple[EvaluationKind, int]] = field(default_factory=list)
-    value_models: list[tuple[EvaluationKind, EvaluationValueModel]] = field(default_factory=list)
-    # The value A/B finds the published value model better, or worse, than the reference.
-    value_ab_passes: bool = False
-    value_ab_worse: bool = False
+    """Each run with the phase it ran in; value arms find the published value model worse when asked. Held-out
+    runs report the rates in `held_out_rates` in order (later runs repeat the last), written where the loop's health
+    check reads them."""
 
-    async def evaluate(
-        self, kind: EvaluationKind, phase: int, repeat: int, value_model: EvaluationValueModel
-    ) -> EvaluationSummary:
-        (self.repeats if repeat else self.runs).append((kind, repeat if repeat else phase))
-        self.value_models.append((kind, value_model))
-        summary = dataclasses.replace(zero(EvaluationSummary), kind=kind, problems=10, solved=4 + repeat)
-        if kind == EvaluationKind.VALUE_AB and value_model == EvaluationValueModel.PUBLISHED:
-            result = dataclasses.replace(zero(ValueAbResult), passed=self.value_ab_passes, worse=self.value_ab_worse)
-            return dataclasses.replace(summary, value_ab=result)
+    runs: list[tuple[EvaluationRun, int]] = field(default_factory=list)
+    value_arm_worse: bool = False
+    # (valid-Lean rate, per-sample success) per held-out run.
+    held_out_rates: list[tuple[float, float]] = field(default_factory=lambda: [(0.8, 0.4)])
+    paths: GrpoLoopPaths | None = None
+
+    async def evaluate(self, run: EvaluationRun, phase: int) -> EvaluationSummary:
+        self.runs.append((run, phase))
+        summary = dataclasses.replace(
+            zero(EvaluationSummary), kind=run.kind, problems=10, solved=4 + run.repeat, slot=run.slot
+        )
+        if run.kind == EvaluationKind.HELD_OUT_STATES:
+            return self.held_out_summary(summary, run)
+        if run.value_arm:
+            assert run.slot is not None
+            result = dataclasses.replace(zero(ValueArmResult), slot=run.slot, worse=self.value_arm_worse)
+            return dataclasses.replace(summary, value_arm=result)
         return summary
+
+    def held_out_summary(self, summary: EvaluationSummary, run: EvaluationRun) -> EvaluationSummary:
+        valid_rate, success = self.held_out_rates[0]
+        if len(self.held_out_rates) > 1:
+            self.held_out_rates.pop(0)
+        summary = dataclasses.replace(summary, samples=1000, valid_samples=round(1000 * valid_rate))
+        summary = dataclasses.replace(summary, solved=round(1000 * success))
+        if self.paths is not None:
+            version = read_current(self.paths.models).version
+            directory = self.paths.evaluation_directory(run, version)
+            write_json_atomically(directory / "summary.json", summary)
+        return summary
+
+    def slots(self, value_arm: bool = False) -> list[tuple[int | None, int]]:
+        """(slot, repeat) of the probe runs, or of the value arms."""
+        return [
+            (run.slot, run.repeat)
+            for run, _ in self.runs
+            if run.kind == EvaluationKind.PROBE and run.value_arm == value_arm
+        ]
+
+
+def scored_benchmark() -> ValueBenchmark:
+    return ValueBenchmark(provenance=(), states=(), groups=())
+
+
+@dataclass
+class FakeValueScorer:
+    """Scores the empty benchmark, failing on a server while `failing`; records its start and end in `events`."""
+
+    events: list[str] = field(default_factory=list)
+    failing: bool = False
+
+    async def score(self, benchmark: ValueBenchmark) -> BenchmarkScores:
+        self.events.append("score")
+        await asyncio.sleep(0.001)
+        if self.failing:
+            raise httpx.ConnectError("value server down")
+        self.events.append("scored")
+        return BenchmarkScores("value-merged", benchmark_fingerprint(benchmark), ())
 
 
 def merge_by_writing(base_model: str, adapter: str, output: Path) -> None:
@@ -394,6 +447,7 @@ class LoopWorld:
     servers: FakeServers
     evaluations: FakeEvaluations
     merge: Callable[[str, str, Path], None] = merge_by_writing
+    scorer: FakeValueScorer | None = None
 
     def loop(self, statement_count: int = 6) -> GrpoLoop:
         return GrpoLoop(
@@ -409,6 +463,7 @@ class LoopWorld:
             print,
             PHASE_TEMPLATE,
             SteppingClock(),
+            value_benchmark=None if self.scorer is None else ValueBenchmarkScoring(scored_benchmark(), self.scorer),
         )
 
     def phases_done(self) -> int:
@@ -421,6 +476,7 @@ def loop_world(
     trainer: FakeTrainer | None = None,
     searcher: FakeSearcher | None = None,
     evaluations: FakeEvaluations | None = None,
+    scorer: FakeValueScorer | None = None,
 ) -> LoopWorld:
     config = parse_loop_config(toml)
     paths = GrpoLoopPaths(root / "runs", root / "data", root / "checkpoints", config.name)
@@ -431,8 +487,12 @@ def loop_world(
         tuple(server.name for server in config.released_servers()),
     )
     trainer.events = servers.events = searcher.events
+    if scorer is not None:
+        scorer.events = searcher.events
     servers.down = searcher.servers_down
-    return LoopWorld(config, paths, searcher, trainer, servers, evaluations or FakeEvaluations())
+    evaluations = evaluations or FakeEvaluations()
+    evaluations.paths = paths
+    return LoopWorld(config, paths, searcher, trainer, servers, evaluations, scorer=scorer)
 
 
 def record_version_zero(world: LoopWorld) -> None:

@@ -12,8 +12,14 @@ from lean_search.rl.policy_data import SamplerAgreement, SignedRatios
 from lean_search.rl.tree_statistics import GraphStatistics
 from lean_search.search.tactic_labels import TacticLabelCounts
 from lean_search.value.benchmark import BenchmarkMetrics
-from lean_search.value.diagnostics import ValueDiagnostics
-from lean_search.value.gate_statistics import GateStatistic
+from lean_search.value.diagnostics import (
+    Calibration,
+    LabelDistribution,
+    LabelDistributions,
+    PhaseValueMetrics,
+    PredictionDistribution,
+)
+from lean_search.value.pair_statistics import PairShare, PairStatistic
 
 
 class LoopState(StrEnum):
@@ -84,6 +90,8 @@ class FixedTargets:
     # Per-sample success on the held-out states.
     held_out_success: float | None = None
     held_out_states: int | None = None
+    # Per sample on the held-out states: the block runs completely in Lean.
+    held_out_valid_rate: float | None = None
     math500_visible: float | None = None
     math500_thinking: float | None = None
     # The probe set (held-out pool statements, stratified by difficulty) at its small budget.
@@ -94,7 +102,16 @@ class FixedTargets:
     # Problems whose search stopped on the wall-clock cap rather than the expansion budget.
     probe_wall_clock_stops: int | None = None
     minif2f_wall_clock_stops: int | None = None
-    # A repeated run against the first run of the version: solved difference, problems solved by one only.
+    # The probe runs one part of the set per slot, the parts in turn (part = slot % parts); a repeated run's line
+    # carries its part and the repeat fields only.
+    probe_slot: int | None = None
+    probe_part: int | None = None
+    # The last `probe_parts` slots together, each part once: the whole set (across their policy versions).
+    probe_rolling_solved: int | None = None
+    probe_rolling_problems: int | None = None
+    probe_rolling_by_difficulty: dict[str, BandOutcome] = field(default_factory=dict)
+    # A repeated run against the first run of the version: solved, difference, problems solved by one only.
+    probe_repeat_solved: int | None = None
     probe_repeat_difference: int | None = None
     probe_repeat_discordant: int | None = None
     # Wall time of the evaluation this line reports.
@@ -145,49 +162,83 @@ class GrpoPhase:
 
 
 @dataclass(frozen=True)
-class ValueBenchmarkResult:
-    """One value retrain: the gate against the published model, diagnostics, and what it trained on and predicts."""
+class ValueTraining:
+    """One value retrain, published with the next version: what it trained on."""
 
-    family: ClassVar[str] = "value"
-    candidate_version: int
-    # Ordered labelled siblings by h better than the published value model beyond the bootstrap's noise: published.
-    gate_passed: bool
-    # The candidate's benchmark metrics: diagnostics, not pass criteria.
-    benchmark: BenchmarkMetrics
-    training_loss: float | None = None
-    gate: GateStatistic | None = None
-    published_benchmark: BenchmarkMetrics | None = None
+    family: ClassVar[str] = "value_training"
+    value_version: int
     # Trees of the training window.
-    trees: int | None = None
-    diagnostics: ValueDiagnostics | None = None
+    trees: int
+    training_loss: float | None = None
+    # The window's targets per bin by source (smoothed as trained) and the v0 replay.
+    labels: LabelDistributions | None = None
+    replay_labels: LabelDistribution | None = None
 
 
 @dataclass(frozen=True)
-class ValueAbResult:
-    """The value A/B search: one policy version with the reference value model (v0) and the published one."""
+class ValueBenchmarkTrend:
+    """The value benchmark scored fresh through the value servers by a newly served value model, against v0 and
+    against the value model served before it: a trend, never a decision."""
 
-    family: ClassVar[str] = "value_ab"
+    family: ClassVar[str] = "value_benchmark"
+    value_version: int
+    # Labelled sibling pairs whose proof-graph child gets the lower h (ties half).
+    pairs: PairShare
+    reference_value_version: int | None
+    previous_value_version: int | None
+    # This model's share minus the other's, with a paired cluster bootstrap interval over problems.
+    against_reference: PairStatistic | None
+    against_previous: PairStatistic | None
+    # AUC, Brier, ECE, pair accuracy by p_dead, Spearman and MAE of the steps.
+    metrics: BenchmarkMetrics
+    predictions: PredictionDistribution
+    calibration: Calibration
+    scoring_seconds: float = 0.0
+
+
+@dataclass(frozen=True)
+class ValuePhase:
+    """Free per phase: μ in effect, and the serving value model against the phase's own labelled search graphs."""
+
+    family: ClassVar[str] = "value_phase"
+    value_share: float
+    metrics: PhaseValueMetrics
+
+
+@dataclass(frozen=True)
+class PairedDifference:
+    """Solve rates of the published value model's runs minus v0's on the same problems, paired per problem."""
+
+    runs: int
     problems: int
-    reference_solved: int
-    published_solved: int
-    # Problems only one arm solved in this run: the paired test's evidence.
     only_reference: int
     only_published: int
-    # Exact McNemar test on this run's, two-sided.
-    p_value: float
-    # One-sided exact McNemar tests, pooled over every A/B of this published value model: worse, better.
+    # (only_published - only_reference) / problems, and its exact interval given the discordant problems.
+    difference: float | None
+    lower: float | None
+    upper: float | None
+    # One-sided exact McNemar tests.
     worse_p_value: float
-    # Better than the reference at the configured level (pooled): μ may turn on.
-    passed: bool
+    better_p_value: float
+
+
+@dataclass(frozen=True)
+class ValueArmResult:
+    """A probe slot's part searched again with the published value model, paired with the slot's run with v0."""
+
+    family: ClassVar[str] = "value_arm"
+    slot: int
+    part: int
     reference_value_version: int
     published_value_version: int
-    better_p_value: float = 1.0
-    # Worse than the reference at that level (pooled): the loop publishes the reference value model again.
-    worse: bool = False
-    # The A/B runs pooled, this one included, and their problems solved by one arm only.
-    pooled_runs: int = 1
-    pooled_only_reference: int = 0
-    pooled_only_published: int = 0
+    reference_solved: int
+    published_solved: int
+    this_slot: PairedDifference
+    # Pooled with the earlier value arms of the same published value model, and of every value model.
+    same_value_version: PairedDifference
+    all_value_versions: PairedDifference
+    # Worse than v0 at the configured level, pooled over the same value model: an alert, no automatic action.
+    worse: bool
 
 
 @dataclass(frozen=True)
@@ -252,7 +303,6 @@ class PauseSegments:
     policy_training_seconds: float = 0.0
     # Loading, compiling, training and saving the value model.
     value_training_seconds: float = 0.0
-    gate_seconds: float = 0.0
     # Merging the new adapters into their bases on the GPUs, and writing them (and the policy adapter).
     merge_seconds: float = 0.0
     write_seconds: float = 0.0
@@ -272,7 +322,7 @@ class PhaseTiming:
 
     family: ClassVar[str] = "timing"
     sampling_seconds: float
-    # The training job as a whole (model loading, policy and value training, the value gate).
+    # The training job as a whole (model loading, policy and value training, the merges).
     training_seconds: float
     publishing_seconds: float
     evaluation_seconds: float
@@ -282,14 +332,134 @@ class PhaseTiming:
     pause: PauseSegments = field(default_factory=PauseSegments)
 
 
+@dataclass(frozen=True)
+class BudgetPhase:
+    """How the phase's searches used their expansion budget and what they solved (rl/budget_signals.py): a budget too
+    small for the harder proofs shows as solves crowding into its last quarter."""
+
+    family: ClassVar[str] = "budget"
+    trees: int
+    solved_trees: int
+    # Groups the policy trains on, the phase trigger's count.
+    trainable_groups: int
+    # The searches' expansion budget (the largest, should it have changed within the phase).
+    expansion_budget: int
+    # Solved trees whose first proof came in the last quarter of their budget (expansions 25-32 of 32), and their share
+    # of the solved trees with a known first-proof expansion.
+    late_solves: int
+    late_solve_share: float | None
+    # That share pooled over the last `recent_phases` phases, this one included, and its alert threshold.
+    recent_late_solve_share: float | None
+    recent_phases: int
+    max_late_solve_share: float
+    # Solved trees by the expansion of their first proof ("25-32": 25 to 32), and the mean.
+    expansions_to_solve: dict[str, int] = field(default_factory=dict)
+    mean_expansions_to_solve: float | None = None
+    # Solved trees by the top-level tactics of their shortest proof on the proof graph, and the mean.
+    proof_steps: dict[str, int] = field(default_factory=dict)
+    mean_proof_steps: float | None = None
+    # The curriculum's difficulty estimate of the solved statements, and of every searched one.
+    mean_difficulty_solved: float | None = None
+    median_difficulty_solved: float | None = None
+    p90_difficulty_solved: float | None = None
+    mean_difficulty_searched: float | None = None
+
+
+@dataclass(frozen=True)
+class HealthMeasurements:
+    """A phase's training-stability signals (rl/health_checks.py); None when not measured in this phase."""
+
+    # KL (k3, per token) of the trained policy to the starting policy and the clip fraction, both of the last pass.
+    kl_to_starting_policy: float | None = None
+    clip_fraction: float | None = None
+    # Per policy expansion of the phase's searches (n = 8 samples): distinct blocks (identical ones run once), and
+    # distinct sample texts.
+    distinct_samples_per_expansion: float | None = None
+    distinct_texts_per_expansion: float | None = None
+    # Explanation tokens of the trained samples.
+    mean_explanation_tokens: float | None = None
+    # Policy samples cut off at the token cap (their answer forced), and those repeating their own text.
+    cut_off_share: float | None = None
+    repetition_loop_share: float | None = None
+    # The held-out states, when evaluated after this phase: samples whose block runs completely in Lean, and that
+    # succeed.
+    held_out_valid_rate: float | None = None
+    held_out_success: float | None = None
+
+
+@dataclass(frozen=True)
+class HealthThresholds:
+    """The limits a phase was judged against; the relative ones are None until their reference exists (version 0's
+    held-out evaluation, the mean of the first phases)."""
+
+    max_kl_to_starting_policy: float
+    max_clip_fraction: float
+    min_distinct_samples_per_expansion: float | None = None
+    min_explanation_tokens: float | None = None
+    max_explanation_tokens: float | None = None
+    max_cut_off_share: float | None = None
+    min_held_out_valid_rate: float | None = None
+    # Below this the loop stops after the phase.
+    stop_held_out_valid_rate: float | None = None
+    min_held_out_success: float | None = None
+
+
+class HealthCheck(StrEnum):
+    KL_TO_STARTING_POLICY = "kl_to_starting_policy"
+    CLIP_FRACTION = "clip_fraction"
+    DISTINCT_SAMPLES = "distinct_samples"
+    EXPLANATION_LENGTH = "explanation_length"
+    CUT_OFF_SAMPLES = "cut_off_samples"
+    HELD_OUT_VALID_LEAN = "held_out_valid_lean"
+    HELD_OUT_SUCCESS = "held_out_success"
+    SEARCH_BUDGET = "search_budget"
+
+
+class HealthSeverity(StrEnum):
+    # The loop stopped after the phase.
+    STOP = "stop"
+    WARNING = "warning"
+    # A suggestion, e.g. a larger search budget.
+    NOTE = "note"
+
+
+@dataclass(frozen=True)
+class HealthAlert:
+    check: HealthCheck
+    severity: HealthSeverity
+    title: str
+    detail: str
+
+
+@dataclass(frozen=True)
+class PhaseHealth:
+    """A phase's health checks: what was measured, the limits, the alerts (also in loop.log) and the rollback target."""
+
+    family: ClassVar[str] = "health"
+    phase: int
+    # The version the phase published.
+    policy_version: int
+    measured: HealthMeasurements
+    thresholds: HealthThresholds
+    alerts: tuple[HealthAlert, ...] = ()
+    # The held-out valid-Lean rate fell below its stop threshold: the loop stopped after this phase.
+    hard_stop: bool = False
+    # The newest version whose held-out evaluation stayed above the stop threshold (0 before any): the rollback target.
+    last_good_version: int = 0
+
+
 FAMILIES = (
     LoopStatus,
     SystemUsage,
     FixedTargets,
     GrpoPhase,
-    ValueBenchmarkResult,
-    ValueAbResult,
+    ValueTraining,
+    ValueBenchmarkTrend,
+    ValuePhase,
+    ValueArmResult,
     SearchPhase,
     CurriculumPhase,
     PhaseTiming,
+    BudgetPhase,
+    PhaseHealth,
 )

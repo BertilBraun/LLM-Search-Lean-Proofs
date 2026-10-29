@@ -13,9 +13,14 @@ cd "${script_directory}/.."
 source deployment/environment.sh
 
 if [[ -n "${LEAN_SEARCH_PYPI_MIRROR:-}" ]]; then
-    # uv.lock records pypi.org URLs: resolve against the mirror (keeps the locked versions), then restore the lock.
-    uv sync --python 3.12 --extra ml --default-index "${LEAN_SEARCH_PYPI_MIRROR}"
-    git checkout -- uv.lock
+    # uv.lock records pypi.org URLs, and re-resolving against a mirror can fail on platforms we never use: install
+    # the exact locked versions from the mirror instead.
+    requirements="$(mktemp)"
+    uv export --quiet --frozen --extra ml --group dev --no-emit-project --no-hashes -o "${requirements}"
+    [[ -x .venv/bin/python ]] || uv venv --quiet --python 3.12 .venv
+    uv pip install --python .venv/bin/python -r "${requirements}" --index-url "${LEAN_SEARCH_PYPI_MIRROR}"
+    uv pip install --python .venv/bin/python --no-deps -e .
+    rm -f "${requirements}"
 else
     uv sync --locked --python 3.12 --extra ml
 fi

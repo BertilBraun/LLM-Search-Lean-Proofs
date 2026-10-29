@@ -28,13 +28,6 @@ from lean_search.search import TreeRecord  # noqa: E402
 from lean_search.training.data_parallel import Ranks, balanced_shards  # noqa: E402
 from lean_search.training.sft import LoraSettings, OptimizationConfig, load_trainable_model  # noqa: E402
 from lean_search.training.sft_data import TokenizedExample  # noqa: E402
-from lean_search.value.benchmark import (  # noqa: E402
-    BenchmarkConfig,
-    SearchGuidance,
-    TreeProvenance,
-    TreeSource,
-    build_benchmark,
-)
 from lean_search.value.graph_trainer import (  # noqa: E402
     GraphValueConfig,
     GraphValueData,
@@ -249,21 +242,18 @@ def test_one_shard_keeps_every_index_in_order() -> None:
 @dataclasses.dataclass(frozen=True)
 class RankValueOutcome:
     trees: int
-    gated: bool
-    diagnosed: bool
+    labelled: bool
 
 
 def value_phase(model: Path, output: Path, ranks: Ranks) -> None:
-    """A value-only phase on a window of two trees with a benchmark; each rank writes what its outcome holds."""
+    """A value-only phase on a window of two trees; each rank writes what its outcome holds."""
     config = TrainingPhaseConfig(value=GraphValueConfig(model=str(model), lora=LORA, optimization=OPTIMIZATION))
     record = value_tree()
-    provenance = TreeProvenance("benchmark", SearchGuidance.VALUE_FREE, None, "")
-    benchmark = build_benchmark([TreeSource(provenance, label_phase_data([record], config).trees)], BenchmarkConfig())
-    inputs = PhaseInputs(records=[record], value_benchmark=benchmark, value_records=[record, record])
+    inputs = PhaseInputs(records=[record], value_records=[record, record])
     tokenizer = CharacterTokenizer()
     outcome = run_training_phase(config, inputs, None, tokenizer, CPU, output / "phase", ranks)
     assert outcome.value is not None
-    seen = RankValueOutcome(outcome.value.trees, outcome.value.gate is not None, outcome.value.diagnostics is not None)
+    seen = RankValueOutcome(outcome.value.trees, outcome.value.labels is not None)
     (output / f"rank_{ranks.rank}.json").write_text(json.dumps(dataclasses.asdict(seen)))
 
 
@@ -278,5 +268,5 @@ def test_every_rank_trains_on_the_whole_value_window(value_phase_ranks: list[Ran
     assert [outcome.trees for outcome in value_phase_ranks] == [2, 2]
 
 
-def test_only_the_main_rank_runs_the_value_gate_and_its_diagnostics(value_phase_ranks: list[RankValueOutcome]) -> None:
-    assert [(outcome.gated, outcome.diagnosed) for outcome in value_phase_ranks] == [(True, True), (False, False)]
+def test_only_the_main_rank_reports_the_value_labels(value_phase_ranks: list[RankValueOutcome]) -> None:
+    assert [outcome.labelled for outcome in value_phase_ranks] == [True, False]

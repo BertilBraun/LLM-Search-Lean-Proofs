@@ -25,20 +25,12 @@ from lean_search.rl.training_phase import (  # noqa: E402
     TrainingPhaseConfig,
     TrainingStage,
     grpo_phase_record,
-    label_phase_data,
     publish_phase,
     run_training_phase,
 )
 from lean_search.search import TreeRecord  # noqa: E402
 from lean_search.search.records import from_json_object  # noqa: E402
 from lean_search.training.sft import LoraSettings, OptimizationConfig  # noqa: E402
-from lean_search.value.benchmark import (  # noqa: E402
-    BenchmarkConfig,
-    SearchGuidance,
-    TreeProvenance,
-    TreeSource,
-    build_benchmark,
-)
 from lean_search.value.graph_trainer import GraphValueConfig  # noqa: E402
 
 CONFIG_DIRECTORY = Path(__file__).resolve().parents[2] / "experiments" / "configs" / "grpo"
@@ -90,10 +82,8 @@ def phase(tmp_path_factory: pytest.TempPathFactory) -> tuple[PhaseOutcome, Path]
         ),
         value=GraphValueConfig(model=str(model), lora=LORA, optimization=OPTIMIZATION),
     )
-    provenance = TreeProvenance("benchmark", SearchGuidance.VALUE_FREE, None, "")
-    benchmark = build_benchmark([TreeSource(provenance, label_phase_data([record], config).trees)], BenchmarkConfig())
     # The value model's window: the same tree twice, the policy's phase once.
-    inputs = PhaseInputs(records=[record], value_benchmark=benchmark, value_records=[record, record])
+    inputs = PhaseInputs(records=[record], value_records=[record, record])
     output = tmp_path_factory.mktemp("phase")
     tokenizer = CharacterTokenizer()
     return run_training_phase(config, inputs, tokenizer, tokenizer, CPU, output), output
@@ -137,7 +127,7 @@ def test_phase_record_keys_the_advantage_sign_ratios_by_pass_number(phase: tuple
     assert list(grpo_phase_record(outcome.policy, sampling_seconds=600.0).ratios_by_pass) == ["1"]
 
 
-def test_the_written_outcome_reads_back_with_the_value_diagnostics(phase: tuple[PhaseOutcome, Path]) -> None:
+def test_the_written_outcome_reads_back_with_the_value_labels(phase: tuple[PhaseOutcome, Path]) -> None:
     outcome, output = phase
     assert read_phase_outcome(output / "phase.json") == outcome
 
@@ -149,8 +139,8 @@ def test_value_trains_on_its_window_of_trees(phase: tuple[PhaseOutcome, Path]) -
 
 def test_value_outcome_counts_the_window_labels(phase: tuple[PhaseOutcome, Path]) -> None:
     outcome, _ = phase
-    assert outcome.value is not None and outcome.value.diagnostics is not None
-    assert outcome.value.diagnostics.labels.proof_graph.targets == 2 * 2
+    assert outcome.value is not None and outcome.value.labels is not None
+    assert outcome.value.labels.proof_graph.targets == 2 * 2
 
 
 class RecordingPublisher:
@@ -169,16 +159,13 @@ class RecordingPublisher:
         return adapter
 
 
-def test_published_value_adapter_changes_only_after_a_passed_gate(
-    phase: tuple[PhaseOutcome, Path], tmp_path: Path
-) -> None:
+def test_every_trained_value_adapter_is_published(phase: tuple[PhaseOutcome, Path], tmp_path: Path) -> None:
     outcome, _ = phase
     paths = LoopPaths(tmp_path, tmp_path, "loop")
     record_published(paths, ModelVersion(0, "policy-v0", "value-v0", "", "initial"))
     published = publish_phase(paths, RecordingPublisher(), outcome, "test")
-    assert outcome.value is not None
-    expected = outcome.value.adapter if outcome.value.accepted else "value-v0"
-    assert (published.policy_adapter, published.value_adapter) == (outcome.policy.adapter, expected)
+    assert outcome.policy is not None and outcome.value is not None
+    assert (published.policy_adapter, published.value_adapter) == (outcome.policy.adapter, outcome.value.adapter)
 
 
 @pytest.fixture

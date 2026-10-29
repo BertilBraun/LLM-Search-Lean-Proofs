@@ -20,14 +20,21 @@ from lean_search.value.benchmark import (
     build_benchmark,
 )
 from lean_search.value.bins import BIN_COUNT, Readout
-from lean_search.value.gate_statistics import GateConfig, GateResult, labelled_pairs, value_gate
 from lean_search.value.graph_targets import RemainingStepsReadout, ValueTargetConfig, recorded_estimates, value_targets
+from lean_search.value.pair_statistics import (
+    PairStatistic,
+    PairStatisticConfig,
+    labelled_pairs,
+    pair_share,
+    pair_statistic,
+    remaining_steps,
+)
 
 CONFIG = BenchmarkConfig()
-VALUE_FREE = TreeProvenance("gate", SearchGuidance.VALUE_FREE, None, "")
+VALUE_FREE = TreeProvenance("benchmark", SearchGuidance.VALUE_FREE, None, "")
 
 
-def gate_tree(problem_name: str) -> TreeRecord:
+def sibling_tree(problem_name: str) -> TreeRecord:
     """A proof-graph child with a dead-end sibling, an explored off-graph sibling and a never-expanded one."""
     builder = GraphBuilder("⊢ r")
     proof_child = builder.child(builder.root, "⊢ p")
@@ -47,7 +54,7 @@ def labelled_tree(record: TreeRecord) -> LabelledTree:
 
 
 def benchmark(problems: int) -> ValueBenchmark:
-    trees = tuple(labelled_tree(gate_tree(f"t{number}")) for number in range(problems))
+    trees = tuple(labelled_tree(sibling_tree(f"t{number}")) for number in range(problems))
     return build_benchmark([TreeSource(VALUE_FREE, trees)], CONFIG)
 
 
@@ -82,64 +89,62 @@ def test_a_never_expanded_sibling_enters_no_pair() -> None:
     assert NodeClass.NEVER_EXPANDED not in others
 
 
-def gate(
-    problems: int, candidate: Callable[[BenchmarkState], int], current: Callable[[BenchmarkState], int]
-) -> GateResult:
+def statistic(
+    problems: int, model: Callable[[BenchmarkState], int], reference: Callable[[BenchmarkState], int]
+) -> PairStatistic:
     bench = benchmark(problems)
-    return value_gate(bench, scores(bench, candidate), scores(bench, current), Readout(), CONFIG, GateConfig())
+    model_steps = remaining_steps(scores(bench, model), Readout())
+    reference_steps = remaining_steps(scores(bench, reference), Readout())
+    return pair_statistic(bench, model_steps, reference_steps, CONFIG, PairStatisticConfig())
 
 
-def test_a_candidate_giving_proof_children_the_lower_h_passes() -> None:
-    assert gate(20, everywhere(1), everywhere(5)).passed
+def test_a_model_giving_proof_children_the_lower_h_is_ahead_beyond_the_interval() -> None:
+    assert statistic(20, everywhere(1), everywhere(5)).lower > 0
 
 
-def test_a_candidate_giving_proof_children_the_higher_h_fails() -> None:
-    assert not gate(20, everywhere(5), everywhere(1)).passed
+def test_a_model_giving_proof_children_the_higher_h_is_behind_beyond_the_interval() -> None:
+    assert statistic(20, everywhere(5), everywhere(1)).upper < 0
 
 
-def test_the_same_scores_have_no_gain_and_fail() -> None:
-    result = gate(20, everywhere(1), everywhere(1))
-    assert (result.statistic.lower, result.statistic.upper, result.passed) == (0.0, 0.0, False)
+def test_the_same_scores_have_an_empty_interval_at_zero() -> None:
+    result = statistic(20, everywhere(1), everywhere(1))
+    assert (result.lower, result.upper) == (0.0, 0.0)
 
 
-def test_the_difference_is_candidate_minus_current_accuracy() -> None:
-    assert gate(20, everywhere(1), everywhere(5)).statistic.difference == 1.0
+def test_the_difference_is_model_minus_reference_share() -> None:
+    assert statistic(20, everywhere(1), everywhere(5)).difference == 1.0
 
 
 def test_a_tie_in_h_counts_half() -> None:
-    assert gate(4, everywhere(3), everywhere(5)).statistic.candidate_accuracy == 0.5
+    assert statistic(4, everywhere(3), everywhere(5)).model_share == 0.5
 
 
 def test_the_interval_holds_a_mixed_difference() -> None:
-    statistic = gate(20, odd_problems(1, 5), everywhere(5)).statistic
-    assert statistic.lower < statistic.difference < statistic.upper
+    result = statistic(20, odd_problems(1, 5), everywhere(5))
+    assert result.lower < result.difference < result.upper
 
 
 def test_the_statistic_reports_problems_and_pairs() -> None:
-    statistic = gate(6, everywhere(1), everywhere(5)).statistic
-    assert (statistic.problems, statistic.pairs) == (6, 12)
+    result = statistic(6, everywhere(1), everywhere(5))
+    assert (result.problems, result.pairs) == (6, 12)
 
 
 def test_pairs_moving_together_count_as_one_effective_pair_per_problem() -> None:
-    statistic = gate(40, odd_problems(1, 5), odd_problems(5, 1)).statistic
-    assert statistic.effective_pairs == pytest.approx(40, rel=0.15)
+    result = statistic(40, odd_problems(1, 5), odd_problems(5, 1))
+    assert result.effective_pairs == pytest.approx(40, rel=0.15)
 
 
 def test_the_bootstrap_is_reproducible() -> None:
-    first = gate(20, odd_problems(1, 5), everywhere(5)).statistic
-    assert gate(20, odd_problems(1, 5), everywhere(5)).statistic == first
+    assert statistic(20, odd_problems(1, 5), everywhere(5)) == statistic(20, odd_problems(1, 5), everywhere(5))
 
 
-def test_a_benchmark_without_scored_pairs_fails() -> None:
+def test_a_benchmark_without_scored_pairs_has_no_difference() -> None:
     bench = benchmark(2)
-    unscored = BenchmarkScores("m", benchmark_fingerprint(bench), (None,) * len(bench.states))
-    result = value_gate(bench, unscored, unscored, Readout(), CONFIG, GateConfig())
-    assert result.reasons == ("no labelled sibling pair scored by both models",)
+    unscored = [None] * len(bench.states)
+    assert pair_statistic(bench, unscored, unscored, CONFIG, PairStatisticConfig()).difference is None
 
 
-def test_a_value_guided_benchmark_fails_the_gate() -> None:
-    guided = TreeProvenance("astar", SearchGuidance.VALUE_MODEL, None, "value-v0")
-    trees = tuple(labelled_tree(gate_tree(f"t{number}")) for number in range(20))
-    bench = build_benchmark([TreeSource(guided, trees)], CONFIG)
-    candidate, current = scores(bench, everywhere(1)), scores(bench, everywhere(5))
-    assert not value_gate(bench, candidate, current, Readout(), CONFIG, GateConfig()).passed
+def test_one_models_share_counts_its_pairs_and_problems() -> None:
+    bench = benchmark(3)
+    share = pair_share(bench, remaining_steps(scores(bench, everywhere(1)), Readout()), CONFIG)
+    assert (share.problems, share.pairs, share.share) == (3, 6, 1.0)
