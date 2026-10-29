@@ -353,12 +353,13 @@ expensive); per-tactic against sequence-level credit is compared only in the che
     tactic per step (the non-reasoning policies emit exactly one).
   - **Visible chunk examples** (decided 2026-10-29): the loop samples in visible mode, so chunks taught only as
     non-visible examples might not transfer. A teacher (the namer, Qwen3.5-9B) writes the explanation a prover would
-    state before the known block for one chunk per reasoning example, in the naming run (~9,500 explanations, ~15–20
-    min on 4 GPUs with prefix caching; `data_rewrite/README.md`). Replies are validated (length, markup, code,
+    state before the known block for two chunks per reasoning example, in the naming run (~18,500 explanations,
+    ~30–40 min on 4 GPUs with prefix caching; `data_rewrite/README.md`). Replies are validated (length, markup, code,
     copied block, stale names, …), retried once, and a chunk without an accepted explanation stays a non-visible
     example. The explanation is written on the named chunk and renamed back for the numbered arm.
-  - **Open (owner)**: the share of non-visible examples in the train set, 0.5 (the implemented default; doubles the
-    set) or 1/3 (keeps today's non-visible count; recommended).
+  - **Mode mix** (decided 2026-10-29): a third of the train examples are non-visible chunks, two thirds visible
+    (per reasoning example: itself, two visible chunks, 1.5 non-visible; ~40k train examples). Check MATH-500 and
+    the held-out states right after the SFT, since more steps move further from v2.
 - **The SFT stage's adapter is the GRPO policy** (decided 2026-10-29): it continues visible student v2's adapter on
   raw Qwen3.5-4B, is merged for version 0 and keeps training phase by phase on raw Qwen3.5-4B ("Precision" below).
 - **Descriptive hypothesis names: a cheap A/B before GRPO, leaning towards adopting them** (decided 2026-10-28).
@@ -917,9 +918,11 @@ Paper names in the last three rows are from memory and still need checking befor
 ### Open
 
 - Hardware offers within the budget.
-- Owner decisions (2026-10-29): the value gate's power, (i) wider gate searches or (ii) the A/B as the real decision
-  with the bootstrap as a regression pre-filter ("Benchmark and gate"); the non-visible share of the SFT data, 0.5
-  or 1/3 ("Starting policy").
+- Owner decisions (2026-10-29, being implemented): no value gate (every retrained value model is published; the
+  benchmark and the paired value-arm evaluations are dashboard trends only; μ a manual switch starting at 0); a
+  persistent trainer with in-memory weight handoff; phases ending at 300 trainable groups within 45–90 min;
+  32 expansions per loop search with budget signals; per-phase health checks (alerts, a hard stop on a valid-Lean
+  collapse); learning rate 1e-5 vs 3e-5 decided by the single-step test on the node.
 - Serving precision: fp16-merged vs bf16-merged vs unmerged LoRA, decided by the node test against fp32.
 - Whether the four-GPU pause pays for its fixed segments (else `gpus = [0]`), and whether a persistent trainer is
   worth its host memory.

@@ -6,8 +6,8 @@
 # (the named arm's text; the numbered arm's is renamed back).
 rewrite_run = "data_rewrite_v1"
 variant = "named"
-visible_chunk_examples_per_reasoning_example = 1.0
-non_visible_share = 0.5
+visible_chunk_examples_per_reasoning_example = 2.0
+non_visible_share = 0.3333333333333333
 validation_chunk_examples = 500
 validation_visible_chunk_examples = 500
 max_prompt_tokens = 2048

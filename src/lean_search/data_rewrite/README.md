@@ -119,7 +119,7 @@ It trains exactly as the loop samples: the visible prompt (`render_prompt(…, v
   token caps (2,048 prompt, 512 completion: the policy writes blocks in visible mode under a 1,280-token cap) or with
   forbidden tokens falls back to the next shorter configured length. Identical (state, chunk) pairs are kept once.
 - **Visible chunk examples** (the loop samples in visible mode, so block lengths taught only in the non-visible format
-  might not transfer): `visible_chunk_examples_per_reasoning_example = 1` train chunks per train reasoning example (and
+  might not transfer): `visible_chunk_examples_per_reasoning_example = 2` train chunks per train reasoning example (and
   500 validation chunks) are planned for the visible mode and get a teacher-written explanation. The teacher is the
   rewrite pass's namer model (Qwen3.5-9B, thinking off, temperature 0.7), shown the state and the known block, asked
   for the plan written *before* the block (what to do and why, a few sentences, no code blocks, Lean only as short
@@ -133,12 +133,12 @@ It trains exactly as the loop samples: the visible prompt (`render_prompt(…, v
   renamed), and the numbered arm's text is the inverse renaming of it (whole identifiers, LaTeX-quoted ones included).
   Spellings that would escape the inverse renaming are rejected (`stale_name`, `unrenamed_name`), so the two arms'
   explanations differ in the names alone: renaming the numbered one gives the named one.
-- **Mode mix**: `non_visible_share = 0.5` of the train examples are plain non-visible chunk examples, the build's share
-  before the visible chunks (one per reasoning example), so the reasoning-free mode keeps its weight. With one visible
-  chunk per reasoning example this doubles the train set (per reasoning example: one visible chunk, two non-visible;
-  rejected explanations add to the non-visible ones); `non_visible_share = 1/3` would keep the non-visible count of
-  before instead (v2 replayed 0.21 one-tactic steps per reasoning example). The validation set lists the 500
-  non-visible chunks first (the trainer's greedy check reads them), then the 500 visible ones.
+- **Mode mix** (decided 2026-10-29): `non_visible_share = 1/3` of the train examples are plain non-visible chunk
+  examples, so two thirds are visible (the mode the loop samples in). With two visible chunks per reasoning example
+  that is, per reasoning example, the example itself, two visible chunks and 1.5 non-visible ones, 4.5 in all
+  (rejected explanations add to the non-visible ones; v2 replayed 0.21 one-tactic steps per reasoning example). The
+  validation set lists the 500 non-visible chunks first (the trainer's greedy check reads them), then the 500 visible
+  ones.
 - **Reasoning examples are never chunked**: an explanation describes its whole block, so the block is kept whole and
   flattened and the explanation unchanged (flattening changes the layout, not what the block does). An example is
   kept only if its state rebuilds from the reasoning run's `states.jsonl` (statement plus reference steps) to exactly
@@ -202,17 +202,17 @@ completion over 512 tokens. Explanations rename LaTeX-quoted names too (`$h3$` b
 
 - **Chunks in the full build**: the sample run gives 12.9 chunk examples per usable proof (3,037 from 236, about 4.0
   tactics each). With `max_proofs = 20000` and 98% usable that is about 250,000 chunk candidates, of which the build
-  takes far fewer: per train reasoning example (about 9,000 from `visible_student_v2`) one visible and two non-visible
-  chunks, so about 9,000 visible and 18,000 non-visible train chunk examples, plus 500 of each for validation (about
-  36,000 train examples with the reasoning examples). Only the visible ones are explained: about 9,500 chunks.
-- **Requests**: about 11,000 with retries (assuming 15% of first replies rejected; the checks reject 3% of the
+  takes far fewer: per train reasoning example (about 9,000 from `visible_student_v2`) two visible and 1.5 non-visible
+  chunks, so about 18,000 visible and 13,500 non-visible train chunk examples, plus 500 of each for validation (about
+  40,500 train examples with the reasoning examples). Only the visible ones are explained: about 18,500 chunks.
+- **Requests**: about 21,500 with retries (assuming 15% of first replies rejected; the checks reject 3% of the
   reasoning data's own explanations). Per request: a shared prefix of about 1,400 tokens (system prompt and four
   few-shot turns, cached by vLLM after the first request per server), about 400 uncached prompt tokens (state ~150,
   block ~130, instruction and framing ~120) and about 100 generated tokens (the data's explanations average ~70; the
-  9B's visible explanations had a median of 95). In total about 4.4M uncached prompt and 1.1M generated tokens.
+  9B's visible explanations had a median of 95). In total about 8.6M uncached prompt and 2.2M generated tokens.
 - **Wall time on 4× RTX 3090** (one 9B replica per GPU, bf16 weights ~19 GB, so 2–3 GB for KV and recurrent state):
   prefill at about 1,200–1,500 tokens/s per GPU (35.6 dense bf16 TFLOPS with fp32 accumulation at 50–60%, 18 GFLOP
-  per token) is the larger part, about 50–60 GPU-minutes, plus about 8 GPU-minutes of decoding at the ~2,300 generated
-  tokens/s per GPU measured for the visible 9B teacher: **about 1 GPU-hour, 15–20 minutes on four GPUs**, about an
-  hour on the namer's GPU alone. The prefix cache matters: without it the few-shot prefix adds about 15M prompt tokens
-  (3–4 hours on four GPUs). Explaining every candidate instead of the planned chunks would take about 25 times as long.
+  per token) is the larger part, about 100–120 GPU-minutes, plus about 16 GPU-minutes of decoding at the ~2,300
+  generated tokens/s per GPU measured for the visible 9B teacher: **about 2 GPU-hours, 30–40 minutes on four GPUs**,
+  about two hours on the namer's GPU alone. The prefix cache matters: without it the few-shot prefix adds about 30M
+  prompt tokens (6–8 hours on four GPUs). Explaining every candidate instead of the planned chunks would take about 25 times as long.
