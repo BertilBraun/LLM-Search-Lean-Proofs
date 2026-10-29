@@ -475,6 +475,13 @@ The single-step test and the naming A/B swap weights into the policy servers; re
 Without a writable `/workspace` (local WSL), `environment.sh` uses `~/lean-search-workspace` instead
 (`LEAN_SEARCH_WORKSPACE` overrides both).
 
+## Second node (returned within the hour, 2026-10-29)
+
+4× RTX 3090 (PCIe 4.0 x16), AMD EPYC 7K62 with a 92-core cgroup quota, ~171 GiB RAM cgroup limit, 200 GB disk,
+62 GB `/dev/shm`, driver 595 (CUDA 13.2), China. GitHub, huggingface.co and pypi.org unreachable (ghfast.top,
+hf-mirror.com and the Tsinghua mirror worked), and uploads from the local machine ran at ~34 KB/s, too slow for the
+~2 GB of adapters and data from `node_backup/`. Check the upload speed (and GitHub) before setting a node up.
+
 ## First node (returned)
 
 2× RTX 3090 (24 GB), AMD EPYC 7K62 with a 46-core cgroup quota, ~120 GB RAM cgroup limit, 300 GB disk,
