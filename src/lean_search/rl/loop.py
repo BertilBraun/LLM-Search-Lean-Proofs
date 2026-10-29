@@ -11,17 +11,19 @@ training    the paused searches' REPL processes stop to free host memory and the
             the training job (grpo_phase.py, data-parallel over those GPUs) labels the phase's trees, trains the
             policy (GRPO) with the μ set for the run (`set_value_share`, 0 until set) and, every
             `value_every_phases`, the value model on the window of recent phases' trees, and merges the new adapters on
-            the GPUs; meanwhile the loop labels the phase's trees for the search, curriculum and value metrics
+            the main rank's GPU; meanwhile the loop labels the phase's trees for the search, curriculum and value
+            metrics
 publishing  version k + 1 (the new policy adapter and a new value adapter): with the persistent job's merges in host
             memory the sleeping servers wake with them (the others swap in place), the searches resume unless
             evaluations are due, and the version is recorded once the merges are on disk; otherwise it is recorded
             with the job's merges (or merged on the CPU) first, then served
 evaluating  the fixed targets that are due (by loop hours, at the start, or requested) run as separate jobs while
             the searches stay paused, after the paused searches' REPL processes stopped to free host memory; the value
-            servers serve the evaluations' fixed value model meanwhile. The probe runs one part of its set per slot;
-            every other slot also runs its part with the published value model (the value arm), paired with the slot's
-            run, which only reports (and alerts when the published model is worse than the reference); then the
-            phase's budget signals and health checks (`health_checks.py`), whose hard stop ends the loop here
+            servers serve the evaluations' fixed value model meanwhile. The probe runs one part of its set per slot,
+            the held-out states with it; the first slot after a value model is published also runs its part with that
+            model (the value arm), paired with the slot's run, which only reports (and alerts when the published model
+            is worse than the reference); then the phase's budget signals and health checks (`health_checks.py`): a
+            held-out collapse publishes the last good version's policy again, a second one soon after ends the loop
 resume      the searches continue with the new weights; a newly served value model scores the value benchmark through
             the value servers meanwhile, a trend against v0 and the value model before it
 
@@ -59,9 +61,11 @@ from lean_search.expert_iteration.serving import (
 )
 from lean_search.expert_iteration.toml_text import toml_text
 from lean_search.monitoring.families import (
+    HealthCheck,
     LoopState,
     LoopStatus,
     PauseSegments,
+    PhaseHealth,
     PhaseTiming,
     ValueArmResult,
     ValueBenchmarkTrend,
@@ -73,20 +77,33 @@ from lean_search.policy.adapters import handed_off_weights
 from lean_search.policy.server_control import PhaseSeconds
 from lean_search.rl.advantages import CreditMode
 from lean_search.rl.budget_signals import budget_phase_record
-from lean_search.rl.evaluation import EvaluationKind, EvaluationRun, EvaluationSummary, read_summary, value_arm_text
+from lean_search.rl.evaluation import (
+    BaselineDifferences,
+    EvaluationKind,
+    EvaluationRun,
+    EvaluationSummary,
+    baseline_difference,
+    mean_or_none,
+    read_summary,
+    value_arm_text,
+)
 from lean_search.rl.fixed_targets import target_config
 from lean_search.rl.health_checks import (
+    HeldOutRates,
     append_health,
     health_stop_text,
+    healthy_versions,
     held_out_rates,
     last_good_version,
     measurements,
     phase_health,
+    publish_rollback,
     read_health_history,
     read_health_stop,
+    rollback_trigger,
     write_health_stop,
 )
-from lean_search.rl.loop_config import EvaluationTarget, EvaluationValueModel, GrpoLoopConfig
+from lean_search.rl.loop_config import EvaluationConfig, EvaluationTarget, EvaluationValueModel, GrpoLoopConfig
 from lean_search.rl.phase_metrics import search_phase_record
 from lean_search.rl.retention import kept_adapters, prune_phase_adapters
 from lean_search.rl.statement_sources import FedStatement, StatementSource
@@ -152,6 +169,8 @@ class LoopProgress:
     held_out_states_at: float | None = None
     # Probe slots run so far: the next slot's number (its part: slot % probe_parts).
     probe_slots: int = 0
+    # The published value version whose value arm ran last (0: none yet; v0 is the reference and gets none).
+    value_arm_version: int = 0
 
 
 @dataclass(frozen=True)
@@ -536,7 +555,7 @@ def published_time(version: ModelVersion) -> float:
     return datetime.datetime.fromisoformat(version.published_at).timestamp()
 
 
-def unmeasured_host_memory() -> str:
+def not_measured() -> str:
     return "not measured"
 
 
@@ -548,6 +567,32 @@ def earlier_value_arm_results(paths: GrpoLoopPaths, own: Path) -> list[ValueArmR
         for path in sorted(paths.evaluations.glob(pattern))
         if path.parent != own
     ]
+
+
+def part_baseline(paths: GrpoLoopPaths, evaluation: EvaluationConfig, part: int) -> list[EvaluationSummary]:
+    """Version 0's runs of the probe part before the first phase (its slot is the part's number), those that exist."""
+    runs = [
+        paths.evaluation_directory(EvaluationRun(EvaluationKind.PROBE, part, repeat), 0) / "summary.json"
+        for repeat in range(evaluation.probe.baseline_runs)
+    ]
+    return [read_summary(path) for path in runs if path.exists()]
+
+
+def slot_baseline_difference(paths: GrpoLoopPaths, evaluation: EvaluationConfig, slot: int) -> float | None:
+    directory = paths.probe_slot_directory(slot)
+    if directory is None:
+        return None
+    baseline = part_baseline(paths, evaluation, slot % evaluation.probe_parts)
+    return baseline_difference(read_summary(directory / "summary.json"), baseline)
+
+
+def probe_baseline_differences(paths: GrpoLoopPaths, evaluation: EvaluationConfig, slot: int) -> BaselineDifferences:
+    """The slot against version 0's runs of its part, and the mean of that over the last `probe_parts` slots."""
+    first = slot - evaluation.probe_parts + 1
+    last_slots = (
+        [slot_baseline_difference(paths, evaluation, number) for number in range(first, slot + 1)] if first >= 0 else []
+    )
+    return BaselineDifferences(slot_baseline_difference(paths, evaluation, slot), mean_or_none(last_slots))
 
 
 class GrpoLoop:
@@ -565,19 +610,22 @@ class GrpoLoop:
         log: Callable[[str], None],
         phase_template: str,
         clock: Callable[[], float] = time.monotonic,
-        host_memory: Callable[[], str] = unmeasured_host_memory,
+        host_memory: Callable[[], str] = not_measured,
         value_readout: Readout = DEFAULT_READOUT,
         value_benchmark: ValueBenchmarkScoring | None = None,
+        gpu_memory: Callable[[], str] = not_measured,
     ) -> None:
         """`phase_template`: the text of the training phase config (config.training.phase_config); `host_memory`
-        describes the node's memory for the log at the pause's stage boundaries; `value_readout`: A*'s readout of the
-        value bins, for the value metrics; `value_benchmark`: scored by every newly served value model."""
+        describes the node's memory for the log at the pause's stage boundaries, `gpu_memory` the training GPUs' free
+        memory before their servers wake; `value_readout`: A*'s readout of the value bins, for the value metrics;
+        `value_benchmark`: scored by every newly served value model."""
         self.config = config
         self.value_readout = value_readout
         self.value_benchmark = value_benchmark
         # The value benchmark's scoring in flight, during sampling.
         self.scoring: asyncio.Task[None] | None = None
         self.host_memory = host_memory
+        self.gpu_memory = gpu_memory
         self.paths = paths
         self.statements = statements
         self.searcher = searcher
@@ -602,6 +650,9 @@ class GrpoLoop:
         self.server_failures: dict[str, int] = {}
         self.session_server_failures = 0
         self.statements_given_up = 0
+        # This session's failed value benchmark scorings and trees left out because their summary failed.
+        self.value_benchmark_failures = 0
+        self.trees_left_out = 0
         # The last searches to end, True for those a server failed.
         self.recent_searches: deque[bool] = deque(maxlen=config.sampling.server_failure_window)
         # One pause of the searches at a time: a phase's, or a check of the servers.
@@ -678,6 +729,7 @@ class GrpoLoop:
         health_stop = read_health_stop(self.paths.health_stop)
         if health_stop is not None:
             raise RuntimeError(health_stop_text(health_stop))
+        await asyncio.to_thread(self.clear_stale_handoff)
         await self.servers.check()
         current = read_current(self.paths.models)
         await self.servers.serve(current)
@@ -691,6 +743,7 @@ class GrpoLoop:
             if stop.is_set():
                 return
         await self.run_evaluations(self.due_evaluations(at_start=True), self.progress.phase - 1, at_start=True)
+        self.check_hard_stop_baseline()
         await self.prepare_training()
         self.schedule_benchmark_scoring()
         self.sampling_since = self.clock()
@@ -733,19 +786,33 @@ class GrpoLoop:
             self.recent_searches.append(False)
             result = completed.result
             if completed.tree is not None:
-                # The statement searched: the renamed one when the loop renames hypotheses.
-                record = tree_record(completed.tree, completed.tree.root.state.statement, result)
-                summary = await asyncio.to_thread(
-                    tree_summary, record, self.reward_config, self.credit, self.config.sampling.max_expansions
-                )
-                async with self.store_lock:
-                    await asyncio.to_thread(
-                        self.store.add, record, self.collecting, self.served_version, fed.difficulty, summary
-                    )
+                await self.keep_tree(fed, completed)
             self.statements.record_outcome(fed.name, result.proved)
             self.server_failures.pop(fed.name, None)
             self.session_trees += 1
             self.session_proofs += result.accounting.proofs
+
+    async def keep_tree(self, fed: FedStatement, completed: CompletedSearch) -> None:
+        """The tree into the store with its summary; a tree whose summary fails is logged and left out, so that
+        neither the loop nor the training job stops on it."""
+        assert completed.tree is not None
+        # The statement searched: the renamed one when the loop renames hypotheses.
+        record = tree_record(completed.tree, completed.tree.root.state.statement, completed.result)
+        try:
+            summary = await asyncio.to_thread(
+                tree_summary, record, self.reward_config, self.credit, self.config.sampling.max_expansions
+            )
+        except Exception as error:
+            self.trees_left_out += 1
+            self.log(
+                f"{fed.name}: summarizing its tree failed ({type(error).__name__}: {error}); the tree is left out\n"
+                f"{traceback.format_exc()}"
+            )
+            return
+        async with self.store_lock:
+            await asyncio.to_thread(
+                self.store.add, record, self.collecting, self.served_version, fed.difficulty, summary
+            )
 
     def server_failed(self, fed: FedStatement, error: httpx.HTTPError) -> None:
         """A policy or value server failed the search, which says nothing about the statement: it is fed again."""
@@ -834,6 +901,8 @@ class GrpoLoop:
                 last_publish_time=published_time(current) if current.version else None,
                 server_failures=self.session_server_failures,
                 statements_given_up=self.statements_given_up,
+                value_benchmark_failures=self.value_benchmark_failures,
+                trees_left_out=self.trees_left_out,
             )
         )
 
@@ -900,6 +969,7 @@ class GrpoLoop:
                 if not self.due_evaluations(at_start=False):
                     self.resume_searches()
                     resumed_early = True
+                    await self.log_host_memory("after the early resume, the handoff not yet on disk")
                 await durable
             self.save_progress(stage=PhaseStage.EVALUATING, publishing_seconds=publishing_seconds)
             await self.log_host_memory("after publishing")
@@ -911,9 +981,11 @@ class GrpoLoop:
         if self.search_metrics is not None:
             await self.search_metrics
             self.search_metrics = None
-        hard_stop = await asyncio.to_thread(self.check_health, phase, kinds)
+        health = await asyncio.to_thread(self.check_health, phase)
+        if health.rolled_back_to is not None:
+            await self.roll_back(phase, health.rolled_back_to)
         self.close_phase(phase, kinds, evaluation_seconds)
-        if hard_stop:
+        if health.hard_stop:
             assert self.stop is not None
             self.stop.set()
             return
@@ -944,30 +1016,32 @@ class GrpoLoop:
             await scoring
 
     async def score_value_benchmark(self, scoring: ValueBenchmarkScoring, version: int) -> None:
+        """A trend only: any error is logged as an alert and the version is scored again after the next phase."""
         started = self.clock()
         try:
             scores = await scoring.scorer.score(scoring.benchmark)
-        except httpx.HTTPError as error:
+            trend = await asyncio.to_thread(
+                self.benchmark_trend, scoring.benchmark, version, scores, self.clock() - started
+            )
+        except Exception as error:
+            self.value_benchmark_failures += 1
             self.log(
-                f"Scoring the value benchmark with value v{version} failed ({type(error).__name__}: {error}); "
-                "it is scored again after the next phase"
+                f"Alert: scoring the value benchmark with value v{version} failed ({type(error).__name__}: {error}); "
+                f"it is scored again after the next phase\n{traceback.format_exc()}"
             )
             return
-        trend = await asyncio.to_thread(
-            self.benchmark_trend, scoring.benchmark, version, scores, self.clock() - started
-        )
         self.writer.write(trend)
         self.log(trend_text(trend))
 
     def benchmark_trend(
         self, benchmark: ValueBenchmark, version: int, scores: BenchmarkScores, seconds: float
     ) -> ValueBenchmarkTrend:
-        """Keeps the scores, then compares them with v0's and with those of the value version scored before."""
+        """Compares the scores with v0's and with those of the value version scored before, then keeps them (a version
+        without kept scores is scored again)."""
         directory = self.paths.value_benchmark
-        keep_scores(directory, version, scores)
         reference = value_adapter_version(read_versions(self.paths.models), self.config.initial.value_adapter)
         reference_scores, previous_scores = earlier_scores(directory, version, reference)
-        return benchmark_trend(
+        trend = benchmark_trend(
             benchmark,
             VersionScores(version, scores),
             reference_scores,
@@ -976,6 +1050,8 @@ class GrpoLoop:
             self.config.evaluation.value_benchmark,
             seconds,
         )
+        keep_scores(directory, version, scores)
+        return trend
 
     async def release_lean_memory(self, threshold_gib: float, purpose: str) -> None:
         released = await self.searcher.release_lean_memory(int(threshold_gib * GIB))
@@ -987,39 +1063,79 @@ class GrpoLoop:
     async def log_host_memory(self, moment: str) -> None:
         self.log(f"Host memory {moment}: {await asyncio.to_thread(self.host_memory)}")
 
-    def check_health(self, phase: int, kinds: Sequence[EvaluationKind]) -> bool:
-        """Writes the phase's budget and health lines and logs the alerts; True when the loop must stop (then
-        health_stop.json names the last good version)."""
+    def check_health(self, phase: int) -> PhaseHealth:
+        """Writes the phase's budget and health lines and logs the alerts. The held-out rates are those of the version
+        the phase published, when the held-out states evaluated it (so a restart judges the phase alike). A collapse
+        sets the rollback (`rolled_back_to`) or the stop (health_stop.json names the last good version); a drop of the
+        sampled blocks' valid Lean requests the held-out states for the next pause."""
         health = self.config.health
         budget = budget_phase_record(self.store.entries, phase, health.late_solve_phases, health.max_late_solve_share)
         self.writer.write(budget)
-        current = read_current(self.paths.models)
+        published = next(
+            version for version in read_versions(self.paths.models) if version.trigger == phase_trigger(phase)
+        )
         outcome_path = self.paths.phase_checkpoints(phase) / PHASE_OUTCOME_FILE
         outcome = read_phase_outcome(outcome_path) if outcome_path.exists() else None
-        held_out = None
-        if EvaluationKind.HELD_OUT_STATES in kinds:
-            held_out = held_out_rates(self.held_out_summary(current.version))
-        version_zero_path = self.held_out_summary_path(0)
-        version_zero = held_out_rates(read_summary(version_zero_path)) if version_zero_path.exists() else None
+        held_out = self.held_out_rates(published.version)
+        version_zero = self.held_out_rates(0)
+        if held_out is not None and version_zero is None:
+            self.log("Alert: version 0's held-out evaluation is missing: the held-out checks and the hard stop are off")
         measured = measurements(outcome, self.store.phase_entries(phase), held_out)
         history = read_health_history(self.paths.health)
-        record = phase_health(phase, current.version, measured, history, version_zero, budget, health)
+        record = phase_health(phase, published.version, measured, history, version_zero, budget, health)
         append_health(self.paths.health, record)
         self.writer.write(record)
         for alert in record.alerts:
             self.log(f"Health of phase {phase} ({alert.severity}, {alert.check}): {alert.detail}")
         if not record.alerts:
             self.log(f"Health of phase {phase}: no alerts")
-        if not record.hard_stop:
-            return False
-        self.log(health_stop_text(write_health_stop(self.paths.health_stop, record)))
-        return True
+        if held_out is None and any(alert.check == HealthCheck.VALID_BLOCKS for alert in record.alerts):
+            request_evaluation(self.paths, EvaluationKind.HELD_OUT_STATES)
+        if record.hard_stop:
+            self.log(health_stop_text(write_health_stop(self.paths.health_stop, record)))
+        return record
+
+    async def roll_back(self, phase: int, version: int) -> None:
+        """After a collapse: the version's policy adapter published again as a new version (merged on the CPU) and
+        served; the searches continue with it and the next phase trains on from it. A restart that finds the
+        rollback recorded only serves it."""
+        trigger = rollback_trigger(version, phase)
+        current = read_current(self.paths.models)
+        if current.trigger != trigger:
+            current = await asyncio.to_thread(publish_rollback, self.paths.models, self.publisher, version, trigger)
+            await asyncio.to_thread(self.prune_adapters)
+        await self.servers.serve(current)
+        self.served_value_weights = current.value_weights
+        self.served_version = current.version
+        self.searcher.serving(current.version)
+        self.log(
+            f"Alert: the held-out valid Lean collapsed after phase {phase}: rolled back to version {version}'s policy "
+            f"as version {current.version}, the searches continue; a second collapse within "
+            f"{self.config.health.rollback_window_phases} phases stops the loop"
+        )
 
     def held_out_summary_path(self, version: int) -> Path:
         return self.paths.evaluation_directory(EvaluationRun(EvaluationKind.HELD_OUT_STATES), version) / "summary.json"
 
-    def held_out_summary(self, version: int) -> EvaluationSummary:
-        return read_summary(self.held_out_summary_path(version))
+    def held_out_rates(self, version: int) -> HeldOutRates | None:
+        """The version's held-out evaluation, if one ran."""
+        path = self.held_out_summary_path(version)
+        return held_out_rates(read_summary(path)) if path.exists() else None
+
+    def check_hard_stop_baseline(self) -> None:
+        """With the held-out states on a schedule and the hard stop on, version 0's held-out evaluation must exist
+        with valid samples, or the hard stop could never fire."""
+        held_out = self.config.evaluation.held_out_states
+        if not (held_out.every_hours and self.config.health.stop_held_out_valid_fraction):
+            return
+        version_zero = self.held_out_rates(0)
+        if version_zero is None or version_zero.valid_rate == 0:
+            raise RuntimeError(
+                f"Version 0's held-out evaluation ({self.held_out_summary_path(0)}) is missing or has no valid "
+                "samples, so the hard stop could never fire. Run it with version 0 served ([evaluation."
+                "held_out_states] at_start = true on a fresh loop, or grpo_evaluate.py --target held_out_states), or "
+                "turn the hard stop off ([health] stop_held_out_valid_fraction = 0)."
+            )
 
     def value_window(self, phase: int) -> tuple[Path, ...]:
         """The tree directories the value model trains on when it is due this phase; none when it is not."""
@@ -1067,7 +1183,7 @@ class GrpoLoop:
         request = self.training_request(phase, value_share)
         # Awaited only before the phase closes: the publish need not wait for the loop's own labelling.
         self.search_metrics = asyncio.create_task(
-            asyncio.to_thread(self.write_search_metrics, phase, request.config_text)
+            asyncio.to_thread(self.write_search_metrics_or_log, phase, request.config_text)
         )
         outcome = await self.trainer.train(request)
         if outcome.value is not None:
@@ -1077,6 +1193,16 @@ class GrpoLoop:
             + ("" if outcome.value is None else f", a value model on {outcome.value.trees} trees")
         )
         return outcome
+
+    def write_search_metrics_or_log(self, phase: int, config_text: str) -> None:
+        """Metrics only: an error is logged, never stops the loop."""
+        try:
+            self.write_search_metrics(phase, config_text)
+        except Exception as error:
+            self.log(
+                f"Alert: the search metrics of phase {phase} failed ({type(error).__name__}: {error})\n"
+                f"{traceback.format_exc()}"
+            )
 
     def write_search_metrics(self, phase: int, config_text: str) -> None:
         entries = self.store.phase_entries(phase)
@@ -1107,9 +1233,12 @@ class GrpoLoop:
                 current = await asyncio.to_thread(
                     publish_phase, self.paths.models, self.publisher, outcome, phase_trigger(phase)
                 )
-                await asyncio.to_thread(self.prune_adapters)
+        if handed_off is None:
+            # Also after a restart that found the version recorded but host memory not yet cleared.
+            await asyncio.to_thread(self.recorded)
         served_version = current if handed_off is None else handed_off
         published = self.clock()
+        self.log(f"GPU memory before the wake: {await asyncio.to_thread(self.gpu_memory)}")
         served = await self.servers.serve(served_version)
         self.save_progress(
             pause=dataclasses.replace(
@@ -1134,12 +1263,31 @@ class GrpoLoop:
         current = await asyncio.to_thread(
             publish_phase, self.paths.models, self.publisher, outcome, phase_trigger(phase)
         )
-        await asyncio.to_thread(self.prune_adapters)
-        await asyncio.to_thread(shutil.rmtree, self.handoff_root, True)
+        await self.log_host_memory("after the durable write, before clearing the handoff")
+        await asyncio.to_thread(self.recorded)
         self.served_value_weights = current.value_weights
         seconds = self.clock() - started
         self.save_progress(pause=dataclasses.replace(self.progress.pause, durable_write_seconds=seconds))
         self.log(f"Version {current.version} written to disk and recorded in {seconds:.0f} s")
+
+    def recorded(self) -> None:
+        """After a version's record: older adapters pruned, the merges handed off in host memory cleared."""
+        self.prune_adapters()
+        shutil.rmtree(self.handoff_root, ignore_errors=True)
+
+    def clear_stale_handoff(self) -> None:
+        """At the start: merges in host memory that this restart will not serve, i.e. all of them unless the
+        interrupted phase's version awaits its record (then only partly written ones)."""
+        if not self.handoff_root.exists():
+            return
+        awaiting = self.progress.stage == PhaseStage.PUBLISHING and read_current(
+            self.paths.models
+        ).trigger != phase_trigger(self.progress.phase)
+        stale = [path for path in self.handoff_root.iterdir() if not awaiting or path.name.endswith(".tmp")]
+        for path in stale:
+            shutil.rmtree(path, ignore_errors=True)
+        if stale:
+            self.log(f"Cleared {len(stale)} stale merges from host memory ({self.handoff_root})")
 
     def prune_adapters(self) -> None:
         """Deletes the phase adapters of versions older than the retention that nothing uses any more."""
@@ -1147,9 +1295,11 @@ class GrpoLoop:
         if not retention.adapter_versions:
             return
         versions = read_versions(self.paths.models)
-        # The health check's rollback target stays, however old.
-        good = versions[last_good_version(read_health_history(self.paths.health))]
-        kept = kept_adapters(versions, retention.adapter_versions, [self.progress.value_adapter, good.policy_adapter])
+        # The rollback target and the last healthy versions stay, however old.
+        history = read_health_history(self.paths.health)
+        healthy = {last_good_version(history), *healthy_versions(history)[-retention.healthy_versions :]}
+        in_use = [self.progress.value_adapter, *(versions[version].policy_adapter for version in sorted(healthy))]
+        kept = kept_adapters(versions, retention.adapter_versions, in_use)
         phases = (self.paths.phase_checkpoints(number) for number in range(1, self.progress.phase + 1))
         removed = prune_phase_adapters(phases, kept)
         if removed:
@@ -1201,15 +1351,16 @@ class GrpoLoop:
         await self.serve_value_model(value_model)
         return await self.evaluations.evaluate(run, phase)
 
-    def value_arm_due(self, slot: int) -> bool:
-        """Every `every_slots`-th slot, while the published value model is not the evaluations' fixed reference."""
+    def value_arm_due(self) -> bool:
+        """Once per published value model other than the evaluations' fixed reference: at the first slot after it was
+        published."""
         evaluation = self.config.evaluation
-        every = evaluation.value_arm.every_slots
+        versions = read_versions(self.paths.models)
         return (
-            every > 0
-            and slot % every == 0
+            evaluation.value_arm.enabled
             and evaluation.value_model == EvaluationValueModel.INITIAL
-            and read_current(self.paths.models).value_adapter != self.config.initial.value_adapter
+            and versions[-1].value_adapter != self.config.initial.value_adapter
+            and value_version(versions) != self.progress.value_arm_version
         )
 
     async def run_probe(self, phase: int, baseline: bool) -> None:
@@ -1228,8 +1379,9 @@ class GrpoLoop:
             ]
             self.log_summaries(f"probe slot {slot} (part {slot % evaluation.probe_parts})", summaries)
             solved_by_run = [total + summary.solved for total, summary in zip(solved_by_run, summaries, strict=True)]
-            if self.value_arm_due(slot):
+            if self.value_arm_due():
                 await self.run_value_arm(slot, phase)
+                self.save_progress(value_arm_version=value_version(read_versions(self.paths.models)))
             self.save_progress(probe_slots=slot + 1)
         if runs > 1 and self.progress.probe_slots > first:
             self.log(f"Probe baseline run to run over slots {first}-{last}: solved {solved_by_run}")

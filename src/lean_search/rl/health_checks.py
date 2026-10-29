@@ -2,11 +2,13 @@
 search budget, each against a threshold; alerts go to loop.log and the dashboard (the `health` family).
 
 Absolute limits: the KL to the starting policy (version 0's is 0) and the clip fraction. Relative limits: distinct
-samples per expansion, explanation length and cut-off samples against the mean of the first `reference_phases` phases;
-the held-out valid-Lean rate and per-sample success against version 0's held-out evaluation. One check stops the loop:
-a held-out valid-Lean rate below `stop_held_out_valid_fraction` of version 0's. The loop then closes the phase, writes
-`health_stop.json` and refuses to start until the owner rolls back to the last good version (`publish_rollback`) or
-clears the stop. Every default is a first guess, to be calibrated on the first phases.
+samples per expansion, explanation length, cut-off samples and the sampled blocks' valid-Lean rate (a free early warning
+that brings the held-out states forward) against the mean of the first `reference_phases` phases; the held-out
+valid-Lean rate and per-sample success against version 0's held-out evaluation. One check acts: a held-out valid-Lean
+rate below `stop_held_out_valid_fraction` of version 0's (a collapse). The loop then publishes the last good version's
+policy again (`publish_rollback`) and keeps sampling; a second collapse within `rollback_window_phases` of that rollback
+closes the phase, writes `health_stop.json` and stops the loop, which refuses to start until the owner rolls back
+(`grpo_loop.py rollback`) or clears the stop. Every default is a first guess, to be calibrated on the first phases.
 """
 
 import dataclasses
@@ -80,6 +82,9 @@ def measurements(
         repetition_loop_share=share(sum(summary.repetition_loops for summary in summaries), samples),
         held_out_valid_rate=None if held_out is None else held_out.valid_rate,
         held_out_success=None if held_out is None else held_out.success,
+        valid_block_rate=share(
+            sum(summary.valid_blocks for summary in summaries), sum(summary.judged_blocks for summary in summaries)
+        ),
     )
 
 
@@ -115,6 +120,7 @@ def health_thresholds(
             max_cut_off_share=None
             if cut_off is None
             else max(cut_off * config.max_cut_off_factor, cut_off + config.min_cut_off_rise),
+            min_valid_block_rate=scaled(reference.valid_block_rate, config.min_valid_block_fraction),
         )
     if version_zero is not None:
         thresholds = dataclasses.replace(
@@ -147,13 +153,15 @@ def alert_title(check: HealthCheck, severity: HealthSeverity) -> str:
         case HealthCheck.CUT_OFF_SAMPLES:
             return "Samples cut off at the token cap"
         case HealthCheck.HELD_OUT_VALID_LEAN if severity == HealthSeverity.STOP:
-            return "Held-out valid Lean collapsed: loop stopped"
+            return "Held-out valid Lean collapsed"
         case HealthCheck.HELD_OUT_VALID_LEAN:
             return "Held-out valid Lean dropping"
         case HealthCheck.HELD_OUT_SUCCESS:
             return "Held-out success dropping"
         case HealthCheck.SEARCH_BUDGET:
             return "Search budget may be too small"
+        case HealthCheck.VALID_BLOCKS:
+            return "Sampled blocks' valid Lean dropping"
 
 
 def health_alert(check: HealthCheck, severity: HealthSeverity, detail: str) -> HealthAlert:
@@ -199,6 +207,13 @@ def health_alerts(
             f"{measured.cut_off_share:.1%} of the samples cut off at the token cap > "
             f"{thresholds.max_cut_off_share:.1%} ({measured.repetition_loop_share:.1%} repetition loops).",
         )
+    if below(measured.valid_block_rate, thresholds.min_valid_block_rate):
+        warn(
+            HealthCheck.VALID_BLOCKS,
+            f"{measured.valid_block_rate:.1%} of the sampled blocks ran completely in Lean < "
+            f"{thresholds.min_valid_block_rate:.1%} ({config.min_valid_block_fraction:.0%} of the first phases'): the "
+            "held-out states run at the next pause.",
+        )
     valid = measured.held_out_valid_rate
     if below(valid, thresholds.stop_held_out_valid_rate):
         found.append(
@@ -206,7 +221,7 @@ def health_alerts(
                 HealthCheck.HELD_OUT_VALID_LEAN,
                 HealthSeverity.STOP,
                 f"Held-out valid-Lean rate {valid:.1%} < {thresholds.stop_held_out_valid_rate:.1%} "
-                f"({config.stop_held_out_valid_fraction:.0%} of version 0's): the loop stops after this phase.",
+                f"({config.stop_held_out_valid_fraction:.0%} of version 0's).",
             )
         )
     elif below(valid, thresholds.min_held_out_valid_rate):
@@ -246,19 +261,61 @@ def phase_health(
     budget: BudgetPhase,
     config: HealthConfig,
 ) -> PhaseHealth:
-    """`history`: the earlier phases' records (`read_health_history`)."""
+    """`history`: the earlier phases' records (`read_health_history`). A collapse rolls back to the last good version,
+    unless it comes within `rollback_window_phases` of the last rollback (or rollbacks are off): then the loop
+    stops."""
     earlier = [record for record in history if record.phase < phase]
     thresholds = health_thresholds(config, reference_measurements(earlier, config.reference_phases), version_zero)
     alerts = health_alerts(measured, thresholds, budget, config)
-    hard_stop = any(alert.severity == HealthSeverity.STOP for alert in alerts)
-    last_good = last_good_version(earlier)
-    if measured.held_out_valid_rate is not None and not hard_stop:
-        last_good = policy_version
-    return PhaseHealth(phase, policy_version, measured, thresholds, tuple(alerts), hard_stop, last_good)
+    record = PhaseHealth(phase, policy_version, measured, thresholds, tuple(alerts))
+    record = dataclasses.replace(record, last_good_version=last_good_version([*earlier, record]))
+    if not any(alert.severity == HealthSeverity.STOP for alert in alerts):
+        return record
+    rollback = last_rollback(earlier)
+    window = config.rollback_window_phases
+    if window and (rollback is None or phase - rollback.phase > window):
+        action = (
+            f"Version {record.last_good_version}'s policy is published again and the searches continue; a second "
+            f"collapse within {window} phases stops the loop."
+        )
+        record = dataclasses.replace(record, rolled_back_to=record.last_good_version)
+        title = f"rolled back to v{record.last_good_version}"
+    else:
+        after = "" if rollback is None else f" within {window} phases of the rollback after phase {rollback.phase}"
+        action = f"Collapsed{after}: the loop stops after this phase."
+        record = dataclasses.replace(record, hard_stop=True)
+        title = "loop stopped"
+    acted = tuple(
+        dataclasses.replace(alert, title=f"{alert.title}: {title}", detail=f"{alert.detail} {action}")
+        if alert.severity == HealthSeverity.STOP
+        else alert
+        for alert in alerts
+    )
+    return dataclasses.replace(record, alerts=acted)
+
+
+HELD_OUT_CHECKS = (HealthCheck.HELD_OUT_VALID_LEAN, HealthCheck.HELD_OUT_SUCCESS)
+
+
+def healthy(record: PhaseHealth) -> bool:
+    """A held-out evaluation after the phase that raised no held-out alert."""
+    return record.measured.held_out_valid_rate is not None and not any(
+        alert.check in HELD_OUT_CHECKS for alert in record.alerts
+    )
+
+
+def healthy_versions(history: Sequence[PhaseHealth]) -> list[int]:
+    """The versions a held-out evaluation found healthy, oldest first."""
+    return [record.policy_version for record in history if healthy(record)]
 
 
 def last_good_version(history: Sequence[PhaseHealth]) -> int:
-    return history[-1].last_good_version if history else 0
+    return ([0, *healthy_versions(history)])[-1]
+
+
+def last_rollback(history: Sequence[PhaseHealth]) -> PhaseHealth | None:
+    rollbacks = [record for record in history if record.rolled_back_to is not None]
+    return rollbacks[-1] if rollbacks else None
 
 
 def read_health_history(path: Path) -> list[PhaseHealth]:
@@ -282,8 +339,8 @@ def health_stop_text(stop: HealthStop) -> str:
     return (
         f"The loop stopped after phase {stop.phase} on its health check: {stop.reason} "
         f"Version {stop.last_good_version} is the last good one. Roll back to it (grpo_loop.py rollback: its policy "
-        "adapter as a new version), or keep the current version (grpo_loop.py clear-health-stop); then start the loop "
-        "again."
+        "adapter as a new version; lower the learning rate first), or keep the current version (grpo_loop.py "
+        "clear-health-stop); then start the loop again."
     )
 
 
@@ -315,7 +372,12 @@ def clear_health_stop(path: Path) -> Path:
     return kept
 
 
-def publish_rollback(paths: LoopPaths, publisher: Publisher, version: int) -> ModelVersion:
+def rollback_trigger(version: int, phase: int | None = None) -> str:
+    """By hand (`grpo_loop.py rollback`), or by the loop after a phase's collapse."""
+    return f"rollback to v{version}" + ("" if phase is None else f" after phase {phase}")
+
+
+def publish_rollback(paths: LoopPaths, publisher: Publisher, version: int, trigger: str) -> ModelVersion:
     """The next version: the given version's policy adapter, the current value adapter (the policy collapsed, not the
     value model). The next phase continues training from that policy adapter."""
     versions = read_versions(paths)
@@ -326,7 +388,7 @@ def publish_rollback(paths: LoopPaths, publisher: Publisher, version: int) -> Mo
         policy_adapter=target.policy_adapter,
         value_adapter=current.value_adapter,
         published_at=datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds"),
-        trigger=f"rollback to v{version}",
+        trigger=trigger,
     )
     prepared = publisher.prepare(rolled_back)
     record_published(paths, prepared)

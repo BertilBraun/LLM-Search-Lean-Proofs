@@ -337,12 +337,11 @@ def released_memory(stage: TrainingStage, device: torch.device, ranks: Ranks) ->
 
 
 def merge_on_gpus(merges: Sequence[PremergedWeights], device: torch.device, ranks: Ranks) -> MergeSeconds:
-    """Each adapter merged into its base on one rank's GPU (in turn), next to the adapter; the slowest rank's time."""
-    seconds = [
-        premerge_adapter(merge.base_model, Path(merge.adapter), device)
-        for index, merge in enumerate(merges)
-        if index % ranks.world_size == ranks.rank
-    ]
+    """Each adapter merged into its base on the main rank's GPU, one after another, next to the adapter
+    (transformers' `save_pretrained` writes the weights only on distributed rank 0); its time."""
+    seconds = (
+        [premerge_adapter(merge.base_model, Path(merge.adapter), device) for merge in merges] if ranks.is_main else []
+    )
     return MergeSeconds(
         largest(sum(part.merge for part in seconds), device, ranks),
         largest(sum(part.write for part in seconds), device, ranks),

@@ -1,3 +1,5 @@
+import dataclasses
+import time
 import tomllib
 from pathlib import Path
 
@@ -12,11 +14,19 @@ from loop_fakes import (
     run_until,
 )
 
-from lean_search.expert_iteration.serving import MergedPublisher, read_current
+from lean_search.expert_iteration.serving import MergedPublisher, read_current, read_versions, write_json_atomically
+from lean_search.monitoring.alerts import AlertThresholds, run_alerts
+from lean_search.monitoring.families import HealthMeasurements, HealthThresholds, PhaseHealth
 from lean_search.monitoring.store import RunReader
 from lean_search.rl.evaluation import EvaluationKind
-from lean_search.rl.health_checks import clear_health_stop, publish_rollback, read_health_stop
-from lean_search.rl.loop import request_evaluation
+from lean_search.rl.health_checks import (
+    append_health,
+    clear_health_stop,
+    publish_rollback,
+    read_health_stop,
+    rollback_trigger,
+)
+from lean_search.rl.loop import LoopProgress, PhaseStage, read_progress, request_evaluation
 from lean_search.rl.tree_store import TreeStore
 
 HELD_OUT_BLOCK = """[evaluation.held_out_states]
@@ -29,16 +39,19 @@ at_start = false"""
 HELD_OUT_EVERY_PHASE = LOOP_TOML.replace(
     HELD_OUT_BLOCK, HELD_OUT_BLOCK.replace("every_hours = 0.0", "every_hours = 0.0001").replace("false", "true")
 )
-COLLAPSE = [(0.8, 0.4), (0.5, 0.4)]
+# Version 0's baseline, then the held-out valid-Lean rate of each phase's version (the last repeats).
+COLLAPSE_ONCE = [(0.8, 0.4), (0.5, 0.4), (0.8, 0.4)]
+COLLAPSE_TWICE = [(0.8, 0.4), (0.5, 0.4), (0.5, 0.4)]
 
 
-def collapsing_world(root: Path, rates: list[tuple[float, float]] = COLLAPSE) -> LoopWorld:
-    world = loop_world(root, HELD_OUT_EVERY_PHASE, evaluations=FakeEvaluations(held_out_rates=list(rates)))
+def collapsing_world(root: Path, rates: list[tuple[float, float]], toml: str = HELD_OUT_EVERY_PHASE) -> LoopWorld:
+    world = loop_world(root, toml, evaluations=FakeEvaluations(held_out_rates=list(rates)))
     record_version_zero(world)
     return world
 
 
-async def stopped_world(root: Path, rates: list[tuple[float, float]] = COLLAPSE) -> LoopWorld:
+async def stopped_world(root: Path, rates: list[tuple[float, float]] = COLLAPSE_TWICE) -> LoopWorld:
+    """Phase 1 collapses and rolls back to version 0 (version 2), phase 2 collapses again: the loop stops."""
     world = collapsing_world(root, rates)
     await run_until(world, world.loop(), phases=3)
     return world
@@ -89,47 +102,132 @@ async def test_a_healthy_held_out_evaluation_keeps_the_loop_running(tmp_path: Pa
     assert world.phases_done() == 2
 
 
-async def test_a_held_out_collapse_stops_the_loop_after_the_phase(tmp_path: Path) -> None:
+async def test_a_held_out_collapse_rolls_back_to_the_last_good_version(tmp_path: Path) -> None:
+    world = collapsing_world(tmp_path, COLLAPSE_ONCE)
+    await run_until(world, world.loop(), phases=1)
+    current = read_current(world.paths.models)
+    assert (current.version, current.trigger) == (2, "rollback to v0 after phase 1")
+
+
+async def test_the_servers_serve_the_rolled_back_version(tmp_path: Path) -> None:
+    world = collapsing_world(tmp_path, COLLAPSE_ONCE)
+    await run_until(world, world.loop(), phases=1)
+    assert world.servers.served[-1] == 2
+
+
+async def test_the_searches_continue_after_a_rollback(tmp_path: Path) -> None:
+    world = collapsing_world(tmp_path, COLLAPSE_ONCE)
+    await run_until(world, world.loop(), phases=3)
+    assert world.phases_done() == 3
+
+
+async def test_the_phase_after_an_automatic_rollback_trains_on_from_the_rolled_back_policy(tmp_path: Path) -> None:
+    world = collapsing_world(tmp_path, COLLAPSE_ONCE)
+    await run_until(world, world.loop(), phases=2)
+    assert tomllib.loads(world.trainer.requests[1].config_text)["policy"]["initial_adapter"] == ""
+
+
+async def test_a_rollback_alerts_in_the_log(tmp_path: Path) -> None:
+    world = collapsing_world(tmp_path, COLLAPSE_ONCE)
+    messages: list[str] = []
+    loop = world.loop()
+    loop.log = messages.append
+    await run_until(world, loop, phases=1)
+    assert any(message.startswith("Alert: ") and "rolled back to version 0" in message for message in messages)
+
+
+async def test_a_rollback_is_on_the_dashboard(tmp_path: Path) -> None:
+    world = collapsing_world(tmp_path, COLLAPSE_ONCE)
+    await run_until(world, world.loop(), phases=1)
+    alerts = run_alerts(RunReader(world.paths.directory), AlertThresholds(), time.time())
+    assert "Policy rolled back" in {alert.title for alert in alerts}
+
+
+async def test_a_second_collapse_within_the_window_stops_the_loop(tmp_path: Path) -> None:
     world = await stopped_world(tmp_path)
+    assert world.phases_done() == 2
+
+
+async def test_with_rollbacks_off_a_collapse_stops_the_loop_after_the_phase(tmp_path: Path) -> None:
+    toml = HELD_OUT_EVERY_PHASE + "\n[health]\nrollback_window_phases = 0\n"
+    world = collapsing_world(tmp_path, COLLAPSE_ONCE, toml)
+    await run_until(world, world.loop(), phases=3)
     assert world.phases_done() == 1
 
 
 async def test_a_held_out_collapse_records_the_last_good_version(tmp_path: Path) -> None:
     world = await stopped_world(tmp_path)
     stop = read_health_stop(world.paths.health_stop)
-    assert stop is not None and (stop.policy_version, stop.last_good_version) == (1, 0)
+    assert stop is not None and (stop.policy_version, stop.last_good_version) == (3, 0)
+
+
+async def test_a_restart_after_the_rollback_does_not_roll_back_again(tmp_path: Path) -> None:
+    world = collapsing_world(tmp_path, COLLAPSE_ONCE)
+    await run_until(world, world.loop(), phases=1)
+    progress = read_progress(world.paths.progress)
+    write_json_atomically(world.paths.progress, dataclasses.replace(progress, phase=1, stage=PhaseStage.EVALUATING))
+    world.paths.phases.unlink()
+    await run_until(world, world.loop(), phases=1)
+    assert [version.trigger for version in read_versions(world.paths.models)] == [
+        "initial",
+        "phase 1",
+        "rollback to v0 after phase 1",
+    ]
+
+
+async def test_a_missing_version_zero_held_out_baseline_refuses_to_start(tmp_path: Path) -> None:
+    toml = HELD_OUT_EVERY_PHASE.replace(
+        "every_hours = 0.0001\nat_start = true", "every_hours = 0.0001\nat_start = false"
+    )
+    world = collapsing_world(tmp_path, COLLAPSE_ONCE, toml)
+    with pytest.raises(RuntimeError):
+        await run_until(world, world.loop(), phases=1)
+
+
+async def test_a_drop_of_the_sampled_blocks_valid_lean_brings_the_held_out_states_forward(tmp_path: Path) -> None:
+    world = loop_world(tmp_path)
+    record_version_zero(world)
+    for phase in (1, 2):
+        measured = HealthMeasurements(valid_block_rate=1.0)
+        append_health(world.paths.health, PhaseHealth(phase, 0, measured, HealthThresholds(0.005, 0.1)))
+    write_json_atomically(world.paths.progress, LoopProgress(phase=3))
+    await run_until(world, world.loop(), phases=2)
+    assert EvaluationKind.HELD_OUT_STATES in {run.kind for run, _ in world.evaluations.runs}
 
 
 async def test_a_loop_after_a_health_stop_refuses_to_start(tmp_path: Path) -> None:
     world = await stopped_world(tmp_path)
     served = list(world.servers.served)
     with pytest.raises(RuntimeError):
-        await run_until(world, world.loop(), phases=2)
+        await run_until(world, world.loop(), phases=3)
     assert world.servers.served == served
 
 
 async def test_a_cleared_health_stop_lets_the_loop_continue(tmp_path: Path) -> None:
-    world = await stopped_world(tmp_path, [*COLLAPSE, (0.8, 0.4)])
+    world = await stopped_world(tmp_path, [*COLLAPSE_TWICE, (0.8, 0.4)])
     clear_health_stop(world.paths.health_stop)
-    await run_until(world, world.loop(), phases=2)
-    assert world.phases_done() == 2
+    await run_until(world, world.loop(), phases=3)
+    assert world.phases_done() == 3
 
 
 async def test_a_rollback_publishes_the_last_good_policy_as_a_new_version(tmp_path: Path) -> None:
     world = await stopped_world(tmp_path)
     publisher = MergedPublisher(world.config.serving, world.paths.weights, merge_by_writing)
-    publish_rollback(world.paths.models, publisher, 0)
+    publish_rollback(world.paths.models, publisher, 0, rollback_trigger(0))
     current = read_current(world.paths.models)
-    assert (current.version, current.policy_adapter, current.trigger) == (2, "", "rollback to v0")
+    assert (current.version, current.policy_adapter, current.trigger) == (4, "", "rollback to v0")
 
 
 async def test_the_phase_after_a_rollback_continues_the_last_good_policy(tmp_path: Path) -> None:
-    world = await stopped_world(tmp_path, [*COLLAPSE, (0.8, 0.4)])
+    world = await stopped_world(tmp_path, [*COLLAPSE_TWICE, (0.8, 0.4)])
     publish_rollback(
-        world.paths.models, MergedPublisher(world.config.serving, world.paths.weights, merge_by_writing), 0
+        world.paths.models,
+        MergedPublisher(world.config.serving, world.paths.weights, merge_by_writing),
+        0,
+        rollback_trigger(0),
     )
     clear_health_stop(world.paths.health_stop)
-    await run_until(world, world.loop(), phases=2)
+    await run_until(world, world.loop(), phases=3)
     assert tomllib.loads(world.trainer.requests[-1].config_text)["policy"]["initial_adapter"] == ""
 
 

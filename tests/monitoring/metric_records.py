@@ -46,7 +46,10 @@ def search_phase(
 
 
 def loop_status(
-    last_publish_time: float | None = None, heartbeat_seconds: float = 60.0, server_failures: int = 0
+    last_publish_time: float | None = None,
+    heartbeat_seconds: float = 60.0,
+    server_failures: int = 0,
+    value_benchmark_failures: int = 0,
 ) -> LoopStatus:
     return LoopStatus(
         state=LoopState.SEARCHING,
@@ -59,6 +62,7 @@ def loop_status(
         statements_per_hour=150.0,
         last_publish_time=last_publish_time,
         server_failures=server_failures,
+        value_benchmark_failures=value_benchmark_failures,
     )
 
 

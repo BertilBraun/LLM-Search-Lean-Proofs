@@ -45,7 +45,13 @@ from lean_search.expert_iteration.serving import (
 from lean_search.monitoring.store import MetricsWriter
 from lean_search.rl.evaluation import EvaluationKind
 from lean_search.rl.fixed_sets import read_fixed_set
-from lean_search.rl.health_checks import clear_health_stop, health_stop_text, publish_rollback, read_health_stop
+from lean_search.rl.health_checks import (
+    clear_health_stop,
+    health_stop_text,
+    publish_rollback,
+    read_health_stop,
+    rollback_trigger,
+)
 from lean_search.rl.loop import (
     GrpoLoop,
     GrpoLoopPaths,
@@ -61,6 +67,7 @@ from lean_search.rl.loop_services import (
     SubprocessEvaluations,
     VllmServers,
     check_policy_server,
+    gpu_memory_text,
     host_memory_text,
     open_trainer,
     open_tree_searcher,
@@ -219,6 +226,7 @@ async def run(config: GrpoLoopConfig, paths: GrpoLoopPaths) -> None:
             host_memory=host_memory,
             value_readout=search_run_config(config).value.readout,
             value_benchmark=value_benchmark_scoring(config),
+            gpu_memory=functools.partial(gpu_memory_text, config),
         )
         await loop.run(stop)
 
@@ -230,7 +238,7 @@ def rollback(config: GrpoLoopConfig, paths: GrpoLoopPaths, version: int | None) 
     if version is None and stop is None:
         raise SystemExit("No health stop recorded: name the version to roll back to with --version.")
     target = stop.last_good_version if version is None else version
-    published = publish_rollback(paths.models, publisher(config, paths), target)
+    published = publish_rollback(paths.models, publisher(config, paths), target, rollback_trigger(target))
     print(f"Version {published.version} serves version {target}'s policy ({published.policy_adapter}).")
     if stop is not None:
         print(f"Health stop kept as {clear_health_stop(paths.health_stop)}; start the loop again.")

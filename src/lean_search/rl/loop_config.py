@@ -68,9 +68,10 @@ class LoopTrainingConfig:
     min_trainable_groups: int = 300
     check_seconds: float = 30.0
     # The value model trains every this many phases (0 never) on the trees of the last `value_window_phases` phases,
-    # continuing the last value adapter trained; every one is published with the next version.
-    value_every_phases: int = 4
-    value_window_phases: int = 8
+    # continuing the last value adapter trained; every one is published with the next version. With 45-90-minute
+    # phases: a retrain every 1.5-3 hours on 3-6 hours of trees.
+    value_every_phases: int = 2
+    value_window_phases: int = 4
     # Replay files under $LEAN_SEARCH_DATA (grpo_phase.py --lean-replay, --math-replay, --value-replay); empty: none.
     # The value replay is v0's own training data (phase3_value_data.py --name v0: value/v0/train.jsonl).
     lean_replay: str = ""
@@ -85,6 +86,13 @@ class LoopTrainingConfig:
     # The persistent job's host memory, a tmpfs, per loop under <host_directory>/<name>: one shared copy of each parked
     # base (~9.4 GB policy, ~4.5 GB value) and the merged weights handed to the servers until written to disk.
     host_directory: str = "/dev/shm/lean_search"
+    # A persistent job that does not answer a phase's `train` in time is stopped and started again (the phase trained
+    # once more; a second time fails the phase): `train_timeout_factor` times the median of the earlier phases of the
+    # same kind (value phase or not), at least `train_timeout_minimum_minutes`; a job's first phase, with its model
+    # building and compilation, `first_train_timeout_minutes`. Below the collectives' own 1-hour timeout.
+    train_timeout_factor: float = 2.0
+    train_timeout_minimum_minutes: float = 15.0
+    first_train_timeout_minutes: float = 45.0
     # Paused searches' REPL processes above this private memory (0: all) stop before the training job starts, to
     # leave host memory to its ranks; they replay their proof states later. A large value keeps them.
     paused_repl_memory_gib: float = 0.0
@@ -95,7 +103,8 @@ class EvaluationTarget:
     max_expansions: int
     # Per problem; an emergency cap, so that the expansions are the budget and the result does not measure load.
     max_wall_seconds: float
-    # Lean REPLs of the evaluation's own pool, next to the paused searches' (rl/README.md, "Host memory").
+    # Lean REPLs of the evaluation's own pool; the paused searches' REPL processes stop first
+    # (`paused_repl_memory_gib`), so the loop's sampling concurrency fits (rl/README.md, "Host memory").
     concurrency: int
     # Hours of loop time (sampling and training, evaluations excluded) between runs; 0: only when requested.
     every_hours: float = 0.0
@@ -117,9 +126,9 @@ class EvaluationValueModel(StrEnum):
 
 @dataclass(frozen=True)
 class ValueArmConfig:
-    # Every probe slot whose number is a multiple of this (0: never) searches its part again with the published value
-    # model (while that is not the reference), paired per problem with the slot's run with the reference.
-    every_slots: int = 2
+    # Once per published value model other than the reference, at the first probe slot after it was published, the
+    # slot's part is searched again with it, paired per problem with the slot's run with the reference; false: never.
+    enabled: bool = True
     # The exact interval of the paired solve-rate difference.
     confidence: float = 0.95
     # Alert (dashboard and loop.log, nothing else) when a one-sided exact McNemar test, pooled over the value arms of
@@ -140,14 +149,17 @@ class EvaluationConfig:
     # The probe set: ~500 held-out pool statements stratified by difficulty, at a small budget; one part of
     # `probe_parts` per slot, in turn (the at-start baseline runs every part).
     probe: EvaluationTarget = field(
-        default_factory=lambda: EvaluationTarget(16, 3600.0, 64, every_hours=2.0, at_start=True, baseline_runs=2)
+        default_factory=lambda: EvaluationTarget(16, 3600.0, 112, every_hours=2.0, at_start=True, baseline_runs=2)
     )
     probe_parts: int = 3
     value_arm: ValueArmConfig = field(default_factory=ValueArmConfig)
     # miniF2F-valid at the full budget, at milestones (grpo_loop.py request-evaluation) and at the start and end.
-    minif2f: EvaluationTarget = field(default_factory=lambda: EvaluationTarget(64, 7200.0, 64))
-    # Per-sample success on the held-out states (one policy request per state, no search).
-    held_out_states: EvaluationTarget = field(default_factory=lambda: EvaluationTarget(1, 600.0, 64))
+    minif2f: EvaluationTarget = field(default_factory=lambda: EvaluationTarget(64, 7200.0, 112))
+    # Per-sample success and valid Lean on the held-out states (one policy request per state, no search), with every
+    # probe slot: the hard stop's signal, against version 0's run at the start.
+    held_out_states: EvaluationTarget = field(
+        default_factory=lambda: EvaluationTarget(1, 600.0, 112, every_hours=2.0, at_start=True)
+    )
     # The value model the probe and miniF2F search with: fixed, so that they measure the policy alone. The servers
     # swap to it for the evaluations and back afterwards.
     value_model: EvaluationValueModel = EvaluationValueModel.INITIAL
@@ -167,14 +179,18 @@ class RetentionConfig:
     # use (the value adapter the next value training continues); older ones are deleted after each publish, ~0.5 GB of
     # fp32 policy adapter per phase. 0 keeps every adapter. Merged weights: only the current version's and version 0's.
     adapter_versions: int = 5
+    # The policy adapters of the last this many versions whose held-out evaluation raised no held-out alert stay too:
+    # the automatic rollback's target and the alternatives to it.
+    healthy_versions: int = 3
 
 
 @dataclass(frozen=True)
 class HealthConfig:
     # Relative limits compare with the mean of the first this many phases (version 0's samples, the first updates).
     reference_phases: int = 2
-    # Per token, k3; version 0's is 0. At lr 1e-5 review F expects 1e-4 to 1e-3 after 5-10 phases.
-    max_kl_to_starting_policy: float = 0.02
+    # Per token, k3; version 0's is 0. Review F expects 1e-4 to 1e-3 after 5-10 phases at lr 1e-5: 0.005 alerts on a
+    # policy moving several times faster than planned (0.02 would fire only on a collapse).
+    max_kl_to_starting_policy: float = 0.005
     # Of the last pass's trained tokens; PPO runs usually stay below 0.1-0.2, this loop's small steps far below.
     max_clip_fraction: float = 0.1
     # Fractions of the reference phases' mean: fewer distinct samples is collapse, explanations shrinking or growing
@@ -188,8 +204,15 @@ class HealthConfig:
     # Fractions of version 0's held-out evaluation.
     min_held_out_valid_fraction: float = 0.9
     min_held_out_success_fraction: float = 0.9
-    # Below this fraction of version 0's held-out valid-Lean rate the loop stops after the phase; 0 never stops.
+    # Below this fraction of version 0's held-out valid-Lean rate the held-out valid Lean collapsed (0: never): the
+    # loop publishes the last healthy version's policy again and continues sampling, and stops only when it collapses
+    # again within `rollback_window_phases` phases of that rollback (0: stop at the first collapse).
     stop_held_out_valid_fraction: float = 0.7
+    rollback_window_phases: int = 4
+    # Below this fraction of the reference phases' valid-block rate (the sampled blocks that run completely in Lean, a
+    # free per-phase early warning) the held-out states run at the next pause. Lower than the held-out warning: the
+    # rate falls with longer blocks too.
+    min_valid_block_fraction: float = 0.85
     # The share of solves in the budget's last quarter, pooled over the last `late_solve_phases` phases, above which
     # a larger `sampling.max_expansions` is suggested.
     max_late_solve_share: float = 0.10
@@ -253,8 +276,8 @@ def parse_loop_config(text: str) -> GrpoLoopConfig:
     targets = (evaluation.probe, evaluation.minif2f, evaluation.held_out_states)
     if any(target.baseline_runs < 1 for target in targets):
         raise ValueError("evaluation targets need baseline_runs >= 1.")
-    if evaluation.probe_parts < 1 or evaluation.value_arm.every_slots < 0:
-        raise ValueError("evaluation needs probe_parts >= 1 and value_arm.every_slots >= 0.")
+    if evaluation.probe_parts < 1:
+        raise ValueError("evaluation needs probe_parts >= 1.")
     return config
 
 

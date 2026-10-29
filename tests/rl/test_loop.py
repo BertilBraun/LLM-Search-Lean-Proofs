@@ -23,7 +23,7 @@ from lean_search.expert_iteration.pool import problem_name
 from lean_search.expert_iteration.serving import ModelVersion, read_current, read_versions, write_json_atomically
 from lean_search.monitoring.families import PauseSegments, ValueArmResult
 from lean_search.monitoring.store import RunReader
-from lean_search.rl.evaluation import EvaluationKind, EvaluationRun
+from lean_search.rl.evaluation import EvaluationKind, EvaluationRun, EvaluationSummary
 from lean_search.rl.loop import (
     GIB,
     GrpoLoop,
@@ -33,6 +33,7 @@ from lean_search.rl.loop import (
     earlier_value_arm_results,
     evaluation_due,
     phase_config_text,
+    probe_baseline_differences,
     read_progress,
     read_value_share,
     request_evaluation,
@@ -337,6 +338,42 @@ def test_a_value_arm_pools_with_every_other_value_arm(tmp_path: Path) -> None:
     assert [result.slot for result in earlier_value_arm_results(paths, own)] == [0, 2]
 
 
+def write_probe_run(paths: GrpoLoopPaths, slot: int, version: int, solved: int, repeat: int = 0) -> None:
+    run = EvaluationRun(EvaluationKind.PROBE, slot, repeat)
+    summary = dataclasses.replace(zero(EvaluationSummary), problems=10, solved=solved, slot=slot)
+    write_json_atomically(paths.evaluation_directory(run, version) / "summary.json", summary)
+
+
+def baseline_world(root: Path, slots: dict[int, int]) -> GrpoLoopPaths:
+    """Version 0's two runs of each part (solved 4 and 6 of 10: a mean of 0.5), then the given slots' solved counts."""
+    paths = GrpoLoopPaths(root, root, root, "loop")
+    for part in range(3):
+        write_probe_run(paths, part, 0, 4)
+        write_probe_run(paths, part, 0, 6, repeat=1)
+    for slot, solved in slots.items():
+        write_probe_run(paths, slot, slot, solved)
+    return paths
+
+
+LOOP_EVALUATION = parse_loop_config(LOOP_TOML).evaluation
+EVALUATION = dataclasses.replace(LOOP_EVALUATION, probe=dataclasses.replace(LOOP_EVALUATION.probe, baseline_runs=2))
+
+
+def test_a_probe_slot_is_compared_with_version_zeros_runs_of_its_part(tmp_path: Path) -> None:
+    paths = baseline_world(tmp_path, {4: 7})
+    assert probe_baseline_differences(paths, EVALUATION, 4).this_slot == pytest.approx(0.2)
+
+
+def test_the_baseline_difference_of_the_last_slots_takes_each_part_once(tmp_path: Path) -> None:
+    paths = baseline_world(tmp_path, {3: 5, 4: 7, 5: 9})
+    assert probe_baseline_differences(paths, EVALUATION, 5).last_slots == pytest.approx(0.2)
+
+
+def test_the_baseline_difference_of_the_last_slots_waits_for_every_part(tmp_path: Path) -> None:
+    paths = baseline_world(tmp_path, {4: 7, 5: 9})
+    assert probe_baseline_differences(paths, EVALUATION, 5).last_slots is None
+
+
 PROBE_EVERY_PHASE = LOOP_TOML.replace(
     "every_hours = 0.0\nat_start = false\n\n[evaluation.held_out_states]",
     "every_hours = 0.001\nat_start = false\n\n[evaluation.held_out_states]",
@@ -358,11 +395,22 @@ async def test_the_next_probe_slot_survives_a_restart(tmp_path: Path) -> None:
     assert world.evaluations.slots()[:2] == [(0, 0), (1, 0)]
 
 
-async def test_every_other_probe_slot_runs_a_value_arm(tmp_path: Path) -> None:
-    world = loop_world(tmp_path, PROBE_EVERY_PHASE)
+PROBE_AND_VALUE_EVERY_SECOND_PHASE = PROBE_EVERY_PHASE.replace("value_every_phases = 1\n", "value_every_phases = 2\n")
+
+
+async def test_each_published_value_model_gets_one_value_arm_at_the_next_slot(tmp_path: Path) -> None:
+    world = loop_world(tmp_path, PROBE_AND_VALUE_EVERY_SECOND_PHASE)
     record_version_zero(world)
+    await run_until(world, world.loop(), phases=4)
+    assert world.evaluations.slots(value_arm=True) == [(1, 0), (3, 0)]
+
+
+async def test_a_value_arm_survives_a_restart_once(tmp_path: Path) -> None:
+    world = loop_world(tmp_path, PROBE_AND_VALUE_EVERY_SECOND_PHASE)
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=2)
     await run_until(world, world.loop(), phases=3)
-    assert world.evaluations.slots(value_arm=True)[:2] == [(0, 0), (2, 0)]
+    assert world.evaluations.slots(value_arm=True) == [(1, 0)]
 
 
 async def test_a_value_arm_follows_its_slots_run(tmp_path: Path) -> None:
@@ -435,6 +483,48 @@ async def test_a_failed_benchmark_scoring_does_not_stop_the_loop(tmp_path: Path)
     assert world.phases_done() == 2
 
 
+async def test_a_failed_benchmark_trend_does_not_stop_the_loop(tmp_path: Path) -> None:
+    world = loop_world(tmp_path, scorer=FakeValueScorer(foreign_scorings=2))
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=2)
+    assert world.phases_done() == 2
+
+
+async def test_a_value_version_whose_trend_failed_is_scored_again_after_the_next_phase(tmp_path: Path) -> None:
+    world = loop_world(
+        tmp_path,
+        LOOP_TOML.replace("value_every_phases = 1\n", "value_every_phases = 0\n"),
+        scorer=FakeValueScorer(foreign_scorings=1),
+    )
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=2)
+    assert scored_versions(world.paths.value_benchmark) == [0]
+
+
+async def test_a_failed_benchmark_trend_is_counted_in_the_status(tmp_path: Path) -> None:
+    world = loop_world(tmp_path, scorer=FakeValueScorer(foreign_scorings=1))
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=1)
+    assert RunReader(world.paths.directory).series("status").columns["value_benchmark_failures"][-1] == 1
+
+
+MALFORMED = problem_name(statement(1).statement)
+
+
+async def test_a_tree_whose_summary_fails_is_left_out(tmp_path: Path) -> None:
+    world = loop_world(tmp_path, searcher=FakeSearcher(malformed=frozenset({MALFORMED})))
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=2)
+    assert MALFORMED not in {entry.problem_name for entry in TreeStore(world.paths.trees).entries}
+
+
+async def test_a_tree_whose_summary_fails_does_not_stop_the_loop(tmp_path: Path) -> None:
+    world = loop_world(tmp_path, searcher=FakeSearcher(malformed=frozenset({MALFORMED})))
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=2)
+    assert world.phases_done() == 2
+
+
 async def test_the_probe_runs_with_the_reference_value_model_once_another_is_published(tmp_path: Path) -> None:
     world = loop_world(tmp_path)
     record_version_zero(world)
@@ -491,11 +581,11 @@ async def test_value_training_sees_the_window_of_recent_phases(tmp_path: Path) -
     assert world.trainer.requests[2].value_trees == (store.phase_directory(2), store.phase_directory(3))
 
 
-async def test_the_value_model_trains_every_fourth_phase_by_default(tmp_path: Path) -> None:
+async def test_the_value_model_trains_every_second_phase_by_default(tmp_path: Path) -> None:
     world = loop_world(tmp_path, LOOP_TOML.replace("value_every_phases = 1\n", ""))
     record_version_zero(world)
     await run_until(world, world.loop(), phases=4)
-    assert [request.train_value for request in world.trainer.requests] == [False, False, False, True]
+    assert [request.train_value for request in world.trainer.requests] == [False, True, False, True]
 
 
 @pytest.mark.parametrize(
@@ -621,6 +711,18 @@ async def test_the_host_memory_is_logged_at_the_pause_stages(tmp_path: Path) -> 
         "Host memory after training: plenty",
         "Host memory after publishing: plenty",
     ]
+
+
+async def test_the_gpu_memory_is_logged_before_the_wake(tmp_path: Path) -> None:
+    world = loop_world(tmp_path)
+    record_version_zero(world)
+    messages: list[str] = []
+    loop = world.loop()
+    loop.log = messages.append
+    loop.gpu_memory = lambda: "GPU 0 2.0 of 24.0 GiB free"
+    await run_until(world, loop, phases=1)
+    wake = messages.index("GPU memory before the wake: GPU 0 2.0 of 24.0 GiB free")
+    assert messages[wake + 1].startswith("Published version 1")
 
 
 FAILING = problem_name(statement(0).statement)

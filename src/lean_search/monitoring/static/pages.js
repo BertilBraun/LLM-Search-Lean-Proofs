@@ -55,6 +55,16 @@ const FIXED = {
       { label: "last three slots", field: "probe_rolling_solved", over: "probe_rolling_problems" },
     ],
   },
+  probeDifference: {
+    title: "Probe set against version 0",
+    subtitle: "each slot's solve rate minus version 0's two runs of the same third (the thirds' difficulty cancels), and its mean over the last three slots",
+    family: "fixed_targets", x: "probe_slot", unit: "share", compare: true, allTime: true,
+    references: [{ value: 0, label: "version 0", kind: "baseline" }],
+    series: [
+      { label: "slot minus v0", field: "probe_baseline_difference" },
+      { label: "last three slots", field: "probe_rolling_baseline_difference" },
+    ],
+  },
   probeBands: {
     title: "Probe set by difficulty, last three slots", subtitle: "solve rate per stratum over the whole set",
     family: "fixed_targets", x: "probe_slot", unit: "share", compare: true, allTime: true,
@@ -236,7 +246,7 @@ const VALUE = {
     ],
   },
   arm: {
-    title: "Value arm: published minus v0, per slot", subtitle: "paired probe solve rate on the slot's third, exact McNemar interval",
+    title: "Value arm: published minus v0, per value model", subtitle: "one arm per published value model, at the next probe slot: paired solve rate on that slot's third, exact McNemar interval",
     family: "value_arm", x: "slot", unit: "share", allTime: true, references: ZERO, dots: true,
     series: interval("this_slot", "this slot"),
   },
@@ -302,14 +312,18 @@ const HEALTH = {
     ],
   },
   heldOut: {
-    title: "Held-out states", subtitle: "per sample, after the phases they ran; dashed: alert and stop thresholds (fractions of version 0's)", family: "health", x: "phase", unit: "share",
+    title: "Held-out states", subtitle: "per sample, after the phases they ran; dashed: alert and collapse thresholds (fractions of version 0's; a collapse rolls back)", family: "health", x: "phase", unit: "share",
     series: [
       { label: "valid Lean", field: "measured.held_out_valid_rate" },
       { label: "success", field: "measured.held_out_success" },
       limit("min valid", "min_held_out_valid_rate"),
-      limit("stop", "stop_held_out_valid_rate"),
+      limit("collapse", "stop_held_out_valid_rate"),
       limit("min success", "min_held_out_success"),
     ],
+  },
+  validBlocks: {
+    title: "Sampled blocks' valid Lean", subtitle: "share of the phase's policy blocks that ran completely, free every phase; below the dashed line the held-out states run at the next pause", family: "health", x: "phase", unit: "share",
+    series: [{ label: "valid", field: "measured.valid_block_rate" }, limit("min", "min_valid_block_rate")],
   },
   explanation: {
     title: "Explanation length", subtitle: "trained samples' explanation tokens; dashed: the band around the first phases", family: "health", x: "phase", unit: "number",
@@ -378,7 +392,7 @@ export const PAGES = [
     families: [],
     sections: [
       { title: "Status", tiles: "overview" },
-      { title: "Fixed targets", charts: [FIXED.probe, FIXED.minif2f, FIXED.heldOut, FIXED.math] },
+      { title: "Fixed targets", charts: [FIXED.probeDifference, FIXED.probe, FIXED.minif2f, FIXED.heldOut, FIXED.math] },
       { title: "RL health", charts: [GRPO.kl, GRPO.clip, GRPO.mixed, GRPO.rewards] },
       { title: "Training health", charts: [HEALTH.kl, HEALTH.heldOut, HEALTH.distinct, BUDGET.lateSolves] },
       { title: "Value health", charts: [VALUE.share, VALUE.benchmarkVersusV0, VALUE.armPooled, VALUE.phaseCalibration] },
@@ -629,7 +643,7 @@ export const PAGES = [
     title: "Training",
     families: ["health", "budget"],
     sections: [
-      { title: "Health checks", charts: [HEALTH.kl, HEALTH.clip, HEALTH.heldOut, HEALTH.distinct, HEALTH.explanation, HEALTH.cutOff] },
+      { title: "Health checks", charts: [HEALTH.kl, HEALTH.clip, HEALTH.heldOut, HEALTH.validBlocks, HEALTH.distinct, HEALTH.explanation, HEALTH.cutOff] },
       {
         title: "Search budget",
         charts: [BUDGET.lateSolves, BUDGET.expansions, BUDGET.meanExpansions, BUDGET.proofSteps, BUDGET.meanProofSteps, BUDGET.difficulty, BUDGET.groups],
@@ -670,6 +684,7 @@ export const PAGES = [
       {
         title: "Fixed targets",
         charts: [
+          FIXED.probeDifference,
           FIXED.probe,
           FIXED.probeBands,
           FIXED.probeSlotBands,

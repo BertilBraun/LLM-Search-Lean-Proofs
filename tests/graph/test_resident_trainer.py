@@ -36,6 +36,7 @@ from lean_search.rl.resident_trainer import (  # noqa: E402
     PhasePreparation,
     ResidentInputs,
     TrainerRank,
+    WindowPreparation,
 )
 from lean_search.rl.trainer_channel import TrainerChannel, TrainerCommand, TrainerCommandKind  # noqa: E402
 from lean_search.rl.training_phase import (  # noqa: E402
@@ -43,11 +44,12 @@ from lean_search.rl.training_phase import (  # noqa: E402
     PhaseOutcome,
     TrainingPhaseConfig,
     label_phase_data,
+    label_value_trees,
     run_training_phase,
 )
 from lean_search.rl.tree_store import TreeStore  # noqa: E402
 from lean_search.rl.tree_summary import TreeSummary  # noqa: E402
-from lean_search.search import TreeRecord  # noqa: E402
+from lean_search.search import TreeRecord, read_tree  # noqa: E402
 from lean_search.training.data_parallel import SINGLE_PROCESS  # noqa: E402
 from lean_search.training.resident import HostDirectories, build_resident_model  # noqa: E402
 from lean_search.training.sft import LoraSettings, OptimizationConfig  # noqa: E402
@@ -245,7 +247,8 @@ def test_a_resident_value_phase_trains_the_value_adapter_a_fresh_job_trains(tmp_
 @pytest.fixture(scope="module")
 def compiled_phases(tmp_path_factory: pytest.TempPathFactory) -> list[PhaseOutcome]:
     """Three phases with compiled layers, as the loop runs them: each continues the last adapter, and from the second
-    on the starting adapter is loaded beside it to score the KL reference, then deleted."""
+    on the starting adapter's weights are swapped in place to score the KL reference, then the trained ones put
+    back."""
     root = tmp_path_factory.mktemp("compiled")
     model = save_tiny_model(root / "model")
     start = root / "start"
@@ -269,10 +272,9 @@ def test_the_first_resident_phase_compiles_the_layers(compiled_phases: list[Phas
     assert compiled_phases[0].timings.compiled_graphs > 0
 
 
-def test_a_resident_phase_after_the_reference_was_first_scored_compiles_nothing(
-    compiled_phases: list[PhaseOutcome],
-) -> None:
-    assert compiled_phases[2].timings.compiled_graphs == 0
+@pytest.mark.parametrize("phase", [1, 2], ids=["second phase", "third phase"])
+def test_a_later_resident_phase_compiles_nothing(compiled_phases: list[PhaseOutcome], phase: int) -> None:
+    assert compiled_phases[phase].timings.compiled_graphs == 0
 
 
 def test_preparation_while_sampling_builds_the_phases_policy_data(tmp_path: Path) -> None:
@@ -287,6 +289,20 @@ def test_preparation_while_sampling_builds_the_phases_policy_data(tmp_path: Path
     prepared = combined_policy_data(preparation.finish())
     expected = build_policy_data(label_phase_data(records, config).policy_trees, tokenizer, PolicyDataConfig())
     assert prepared == expected
+
+
+def test_preparation_while_sampling_labels_the_value_window(tmp_path: Path) -> None:
+    store = TreeStore(tmp_path / "trees")
+    store.add(phase_tree("r"), 1, 0, None, TreeSummary())
+    config = TrainingPhaseConfig(value=GraphValueConfig(model="unused"))
+    preparation = WindowPreparation(
+        (store.phase_directory(1), store.phase_directory(2)), toml_text(without_none(dataclasses.asdict(config)))
+    )
+    store.add(phase_tree("s"), 2, 0, None, TreeSummary())
+    expected = label_value_trees(
+        [read_tree(tmp_path / "trees" / entry.file, texts=False) for entry in store.entries], config
+    )
+    assert tuple(preparation.finish()) == expected
 
 
 cuda_only = pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a GPU (run on the node)")

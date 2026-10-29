@@ -81,8 +81,7 @@ class DemoSchedule:
     evaluation_every_phases: int = 15
     # A probe slot about every 2 hours.
     probe_every_phases: int = 5
-    value_every_phases: int = 4
-    value_arm_every_slots: int = 2
+    value_every_phases: int = 2
     # The owner turns μ on after this many hours (never in the control).
     value_share_after_hours: float = 30.0
 
@@ -288,7 +287,7 @@ class DemoRun:
         if self.phase % self.schedule.probe_every_phases == 0:
             slot = len(self.probe_slots)
             self.write_probe_slot(moment + 290)
-            if slot % self.schedule.value_arm_every_slots == 0 and self.value_version:
+            if self.value_version and self.value_version not in self.value_arms:
                 self.write_value_arm(moment + 295, slot)
         if self.phase % self.schedule.evaluation_every_phases == 0:
             self.write_fixed_targets(moment + 300)
@@ -369,15 +368,15 @@ class DemoRun:
     def write_health(self, moment: float) -> None:
         learned = self.progress(moment)
         evaluated = (self.phase + 1) % self.schedule.evaluation_every_phases == 0
-        kl = 0.002 + 0.02 * learned + abs(self.noise(0.001))
+        kl = 0.0005 + 0.005 * learned + abs(self.noise(0.0003))
         alerts = ()
-        if kl > 0.02:
+        if kl > 0.005:
             alerts = (
                 HealthAlert(
                     HealthCheck.KL_TO_STARTING_POLICY,
                     HealthSeverity.WARNING,
                     "KL to the starting policy high",
-                    f"KL to the starting policy {kl:.3g} > 0.02 per token.",
+                    f"KL to the starting policy {kl:.3g} > 0.005 per token.",
                 ),
             )
         self.writer.write(
@@ -394,9 +393,10 @@ class DemoRun:
                     repetition_loop_share=0.002 + abs(self.noise(0.0005)),
                     held_out_valid_rate=0.72 + 0.02 * learned + self.noise(0.005) if evaluated else None,
                     held_out_success=0.421 + self.profile.held_out_gain * learned if evaluated else None,
+                    valid_block_rate=0.78 - 0.03 * learned + self.noise(0.01),
                 ),
                 thresholds=HealthThresholds(
-                    max_kl_to_starting_policy=0.02,
+                    max_kl_to_starting_policy=0.005,
                     max_clip_fraction=0.1,
                     min_distinct_samples_per_expansion=5.1,
                     min_explanation_tokens=60.0,
@@ -405,6 +405,7 @@ class DemoRun:
                     min_held_out_valid_rate=0.648,
                     stop_held_out_valid_rate=0.504,
                     min_held_out_success=0.379,
+                    min_valid_block_rate=0.66,
                 ),
                 alerts=alerts,
                 last_good_version=self.phase + 1 if evaluated else 0,
@@ -449,12 +450,21 @@ class DemoRun:
             probe_slot=slot,
             probe_part=slot % PROBE_PARTS,
         )
+        baseline = self.probe_slots[slot % PROBE_PARTS] if slot >= PROBE_PARTS else record
+        record = dataclasses.replace(
+            record,
+            probe_baseline_difference=((record.probe_solved or 0) - (baseline.probe_solved or 0))
+            / PROBE_PART_PROBLEMS
+            / len(PROBE_STRATA),
+        )
         window = [*self.probe_slots[-(PROBE_PARTS - 1) :], record] if slot >= PROBE_PARTS - 1 else []
         if window:
             record = dataclasses.replace(
                 record,
                 probe_rolling_solved=sum(part.probe_solved or 0 for part in window),
                 probe_rolling_problems=sum(part.probe_problems or 0 for part in window),
+                probe_rolling_baseline_difference=sum(part.probe_baseline_difference or 0.0 for part in window)
+                / len(window),
                 probe_rolling_by_difficulty={
                     stratum: BandOutcome(
                         sum(part.probe_by_difficulty[stratum].attempts for part in window),
