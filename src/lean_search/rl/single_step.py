@@ -65,6 +65,9 @@ class SingleStepConfig:
     # The starting policy's own adapter on policy_base_model, which every arm continues and the KL reference;
     # empty: policy_base_model is the starting policy and the arms train fresh adapters.
     policy_adapter: str = ""
+    # Sleep the policy servers while the arm trains, so an arm can train on its own server's GPU (servers started
+    # with SLEEP_MODE=1) and the arms run side by side, one GPU each.
+    release_servers_while_training: bool = False
 
 
 @dataclass(frozen=True)

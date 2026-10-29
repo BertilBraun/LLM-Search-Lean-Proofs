@@ -10,7 +10,8 @@ every training state and every disjoint state (one request each, executed in Lea
 src/lean_search/rl/single_step.py), record the per-sample success on both sets, then train one GRPO phase (two passes)
 on the training states' root groups, with the arm's phase config (per-tactic or sequence credit), continuing the arm's
 last adapter. A last measurement follows the last round. Round 0's samples are the starting policy's and shared by the
-arms. Run it on the training GPU (CUDA_VISIBLE_DEVICES), with policy servers on the others serving as `policy.model`.
+arms. Run it on the training GPU (CUDA_VISIBLE_DEVICES), with policy servers on the others serving as `policy.model`;
+or, with `release_servers_while_training`, one arm per GPU next to its own sleep-mode server, all arms side by side.
 Outputs in $LEAN_SEARCH_RUNS/<name>/: start/ (round 0 trees and merged weights), <arm>/round_<r>/{train,disjoint}/trees,
 <arm>/round_<r>/ adapter and merged weights, <arm>/curve.jsonl (one line per round: steps so far, success on both
 sets) and report.md.
@@ -21,6 +22,7 @@ import argparse
 import asyncio
 import dataclasses
 import datetime
+import gc
 import json
 import os
 import tomllib
@@ -31,7 +33,7 @@ import torch
 import transformers
 
 from lean_search.policy.adapters import merge_adapter
-from lean_search.policy.server_control import publish_weights
+from lean_search.policy.server_control import is_sleeping, publish_weights, release_gpu, restore_gpu
 from lean_search.reasoning.records import read_records
 from lean_search.reasoning.states import ReasoningState
 from lean_search.rl.single_step import (
@@ -89,8 +91,17 @@ def success(records: list[TreeRecord], states: list[StateProblem]) -> SampleSucc
 
 async def serve(weights: Path, config: RunConfig) -> None:
     for server_url in config.policy.server_urls:
-        await publish_weights(server_url, weights)
+        if await is_sleeping(server_url):
+            await restore_gpu(server_url, weights)
+        else:
+            await publish_weights(server_url, weights)
     log(f"Serving {weights}")
+
+
+async def release_servers(config: RunConfig) -> None:
+    for server_url in config.policy.server_urls:
+        await release_gpu(server_url)
+    log("Servers released for training")
 
 
 def round_directory(directory: Path, arm: SingleStepArm, round_index: int) -> Path:
@@ -190,7 +201,12 @@ async def run_arm(config: SingleStepConfig, arm: SingleStepArm) -> None:
         if (output / "adapter" / "adapter_config.json").exists():
             steps += trained_steps(output)
         else:
+            if config.release_servers_while_training:
+                await release_servers(search)
             steps += train_round(config, arm, train_records, train_states, adapter, output)
+            # The woken server needs the memory the trainer's caching allocator still holds.
+            gc.collect()
+            torch.cuda.empty_cache()
         adapter = str(output / "adapter")
 
 
