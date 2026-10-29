@@ -106,3 +106,17 @@ def test_results_written_before_harvesting_read_with_zero_counts() -> None:
         del data["accounting"][key]
     accounting = from_json_object(SearchResult, data).accounting
     assert (accounting.proofs, accounting.harvest_expansions, accounting.exploration_expansions) == (0, 0, 0)
+
+
+def test_nodes_written_before_value_distributions_read_without_one() -> None:
+    tree = new_tree("⊢ p")
+    record = tree_record(tree, "theorem t : p := by", RESULT)
+    node = record.nodes[0]
+    assert from_json_object(type(node), without(node, "value_distribution")).value_distribution is None
+
+
+def test_tree_record_keeps_the_value_distribution(tmp_path: Path) -> None:
+    tree = new_tree("⊢ p")
+    tree.root.value_distribution = (0.5, 0, 0, 0, 0, 0, 0, 0.25, 0.25)
+    write_tree(tmp_path / "t.json.gz", tree_record(tree, "theorem t : p := by", RESULT))
+    assert read_tree(tmp_path / "t.json.gz").nodes[0].value_distribution == (0.5, 0, 0, 0, 0, 0, 0, 0.25, 0.25)

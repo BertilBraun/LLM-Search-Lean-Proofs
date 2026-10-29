@@ -96,7 +96,10 @@ min_sampling_minutes = 15.0
 max_sampling_minutes = 30.0
 min_solved_trees = 100
 check_seconds = 30.0
-value_every_phases = 1
+# The value model every 4 phases on the last 8 phases' trees, continuing the last value adapter trained; μ turns on
+# once one passed the gate and the value A/B search ([evaluation.value_ab]) found the published one ahead of v0.
+value_every_phases = 4
+value_window_phases = 8
 value_share_after_gate = 0.15
 # grpo_fixed_sets.py gate-benchmark; under $LEAN_SEARCH_RUNS.
 value_benchmark = "grpo_gate/benchmark.json.gz"
@@ -104,8 +107,9 @@ value_benchmark = "grpo_gate/benchmark.json.gz"
 # build, data_rewrite README step 3, of the same arm as [initial]) and its math solutions (phase.toml [policy_replay]).
 lean_replay = "reasoning/visible_student_v3_numbered/train.jsonl"
 math_replay = "reasoning/visible_student_v3_numbered/math.jsonl"
-# The v0 value examples (10% replay in the value phase); empty until their path on the node is checked.
-value_replay = ""
+# v0's own training data (phase3_value_data.py --name v0; node_backup generated_data: data/value/v0/), replayed as
+# 10% of the value targets.
+value_replay = "value/v0/train.jsonl"
 
 [statements]
 kind = "curriculum"
@@ -128,6 +132,9 @@ seed = "grpo-curriculum"
 
 [evaluation]
 probe_set = "grpo/fixed_sets/probe.jsonl"
+# The probe and miniF2F search with value v0 (the starting value adapter), so they measure the policy alone; the value
+# servers swap to it for the evaluations and back.
+value_model = "initial"
 held_out_states_file = "phase5_eval_visible_student_v2_visible/states.jsonl"
 # Before evaluating, the paused searches' REPL processes above this private memory stop (0: all); they restart and
 # replay their proof states on the next request. Memory budget: src/lean_search/rl/README.md, "Host memory".
@@ -158,6 +165,22 @@ max_wall_seconds = 600.0
 concurrency = 64
 every_hours = 6.0
 at_start = true
+
+# The value A/B search: the current policy on 250 probe problems (the first of each stratum) at the probe's budget,
+# once with value v0 and once with the published value model, paired per problem; every ~12 hours of loop time once a
+# value model other than v0 is published (grpo_loop.py request-evaluation --target value_ab for one sooner).
+[evaluation.value_ab]
+max_expansions = 16
+max_wall_seconds = 3600.0
+concurrency = 64
+every_hours = 12.0
+
+# μ turns on when the published value model solves at least min_solved_difference more problems than v0 and an exact
+# McNemar test does not find it worse at the one-sided significance level.
+[evaluation.value_ab_test]
+problems = 250
+min_solved_difference = 1
+significance = 0.05
 
 # On only when the starting policy is the naming A/B's named arm (grpo_fixed_sets.py rename first).
 [renaming]

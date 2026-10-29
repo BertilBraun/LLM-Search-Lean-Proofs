@@ -20,6 +20,7 @@ from lean_search.monitoring.families import (
     PhaseTiming,
     SearchPhase,
     SystemUsage,
+    ValueAbResult,
     ValueBenchmarkResult,
 )
 from lean_search.monitoring.store import LoopContext, MetricsWriter
@@ -36,6 +37,18 @@ from lean_search.value.benchmark import (
     SeparationMetrics,
     StepMetrics,
 )
+from lean_search.value.bins import BIN_COUNT
+from lean_search.value.diagnostics import (
+    CALIBRATION_BINS,
+    DEAD_HISTOGRAM_BINS,
+    STEPS_HISTOGRAM_BINS,
+    Calibration,
+    LabelDistribution,
+    LabelDistributions,
+    PredictionDistribution,
+    ValueDiagnostics,
+)
+from lean_search.value.gate_statistics import GateStatistic
 
 GPUS = 4
 CORES = 92.0
@@ -75,6 +88,44 @@ def counts(total: int, shares: dict[str, float]) -> EdgeKindCounts:
 def tactic_counts(total: int, shares: dict[str, float]) -> TacticLabelCounts:
     scale = total / sum(shares.values())
     return TacticLabelCounts(**{label: round(share * scale) for label, share in shares.items()})
+
+
+def normalized(weights: list[float]) -> tuple[float, ...]:
+    total = sum(weights)
+    return tuple(weight / total for weight in weights)
+
+
+def step_bins_with_dead(peak: float, dead: float) -> tuple[float, ...]:
+    """A distribution over the bins 1..7, 8+, dead: steps around `peak`, `dead` on the dead bin."""
+    steps = normalized([math.exp(-((index + 1 - peak) ** 2) / 4) for index in range(BIN_COUNT - 1)])
+    return (*(probability * (1 - dead) for probability in steps), dead)
+
+
+def predictions(states: int, peak: float, dead: float) -> PredictionDistribution:
+    dead_shares = normalized(
+        [math.exp(-((index / 10 + 0.05 - dead) ** 2) / 0.02) for index in range(DEAD_HISTOGRAM_BINS)]
+    )
+    step_shares = normalized([math.exp(-((index + 1.5 - peak) ** 2) / 6) for index in range(STEPS_HISTOGRAM_BINS)])
+    return PredictionDistribution(
+        states=states,
+        mean_bins=step_bins_with_dead(peak, dead),
+        dead_histogram=tuple(round(share * states) for share in dead_shares),
+        alive_steps_histogram=tuple(round(share * states) for share in step_shares),
+    )
+
+
+def calibration_curve(states: int, bias: float) -> Calibration:
+    bins = tuple(
+        ReliabilityBin(
+            lower=index / CALIBRATION_BINS,
+            upper=(index + 1) / CALIBRATION_BINS,
+            states=round(states / CALIBRATION_BINS),
+            mean_predicted=(index + 0.5) / CALIBRATION_BINS,
+            mean_target=min(1.0, max(0.0, (index + 0.5) / CALIBRATION_BINS - bias)),
+        )
+        for index in range(CALIBRATION_BINS)
+    )
+    return Calibration(states, abs(bias), bins)
 
 
 def scaled(values: EdgeKindCounts, factor: float) -> EdgeKindCounts:
@@ -201,6 +252,8 @@ class DemoRun:
         self.context()
         if self.phase % self.schedule.value_every_phases == 0:
             self.write_value(moment + 280)
+        if self.phase % (2 * self.schedule.value_every_phases) == 0:
+            self.write_value_ab(moment + 300)
         if self.phase % self.schedule.evaluation_every_phases == 0:
             self.write_fixed_targets(moment + 290)
 
@@ -517,16 +570,66 @@ class DemoRun:
                 spearman=0.62 + 0.12 * learned + self.noise(0.015),
             ),
         )
-        candidate = round(150 + 6 * learned + self.noise(3))
+        difference = 0.02 + 0.06 * learned + self.noise(0.02)
+        gate = GateStatistic(
+            problems=150,
+            pairs=420,
+            discordant_pairs=round(60 + self.noise(6)),
+            candidate_accuracy=0.64 + difference,
+            current_accuracy=0.64,
+            difference=difference,
+            lower=difference - 0.045,
+            upper=difference + 0.045,
+            effective_pairs=210 + self.noise(10),
+            resamples=5000,
+            confidence=0.95,
+        )
+        dead = 0.05 + 0.25 * learned
+        diagnostics = ValueDiagnostics(
+            labels=LabelDistributions(
+                proof_graph=LabelDistribution(1100, 1100.0, step_bins_with_dead(2.5, 0.0)),
+                off_graph_solved_trees=LabelDistribution(2600, 610.0, step_bins_with_dead(4.0, 1.0)),
+                off_graph_unsolved_trees=LabelDistribution(5200, 1500.0, step_bins_with_dead(5.0, 1.0)),
+                replay=LabelDistribution(1000, 1000.0, step_bins_with_dead(3.5, 0.0)),
+            ),
+            benchmark_candidate=predictions(3800, 3.0, dead),
+            benchmark_published=predictions(3800, 3.2, max(0.0, dead - 0.05)),
+            benchmark_candidate_calibration=calibration_curve(2300, 0.12 - 0.08 * learned),
+            phase_expanded=predictions(2400, 3.4, dead * 0.8),
+            phase_frontier=predictions(9000, 4.2, dead * 1.2),
+            phase_calibration=calibration_curve(2400, 0.15 - 0.08 * learned),
+        )
         self.writer.write(
             ValueBenchmarkResult(
                 candidate_version=self.value_version if passed else self.value_version + 1,
                 gate_passed=passed,
                 benchmark=benchmark,
-                ab_problems=MINIF2F_VALID,
-                ab_solved_candidate=candidate,
-                ab_solved_current=candidate - round(abs(self.noise(3))) * (1 if passed else -1),
                 training_loss=0.9 - 0.2 * learned + self.noise(0.02),
+                gate=gate,
+                published_benchmark=benchmark,
+                trees=round(480 + self.noise(20)),
+                diagnostics=diagnostics,
+            ),
+            record_time=moment,
+        )
+
+    def write_value_ab(self, moment: float) -> None:
+        learned = self.progress(moment)
+        reference = round(150 + self.noise(3))
+        only_published = round(14 + 6 * learned + self.noise(2))
+        only_reference = round(12 + self.noise(2))
+        self.writer.write(
+            ValueAbResult(
+                problems=250,
+                reference_solved=reference,
+                published_solved=reference + only_published - only_reference,
+                only_reference=only_reference,
+                only_published=only_published,
+                p_value=0.5,
+                worse_p_value=0.8,
+                passed=only_published > only_reference,
+                reference_value_version=0,
+                published_value_version=self.value_version,
             ),
             record_time=moment,
         )

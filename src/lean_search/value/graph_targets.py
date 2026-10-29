@@ -18,21 +18,26 @@ class ValueEstimate:
     remaining_steps: float
 
 
+def bin_estimate(probabilities: Sequence[float], readout: Readout) -> ValueEstimate:
+    """The value model's bins 1..7, 8+, dead: proof probability 1 - p_dead, steps given alive."""
+    return ValueEstimate(1.0 - probabilities[DEAD_BIN], readout.alive_remaining_steps(probabilities))
+
+
 @dataclass(frozen=True)
 class RemainingStepsReadout:
-    """Reads a proof probability from the scalar h a tree records, linear between a sure one-step proof and dead."""
+    """Reads a node's recorded bins as 1 - p_dead and the steps given alive; records written before the bins were
+    kept have only the scalar h, read linearly between a sure one-step proof and dead."""
 
     dead_steps: float = Readout().dead_steps
+    eight_or_more_steps: float = Readout().eight_or_more_steps
     fewest_steps: float = 1.0
 
     def estimate(self, remaining_steps: float) -> ValueEstimate:
         share = (self.dead_steps - remaining_steps) / (self.dead_steps - self.fewest_steps)
         return ValueEstimate(min(1.0, max(0.0, share)), remaining_steps)
 
-
-def bin_estimate(probabilities: Sequence[float], readout: Readout) -> ValueEstimate:
-    """The value model's bins 1..7, 8+, dead: proof probability 1 - p_dead, steps given alive."""
-    return ValueEstimate(1.0 - probabilities[DEAD_BIN], readout.alive_remaining_steps(probabilities))
+    def bins(self, probabilities: Sequence[float]) -> ValueEstimate:
+        return bin_estimate(probabilities, Readout(self.eight_or_more_steps, self.dead_steps))
 
 
 def recorded_estimates(record: TreeRecord, readout: RemainingStepsReadout) -> tuple[ValueEstimate | None, ...]:
@@ -41,6 +46,8 @@ def recorded_estimates(record: TreeRecord, readout: RemainingStepsReadout) -> tu
     for node in record.nodes:
         if not node.goals:
             estimates.append(ValueEstimate(1.0, 0.0) if node.status == NodeStatus.PROVED else None)
+        elif node.value_distribution is not None:
+            estimates.append(readout.bins(node.value_distribution))
         elif node.value_estimate is None:
             estimates.append(None)
         else:

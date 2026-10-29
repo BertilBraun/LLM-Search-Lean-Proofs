@@ -6,6 +6,7 @@ import pytest
 from loop_fakes import (
     LOOP_TOML,
     SERVE_SECONDS,
+    FakeEvaluations,
     FakeSearcher,
     FakeTrainer,
     LoopWorld,
@@ -30,7 +31,7 @@ from lean_search.rl.loop import (
     request_evaluation,
     value_published_by,
 )
-from lean_search.rl.loop_config import EvaluationTarget, parse_loop_config
+from lean_search.rl.loop_config import EvaluationTarget, EvaluationValueModel, parse_loop_config
 from lean_search.rl.loop_services import SubprocessTrainer
 from lean_search.rl.training_phase import TrainerTimings
 from lean_search.rl.tree_store import TreeStore
@@ -39,8 +40,10 @@ TEMPLATE = (Path(__file__).resolve().parents[2] / "experiments/configs/grpo/phas
 VERSION = ModelVersion(3, "phase-3/policy/adapter", "phase-2/value/adapter", "2026-10-29T10:00:00+00:00", "phase 3")
 
 
-def phase_table(value_share: float = 0.0, train_value: bool = True) -> dict:
-    return tomllib.loads(phase_config_text(TEMPLATE, "base/model", "sft/adapter", VERSION, 4, value_share, train_value))
+def phase_table(value_share: float = 0.0, value_adapter: str | None = "phase-1/value/adapter") -> dict:
+    return tomllib.loads(
+        phase_config_text(TEMPLATE, "base/model", "sft/adapter", VERSION, 4, value_share, value_adapter)
+    )
 
 
 def test_phase_config_continues_the_published_policy_adapter() -> None:
@@ -55,12 +58,20 @@ def test_phase_config_keeps_the_starting_adapter_as_the_reference() -> None:
     assert phase_table()["policy"]["reference_adapter"] == "sft/adapter"
 
 
-def test_phase_config_continues_the_published_value_adapter() -> None:
-    assert phase_table()["value"]["initial_adapter"] == "phase-2/value/adapter"
+def test_phase_config_continues_the_given_value_adapter() -> None:
+    assert phase_table()["value"]["initial_adapter"] == "phase-1/value/adapter"
+
+
+def test_phase_config_gates_against_the_published_value_adapter() -> None:
+    assert phase_table()["value"]["published_adapter"] == "phase-2/value/adapter"
+
+
+def test_phase_config_seeds_the_value_training_per_phase() -> None:
+    assert phase_table()["value"]["optimization"]["seed"] == 4
 
 
 def test_phase_config_without_value_training_has_no_value_part() -> None:
-    assert "value" not in phase_table(train_value=False)
+    assert "value" not in phase_table(value_adapter=None)
 
 
 @pytest.mark.parametrize("section", ["reward", "value_targets"])
@@ -213,12 +224,120 @@ async def test_a_value_model_failing_the_gate_is_not_published(tmp_path: Path) -
     assert read_current(world.paths.models).value_adapter == "value-v0-adapter"
 
 
-async def test_mu_turns_on_after_a_value_model_passed_the_gate(tmp_path: Path) -> None:
-    world = loop_world(tmp_path, trainer=FakeTrainer(value_passes=True))
+VALUE_AB_TOML = (
+    LOOP_TOML
+    + """
+[evaluation.value_ab]
+max_expansions = 16
+max_wall_seconds = 600.0
+concurrency = 4
+every_hours = 1.0
+"""
+)
+
+
+def value_shares(world: LoopWorld) -> list[float]:
+    return [tomllib.loads(request.config_text)["reward"]["value_share"] for request in world.trainer.requests]
+
+
+async def test_mu_turns_on_after_the_gate_and_the_value_ab_passed(tmp_path: Path) -> None:
+    evaluations = FakeEvaluations(value_ab_passes=True)
+    world = loop_world(tmp_path, VALUE_AB_TOML, trainer=FakeTrainer(value_passes=True), evaluations=evaluations)
     record_version_zero(world)
     await run_until(world, world.loop(), phases=2)
-    shares = [tomllib.loads(request.config_text)["reward"]["value_share"] for request in world.trainer.requests[:2]]
-    assert shares == [0.0, 0.15]
+    assert value_shares(world)[:2] == [0.0, 0.15]
+
+
+async def test_mu_stays_off_when_the_value_ab_does_not_pass(tmp_path: Path) -> None:
+    world = loop_world(tmp_path, VALUE_AB_TOML, trainer=FakeTrainer(value_passes=True))
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=2)
+    assert value_shares(world)[:2] == [0.0, 0.0]
+
+
+async def test_the_value_ab_runs_the_reference_arm_before_the_published_one(tmp_path: Path) -> None:
+    world = loop_world(tmp_path, VALUE_AB_TOML, trainer=FakeTrainer(value_passes=True))
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=1)
+    arms = [model for kind, model in world.evaluations.value_models if kind == EvaluationKind.VALUE_AB]
+    assert arms == [EvaluationValueModel.INITIAL, EvaluationValueModel.PUBLISHED]
+
+
+async def test_the_value_ab_waits_until_a_value_model_is_published(tmp_path: Path) -> None:
+    world = loop_world(tmp_path, VALUE_AB_TOML, trainer=FakeTrainer(value_passes=False))
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=2)
+    assert world.evaluations.value_models == []
+
+
+async def test_the_probe_runs_with_the_reference_value_model_once_another_is_published(tmp_path: Path) -> None:
+    world = loop_world(tmp_path, trainer=FakeTrainer(value_passes=True))
+    record_version_zero(world)
+    await run_until(
+        world, world.loop(), phases=2, on_sampling=lambda: request_evaluation(world.paths, EvaluationKind.PROBE)
+    )
+    assert "kept_value" in world.servers.value_weights[0]
+
+
+async def test_the_value_servers_return_to_the_published_value_model_after_evaluating(tmp_path: Path) -> None:
+    world = loop_world(tmp_path, trainer=FakeTrainer(value_passes=True))
+    record_version_zero(world)
+    await run_until(
+        world, world.loop(), phases=2, on_sampling=lambda: request_evaluation(world.paths, EvaluationKind.PROBE)
+    )
+    assert world.servers.value_weights[-1] == read_versions(world.paths.models)[1].value_weights
+
+
+async def test_the_value_servers_swap_only_after_every_server_woke(tmp_path: Path) -> None:
+    world = loop_world(tmp_path, trainer=FakeTrainer(value_passes=True))
+    record_version_zero(world)
+    await run_until(
+        world, world.loop(), phases=1, on_sampling=lambda: request_evaluation(world.paths, EvaluationKind.PROBE)
+    )
+    events = world.servers.events
+    first_swap = next(index for index, event in enumerate(events) if event.startswith("value "))
+    last_wake = max(index for index, event in enumerate(events) if event.startswith("wake "))
+    assert last_wake < first_swap
+
+
+async def test_evaluations_need_no_value_swap_while_the_reference_is_published(tmp_path: Path) -> None:
+    world = loop_world(tmp_path)
+    record_version_zero(world)
+    request_evaluation(world.paths, EvaluationKind.PROBE)
+    await run_until(world, world.loop(), phases=1)
+    assert world.servers.value_weights == []
+
+
+async def test_value_training_continues_the_last_trained_adapter(tmp_path: Path) -> None:
+    world = loop_world(tmp_path, trainer=FakeTrainer(value_passes=False))
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=2)
+    first, second = world.trainer.requests[:2]
+    initial = tomllib.loads(second.config_text)["value"]["initial_adapter"]
+    assert initial == str(first.output_directory / "value/adapter")
+
+
+async def test_value_training_gates_against_the_published_adapter(tmp_path: Path) -> None:
+    world = loop_world(tmp_path, trainer=FakeTrainer(value_passes=False))
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=2)
+    assert tomllib.loads(world.trainer.requests[1].config_text)["value"]["published_adapter"] == "value-v0-adapter"
+
+
+async def test_value_training_sees_the_window_of_recent_phases(tmp_path: Path) -> None:
+    toml = LOOP_TOML.replace("value_every_phases = 1\n", "value_every_phases = 1\nvalue_window_phases = 2\n")
+    world = loop_world(tmp_path, toml)
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=3)
+    store = TreeStore(world.paths.trees)
+    assert world.trainer.requests[2].value_trees == (store.phase_directory(2), store.phase_directory(3))
+
+
+async def test_the_value_model_trains_every_fourth_phase_by_default(tmp_path: Path) -> None:
+    world = loop_world(tmp_path, LOOP_TOML.replace("value_every_phases = 1\n", ""))
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=4)
+    assert [request.train_value for request in world.trainer.requests] == [False, False, False, True]
 
 
 async def test_without_a_benchmark_the_value_model_does_not_train(tmp_path: Path) -> None:

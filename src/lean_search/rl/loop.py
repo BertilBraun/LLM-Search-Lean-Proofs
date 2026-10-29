@@ -7,14 +7,15 @@ crash interrupted (searches cut off by the crash are lost and their statements f
 
 pause       every policy and value request waits at the gate; searches keep their trees and REPL states in place
 training    the servers on the training GPUs sleep; the training job (grpo_phase.py, data-parallel over those GPUs)
-            labels the phase's trees, trains the policy (GRPO) and, when due, the value model, gated on the held-out
-            benchmark, and merges the new adapters on the GPUs; meanwhile the loop labels the same trees for the
-            search and curriculum metrics
+            labels the phase's trees, trains the policy (GRPO) and, every `value_every_phases`, the value model on the
+            window of recent phases' trees, gated on the held-out benchmark, and merges the new adapters on the GPUs;
+            meanwhile the loop labels the phase's trees for the search and curriculum metrics
 publishing  version k + 1 (the new policy adapter, the new value adapter only if it passed the gate) is recorded
-            with the job's merges; the sleeping servers wake with it, the others swap to it in place; μ turns on with
-            the first value model that passed the gate
+            with the job's merges; the sleeping servers wake with it, the others swap to it in place
 evaluating  the fixed targets that are due (by loop hours, at the start, or requested) run as separate jobs while
-            the searches stay paused, after the paused searches' REPL processes stopped to free host memory
+            the searches stay paused, after the paused searches' REPL processes stopped to free host memory; the value
+            servers serve the evaluations' fixed value model meanwhile; the value A/B search (both arms) turns μ on
+            once the published value model, which passed the gate, beats the reference
 resume      the searches continue with the new weights
 
 The boundaries to the outside (the searches with Lean and vLLM, the training job, the vLLM servers, the evaluation
@@ -52,7 +53,7 @@ from lean_search.monitoring.store import MetricsWriter
 from lean_search.policy.server_control import PhaseSeconds
 from lean_search.rl.evaluation import EvaluationKind, EvaluationSummary
 from lean_search.rl.fixed_targets import target_config
-from lean_search.rl.loop_config import EvaluationTarget, GrpoLoopConfig
+from lean_search.rl.loop_config import EvaluationTarget, EvaluationValueModel, GrpoLoopConfig
 from lean_search.rl.phase_metrics import search_phase_record
 from lean_search.rl.statement_sources import FedStatement, StatementSource
 from lean_search.rl.training_phase import (
@@ -89,6 +90,10 @@ class LoopProgress:
     training_seconds: float = 0.0
     publishing_seconds: float = 0.0
     value_gate_passed: bool = False
+    # The last value adapter trained, accepted or not: the next value training continues it ("": the published one).
+    value_adapter: str = ""
+    # μ is on: a value model passed the gate and a value A/B search found the published one ahead of the reference.
+    value_share_on: bool = False
     # The pause of `phase` so far, segment by segment.
     pause: PauseSegments = field(default_factory=PauseSegments)
     # Sampling and training of all finished phases: the clock of the evaluation schedule.
@@ -97,6 +102,7 @@ class LoopProgress:
     probe_at: float | None = None
     minif2f_at: float | None = None
     held_out_states_at: float | None = None
+    value_ab_at: float | None = None
 
 
 @dataclass(frozen=True)
@@ -130,6 +136,8 @@ class TrainingRequest:
     run_name: str
     output_directory: Path
     train_value: bool
+    # The value model's window: the tree directories of the last phases, this one's included.
+    value_trees: tuple[Path, ...] = ()
 
 
 class TreeSearcher(Protocol):
@@ -169,10 +177,17 @@ class ModelServers(Protocol):
         server's seconds per part."""
         ...
 
+    async def serve_value(self, weights: str) -> None:
+        """Every value server serves these merged value weights; the policy servers keep theirs."""
+        ...
+
 
 class Evaluations(Protocol):
-    async def evaluate(self, kind: EvaluationKind, phase: int, repeat: int) -> EvaluationSummary:
-        """`repeat` > 0: another independent run of the same version (the probe's noise at the start)."""
+    async def evaluate(
+        self, kind: EvaluationKind, phase: int, repeat: int, value_model: EvaluationValueModel
+    ) -> EvaluationSummary:
+        """`repeat` > 0: another independent run of the same version (the probe's noise at the start);
+        `value_model`: the one the value servers serve for it."""
         ...
 
 
@@ -243,8 +258,12 @@ class GrpoLoopPaths:
     def phase_checkpoints(self, phase: int) -> Path:
         return self.checkpoints_root / self.phase_run_name(phase)
 
-    def evaluation_directory(self, kind: EvaluationKind, version: int, repeat: int = 0) -> Path:
-        return self.evaluations / (f"{kind}_v{version:04d}" + (f"_repeat{repeat}" if repeat else ""))
+    def evaluation_directory(
+        self, kind: EvaluationKind, version: int, repeat: int = 0, arm: EvaluationValueModel | None = None
+    ) -> Path:
+        """`arm`: the value A/B's run with that value model."""
+        name = f"{kind}_v{version:04d}" + (f"_{arm}" if arm else "") + (f"_repeat{repeat}" if repeat else "")
+        return self.evaluations / name
 
 
 def now() -> str:
@@ -265,10 +284,14 @@ def phase_trigger(phase: int) -> str:
     return f"phase {phase}"
 
 
+def value_adapter_version(versions: list[ModelVersion], adapter: str) -> int:
+    """The version that first published the value adapter."""
+    return next(version.version for version in versions if version.value_adapter == adapter)
+
+
 def value_version(versions: list[ModelVersion]) -> int:
     """The version that first published the current value adapter."""
-    current = versions[-1].value_adapter
-    return next(version.version for version in versions if version.value_adapter == current)
+    return value_adapter_version(versions, versions[-1].value_adapter)
 
 
 def value_published_by(versions: list[ModelVersion], phase: int) -> bool:
@@ -283,10 +306,11 @@ def phase_config_text(
     current: ModelVersion,
     phase: int,
     value_share: float,
-    train_value: bool,
+    value_adapter: str | None,
 ) -> str:
-    """The template with the published adapters to continue from (on the policy base), the starting policy's adapter
-    as the KL reference, μ and a per-phase seed; no value part unless due."""
+    """The template with the published policy adapter to continue from (on the policy base), the starting policy's
+    adapter as the KL reference, μ and per-phase seeds; `value_adapter` is the value adapter to continue (None: the
+    value model does not train), which the gate compares with the published one."""
     table = tomllib.loads(template)
     for section in ("reward", "value_targets"):
         table.setdefault(section, {})["value_share"] = value_share
@@ -295,11 +319,14 @@ def phase_config_text(
     policy["initial_adapter"] = current.policy_adapter
     policy["reference_adapter"] = starting_policy_adapter
     policy.setdefault("optimization", {})["seed"] = phase
-    if train_value:
-        if current.value_adapter:
-            table["value"]["initial_adapter"] = current.value_adapter
-    else:
+    if value_adapter is None:
         table.pop("value", None)
+    else:
+        value = table["value"]
+        if value_adapter:
+            value["initial_adapter"] = value_adapter
+        value["published_adapter"] = current.value_adapter
+        value.setdefault("optimization", {})["seed"] = phase
     return toml_text(table)
 
 
@@ -317,6 +344,8 @@ def last_evaluation(progress: LoopProgress, kind: EvaluationKind) -> float | Non
             return progress.minif2f_at
         case EvaluationKind.HELD_OUT_STATES:
             return progress.held_out_states_at
+        case EvaluationKind.VALUE_AB:
+            return progress.value_ab_at
 
 
 def evaluated(progress: LoopProgress, kind: EvaluationKind) -> LoopProgress:
@@ -327,6 +356,8 @@ def evaluated(progress: LoopProgress, kind: EvaluationKind) -> LoopProgress:
             return dataclasses.replace(progress, minif2f_at=progress.loop_seconds)
         case EvaluationKind.HELD_OUT_STATES:
             return dataclasses.replace(progress, held_out_states_at=progress.loop_seconds)
+        case EvaluationKind.VALUE_AB:
+            return dataclasses.replace(progress, value_ab_at=progress.loop_seconds)
 
 
 def request_evaluation(paths: GrpoLoopPaths, kind: EvaluationKind) -> None:
@@ -406,6 +437,8 @@ class GrpoLoop:
         self.session_server_failures = 0
         self.statements_given_up = 0
         self.failure: BaseException | None = None
+        # The merged value weights the value servers serve: the published version's, or an evaluation's fixed ones.
+        self.served_value_weights = ""
         self.phase_template = phase_template
         from_json_object(TrainingPhaseConfig, tomllib.loads(phase_template))
         self.update_context()
@@ -455,6 +488,7 @@ class GrpoLoop:
         await self.servers.check()
         current = read_current(self.paths.models)
         await self.servers.serve(current)
+        self.served_value_weights = current.value_weights
         self.searcher.serving(current.version)
         if self.progress.stage != PhaseStage.SAMPLING:
             self.log(f"Finishing phase {self.progress.phase} from {self.progress.stage}")
@@ -616,13 +650,19 @@ class GrpoLoop:
         self.sampling_since = self.clock()
         self.write_status()
 
+    def value_window(self, phase: int) -> tuple[Path, ...]:
+        """The tree directories the value model trains on when it is due this phase; none when it is not."""
+        training = self.config.training
+        if not (training.value_benchmark and training.value_every_phases and phase % training.value_every_phases == 0):
+            return ()
+        first = max(1, phase - training.value_window_phases + 1)
+        return tuple(self.store.phase_directory(number) for number in range(first, phase + 1))
+
     async def train(self, phase: int) -> PhaseOutcome:
         current = read_current(self.paths.models)
         training = self.config.training
-        train_value = bool(
-            training.value_benchmark and training.value_every_phases and phase % training.value_every_phases == 0
-        )
-        value_share = training.value_share_after_gate if self.progress.value_gate_passed else 0.0
+        value_trees = self.value_window(phase)
+        value_share = training.value_share_after_gate if self.progress.value_share_on else 0.0
         config_text = phase_config_text(
             self.phase_template,
             self.config.serving.policy_base_model,
@@ -630,7 +670,7 @@ class GrpoLoop:
             current,
             phase,
             value_share,
-            train_value,
+            (self.progress.value_adapter or current.value_adapter) if value_trees else None,
         )
         request = TrainingRequest(
             phase,
@@ -638,11 +678,14 @@ class GrpoLoop:
             self.store.phase_directory(phase),
             self.paths.phase_run_name(phase),
             self.paths.phase_checkpoints(phase),
-            train_value,
+            bool(value_trees),
+            value_trees,
         )
         labelling = asyncio.create_task(asyncio.to_thread(self.write_search_metrics, phase, config_text))
         outcome = await self.trainer.train(request)
         await labelling
+        if outcome.value is not None:
+            self.save_progress(value_adapter=outcome.value.adapter)
         self.log(
             f"Phase {phase} trained: {outcome.trees} trees, {outcome.groups} groups"
             + ("" if outcome.value is None else f", value {'accepted' if outcome.value.accepted else 'rejected'}")
@@ -678,9 +721,10 @@ class GrpoLoop:
                 resume_seconds=served.resume,
             )
         )
+        self.served_value_weights = current.value_weights
         self.searcher.serving(current.version)
-        if outcome.value is not None and outcome.value.accepted and not self.progress.value_gate_passed:
-            self.log(f"Value model of phase {phase} passed the gate: μ = {self.config.training.value_share_after_gate}")
+        if outcome.value is not None and outcome.value.accepted:
+            self.log(f"Value model of phase {phase} passed the gate and is published")
             self.save_progress(value_gate_passed=True)
         self.log(f"Published version {current.version}")
 
@@ -688,24 +732,75 @@ class GrpoLoop:
         if outcome.policy is not None:
             self.writer.write(grpo_phase_record(outcome.policy, self.progress.sampling_seconds, candidate_version - 1))
         if outcome.value is not None and outcome.value.gate is not None:
+            gate = outcome.value.gate
             self.writer.write(
                 ValueBenchmarkResult(
                     candidate_version=candidate_version,
                     gate_passed=outcome.value.accepted,
-                    benchmark=outcome.value.gate.new,
+                    benchmark=gate.new,
                     training_loss=outcome.value.result.final_pointwise_loss,
+                    gate=gate.statistic,
+                    published_benchmark=gate.current,
+                    trees=outcome.value.trees,
+                    diagnostics=outcome.value.diagnostics,
                 )
             )
 
+    def value_ab_possible(self) -> bool:
+        """The published value model differs from the reference the A/B compares it with."""
+        return read_current(self.paths.models).value_adapter != self.config.initial.value_adapter
+
     def due_evaluations(self, at_start: bool) -> list[EvaluationKind]:
+        """The value A/B waits (a request too) until a value model other than the reference is published."""
         due = []
         for kind in EvaluationKind:
+            if kind == EvaluationKind.VALUE_AB and not self.value_ab_possible():
+                continue
             requested = (self.paths.requests / kind.value).exists()
             target = target_config(self.config.evaluation, kind)
             last = last_evaluation(self.progress, kind)
             if requested or evaluation_due(target, last, self.progress.loop_seconds, at_start):
                 due.append(kind)
         return due
+
+    def value_weights(self, value_model: EvaluationValueModel) -> str:
+        current = read_current(self.paths.models)
+        reference = self.config.initial.value_adapter
+        match value_model:
+            case EvaluationValueModel.INITIAL if current.value_adapter != reference:
+                return self.publisher.kept_value_weights(reference)
+            case EvaluationValueModel.INITIAL | EvaluationValueModel.PUBLISHED:
+                return current.value_weights
+
+    async def serve_value_model(self, value_model: EvaluationValueModel) -> None:
+        weights = await asyncio.to_thread(self.value_weights, value_model)
+        if weights != self.served_value_weights:
+            self.log(f"Value servers: {value_model} value model ({weights})")
+            await self.servers.serve_value(weights)
+            self.served_value_weights = weights
+
+    async def evaluate(self, kind: EvaluationKind, phase: int, repeat: int) -> EvaluationSummary:
+        value_model = self.config.evaluation.value_model
+        await self.serve_value_model(value_model)
+        return await self.evaluations.evaluate(kind, phase, repeat, value_model)
+
+    async def run_value_ab(self, phase: int) -> None:
+        """Both arms with the policy fixed; μ turns on once the published value model passed."""
+        for arm in (EvaluationValueModel.INITIAL, EvaluationValueModel.PUBLISHED):
+            await self.serve_value_model(arm)
+            summary = await self.evaluations.evaluate(EvaluationKind.VALUE_AB, phase, 0, arm)
+        result = summary.value_ab
+        assert result is not None, "the published arm compares itself with the reference arm"
+        self.log(
+            f"Value A/B of version {summary.policy_version}: published value v{result.published_value_version} "
+            f"{result.published_solved} vs reference {result.reference_solved} of {result.problems} "
+            f"({result.only_published} vs {result.only_reference} solved by one arm only, p = {result.p_value:.3f})"
+        )
+        if result.passed and not self.progress.value_share_on:
+            self.log(
+                f"The published value model passed the A/B search: μ = {self.config.training.value_share_after_gate}"
+            )
+            self.save_progress(value_share_on=True)
 
     async def run_evaluations(self, kinds: list[EvaluationKind], phase: int, at_start: bool = False) -> None:
         if not kinds:
@@ -720,9 +815,11 @@ class GrpoLoop:
             "for the evaluations"
         )
         for kind in kinds:
-            summaries = [
-                await self.evaluations.evaluate(kind, phase, repeat) for repeat in range(self.runs(kind, at_start))
-            ]
+            if kind == EvaluationKind.VALUE_AB:
+                await self.run_value_ab(phase)
+                self.mark_evaluated(kind)
+                continue
+            summaries = [await self.evaluate(kind, phase, repeat) for repeat in range(self.runs(kind, at_start))]
             for repeat, summary in enumerate(summaries):
                 self.log(
                     f"Evaluation {kind} of version {summary.policy_version}"
@@ -732,9 +829,13 @@ class GrpoLoop:
             if len(summaries) > 1:
                 solved = [summary.solved for summary in summaries]
                 self.log(f"Evaluation {kind} run to run: solved {solved}, difference {max(solved) - min(solved)}")
-            self.progress = evaluated(self.progress, kind)
-            self.save_progress()
-            (self.paths.requests / kind.value).unlink(missing_ok=True)
+            self.mark_evaluated(kind)
+        await self.serve_value_model(EvaluationValueModel.PUBLISHED)
+
+    def mark_evaluated(self, kind: EvaluationKind) -> None:
+        self.progress = evaluated(self.progress, kind)
+        self.save_progress()
+        (self.paths.requests / kind.value).unlink(missing_ok=True)
 
     def runs(self, kind: EvaluationKind, at_start: bool) -> int:
         """Independent runs of the version: `baseline_runs` for version 0's baseline, else one."""

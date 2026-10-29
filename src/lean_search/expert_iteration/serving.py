@@ -9,6 +9,7 @@ fallback, e.g. after a reboot (deployment/README.md).
 
 import asyncio
 import dataclasses
+import hashlib
 import json
 import os
 import shutil
@@ -24,6 +25,8 @@ from lean_search.search.records import from_json_object, to_json
 
 REPOSITORY_DIRECTORY = Path(__file__).resolve().parents[3]
 MERGED_MARKER = "merged_from.txt"
+# Merged value models kept across versions; pruning only visits the version directories ("v0001", ...).
+KEPT_VALUE_DIRECTORY = "kept_value"
 
 
 @dataclass(frozen=True)
@@ -175,6 +178,10 @@ class Publisher(Protocol):
         """Frees what older versions left once `current` is published."""
         ...
 
+    def kept_value_weights(self, adapter: str) -> str:
+        """A value adapter's servable weights, kept across versions (an evaluation's fixed value model)."""
+        ...
+
 
 class GpuRelease(Protocol):
     """Frees a server's GPU for training and brings the server back with a version."""
@@ -238,6 +245,11 @@ class MergedPublisher:
             if not any(version_directory.iterdir()):
                 version_directory.rmdir()
         self.merged = {adapter: directory for adapter, directory in self.merged.items() if directory in kept}
+
+    def kept_value_weights(self, adapter: str) -> str:
+        name = hashlib.sha256(adapter.encode()).hexdigest()[:16]
+        directory = self.weights_root / KEPT_VALUE_DIRECTORY / name
+        return str(self.merged_weights(self.config.value_base_model, adapter, directory))
 
     def weights(self, version: ModelVersion, server: ServerEndpoint) -> str:
         return version.policy_weights if server in self.config.policy_servers else version.value_weights

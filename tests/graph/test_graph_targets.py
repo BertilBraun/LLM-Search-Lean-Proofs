@@ -189,3 +189,26 @@ def test_balanced_weights_keep_the_total() -> None:
     targets.append(dataclasses.replace(target(TargetSource.PROOF_GRAPH, 1, node=9), weight=2.0))
     balanced = balanced_weights(targets, SourceShares())
     assert sum(item.weight for item in balanced) == pytest.approx(11.0)
+
+
+RECORDED_BINS = (0.5, 0.0, 0.25, 0.0, 0.0, 0.0, 0.0, 0.0, 0.25)
+
+
+def recorded_bins_estimate() -> ValueEstimate | None:
+    builder = GraphBuilder("⊢ r", root_value=3.0)
+    child = builder.child(builder.root, "⊢ child", value=5.0, distribution=RECORDED_BINS)
+    return recorded_estimates(builder.record(), READOUT)[child.node_id]
+
+
+def test_recorded_bins_give_one_minus_dead_as_the_proof_probability() -> None:
+    assert recorded_bins_estimate().proof_probability == pytest.approx(0.75)
+
+
+def test_recorded_bins_give_the_steps_given_alive() -> None:
+    assert recorded_bins_estimate().remaining_steps == pytest.approx((0.5 * 1 + 0.25 * 3) / 0.75)
+
+
+def test_a_node_recorded_without_bins_keeps_the_linear_readout_of_h() -> None:
+    builder = GraphBuilder("⊢ r", root_value=3.0)
+    child = builder.child(builder.root, "⊢ child", value=4.0)
+    assert recorded_estimates(builder.record(), READOUT)[child.node_id] == ValueEstimate(0.8, 4.0)

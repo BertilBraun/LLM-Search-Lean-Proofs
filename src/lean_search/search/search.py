@@ -229,9 +229,21 @@ async def search_problems(
         await asyncio.gather(*searches, return_exceptions=True)
 
 
-def node_scores(scores: Scores) -> list[tuple[float, float | None]]:
-    value_estimates = scores.value_estimates or (None,) * len(scores.priorities)
-    return list(zip(scores.priorities, value_estimates, strict=True))
+@dataclass(frozen=True)
+class NodeScore:
+    priority: float
+    value_estimate: float | None
+    value_distribution: tuple[float, ...] | None
+
+
+def node_scores(scores: Scores) -> list[NodeScore]:
+    count = len(scores.priorities)
+    value_estimates = scores.value_estimates or (None,) * count
+    distributions = scores.value_distributions or (None,) * count
+    return [
+        NodeScore(priority, estimate, distribution)
+        for priority, estimate, distribution in zip(scores.priorities, value_estimates, distributions, strict=True)
+    ]
 
 
 def step_statistics(tree: SearchTree) -> tuple[StepStatistics, ...]:
@@ -698,7 +710,9 @@ class _TheoremSearch:
         scored = dict(zip((node.node_id for node in late_nodes), node_scores(late_scores), strict=True))
         scored.update((node_id, node_scores(scores)[0]) for node_id, scores in early_results.items())
         for node in nodes:
-            node.priority, node.value_estimate = scored[node.node_id]
+            score = scored[node.node_id]
+            node.priority, node.value_estimate = score.priority, score.value_estimate
+            node.value_distribution = score.value_distribution
             self.frontier.push(node.node_id, node.priority)
 
     def _result(self, stop_reason: StopReason, proved: Node | None, tree: SearchTree | None) -> SearchResult:

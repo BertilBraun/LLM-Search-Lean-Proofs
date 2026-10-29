@@ -47,7 +47,11 @@ class Readout:
     def alive_remaining_steps(self, probabilities: Sequence[float]) -> float:
         """The expected steps given that the state is not a dead end."""
         alive = probabilities[:STEP_BIN_COUNT]
-        return sum(probability * steps for probability, steps in zip(alive, self.bin_steps, strict=False)) / sum(alive)
+        alive_mass = sum(alive)
+        # A prompt too long for the value server is recorded as certainly dead.
+        if not alive_mass:
+            return self.eight_or_more_steps
+        return sum(probability * steps for probability, steps in zip(alive, self.bin_steps, strict=False)) / alive_mass
 
     def label_steps(self, steps: int) -> float:
         return self.bin_steps[step_bin(steps)]

@@ -18,11 +18,23 @@ multiprocessing = pytest.importorskip("torch.multiprocessing")
 from lean_search.policy.adapters import ADAPTER_WEIGHTS_FILE  # noqa: E402
 from lean_search.rl.policy_data import PolicyDataConfig, PolicySequence, PolicyTree, build_policy_data  # noqa: E402
 from lean_search.rl.policy_trainer import GrpoConfig, train_grpo  # noqa: E402
-from lean_search.rl.training_phase import TrainingPhaseConfig, label_phase_data  # noqa: E402
+from lean_search.rl.training_phase import (  # noqa: E402
+    PhaseInputs,
+    TrainingPhaseConfig,
+    label_phase_data,
+    run_training_phase,
+)
 from lean_search.search import TreeRecord  # noqa: E402
 from lean_search.training.data_parallel import Ranks, balanced_shards  # noqa: E402
 from lean_search.training.sft import LoraSettings, OptimizationConfig, load_trainable_model  # noqa: E402
 from lean_search.training.sft_data import TokenizedExample  # noqa: E402
+from lean_search.value.benchmark import (  # noqa: E402
+    BenchmarkConfig,
+    SearchGuidance,
+    TreeProvenance,
+    TreeSource,
+    build_benchmark,
+)
 from lean_search.value.graph_trainer import (  # noqa: E402
     GraphValueConfig,
     GraphValueData,
@@ -232,3 +244,39 @@ def test_the_shards_balance_tokens() -> None:
 
 def test_one_shard_keeps_every_index_in_order() -> None:
     assert balanced_shards([3, 1, 2], [5, 9, 1, 7], 1) == [(3, 1, 2)]
+
+
+@dataclasses.dataclass(frozen=True)
+class RankValueOutcome:
+    trees: int
+    gated: bool
+    diagnosed: bool
+
+
+def value_phase(model: Path, output: Path, ranks: Ranks) -> None:
+    """A value-only phase on a window of two trees with a benchmark; each rank writes what its outcome holds."""
+    config = TrainingPhaseConfig(value=GraphValueConfig(model=str(model), lora=LORA, optimization=OPTIMIZATION))
+    record = value_tree()
+    provenance = TreeProvenance("benchmark", SearchGuidance.VALUE_FREE, None, "")
+    benchmark = build_benchmark([TreeSource(provenance, label_phase_data([record], config).trees)], BenchmarkConfig())
+    inputs = PhaseInputs(records=[record], value_benchmark=benchmark, value_records=[record, record])
+    tokenizer = CharacterTokenizer()
+    outcome = run_training_phase(config, inputs, None, tokenizer, CPU, output / "phase", ranks)
+    assert outcome.value is not None
+    seen = RankValueOutcome(outcome.value.trees, outcome.value.gate is not None, outcome.value.diagnostics is not None)
+    (output / f"rank_{ranks.rank}.json").write_text(json.dumps(dataclasses.asdict(seen)))
+
+
+@pytest.fixture(scope="module")
+def value_phase_ranks(tiny_model: Path, tmp_path_factory: pytest.TempPathFactory) -> list[RankValueOutcome]:
+    root = tmp_path_factory.mktemp("value_phase")
+    on_ranks(2, functools.partial(value_phase, tiny_model, root), root / "rendezvous")
+    return [RankValueOutcome(**json.loads((root / f"rank_{rank}.json").read_text())) for rank in range(2)]
+
+
+def test_every_rank_trains_on_the_whole_value_window(value_phase_ranks: list[RankValueOutcome]) -> None:
+    assert [outcome.trees for outcome in value_phase_ranks] == [2, 2]
+
+
+def test_only_the_main_rank_runs_the_value_gate_and_its_diagnostics(value_phase_ranks: list[RankValueOutcome]) -> None:
+    assert [(outcome.gated, outcome.diagnosed) for outcome in value_phase_ranks] == [(True, True), (False, False)]

@@ -13,6 +13,8 @@ class Scores:
     priorities: tuple[float, ...]
     value_estimates: tuple[float, ...] | None = None
     prompt_tokens: int = 0
+    # Per node, the value model's probabilities of its bins; empty for priorities without a binned value model.
+    value_distributions: tuple[tuple[float, ...], ...] = ()
 
 
 class PriorityFunction(Protocol):
@@ -25,6 +27,8 @@ class PriorityFunction(Protocol):
 class ValueEstimates:
     remaining_steps: tuple[float, ...]
     prompt_tokens: int = 0
+    # Per node, the probabilities of the value model's bins 1..7, 8+, dead; empty for estimators without bins.
+    distributions: tuple[tuple[float, ...], ...] = ()
 
 
 class ValueEstimator(Protocol):
@@ -89,7 +93,7 @@ class AStar:
             self.depth_weight * node.depth + self.value_weight * remaining + self.prior(node, tree)
             for node, remaining in zip(nodes, estimates.remaining_steps, strict=True)
         )
-        return Scores(priorities, estimates.remaining_steps, estimates.prompt_tokens)
+        return Scores(priorities, estimates.remaining_steps, estimates.prompt_tokens, estimates.distributions)
 
     def prior(self, node: Node, tree: SearchTree) -> float:
         if not self.policy_prior_weight:

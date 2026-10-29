@@ -53,14 +53,18 @@ class LoopTrainingConfig:
     max_sampling_minutes: float = 30.0
     min_solved_trees: int = 100
     check_seconds: float = 30.0
-    # The value model trains every this many phases (0 never); it is published only if it passes the gate.
-    value_every_phases: int = 1
-    # μ in the policy reward and the value targets once a value model passed the gate (0 before).
+    # The value model trains every this many phases (0 never) on the trees of the last `value_window_phases` phases,
+    # continuing the last value adapter trained (published or not); it is published only if it passes the gate.
+    value_every_phases: int = 4
+    value_window_phases: int = 8
+    # μ in the policy reward and the value targets once a value model passed the gate and the latest value A/B
+    # search (evaluation.value_ab) found it ahead of the reference (0 before; it then stays on).
     value_share_after_gate: float = 0.15
     # The gate's benchmark (grpo_fixed_sets.py gate-benchmark) under $LEAN_SEARCH_RUNS; without it the value model
     # does not train, since nothing could accept it.
     value_benchmark: str = ""
     # Replay files under $LEAN_SEARCH_DATA (grpo_phase.py --lean-replay, --math-replay, --value-replay); empty: none.
+    # The value replay is v0's own training data (phase3_value_data.py --name v0: value/v0/train.jsonl).
     lean_replay: str = ""
     math_replay: str = ""
     value_replay: str = ""
@@ -83,6 +87,23 @@ class EvaluationTarget:
     baseline_runs: int = 1
 
 
+class EvaluationValueModel(StrEnum):
+    # The loop's starting value adapter (value v0): evaluations then measure the policy alone.
+    INITIAL = "initial"
+    # Whatever value model the loop published last.
+    PUBLISHED = "published"
+
+
+@dataclass(frozen=True)
+class ValueAbConfig:
+    # Probe-set problems searched by both arms: the first ones of each stratum in the set's order, strata alternating.
+    problems: int = 250
+    # μ turns on once the published value model solves at least this many more problems than the reference...
+    min_solved_difference: int = 1
+    # ...and an exact McNemar test on the problems only one arm solved does not find it worse at this one-sided level.
+    significance: float = 0.05
+
+
 @dataclass(frozen=True)
 class EvaluationConfig:
     # The probe set: ~500 held-out pool statements stratified by difficulty, at a small budget.
@@ -93,6 +114,13 @@ class EvaluationConfig:
     minif2f: EvaluationTarget = field(default_factory=lambda: EvaluationTarget(64, 7200.0, 64))
     # Per-sample success on the held-out states (one policy request per state, no search).
     held_out_states: EvaluationTarget = field(default_factory=lambda: EvaluationTarget(1, 600.0, 64))
+    # The value A/B search: the policy fixed, the published value model against `value_model`, at the probe's budget;
+    # runs only while the published value model is not that one.
+    value_ab: EvaluationTarget = field(default_factory=lambda: EvaluationTarget(16, 3600.0, 64, every_hours=12.0))
+    value_ab_test: ValueAbConfig = field(default_factory=ValueAbConfig)
+    # The value model the probe and miniF2F search with: fixed, so that they measure the policy alone. The servers
+    # swap to it for the evaluations and back afterwards.
+    value_model: EvaluationValueModel = EvaluationValueModel.INITIAL
     # Under $LEAN_SEARCH_DATA: the probe set, and the states (a phase5 run's states.jsonl, under $LEAN_SEARCH_RUNS).
     probe_set: str = "grpo/fixed_sets/probe.jsonl"
     held_out_states_file: str = "phase5_eval_visible_student_v2_visible/states.jsonl"
@@ -137,8 +165,11 @@ def parse_loop_config(text: str) -> GrpoLoopConfig:
     training = config.training
     if not 0 < training.min_sampling_minutes <= training.max_sampling_minutes or training.min_solved_trees < 1:
         raise ValueError("training needs 0 < min_sampling_minutes <= max_sampling_minutes and min_solved_trees >= 1.")
+    if training.value_every_phases and training.value_window_phases < 1:
+        raise ValueError("training.value_window_phases must be at least 1.")
     evaluation = config.evaluation
-    if any(target.baseline_runs < 1 for target in (evaluation.probe, evaluation.minif2f, evaluation.held_out_states)):
+    targets = (evaluation.probe, evaluation.minif2f, evaluation.held_out_states, evaluation.value_ab)
+    if any(target.baseline_runs < 1 for target in targets):
         raise ValueError("evaluation targets need baseline_runs >= 1.")
     return config
 

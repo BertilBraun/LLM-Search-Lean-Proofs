@@ -300,7 +300,9 @@ id>`, stop it with `kill -TERM -<process id>`, then start the loop again.
 
 Bring-up on a fresh node, after the rebuild (`setup_remote.sh`, pool v3 verified statements under
 `$LEAN_SEARCH_DATA/expert_iteration/pool_v3/`, the value v0 adapter at `phase3_value_v0/adapter` from `node_backup/`,
-and the per-step evaluation's states at `$LEAN_SEARCH_RUNS/phase5_eval_visible_student_v2_visible/states.jsonl`) and
+v0's training data at `$LEAN_SEARCH_DATA/value/v0/train.jsonl` for the value replay (`data/value/v0/` in
+`node_backup/2026-10-15/generated_data.tar.zst`, or rebuilt with `phase3_value_data.py --name v0`), and the per-step
+evaluation's states at `$LEAN_SEARCH_RUNS/phase5_eval_visible_student_v2_visible/states.jsonl`) and
 after the SFT stage (`src/lean_search/data_rewrite/README.md`, steps 1-4), whose outputs the loop starts from:
 
 - the starting policy's own LoRA adapter, `$LEAN_SEARCH_CHECKPOINTS/data_rewrite_sft_<arm>/adapter` (it continues

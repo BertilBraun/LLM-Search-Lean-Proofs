@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from lean_search.rl.fixed_sets import FixedSetsConfig
-from lean_search.rl.loop_config import GrpoLoopConfig, StatementSourceKind, load_loop_config
+from lean_search.rl.loop_config import EvaluationValueModel, GrpoLoopConfig, StatementSourceKind, load_loop_config
 from lean_search.rl.single_step import SingleStepConfig
 from lean_search.rl.training_phase import TrainingPhaseConfig
 from lean_search.search import PriorityKind, RunConfig, load_run_config
@@ -123,3 +123,12 @@ def test_single_step_starts_where_the_loop_starts() -> None:
     starting = loop("grpo/loop.toml")
     expected = (starting.serving.policy_base_model, starting.initial.policy_adapter)
     assert (config.policy_base_model, config.policy_adapter) == expected
+
+
+def test_loop_replays_the_v0_value_training_data() -> None:
+    assert loop("grpo/loop.toml").training.value_replay == "value/v0/train.jsonl"
+
+
+@pytest.mark.parametrize("name", LOOPS)
+def test_loop_evaluations_search_with_the_starting_value_model(name: str) -> None:
+    assert loop(name).evaluation.value_model == EvaluationValueModel.INITIAL

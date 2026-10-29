@@ -38,6 +38,8 @@ class NodeRecord:
     # Absent from records written before generation cost was charged per batch.
     expansion_prompt_tokens: int | None = None
     expansion_generated_tokens: int | None = None
+    # The value model's probabilities of the bins 1..7, 8+, dead (absent from records written before they were kept).
+    value_distribution: tuple[float, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -75,6 +77,7 @@ def tree_record(tree: SearchTree, statement: str, result: SearchResult) -> TreeR
             verification_problems=node.verification_problems,
             expansion_prompt_tokens=node.expansion_prompt_tokens,
             expansion_generated_tokens=node.expansion_generated_tokens,
+            value_distribution=node.value_distribution,
         )
         for node in tree.nodes
     )

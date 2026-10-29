@@ -87,9 +87,11 @@ does.
 `ValueModelEstimator.estimate(nodes)` scores the nodes 32 to a request (`score_next_tokens` with a list of prompts;
 one request per node cost the client ~10 ms of CPU each), the requests concurrently and round-robin over servers
 (`adapter` as the model, or a merged value model with no adapter), renormalizes the returned logprobs over the nine bin tokens (a bin outside the
-top-k gets the smallest returned logprob, an upper bound on its own) and returns `BinnedValueEstimates`:
+top-k gets the smallest returned logprob, an upper bound on its own) and returns `ValueEstimates`:
 `remaining_steps` (h) and `prompt_tokens` as A* expects, plus the per-node `distributions`. A prompt that does not
-fit the server's context reads out as dead. Serve the adapter with `--lora-modules <name>=<directory>` and enable it
+fit the server's context reads out as dead. A* passes the distributions on (`Scores.value_distributions`), and every
+scored node keeps its bins next to its h (`Node.value_distribution`, `NodeRecord.value_distribution`; None in records
+written before, and for priorities without a binned value model). Serve the adapter with `--lora-modules <name>=<directory>` and enable it
 in a run config:
 
 ```toml
@@ -124,8 +126,8 @@ expanded state gets `y = (1 − μ) · z + μ · q` (`value_share` = μ; 0 until
 | never expanded | — | — | no target |
 
 Estimates are `ValueEstimate(proof_probability, remaining_steps)`: from the bins as `1 − p_dead` and the steps given
-alive (`bin_estimate`), or from a tree's recorded scalar h as `(dead_steps − h) / (dead_steps − 1)`, clipped
-(`RemainingStepsReadout`). `bin_target` is the mixture `(1 − μ) · bins(z) + μ · bins(q)`: bins(z) is the smoothed exact
+alive (`bin_estimate`; `recorded_estimates` reads a node's recorded bins so), or, for records written before the bins
+were kept, from the scalar h as `(dead_steps − h) / (dead_steps − 1)`, clipped (`RemainingStepsReadout`). `bin_target` is the mixture `(1 − μ) · bins(z) + μ · bins(q)`: bins(z) is the smoothed exact
 step on the proof graph and all-dead off it, bins(q) spreads q's proof probability over the step bins around its
 steps and puts the rest on dead, so `1 − p_dead` of the target is y. A target without any estimate is z alone.
 `temperature` slides q toward the best descendant (softmax weights on the proof probability; `None` is the plain
@@ -140,11 +142,39 @@ times the sibling's `n / (n + half_weight_expanded_nodes)`) and over each never-
 against `bin_target` (plus the bin-mass term), weighted and rebalanced per step across sources (`SourceShares`), plus
 `ranking_weight` times the weighted logistic loss `softplus(-(s_preferred - s_other) / temperature)` on sibling pairs,
 with s the log-odds of the proof probability `log(1 - p_dead) - log p_dead` (or the probability itself). A parent's
-pair members train in the same micro-batch; exact and dead v0 examples are replayed as `replay_share` of the pointwise
-items. `run_value_gate` scores the benchmark fresh with the new and the current adapter (`benchmark_scores`, the same
-`BenchmarkScores` as the served path) and passes when the sibling pairwise accuracy improves by `min_ranking_gain`
-without the proof-graph/dead-end AUC or the anchors' Brier score regressing beyond their tolerances, and the
-benchmark holds no value-model-guided tree (`guided_trees = "refuse"`; `"warn"` only reports them in `warnings`).
+pair members train in the same micro-batch; exact and dead v0 examples (v0's own training data, `value/v0/train.jsonl`)
+are replayed as `replay_share` of the pointwise items, drawn anew by each phase's optimization seed.
+
+## The gate (`gate_statistics.py`)
+
+`run_value_gate` scores the benchmark fresh with the candidate and the published adapter (`benchmark_scores`, the same
+`BenchmarkScores` as the served path) and `value_gate` decides on the quantity A* orders its frontier by: for every
+labelled sibling pair of the benchmark (`labelled_pairs`: a proof-graph child against a dead-end sibling, or against
+an off-graph sibling the search explored, `min_expanded_nodes`), whether the proof-graph child gets the lower
+`h = Σ p_k · steps_k` (ties count half). The statistic is the candidate's share of such pairs minus the published
+model's, and its interval a percentile interval from a paired cluster bootstrap: problems are drawn with replacement
+with all their pairs (`bootstrap_resamples` 5000, fixed `seed`, `confidence` 0.95). The candidate passes when the lower
+bound lies above `min_lower_bound` (0) and the benchmark holds no value-model-guided tree (`guided_trees = "refuse"`;
+`"warn"` only reports them in `warnings`). `GateStatistic` reports the problems and pairs behind it, the pairs the two
+models order differently, and the effective pairs: the independent pairs that would give the bootstrap's spread
+(fewer than the pairs when the pairs of one problem move together). The benchmark metrics of both models (AUC, Brier,
+pair accuracy by p_dead, Spearman) are kept in `GateResult` as diagnostics, never as pass criteria; v0 has no
+meaningful p_dead (≈ 1e-7 everywhere), so any metric of p_dead favours every new model.
+
+What it can detect, measured on the value-free row-2 trees (miniF2F-valid, log-probability search of SFT v2, 244
+trees): 52 labelled pairs (50 proof over expanded, 2 proof over dead end) over only 13 problems (16, 8, 6, 5, 5, 3, 2,
+2 and five with one); `min_expanded_nodes = 1` would give 95 pairs over 24 problems. A model against itself gives the
+interval [0, 0]. In simulations on that pair structure (a candidate changing 10-40% of the pairs, independently per
+pair), the 95% half-width is 0.08-0.17, a candidate without a real gain passes in 2-4% of retrains, and a gain of
++0.10 in pairs ordered by h passes 22-61% of the time (60% only when the candidate changes few pairs); when the pairs
+of a problem change together, power is lower still. The gate set's 402 problems give about 1.6 times the pairs.
+
+`diagnostics.py` records per retrain (`ValueDiagnostics`, the dashboard's value page): the label distribution of the
+window's targets per bin (proof graph, off graph in solved and in unsolved trees, v0 replay; weight-averaged, with
+counts and weights), the predicted distributions (mean per bin, p_dead per tenth, expected steps given alive per step)
+of the candidate and the published model on the benchmark and of the serving model on the phase's expanded and
+frontier states (the recorded bins), and the calibration of the predicted proof probability against z on expanded
+states (the candidate on the benchmark, the serving model on the phase).
 
 ## Value benchmark (`benchmark.py`, `benchmark_scoring.py`, `experiments/value_benchmark.py`)
 

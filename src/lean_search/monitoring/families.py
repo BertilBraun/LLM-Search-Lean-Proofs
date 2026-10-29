@@ -12,6 +12,8 @@ from lean_search.rl.policy_data import SamplerAgreement
 from lean_search.rl.tree_statistics import GraphStatistics
 from lean_search.search.tactic_labels import TacticLabelCounts
 from lean_search.value.benchmark import BenchmarkMetrics
+from lean_search.value.diagnostics import ValueDiagnostics
+from lean_search.value.gate_statistics import GateStatistic
 
 
 class LoopState(StrEnum):
@@ -138,16 +140,40 @@ class GrpoPhase:
 
 @dataclass(frozen=True)
 class ValueBenchmarkResult:
+    """One value retrain: the gate against the published model, diagnostics, and what it trained on and predicts."""
+
     family: ClassVar[str] = "value"
     candidate_version: int
-    # Beat the published value model on the benchmark, hence published.
+    # Ordered labelled siblings by h better than the published value model beyond the bootstrap's noise: published.
     gate_passed: bool
+    # The candidate's benchmark metrics: diagnostics, not pass criteria.
     benchmark: BenchmarkMetrics
-    # The decisive A/B search: policy fixed, only the value model swapped.
-    ab_problems: int | None = None
-    ab_solved_candidate: int | None = None
-    ab_solved_current: int | None = None
     training_loss: float | None = None
+    gate: GateStatistic | None = None
+    published_benchmark: BenchmarkMetrics | None = None
+    # Trees of the training window.
+    trees: int | None = None
+    diagnostics: ValueDiagnostics | None = None
+
+
+@dataclass(frozen=True)
+class ValueAbResult:
+    """The value A/B search: one policy version with the reference value model (v0) and the published one."""
+
+    family: ClassVar[str] = "value_ab"
+    problems: int
+    reference_solved: int
+    published_solved: int
+    # Problems only one arm solved: the paired test's evidence.
+    only_reference: int
+    only_published: int
+    # Exact McNemar test on those: two-sided, and one-sided against the published model being worse.
+    p_value: float
+    worse_p_value: float
+    # Ahead of the reference by the configured margin and not significantly worse: μ may turn on.
+    passed: bool
+    reference_value_version: int
+    published_value_version: int
 
 
 @dataclass(frozen=True)
@@ -236,6 +262,7 @@ FAMILIES = (
     FixedTargets,
     GrpoPhase,
     ValueBenchmarkResult,
+    ValueAbResult,
     SearchPhase,
     CurriculumPhase,
     PhaseTiming,

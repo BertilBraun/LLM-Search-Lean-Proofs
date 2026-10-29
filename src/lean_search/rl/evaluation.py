@@ -9,6 +9,7 @@ import asyncio
 import contextlib
 import datetime
 import json
+import math
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -18,7 +19,8 @@ from pathlib import Path
 from lean_search.data import Problem
 from lean_search.expert_iteration.pool_search import PRELOADED_HEADER_SHARE, common_headers
 from lean_search.lean import LeanReplConfig, LeanReplPool
-from lean_search.monitoring.families import BandOutcome, FixedTargets
+from lean_search.monitoring.families import BandOutcome, FixedTargets, ValueAbResult
+from lean_search.rl.loop_config import ValueAbConfig
 from lean_search.rl.renaming import StatementRenamings, search_problem
 from lean_search.rl.search_models import open_search_models, run_config_text
 from lean_search.search import CompletedSearch, RunConfig, SearchResult, StopReason, read_results, tree_record
@@ -29,6 +31,8 @@ class EvaluationKind(StrEnum):
     PROBE = "probe"
     MINIF2F = "minif2f"
     HELD_OUT_STATES = "held_out_states"
+    # Part of the probe set searched twice by one policy version, with the reference and the published value model.
+    VALUE_AB = "value_ab"
 
 
 @dataclass(frozen=True)
@@ -65,6 +69,8 @@ class EvaluationSummary:
     samples: int = 0
     # Searches stopped by the per-problem wall-clock cap rather than the expansion budget.
     wall_clock_stops: int = 0
+    # The value A/B's published arm, once the reference arm ran: the paired comparison.
+    value_ab: ValueAbResult | None = None
 
     @property
     def solve_rate(self) -> float:
@@ -175,6 +181,36 @@ def compare_repeats(first: Sequence[SearchResult], second: Sequence[SearchResult
     )
 
 
+def binomial_upper_tail(successes: int, trials: int) -> float:
+    """P(X >= successes) for X ~ Binomial(trials, 1/2)."""
+    return sum(math.comb(trials, count) for count in range(successes, trials + 1)) / 2**trials
+
+
+def value_ab_result(
+    reference: Sequence[SearchResult],
+    published: Sequence[SearchResult],
+    config: ValueAbConfig,
+    value_versions: tuple[int, int],
+) -> ValueAbResult:
+    """Paired per problem; the exact McNemar test counts only the problems one arm solved."""
+    comparison = compare_repeats(reference, published)
+    discordant = comparison.discordant
+    worse = binomial_upper_tail(comparison.only_first, discordant)
+    better = binomial_upper_tail(comparison.only_second, discordant)
+    return ValueAbResult(
+        problems=comparison.problems,
+        reference_solved=comparison.first_solved,
+        published_solved=comparison.second_solved,
+        only_reference=comparison.only_first,
+        only_published=comparison.only_second,
+        p_value=min(1.0, 2 * min(worse, better)),
+        worse_p_value=worse,
+        passed=comparison.difference >= config.min_solved_difference and worse >= config.significance,
+        reference_value_version=value_versions[0],
+        published_value_version=value_versions[1],
+    )
+
+
 def fixed_targets_record(summary: EvaluationSummary, comparison: RepeatComparison | None = None) -> FixedTargets:
     match summary.kind:
         case EvaluationKind.PROBE:
@@ -204,6 +240,8 @@ def fixed_targets_record(summary: EvaluationSummary, comparison: RepeatCompariso
                 held_out_states=summary.problems,
                 evaluation_seconds=summary.wall_seconds,
             )
+        case EvaluationKind.VALUE_AB:
+            raise AssertionError("The value A/B writes a value_ab line, not a fixed target.")
 
 
 def keep_config(paths: EvaluationPaths, config: RunConfig) -> None:

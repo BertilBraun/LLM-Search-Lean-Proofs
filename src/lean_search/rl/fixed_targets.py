@@ -1,12 +1,15 @@
-"""The fixed targets of the loop as runnable jobs: the probe set, miniF2F-valid and the held-out states.
+"""The fixed targets of the loop as runnable jobs: the probe set, miniF2F-valid, the held-out states and the value A/B.
 
-Each runs against whatever the servers serve (the loop's published version) with the loop's search template, at the
-target's budget, without harvesting or ε-exploration, and with the loop's statement renaming when it is on (the
-held-out states are traced states with their original names and are never renamed).
+Each runs against whatever the servers serve with the loop's search template, at the target's budget, without
+harvesting or ε-exploration, and with the loop's statement renaming when it is on (the held-out states are traced
+states with their original names and are never renamed). The loop serves its published policy and, for the probe and
+miniF2F, the fixed value model of `EvaluationConfig.value_model`; the value A/B's two arms run on part of the probe set
+with the reference and with the published value model.
 """
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from itertools import zip_longest
 from pathlib import Path
 
 from lean_search.data import Split, load_minif2f
@@ -43,10 +46,21 @@ def target_config(evaluation: EvaluationConfig, kind: EvaluationKind) -> Evaluat
             return evaluation.minif2f
         case EvaluationKind.HELD_OUT_STATES:
             return evaluation.held_out_states
+        case EvaluationKind.VALUE_AB:
+            return evaluation.value_ab
 
 
 def probe_problems(path: Path) -> list[EvaluationProblem]:
     return [EvaluationProblem(statement.problem, statement.stratum.value) for statement in read_fixed_set(path)]
+
+
+def value_ab_problems(problems: Sequence[EvaluationProblem], count: int) -> list[EvaluationProblem]:
+    """The first problems of each stratum in the set's order, taking the strata in turn."""
+    by_stratum: dict[str, list[EvaluationProblem]] = {}
+    for problem in problems:
+        by_stratum.setdefault(problem.stratum, []).append(problem)
+    interleaved = [problem for turn in zip_longest(*by_stratum.values()) for problem in turn if problem is not None]
+    return interleaved[:count]
 
 
 async def evaluate_held_out_states(
@@ -107,6 +121,10 @@ async def evaluate_target(
         case EvaluationKind.HELD_OUT_STATES:
             states_path = runs_root / evaluation.held_out_states_file
             return await evaluate_held_out_states(states_path, template, target, directory, versions, log)
+        case EvaluationKind.VALUE_AB:
+            problems = value_ab_problems(
+                probe_problems(data_root / evaluation.probe_set), evaluation.value_ab_test.problems
+            )
     config = evaluation_run_config(template, target)
     paths = EvaluationPaths(directory)
     return await run_problem_set_evaluation(kind, directory.name, versions, problems, config, paths, log, renamings)
