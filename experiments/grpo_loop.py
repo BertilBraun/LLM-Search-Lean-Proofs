@@ -8,12 +8,15 @@
     python experiments/grpo_loop.py --config ... status
     python experiments/grpo_loop.py --config ... report              # solve rate per phase (the overfit curve)
     python experiments/grpo_loop.py --config ... request-evaluation --target minif2f
+    python experiments/grpo_loop.py --config ... set-value-share 0.15    # μ from the next phase that trains; 0: off
 
 init records version 0 (the [initial] adapters merged into full weights) and refuses an existing loop. run copies the
 config to $LEAN_SEARCH_RUNS/<name>/loop.toml (the evaluation jobs read it), resumes an interrupted phase, and writes
 the dashboard's metrics under $LEAN_SEARCH_RUNS/<name>/metrics/ (experiments/dashboard.py serve). request-evaluation
-asks the running loop to evaluate a fixed target at its next phase pause; without a running loop use
-experiments/grpo_evaluate.py.
+asks the running loop to evaluate a fixed target at its next phase pause (the probe: its next slot); without a running
+loop use experiments/grpo_evaluate.py. set-value-share writes μ (value_share in [reward] and [value_targets] of every
+phase) to $LEAN_SEARCH_RUNS/<name>/value_share.json, which the loop reads each time a phase starts training; until it
+is set, μ is 0.
 """
 
 import argparse
@@ -38,9 +41,18 @@ from lean_search.expert_iteration.serving import (
 from lean_search.monitoring.store import MetricsWriter
 from lean_search.rl.evaluation import EvaluationKind
 from lean_search.rl.fixed_sets import read_fixed_set
-from lean_search.rl.loop import GrpoLoop, GrpoLoopPaths, read_progress, request_evaluation
+from lean_search.rl.loop import (
+    GrpoLoop,
+    GrpoLoopPaths,
+    ValueBenchmarkScoring,
+    read_progress,
+    read_value_share,
+    request_evaluation,
+    set_value_share,
+)
 from lean_search.rl.loop_config import GrpoLoopConfig, StatementSourceKind, load_loop_config
 from lean_search.rl.loop_services import (
+    ServedValueScorer,
     SubprocessEvaluations,
     SubprocessTrainer,
     VllmServers,
@@ -54,6 +66,7 @@ from lean_search.rl.search_models import served_run_config
 from lean_search.rl.statement_sources import CurriculumStatements, FixedStatements, StatementSource
 from lean_search.rl.tree_store import TreeStore
 from lean_search.search import RunConfig, load_run_config
+from lean_search.value.benchmark import read_benchmark
 
 REPOSITORY_DIRECTORY = Path(__file__).resolve().parents[1]
 DATA_DIRECTORY = Path(os.environ["LEAN_SEARCH_DATA"])
@@ -74,6 +87,8 @@ def parse_arguments() -> argparse.Namespace:
     commands.add_parser("report")
     request = commands.add_parser("request-evaluation")
     request.add_argument("--target", type=EvaluationKind, choices=list(EvaluationKind), required=True)
+    value_share = commands.add_parser("set-value-share")
+    value_share.add_argument("value_share", type=float, help="μ in [0, 1]; 0 turns it off")
     return parser.parse_args()
 
 
@@ -102,6 +117,14 @@ def statement_source(config: GrpoLoopConfig, paths: GrpoLoopPaths) -> StatementS
             return CurriculumStatements(statements.curriculum, DATA_DIRECTORY, paths.curriculum, held_out, searched)
         case StatementSourceKind.FIXED:
             return FixedStatements(read_fixed_set(DATA_DIRECTORY / statements.fixed))
+
+
+def value_benchmark_scoring(config: GrpoLoopConfig) -> ValueBenchmarkScoring | None:
+    """The value benchmark, scored through the loop's value servers as the search scores its states."""
+    if not config.evaluation.value_benchmark.path:
+        return None
+    benchmark = read_benchmark(RUNS_DIRECTORY / config.evaluation.value_benchmark.path)
+    return ValueBenchmarkScoring(benchmark, ServedValueScorer(search_run_config(config).value))
 
 
 def logger(paths: GrpoLoopPaths) -> Callable[[str], None]:
@@ -181,6 +204,8 @@ async def run(config: GrpoLoopConfig, paths: GrpoLoopPaths) -> None:
             log,
             phase_template,
             host_memory=host_memory_text,
+            value_readout=search_run_config(config).value.readout,
+            value_benchmark=value_benchmark_scoring(config),
         )
         await loop.run(stop)
 
@@ -190,6 +215,7 @@ def status(paths: GrpoLoopPaths) -> None:
     store = TreeStore(paths.trees)
     progress = read_progress(paths.progress)
     print(f"progress: {progress}")
+    print(f"μ for the next phase: {read_value_share(paths)}")
     print(f"versions: {len(versions)}, current {versions[-1] if versions else None}")
     phase_entries = store.phase_entries(progress.phase)
     print(
@@ -244,6 +270,9 @@ def main() -> None:
         case "request-evaluation":
             request_evaluation(paths, arguments.target)
             print(f"The loop evaluates {arguments.target} at its next phase pause.")
+        case "set-value-share":
+            set_value_share(paths, arguments.value_share)
+            print(f"μ = {arguments.value_share} from the next phase that starts training ({paths.value_share}).")
     sys.stdout.flush()
 
 

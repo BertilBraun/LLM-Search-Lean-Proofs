@@ -63,8 +63,7 @@ class TargetSource(StrEnum):
 
 @dataclass(frozen=True)
 class ValueTargetConfig:
-    # μ: the value part's share of every target; 0 trains on the concrete labels alone (before a value model passed
-    # the gate).
+    # μ: the value part's share of every target; 0 trains on the concrete labels alone (the loop's start).
     value_share: float = 0.15
     proof_graph_weight: float = 1.0
     off_graph_weight: float = 0.5

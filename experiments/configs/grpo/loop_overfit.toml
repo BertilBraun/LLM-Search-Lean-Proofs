@@ -87,9 +87,6 @@ max_sampling_minutes = 20.0
 min_solved_trees = 30
 check_seconds = 30.0
 value_every_phases = 0
-value_share_after_gate = 0.15
-# grpo_fixed_sets.py gate-benchmark; under $LEAN_SEARCH_RUNS.
-value_benchmark = "grpo_gate/benchmark.json.gz"
 # Under $LEAN_SEARCH_DATA: the starting policy's flat SFT data (data_rewrite.py build) and its math solutions.
 lean_replay = "reasoning/visible_student_v3_numbered/train.jsonl"
 math_replay = "reasoning/visible_student_v3_numbered/math.jsonl"
@@ -107,7 +104,9 @@ held_out_states_file = "phase5_eval_visible_student_v2_visible/states.jsonl"
 # replay their proof states on the next request. Memory budget: src/lean_search/rl/README.md, "Host memory".
 paused_repl_memory_gib = 0.0
 
-# Only when requested (grpo_loop.py request-evaluation --target probe).
+# Only when requested (grpo_loop.py request-evaluation --target probe), the whole set at once.
+probe_parts = 1
+
 [evaluation.probe]
 max_expansions = 16
 max_wall_seconds = 3600.0

@@ -1,5 +1,4 @@
-"""Value LoRA training on search-graph targets: soft bin targets plus a sibling ranking loss, and the gate's fresh
-scores of the candidate and the published model."""
+"""Value LoRA training on search-graph targets: soft bin targets plus a sibling ranking loss."""
 
 import hashlib
 import random
@@ -9,11 +8,9 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
-import peft
 import torch
 import torch.nn.functional as functional
 
-from lean_search.policy.adapters import load_base_model
 from lean_search.training.data_parallel import SINGLE_PROCESS, Ranks, barrier, local_shard, sum_gradients, summed
 from lean_search.training.packing import packed_positions, sequence_starts
 from lean_search.training.sft import (
@@ -23,15 +20,8 @@ from lean_search.training.sft import (
     load_trainable_model,
     trainable_parameters,
 )
-from lean_search.value.benchmark import (
-    BenchmarkConfig,
-    BenchmarkScores,
-    LabelledTree,
-    ValueBenchmark,
-    benchmark_fingerprint,
-)
-from lean_search.value.bins import BIN_COUNT, DEAD_BIN, STEP_BIN_COUNT, Readout
-from lean_search.value.gate_statistics import GateConfig, GateResult, value_gate
+from lean_search.value.benchmark import LabelledTree
+from lean_search.value.bins import BIN_COUNT, DEAD_BIN, STEP_BIN_COUNT
 from lean_search.value.graph_targets import (
     SourceShares,
     ValueTarget,
@@ -58,8 +48,6 @@ class GraphValueConfig:
     # The adapter training continues (the last trained one) unless retrain_from_base; empty starts a fresh adapter.
     initial_adapter: str = ""
     retrain_from_base: bool = False
-    # The served value adapter the gate compares the candidate with; empty scores the base model.
-    published_adapter: str = ""
     lora: LoraSettings = field(default_factory=LoraSettings)
     # micro_batch_tokens: padded prompt tokens (real ones when packing), filled with whole sibling units.
     optimization: OptimizationConfig = field(
@@ -81,9 +69,6 @@ class GraphValueConfig:
     max_pairs_per_tree: int = 64
     # v0 examples (exact and dead labels) as this share of all pointwise items, drawn by the optimization seed.
     replay_share: float = 0.1
-    readout: Readout = field(default_factory=Readout)
-    benchmark: BenchmarkConfig = field(default_factory=BenchmarkConfig)
-    gate: GateConfig = field(default_factory=GateConfig)
 
 
 @dataclass(frozen=True)
@@ -550,95 +535,3 @@ def train_graph_value_model(
         final_ranking_loss=mean([record.ranking_loss for record in last if record.pairs]),
         final_pair_accuracy=mean([record.pair_accuracy for record in last if record.pairs]),
     )
-
-
-def load_scoring_model(model: str, adapter: str, device: torch.device) -> LastPositionLogits:
-    """The base weights with the adapter merged in for inference; no adapter scores the base weights."""
-    causal_model = load_base_model(model, device=str(device))
-    if adapter:
-        causal_model = peft.PeftModel.from_pretrained(causal_model, adapter).merge_and_unload()
-    causal_model.eval()
-    return LastPositionLogits(causal_model)
-
-
-@torch.no_grad()
-def bin_probabilities(
-    model: LastPositionLogits,
-    states: Sequence[ValueState],
-    bin_ids: torch.Tensor,
-    micro_batch_tokens: int,
-    pad_token_id: int,
-    device: torch.device,
-) -> list[tuple[float, ...]]:
-    """Each state's distribution over the nine bins (renormalized over the bin tokens)."""
-    order = sorted(range(len(states)), key=lambda index: states[index].token_count)
-    results: list[tuple[float, ...]] = [()] * len(states)
-    start = 0
-    while start < len(order):
-        end = start + 1
-        while end < len(order) and states[order[end]].token_count * (end + 1 - start) <= micro_batch_tokens:
-            end += 1
-        indices = order[start:end]
-        batch = state_batch([states[index] for index in indices], False, pad_token_id, device)
-        with torch.autocast(device.type, dtype=torch.bfloat16):
-            full_logits = model(batch)
-        for index, probabilities in zip(
-            indices, torch.softmax(full_logits[:, bin_ids].float(), dim=-1).tolist(), strict=True
-        ):
-            results[index] = tuple(probabilities)
-        start = end
-    return results
-
-
-def benchmark_scores(
-    model: LastPositionLogits,
-    name: str,
-    tokenizer: ValueTokenizer,
-    pad_token_id: int,
-    benchmark: ValueBenchmark,
-    config: GraphValueConfig,
-    device: torch.device,
-) -> BenchmarkScores:
-    """Fresh bin distributions on every benchmark state, as the served scoring path stores them."""
-    states = [
-        ValueState(
-            state.problem_name,
-            state.node_id,
-            tuple(tokenizer.encode(render_value_prompt(tokenizer, state.goals), add_special_tokens=False)),
-        )
-        for state in benchmark.states
-    ]
-    bin_ids = torch.tensor(bin_token_ids(tokenizer), device=device)
-    distributions = bin_probabilities(
-        model, states, bin_ids, config.optimization.micro_batch_tokens, pad_token_id, device
-    )
-    return BenchmarkScores(name, benchmark_fingerprint(benchmark), tuple(distributions))
-
-
-@dataclass(frozen=True)
-class ScoredGate:
-    result: GateResult
-    new_scores: BenchmarkScores
-    current_scores: BenchmarkScores
-
-
-def run_value_gate(
-    config: GraphValueConfig,
-    tokenizer: ValueTokenizer,
-    pad_token_id: int,
-    benchmark: ValueBenchmark,
-    new_adapter: str,
-    current_adapter: str,
-    device: torch.device,
-) -> ScoredGate:
-    """Fresh scores of the new and the current adapter on the benchmark, one loaded at a time, and the decision."""
-    scores = []
-    for adapter in (new_adapter, current_adapter):
-        model = load_scoring_model(config.model, adapter, device)
-        scores.append(
-            benchmark_scores(model, adapter or config.model, tokenizer, pad_token_id, benchmark, config, device)
-        )
-        del model
-    new_scores, current_scores = scores
-    result = value_gate(benchmark, new_scores, current_scores, config.readout, config.benchmark, config.gate)
-    return ScoredGate(result, new_scores, current_scores)

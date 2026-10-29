@@ -1,7 +1,7 @@
 # The search-tree GRPO loop (experiments/grpo_loop.py, DESIGN.md "Next phase: search-tree GRPO"), on 4x RTX 3090:
 # while sampling, every GPU serves the merged policy and the merged value model; at a phase's pause every search waits,
-# the servers sleep (freeing their GPUs) and all four GPUs train data-parallel (policy GRPO, then the value model and
-# its gate, then the merges), and the servers wake with the new weights. Bring-up on a fresh node:
+# the servers sleep (freeing their GPUs) and all four GPUs train data-parallel (policy GRPO, then the value model, then
+# the merges), and the servers wake with the new weights. Bring-up on a fresh node:
 # deployment/README.md, "GRPO loop"; the timing of each pause segment: src/lean_search/rl/README.md, "Timing".
 #   python experiments/grpo_loop.py --config experiments/configs/grpo/loop.toml init
 #   python experiments/grpo_loop.py --config experiments/configs/grpo/loop.toml run
@@ -96,13 +96,11 @@ min_sampling_minutes = 15.0
 max_sampling_minutes = 30.0
 min_solved_trees = 100
 check_seconds = 30.0
-# The value model every 4 phases on the last 8 phases' trees, continuing the last value adapter trained; μ turns on
-# once one passed the gate and the value A/B search ([evaluation.value_ab]) found the published one better than v0.
+# The value model every 4 phases on the last 8 phases' trees, continuing the last value adapter trained; every one is
+# published and searched with (no gate; the value benchmark and the value arms are trends on the dashboard). μ is 0
+# until set by hand: deployment/grpo_loop.sh value-share 0.15 (read when each phase starts training).
 value_every_phases = 4
 value_window_phases = 8
-value_share_after_gate = 0.15
-# grpo_fixed_sets.py gate-benchmark; under $LEAN_SEARCH_RUNS.
-value_benchmark = "grpo_gate/benchmark.json.gz"
 # Under $LEAN_SEARCH_DATA: the starting policy's SFT data, flat proofs without nested `have ... := by` (data_rewrite.py
 # build, data_rewrite README step 3, of the same arm as [initial]) and its math solutions (phase.toml [policy_replay]).
 lean_replay = "reasoning/visible_student_v3_numbered/train.jsonl"
@@ -145,15 +143,35 @@ held_out_states_file = "phase5_eval_visible_student_v2_visible/states.jsonl"
 # replay their proof states on the next request. Memory budget: src/lean_search/rl/README.md, "Host memory".
 paused_repl_memory_gib = 0.0
 
-# Every ~6 hours of loop time (sampling and training), and before the first phase twice (version 0's baseline and
-# its run-to-run noise). The wall cap is an emergency stop: the expansions are the budget (wall_clock_stops ~ 0).
+# One part of the probe set per slot, the parts in turn (a stratified third, ~167 problems): every ~2 hours of loop
+# time (sampling and training), so the whole set every ~6 hours; the dashboard draws each slot and the last three
+# together. Before the first phase every part twice (version 0's baseline and its run-to-run noise). The wall cap is an
+# emergency stop: the expansions are the budget (wall_clock_stops ~ 0).
+probe_parts = 3
+
 [evaluation.probe]
 max_expansions = 16
 max_wall_seconds = 3600.0
 concurrency = 64
-every_hours = 6.0
+every_hours = 2.0
 at_start = true
 baseline_runs = 2
+
+# Every other probe slot also searches its part with the published value model (same policy), paired per problem with
+# the slot's run with v0: the paired difference per slot and pooled (exact McNemar interval), and an alert (dashboard,
+# loop.log) when the published value model is worse than v0 at `significance` pooled over its value arms. No automatic
+# action. Only while a value model other than v0 is published.
+[evaluation.value_arm]
+every_slots = 2
+confidence = 0.95
+significance = 0.05
+
+# grpo_fixed_sets.py gate-benchmark (the gate set searched once without a value model), under $LEAN_SEARCH_RUNS: every
+# newly served value model scores it through the value servers while the searches run, a trend against v0 and the value
+# model before it (share of labelled sibling pairs ordered by h with a paired cluster bootstrap over problems; AUC,
+# Brier, calibration, Spearman of the steps).
+[evaluation.value_benchmark]
+path = "grpo_gate/benchmark.json.gz"
 
 # Version 0's baseline before the first phase (version 0's merged weights are never pruned), then milestones only:
 # grpo_loop.py request-evaluation --target minif2f (or grpo_evaluate.py with the loop stopped).
@@ -164,28 +182,13 @@ concurrency = 64
 every_hours = 0.0
 at_start = true
 
-# Per-sample success on the 512 held-out states, with every probe.
+# Per-sample success on the 512 held-out states, every ~6 hours (with every third probe slot).
 [evaluation.held_out_states]
 max_expansions = 1
 max_wall_seconds = 600.0
 concurrency = 64
 every_hours = 6.0
 at_start = true
-
-# The value A/B search: the current policy on 250 probe problems (the first of each stratum) at the probe's budget,
-# once with value v0 and once with the published value model, paired per problem; every ~12 hours of loop time once a
-# value model other than v0 is published (grpo_loop.py request-evaluation --target value_ab for one sooner).
-[evaluation.value_ab]
-max_expansions = 16
-max_wall_seconds = 3600.0
-concurrency = 64
-every_hours = 12.0
-
-# One-sided exact McNemar tests on the problems one arm solved, pooled over the A/Bs of the same published value model:
-# better than v0 at `significance` turns μ on; worse publishes v0's value model again and turns μ off.
-[evaluation.value_ab_test]
-problems = 250
-significance = 0.05
 
 # After each publish, the phase adapters of versions older than the last 5 are deleted unless still used (the current
 # version's, the value adapter the next value training continues); 0 keeps every adapter. src/lean_search/rl/README.md,

@@ -7,21 +7,13 @@ from lean_search.monitoring.families import (
     GrpoPhase,
     LoopState,
     LoopStatus,
+    PairedDifference,
     SearchPhase,
     SystemUsage,
-    ValueBenchmarkResult,
+    ValueArmResult,
 )
 from lean_search.rl.tree_statistics import BlockCounts, EdgeKindCounts, GraphStatistics, SizeHistogram
 from lean_search.search.tactic_labels import TacticLabelCounts
-from lean_search.value.benchmark import (
-    BenchmarkMetrics,
-    CalibrationMetrics,
-    EstimateKind,
-    PairAccuracy,
-    RankingMetrics,
-    SeparationMetrics,
-    StepMetrics,
-)
 
 ZERO_BY_TYPE = {
     int: 0,
@@ -119,23 +111,17 @@ def curriculum_phase(attempts: int = 100, solved: int = 50) -> CurriculumPhase:
     )
 
 
-def value_result(gate_passed: bool) -> ValueBenchmarkResult:
-    return ValueBenchmarkResult(
-        candidate_version=1,
-        gate_passed=gate_passed,
-        benchmark=BenchmarkMetrics(
-            estimates="fresh scores of value-v1",
-            kind=EstimateKind.FRESH,
-            model="value-v1",
-            circular_runs=(),
-            states=10,
-            groups=4,
-            states_without_estimate=0,
-            ranking=RankingMetrics(
-                4, 8, 0.7, PairAccuracy(2, 0.8), PairAccuracy(6, 0.6), PairAccuracy(5, 0.6), 0.5, 3, 1
-            ),
-            calibration=CalibrationMetrics(6, 0.1, 0.2, ()),
-            separation=SeparationMetrics(0.7, 0.65),
-            steps=StepMetrics(4, 1.2, 0.7),
-        ),
+def value_arm(worse: bool) -> ValueArmResult:
+    difference = PairedDifference(1, 56, 9 if worse else 4, 4, -0.09 if worse else 0.0, -0.2, 0.02, 0.02, 0.9)
+    return ValueArmResult(
+        slot=4,
+        part=1,
+        reference_value_version=0,
+        published_value_version=4,
+        reference_solved=30,
+        published_solved=25 if worse else 30,
+        this_slot=difference,
+        same_value_version=difference,
+        all_value_versions=difference,
+        worse=worse,
     )

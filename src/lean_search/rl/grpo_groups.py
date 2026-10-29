@@ -27,7 +27,7 @@ class RewardConfig:
     # c: the advantage of a failing, no-progress or redundant tactic other than the block's anchor; the block's prefix
     # is kept, so only its tokens are wasted. Against errors alone, continuing pays when P(correct) > c / (c + δ).
     wasted_tactic_cost: float = 0.1
-    # μ: an expanded off-graph state earns G = μ · q, q its value part; 0 until a value model passed the gate.
+    # μ: an expanded off-graph state earns G = μ · q, q its value part; the loop's μ, 0 until set by hand.
     value_share: float = 0.0
     # An off-graph state with live children and fewer expanded nodes in its subtree (itself included) is unknown.
     off_graph_min_expanded_nodes: int = 4

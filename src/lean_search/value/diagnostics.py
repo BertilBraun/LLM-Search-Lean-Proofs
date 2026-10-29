@@ -1,5 +1,6 @@
-"""What a value retrain trained on and what the models predict: label and prediction distributions over the bins,
-and calibration of the proof probability against the concrete label z of expanded states."""
+"""What the value model trains on and what it predicts: label and prediction distributions over the bins, calibration
+of the proof probability against the concrete label z of expanded states, and its remaining steps on the proof graph,
+from the bins a search recorded (free, per phase) or from fresh scores of the benchmark."""
 
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
@@ -9,12 +10,14 @@ from lean_search.value.benchmark import (
     BenchmarkScores,
     LabelledTree,
     ReliabilityBin,
+    StepMetrics,
     ValueBenchmark,
     expected_calibration_error,
     reliability_bins,
 )
 from lean_search.value.bins import BIN_COUNT, DEAD_BIN, Readout
 from lean_search.value.graph_targets import TargetSource, bin_target
+from lean_search.value.metrics import mean, spearman_correlation
 
 DEAD_HISTOGRAM_BINS = 10
 # Expected remaining steps given alive lie between 1 and the 8+ readout (12): one bin per step.
@@ -49,28 +52,20 @@ class LabelDistributions:
     proof_graph: LabelDistribution
     off_graph_solved_trees: LabelDistribution
     off_graph_unsolved_trees: LabelDistribution
-    replay: LabelDistribution
 
 
-def label_distributions(
-    trees: Sequence[LabelledTree], replay: Iterable[tuple[Sequence[float], float]], sigma: float
-) -> LabelDistributions:
-    """The value targets of the trees by source and tree outcome, with their weights before class balancing."""
-    groups: dict[tuple[TargetSource, bool], list[tuple[Sequence[float], float]]] = {
-        (TargetSource.PROOF_GRAPH, True): [],
-        (TargetSource.OFF_GRAPH, True): [],
-        (TargetSource.OFF_GRAPH, False): [],
-    }
+SOURCES = ((TargetSource.PROOF_GRAPH, True), (TargetSource.OFF_GRAPH, True), (TargetSource.OFF_GRAPH, False))
+
+
+def label_distributions(trees: Sequence[LabelledTree], sigma: float) -> LabelDistributions:
+    """The value targets of the trees by source and tree outcome, with their weights before class balancing; `sigma`
+    smooths exact steps over the step bins (0: the label's own bin)."""
+    groups: dict[tuple[TargetSource, bool], list[tuple[Sequence[float], float]]] = {source: [] for source in SOURCES}
     for tree in trees:
-        solved = tree.labels.solved
         for target in tree.targets:
-            groups[target.source, solved].append((bin_target(target, sigma), target.weight))
-    return LabelDistributions(
-        proof_graph=label_distribution(groups[TargetSource.PROOF_GRAPH, True]),
-        off_graph_solved_trees=label_distribution(groups[TargetSource.OFF_GRAPH, True]),
-        off_graph_unsolved_trees=label_distribution(groups[TargetSource.OFF_GRAPH, False]),
-        replay=label_distribution(replay),
-    )
+            groups[target.source, tree.labels.solved].append((bin_target(target, sigma), target.weight))
+    proof_graph, off_graph_solved, off_graph_unsolved = (label_distribution(groups[source]) for source in SOURCES)
+    return LabelDistributions(proof_graph, off_graph_solved, off_graph_unsolved)
 
 
 @dataclass(frozen=True)
@@ -106,9 +101,44 @@ def prediction_distribution(distributions: Iterable[Sequence[float]], readout: R
 
 
 @dataclass(frozen=True)
+class PredictionDistributions:
+    """The serving model's recorded bins on the states the labels cover, by the same source and tree outcome."""
+
+    proof_graph: PredictionDistribution
+    off_graph_solved_trees: PredictionDistribution
+    off_graph_unsolved_trees: PredictionDistribution
+
+
+def target_predictions(trees: Sequence[LabelledTree], readout: Readout) -> PredictionDistributions:
+    groups: dict[tuple[TargetSource, bool], list[tuple[float, ...]]] = {source: [] for source in SOURCES}
+    for tree in trees:
+        for target in tree.targets:
+            distribution = tree.record.nodes[target.node_id].value_distribution
+            if distribution is not None:
+                groups[target.source, tree.labels.solved].append(distribution)
+    proof_graph, off_graph_solved, off_graph_unsolved = (
+        prediction_distribution(groups[source], readout) for source in SOURCES
+    )
+    return PredictionDistributions(proof_graph, off_graph_solved, off_graph_unsolved)
+
+
+def frontier_distributions(trees: Sequence[LabelledTree]) -> list[tuple[float, ...]]:
+    """The bins the serving value model recorded for the never-expanded frontier."""
+    return [
+        node.value_distribution
+        for tree in trees
+        for node in tree.record.nodes
+        if tree.labels.node_classes[node.node_id] == NodeClass.NEVER_EXPANDED
+        and node.goals
+        and node.value_distribution is not None
+    ]
+
+
+@dataclass(frozen=True)
 class Calibration:
     states: int
     expected_calibration_error: float | None
+    brier_score: float | None
     # Predicted proof probability (1 - p_dead) against the share of proof-graph states, per tenth of the prediction.
     bins: tuple[ReliabilityBin, ...]
 
@@ -121,7 +151,8 @@ def calibration(pairs: Iterable[tuple[float, float]]) -> Calibration:
         predicted.append(probability)
         observed.append(label)
     bins = reliability_bins(predicted, observed, CALIBRATION_BINS)
-    return Calibration(len(predicted), expected_calibration_error(bins), bins)
+    brier = mean([(probability - label) ** 2 for probability, label in zip(predicted, observed, strict=True)])
+    return Calibration(len(predicted), expected_calibration_error(bins), brier, bins)
 
 
 def concrete_label(node_class: NodeClass) -> float | None:
@@ -145,18 +176,6 @@ def benchmark_calibration(benchmark: ValueBenchmark, scores: BenchmarkScores) ->
     return calibration(pairs)
 
 
-def recorded_distributions(trees: Sequence[LabelledTree], expanded: bool) -> list[tuple[float, ...]]:
-    """The bins the serving value model recorded for the expanded states, or for the never-expanded frontier."""
-    distributions = []
-    for tree in trees:
-        for node in tree.record.nodes:
-            node_class = tree.labels.node_classes[node.node_id]
-            wanted = tree.labels.expanded[node.node_id] if expanded else node_class == NodeClass.NEVER_EXPANDED
-            if wanted and node.goals and node.value_distribution is not None:
-                distributions.append(node.value_distribution)
-    return distributions
-
-
 def recorded_calibration(trees: Sequence[LabelledTree]) -> Calibration:
     """The serving value model's recorded proof probability on expanded states against z."""
     pairs = []
@@ -168,38 +187,45 @@ def recorded_calibration(trees: Sequence[LabelledTree]) -> Calibration:
     return calibration(pairs)
 
 
+def recorded_steps(trees: Sequence[LabelledTree], readout: Readout) -> StepMetrics:
+    """The recorded expected steps given alive against the exact remaining steps of proof-graph states (the shortest
+    route to a proof, whatever order the search found it in)."""
+    predicted: list[float] = []
+    exact: list[float] = []
+    for tree in trees:
+        for node in tree.record.nodes:
+            steps = tree.labels.remaining_steps[node.node_id]
+            if steps and node.goals and node.value_distribution is not None:
+                predicted.append(readout.alive_remaining_steps(node.value_distribution))
+                exact.append(float(steps))
+    return StepMetrics(
+        proof_graph_states=len(exact),
+        mean_absolute_error=mean([abs(first - second) for first, second in zip(predicted, exact, strict=True)]),
+        spearman=spearman_correlation(predicted, exact) if len(exact) > 1 else None,
+    )
+
+
 @dataclass(frozen=True)
-class ValueDiagnostics:
-    # The retrain's targets (its window of trees) and v0 replay.
+class PhaseValueMetrics:
+    """Free per phase: the serving value model against the phase's own labelled search graphs."""
+
+    # The phase's value targets, exact steps unsmoothed.
     labels: LabelDistributions
-    # Fresh predictions of the candidate and the published model on the gate's benchmark.
-    benchmark_candidate: PredictionDistribution
-    benchmark_published: PredictionDistribution
-    benchmark_candidate_calibration: Calibration
-    # What the serving model recorded on the phase's trees (none in trees written before the bins were kept).
-    phase_expanded: PredictionDistribution
-    phase_frontier: PredictionDistribution
-    phase_calibration: Calibration
+    # The recorded bins of the same states, and of the never-expanded frontier.
+    predictions: PredictionDistributions
+    frontier: PredictionDistribution
+    # Expanded states.
+    calibration: Calibration
+    steps: StepMetrics
 
 
-def value_diagnostics(
-    window: Sequence[LabelledTree],
-    replay: Iterable[tuple[Sequence[float], float]],
-    phase: Sequence[LabelledTree],
-    benchmark: ValueBenchmark,
-    candidate: BenchmarkScores,
-    published: BenchmarkScores,
-    readout: Readout,
-    sigma: float,
-) -> ValueDiagnostics:
-    return ValueDiagnostics(
-        labels=label_distributions(window, replay, sigma),
-        benchmark_candidate=prediction_distribution(scored(candidate), readout),
-        benchmark_published=prediction_distribution(scored(published), readout),
-        benchmark_candidate_calibration=benchmark_calibration(benchmark, candidate),
-        phase_expanded=prediction_distribution(recorded_distributions(phase, expanded=True), readout),
-        phase_frontier=prediction_distribution(recorded_distributions(phase, expanded=False), readout),
-        phase_calibration=recorded_calibration(phase),
+def phase_value_metrics(trees: Sequence[LabelledTree], readout: Readout) -> PhaseValueMetrics:
+    return PhaseValueMetrics(
+        labels=label_distributions(trees, 0.0),
+        predictions=target_predictions(trees, readout),
+        frontier=prediction_distribution(frontier_distributions(trees), readout),
+        calibration=recorded_calibration(trees),
+        steps=recorded_steps(trees, readout),
     )
 
 

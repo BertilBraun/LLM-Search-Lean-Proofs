@@ -2,7 +2,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from metric_records import curriculum_phase, grpo_phase, loop_status, search_phase, system_usage, value_result
+from metric_records import curriculum_phase, grpo_phase, loop_status, search_phase, system_usage, value_arm
 
 from lean_search.monitoring.alerts import AlertThresholds, Severity, run_alerts
 from lean_search.monitoring.families import FixedTargets
@@ -74,8 +74,8 @@ def solve_rate_too_high(writer: MetricsWriter) -> None:
     writer.write(curriculum_phase(attempts=100, solved=95), record_time=NOW)
 
 
-def failing_gates(writer: MetricsWriter) -> None:
-    write_all(writer, [value_result(gate_passed=False)] * 3)
+def worse_value_arm(writer: MetricsWriter) -> None:
+    writer.write(value_arm(worse=True), record_time=NOW)
 
 
 def low_host_memory(writer: MetricsWriter) -> None:
@@ -105,7 +105,7 @@ def failing_servers(writer: MetricsWriter) -> None:
         (few_mixed_groups, "Few mixed groups"),
         (idle_gpus, "GPUs underused"),
         (solve_rate_too_high, "Curriculum off target"),
-        (failing_gates, "Value gate failing"),
+        (worse_value_arm, "Value model worse than v0"),
         (low_host_memory, "Host memory low"),
         (low_disk, "Disk almost full"),
         (failing_servers, "Server failures"),
@@ -137,12 +137,12 @@ def balanced_curriculum(writer: MetricsWriter) -> None:
     writer.write(curriculum_phase(attempts=100, solved=50), record_time=NOW)
 
 
-def passing_gate(writer: MetricsWriter) -> None:
-    write_all(writer, [value_result(gate_passed=False)] * 2 + [value_result(gate_passed=True)])
+def value_arm_no_worse(writer: MetricsWriter) -> None:
+    write_all(writer, [value_arm(worse=True), value_arm(worse=False)])
 
 
 @pytest.mark.parametrize(
-    "scenario", [steady_search, calm_grpo, retained_math, busy_gpus, balanced_curriculum, passing_gate]
+    "scenario", [steady_search, calm_grpo, retained_math, busy_gpus, balanced_curriculum, value_arm_no_worse]
 )
 def test_healthy_run_has_no_alerts(tmp_path: Path, scenario: Callable[[MetricsWriter], None]) -> None:
     writer = MetricsWriter(tmp_path)

@@ -42,7 +42,6 @@ class AlertThresholds:
     min_gpu_utilization: float = 60.0
     min_solve_rate: float = 0.3
     max_solve_rate: float = 0.7
-    failed_gates_in_a_row: int = 3
     min_available_memory_share: float = 0.15
     min_free_disk_gib: float = 50.0
 
@@ -207,13 +206,18 @@ def solve_rate_off_target(reader: RunReader, thresholds: AlertThresholds, now: f
     return Alert(Severity.INFO, "Curriculum off target", detail, "curriculum")
 
 
-def failing_gates(reader: RunReader, thresholds: AlertThresholds, now: float) -> Alert | None:
-    passed = present(reader.series("value").columns.get("gate_passed", []))
-    count = thresholds.failed_gates_in_a_row
-    if len(passed) < count or any(passed[-count:]):
+def worse_value_model(reader: RunReader, thresholds: AlertThresholds, now: float) -> Alert | None:
+    """The value arms of the published value model, pooled, find it worse than v0 (the loop's own significance)."""
+    arms = reader.series("value_arm")
+    if not latest(arms.columns.get("worse", [])):
         return None
-    detail = f"The last {count} value candidates failed the gate."
-    return Alert(Severity.INFO, "Value gate failing", detail, "value")
+    version = latest(arms.columns.get("published_value_version", [])) or 0.0
+    p_value = latest(arms.columns.get("same_value_version.worse_p_value", [])) or 0.0
+    detail = (
+        f"Value v{version:.0f} solves fewer probe problems than v0 in its value arms (pooled one-sided p = "
+        f"{p_value:.3f}). Nothing changes on its own."
+    )
+    return Alert(Severity.WARNING, "Value model worse than v0", detail, "value")
 
 
 def low_host_memory(reader: RunReader, thresholds: AlertThresholds, now: float) -> Alert | None:
@@ -259,7 +263,7 @@ RULES = (
     few_mixed_groups,
     idle_gpus,
     solve_rate_off_target,
-    failing_gates,
+    worse_value_model,
     low_host_memory,
     low_disk,
     server_failures,

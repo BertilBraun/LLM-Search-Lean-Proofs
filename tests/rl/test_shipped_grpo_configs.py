@@ -140,13 +140,32 @@ def test_loop_evaluations_search_with_the_starting_value_model(name: str) -> Non
     assert loop(name).evaluation.value_model == EvaluationValueModel.INITIAL
 
 
-def test_the_smoke_phase_differs_from_the_phase_only_in_its_gate() -> None:
-    phase, smoke = (
-        tomllib.loads((CONFIGS / name).read_text(encoding="utf-8"))
-        for name in ("grpo/phase.toml", "grpo/phase_smoke.toml")
-    )
-    smoke["value"]["gate"]["min_lower_bound"] = phase["value"]["gate"]["min_lower_bound"]
-    assert smoke == phase
+@pytest.mark.parametrize("name", LOOPS)
+def test_loop_starts_with_mu_off(name: str) -> None:
+    text = (CONFIGS.parent.parent / loop(name).training.phase_config).read_text(encoding="utf-8")
+    assert from_json_object(TrainingPhaseConfig, tomllib.loads(text)).reward.value_share == 0.0
+
+
+def test_the_smoke_loop_trains_on_the_real_phase() -> None:
+    assert loop("grpo/loop_smoke.toml").training.phase_config == loop("grpo/loop.toml").training.phase_config
+
+
+@pytest.mark.parametrize("name", ["grpo/loop.toml", "grpo/loop_smoke.toml"])
+def test_loop_scores_the_value_benchmark(name: str) -> None:
+    assert loop(name).evaluation.value_benchmark.path.endswith("benchmark.json.gz")
+
+
+def test_the_loop_probes_a_third_every_two_hours() -> None:
+    evaluation = loop("grpo/loop.toml").evaluation
+    assert (evaluation.probe_parts, evaluation.probe.every_hours) == (3, 2.0)
+
+
+def test_the_loop_runs_a_value_arm_every_other_probe_slot() -> None:
+    assert loop("grpo/loop.toml").evaluation.value_arm.every_slots == 2
+
+
+def test_the_overfit_loop_probes_the_whole_set_when_requested() -> None:
+    assert loop("grpo/loop_overfit.toml").evaluation.probe_parts == 1
 
 
 def test_the_smoke_loop_trains_the_value_model_every_phase() -> None:

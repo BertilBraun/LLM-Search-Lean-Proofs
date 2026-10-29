@@ -1,5 +1,5 @@
 # The GRPO loop's held-out statement sets (experiments/grpo_fixed_sets.py, DESIGN.md "Fixed targets"): the probe set
-# (~500 statements) and the value gate's set (~400), both verified pool v3 statements, stratified easy / medium / hard
+# (~500 statements) and the gate set (~400, the value benchmark's), both verified pool v3 statements, stratified easy / medium / hard
 # by the curriculum's difficulty estimate (the same weights as loop.toml's curriculum; before the value model scores
 # a root, the difficulty is the known proof's top-level tactic count), disjoint, never fed to the loop; and the overfit
 # test's 300 statements outside both.

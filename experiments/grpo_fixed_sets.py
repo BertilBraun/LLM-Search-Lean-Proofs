@@ -1,4 +1,4 @@
-"""The GRPO loop's held-out sets: choose the probe and value-gate statements, rename statements, build the gate.
+"""The GRPO loop's held-out sets: choose the probe and gate statements, rename statements, build the value benchmark.
 
     python experiments/grpo_fixed_sets.py --config experiments/configs/grpo/fixed_sets.toml select
     python experiments/grpo_fixed_sets.py --config ... select-overfit       # the overfit test's 300 statements
@@ -15,7 +15,7 @@ curriculum never feeds them. It refuses to overwrite existing sets (they are fix
 
 gate-benchmark (once, ~1-2 h with the starting policy served, no value model) searches the gate set by log-probability
 best-first (value-free, so no value model chose its labels) into $LEAN_SEARCH_RUNS/<run-name>/ and builds the value
-benchmark from those trees into $LEAN_SEARCH_RUNS/<output>, the loop's `training.value_benchmark`. Resumable.
+benchmark from those trees into $LEAN_SEARCH_RUNS/<output>, the loop's `evaluation.value_benchmark.path`. Resumable.
 --problems N takes only the first N (strata in turn): the smoke test's tiny benchmark (loop_smoke.toml).
 
 rename (only for a starting policy trained on descriptive names; the naming A/B's named arm) renames the statements'

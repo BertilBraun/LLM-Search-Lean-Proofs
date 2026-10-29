@@ -1,5 +1,5 @@
-# The value gate's trees (experiments/grpo_fixed_sets.py gate-benchmark): the held-out gate statements searched once
-# by the starting policy without a value model (DESIGN.md "Benchmark and gate": no circular labels), with the loop's
+# The value benchmark's trees (experiments/grpo_fixed_sets.py gate-benchmark): the held-out gate statements searched
+# once by the starting policy without a value model (DESIGN.md "Benchmark and value trends": no circular labels), with the loop's
 # harness (visible_student_v2.toml: n = 8, heartbeat limits, flattening) and its budget, no harvesting, no ε. The
 # policy servers serve the starting policy as policy-merged (loop.toml's ports); no value server is needed.
 

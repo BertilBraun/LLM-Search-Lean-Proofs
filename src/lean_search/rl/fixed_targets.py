@@ -1,10 +1,11 @@
-"""The fixed targets of the loop as runnable jobs: the probe set, miniF2F-valid, the held-out states and the value A/B.
+"""The fixed targets of the loop as runnable jobs: the probe set (one part per slot), miniF2F-valid and the held-out
+states.
 
 Each runs against whatever the servers serve with the loop's search template, at the target's budget, without
 harvesting or ε-exploration, and with the loop's statement renaming when it is on (the held-out states are traced
-states with their original names and are never renamed). The loop serves its published policy and, for the probe and
-miniF2F, the fixed value model of `EvaluationConfig.value_model`; the value A/B's two arms run on part of the probe set
-with the reference and with the published value model.
+states with their original names and are never renamed). The loop serves its published policy and the fixed value
+model of `EvaluationConfig.value_model`, except for a probe slot's value arm: the same part with the published value
+model.
 """
 
 import time
@@ -19,6 +20,7 @@ from lean_search.rl.evaluation import (
     EvaluationKind,
     EvaluationPaths,
     EvaluationProblem,
+    EvaluationRun,
     EvaluationSummary,
     now,
     run_problem_set_evaluation,
@@ -46,8 +48,6 @@ def target_config(evaluation: EvaluationConfig, kind: EvaluationKind) -> Evaluat
             return evaluation.minif2f
         case EvaluationKind.HELD_OUT_STATES:
             return evaluation.held_out_states
-        case EvaluationKind.VALUE_AB:
-            return evaluation.value_ab
 
 
 def probe_problems(path: Path) -> list[EvaluationProblem]:
@@ -61,6 +61,19 @@ def first_problems_by_stratum(problems: Sequence[EvaluationProblem], count: int)
         by_stratum.setdefault(problem.stratum, []).append(problem)
     interleaved = [problem for turn in zip_longest(*by_stratum.values()) for problem in turn if problem is not None]
     return interleaved[:count]
+
+
+def probe_part(problems: Sequence[EvaluationProblem], part: int, parts: int) -> list[EvaluationProblem]:
+    """Every `parts`-th problem of each stratum in the set's order, from its `part`-th: the parts are disjoint,
+    together the whole set, and each is stratified like it."""
+    positions: dict[str, int] = {}
+    chosen = []
+    for problem in problems:
+        position = positions.get(problem.stratum, 0)
+        positions[problem.stratum] = position + 1
+        if position % parts == part:
+            chosen.append(problem)
+    return chosen
 
 
 async def evaluate_held_out_states(
@@ -102,7 +115,7 @@ async def evaluate_held_out_states(
 
 
 async def evaluate_target(
-    kind: EvaluationKind,
+    run: EvaluationRun,
     evaluation: EvaluationConfig,
     template: RunConfig,
     directory: Path,
@@ -112,22 +125,25 @@ async def evaluate_target(
     renamings: StatementRenamings | None,
     log: Callable[[str], None],
 ) -> EvaluationSummary:
-    """`template`: the loop's search config on the served models; results under `directory` (resumable)."""
-    target = target_config(evaluation, kind)
-    match kind:
+    """`template`: the loop's search config on the served models; results under `directory` (resumable). A probe
+    slot searches its part of the probe set, without a slot the whole set."""
+    target = target_config(evaluation, run.kind)
+    part = None
+    match run.kind:
         case EvaluationKind.PROBE:
             problems = probe_problems(data_root / evaluation.probe_set)
             problems = first_problems_by_stratum(problems, target.problems) if target.problems else problems
+            if run.slot is not None:
+                part = run.slot % evaluation.probe_parts
+                problems = probe_part(problems, part, evaluation.probe_parts)
         case EvaluationKind.MINIF2F:
             problems = [EvaluationProblem(problem) for problem in load_minif2f(Split.VALID)]
             problems = problems[: target.problems] if target.problems else problems
         case EvaluationKind.HELD_OUT_STATES:
             states_path = runs_root / evaluation.held_out_states_file
             return await evaluate_held_out_states(states_path, template, target, directory, versions, log)
-        case EvaluationKind.VALUE_AB:
-            problems = first_problems_by_stratum(
-                probe_problems(data_root / evaluation.probe_set), evaluation.value_ab_test.problems
-            )
     config = evaluation_run_config(template, target)
     paths = EvaluationPaths(directory)
-    return await run_problem_set_evaluation(kind, directory.name, versions, problems, config, paths, log, renamings)
+    return await run_problem_set_evaluation(
+        run.kind, directory.name, versions, problems, config, paths, log, renamings, run.slot, part
+    )

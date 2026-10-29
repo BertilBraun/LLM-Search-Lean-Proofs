@@ -1,5 +1,6 @@
 """The GRPO loop's production boundaries: Lean searches with the served models, the training job, the vLLM servers,
-the evaluation jobs, the servers' start commands and the first-hour check of a policy server's responses."""
+the evaluation jobs, the value benchmark's scoring through the value servers, the servers' start commands and the
+first-hour check of a policy server's responses."""
 
 import asyncio
 import contextlib
@@ -33,7 +34,7 @@ from lean_search.policy.server_control import (
     release_gpu,
     restore_gpu,
 )
-from lean_search.rl.evaluation import EvaluationKind, EvaluationSummary, read_summary
+from lean_search.rl.evaluation import EvaluationRun, EvaluationSummary, read_summary
 from lean_search.rl.loop import (
     GIB,
     PHASE_OUTCOME_FILE,
@@ -42,12 +43,16 @@ from lean_search.rl.loop import (
     TrainingRequest,
     read_phase_outcome,
 )
-from lean_search.rl.loop_config import EvaluationValueModel, GrpoLoopConfig, LoopTrainingConfig
+from lean_search.rl.loop_config import GrpoLoopConfig, LoopTrainingConfig
 from lean_search.rl.renaming import StatementRenamings, search_problem
 from lean_search.rl.search_models import SearchModels, open_search_models
 from lean_search.rl.training_phase import PhaseOutcome
 from lean_search.search import CompletedSearch, RunConfig
 from lean_search.search.records import from_json_object
+from lean_search.value.benchmark import BenchmarkScores, ValueBenchmark
+from lean_search.value.benchmark_scoring import score_benchmark
+from lean_search.value.config import ValueConfig
+from lean_search.value.estimator import open_value_estimator
 
 REPOSITORY_DIRECTORY = Path(__file__).resolve().parents[3]
 # The GRPO trainer compares the sampler's log-probabilities with its own at the sampling temperature.
@@ -274,7 +279,6 @@ class SubprocessTrainer:
             if relative:
                 arguments += [option, str(self.paths.data_root / relative)]
         if request.train_value:
-            arguments += ["--value-benchmark", str(self.paths.runs_root / self.config.value_benchmark)]
             arguments += ["--value-trees", *(str(directory) for directory in request.value_trees)]
         return arguments
 
@@ -398,12 +402,8 @@ class SubprocessEvaluations:
         self.command_prefix = command_prefix
         self.current_version = current_version
 
-    async def evaluate(
-        self, kind: EvaluationKind, phase: int, repeat: int, value_model: EvaluationValueModel
-    ) -> EvaluationSummary:
-        version = self.current_version()
-        arm = value_model if kind == EvaluationKind.VALUE_AB else None
-        directory = self.paths.evaluation_directory(kind, version, repeat, arm)
+    async def evaluate(self, run: EvaluationRun, phase: int) -> EvaluationSummary:
+        directory = self.paths.evaluation_directory(run, self.current_version())
         arguments = [
             *shlex.split(self.command_prefix),
             sys.executable,
@@ -411,17 +411,30 @@ class SubprocessEvaluations:
             "--loop-directory",
             str(self.paths.directory),
             "--target",
-            kind.value,
+            run.kind.value,
             "--phase",
             str(phase),
             "--repeat",
-            str(repeat),
-            "--value-model",
-            value_model.value,
+            str(run.repeat),
         ]
+        if run.slot is not None:
+            arguments += ["--slot", str(run.slot)]
+        if run.value_arm:
+            arguments.append("--value-arm")
         log_path = directory.with_name(directory.name + ".log")
         await run_logged(arguments, log_path, dict(os.environ), self.paths.children / "evaluation.pid")
         return read_summary(directory / "summary.json")
+
+
+class ServedValueScorer:
+    """The value benchmark through the value servers, as the search scores its states."""
+
+    def __init__(self, config: ValueConfig) -> None:
+        self.config = config
+
+    async def score(self, benchmark: ValueBenchmark) -> BenchmarkScores:
+        async with open_value_estimator(self.config) as estimator:
+            return await score_benchmark(estimator, benchmark)
 
 
 def host_memory_text() -> str:
