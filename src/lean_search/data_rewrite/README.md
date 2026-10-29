@@ -13,13 +13,17 @@ hypothesis names. Entry point: `experiments/data_rewrite.py`; configs in `experi
 #    sft/4b and reasoning/visible_student_v2 (generated data), the reasoning runs' states.jsonl under $LEAN_SEARCH_RUNS
 #    (phase5_visible_teacher_9b, phase5_visible_self_4b, phase5_teacher_9b; from node_backup/).
 # 1. The namer: a larger model behind an OpenAI-compatible endpoint (or set `model = ""` for rule-based names only).
-deployment/serve_model.sh namer Qwen/Qwen3.5-9B 0 8120
+# The 9B's bf16 weights take 18.5 GiB: without these settings vLLM runs out of memory profiling its CUDA graphs.
+MAX_MODEL_LEN=5120 GPU_MEMORY_UTILIZATION=0.95 deployment/serve_model.sh namer Qwen/Qwen3.5-9B 0 8120 --no-enable-lora
 # 2. The Lean pass: flatten, re-trace, rename, replay; resumable by shard (rerun the same command after a stop).
 python experiments/data_rewrite.py rewrite \
     --config experiments/configs/data_rewrite/rewrite_visible_student_v2.toml --run-name data_rewrite_v1
 # 2b. The teacher: the same 9B writes the explanations of the chunks planned for the visible mode; replicas on the
 #     free GPUs (explain_chunks.toml lists all four servers; drop the ones not started). Resumable by shard.
-for gpu in 1 2 3; do deployment/serve_model.sh teacher-$gpu Qwen/Qwen3.5-9B $gpu $((8120 + gpu)); done
+for gpu in 1 2 3; do
+    MAX_MODEL_LEN=5120 GPU_MEMORY_UTILIZATION=0.95 deployment/serve_model.sh teacher-$gpu Qwen/Qwen3.5-9B $gpu \
+        $((8120 + gpu)) --no-enable-lora
+done
 python experiments/data_rewrite.py explain --config experiments/configs/data_rewrite/explain_chunks.toml \
     --build-config experiments/configs/data_rewrite/build_named.toml
 for name in namer teacher-1 teacher-2 teacher-3; do deployment/stop_model.sh $name; done
