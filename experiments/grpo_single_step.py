@@ -4,15 +4,16 @@
     python experiments/grpo_single_step.py --config ... run --arm sequence
     python experiments/grpo_single_step.py --config ... report
 
-Each arm starts from the merged starting policy and runs `rounds` rounds: serve the arm's current weights on the
-policy servers (merged on the CPU, swapped in place), sample n blocks on every training state and every disjoint
-state (one request each, executed in Lean from the rebuilt state; src/lean_search/rl/single_step.py), record the
-per-sample success on both sets, then train one GRPO phase (two passes) on the training states' root groups, with the
-arm's phase config (per-tactic or sequence credit), from the arm's last adapter. A last measurement follows the last
-round. Round 0's samples are the starting policy's and shared by the arms. Run it on the training GPU
-(CUDA_VISIBLE_DEVICES), with the policy servers on the others serving the starting policy as `policy.model`.
-Outputs in $LEAN_SEARCH_RUNS/<name>/: start/ (round 0 trees), <arm>/round_<r>/{train,disjoint}/trees, <arm>/round_<r>/
-adapter and merged weights, <arm>/curve.jsonl (one line per round: steps so far, success on both sets) and report.md.
+Each arm starts from the starting policy (`policy_adapter` on `policy_base_model`) and runs `rounds` rounds: serve
+the arm's current weights on the policy servers (its adapter merged on the CPU, swapped in place), sample n blocks on
+every training state and every disjoint state (one request each, executed in Lean from the rebuilt state;
+src/lean_search/rl/single_step.py), record the per-sample success on both sets, then train one GRPO phase (two passes)
+on the training states' root groups, with the arm's phase config (per-tactic or sequence credit), continuing the arm's
+last adapter. A last measurement follows the last round. Round 0's samples are the starting policy's and shared by the
+arms. Run it on the training GPU (CUDA_VISIBLE_DEVICES), with policy servers on the others serving as `policy.model`.
+Outputs in $LEAN_SEARCH_RUNS/<name>/: start/ (round 0 trees and merged weights), <arm>/round_<r>/{train,disjoint}/trees,
+<arm>/round_<r>/ adapter and merged weights, <arm>/curve.jsonl (one line per round: steps so far, success on both
+sets) and report.md.
 Resumable: trees and adapters already written are kept.
 """
 
@@ -112,9 +113,14 @@ def train_round(
     phase_text = (REPOSITORY_DIRECTORY / arm.phase_config).read_text(encoding="utf-8")
     phase = from_json_object(TrainingPhaseConfig, tomllib.loads(phase_text))
     assert phase.policy is not None, arm.phase_config
-    grpo = dataclasses.replace(phase.policy, model=config.policy_base_model, initial_adapter=initial_adapter)
+    grpo = dataclasses.replace(
+        phase.policy,
+        model=config.policy_base_model,
+        initial_adapter=initial_adapter,
+        reference_adapter=config.policy_adapter,
+    )
     labelled = single_step_phase_data(records, states, phase.reward)
-    inputs = PhaseInputs(records=records, texts=[expansion for record in records for expansion in record.expansions])
+    inputs = PhaseInputs(records=records)
     tokenizer = transformers.AutoTokenizer.from_pretrained(config.policy_base_model)
     log(f"{arm.name}: training on {len(labelled.groups)} groups from {initial_adapter or 'a fresh adapter'}")
     outcome = train_policy_phase(
@@ -153,13 +159,13 @@ async def run_arm(config: SingleStepConfig, arm: SingleStepArm) -> None:
     curve_path = directory / arm.name / "curve.jsonl"
     curve_path.parent.mkdir(parents=True, exist_ok=True)
     curve_path.write_text("", encoding="utf-8")
-    adapter = ""
+    adapter = config.policy_adapter
     steps = 0
     for round_index in range(config.rounds + 1):
         samples = sample_directory(directory, arm, round_index)
         weights = Path(config.policy_base_model)
         if adapter:
-            weights = round_directory(directory, arm, round_index) / "merged"
+            weights = samples / "merged"
             if not weights.exists():
                 merge_adapter(config.policy_base_model, Path(adapter), weights)
         await serve(weights, search)

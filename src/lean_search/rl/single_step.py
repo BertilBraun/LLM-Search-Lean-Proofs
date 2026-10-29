@@ -24,6 +24,7 @@ from lean_search.data import Problem, Split
 from lean_search.lean import LeanReplConfig, LeanReplPool, ProofState
 from lean_search.reasoning.states import ReasoningState
 from lean_search.rl.grpo_groups import PolicyGroup, RewardConfig, policy_groups
+from lean_search.rl.policy_data import TreeGroups
 from lean_search.rl.search_models import open_search_models
 from lean_search.rl.training_phase import LabelledPhaseData
 from lean_search.rl.tree_statistics import graph_statistics, total_statistics
@@ -45,9 +46,9 @@ class SingleStepArm:
 class SingleStepConfig:
     # $LEAN_SEARCH_RUNS/<name>/.
     name: str
-    # The search template: the policy servers (serving the merged starting policy as `policy.model`) and the harness.
+    # The search template: the policy servers (serving the policy as `policy.model`) and the harness.
     search_config: str
-    # The merged starting policy the arms' adapters apply to (the phase configs' `policy.model`).
+    # The weights the arms' adapters apply to (the phase configs' `policy.model`).
     policy_base_model: str
     # States files (ReasoningState lines) under $LEAN_SEARCH_RUNS: the trained states and a disjoint set.
     train_states: str
@@ -58,6 +59,9 @@ class SingleStepConfig:
     concurrency: int = 64
     # Overrides the template's policy servers (e.g. the three serving GPUs); empty keeps them.
     policy_server_urls: tuple[str, ...] = ()
+    # The starting policy's own adapter on policy_base_model, which every arm continues and the KL reference;
+    # empty: policy_base_model is the starting policy and the arms train fresh adapters.
+    policy_adapter: str = ""
 
 
 @dataclass(frozen=True)
@@ -212,11 +216,11 @@ def single_step_phase_data(
     records: Sequence[TreeRecord], states: Sequence[StateProblem], config: RewardConfig
 ) -> LabelledPhaseData:
     """The root groups of the single-step trees, labelled against each state's reference proof."""
-    groups: list[PolicyGroup] = []
+    policy_trees = []
     statistics = []
     for record, state in zip(records, states, strict=True):
         labels, tactics = reference_labels(record, state.reference_keys)
         tree_groups = single_step_groups(record, state.reference_keys, config)
-        groups.extend(tree_groups)
+        policy_trees.append(TreeGroups(tuple(tree_groups), record.expansions))
         statistics.append(graph_statistics(record, labels, (), tactics, tree_groups))
-    return LabelledPhaseData((), tuple(groups), total_statistics(statistics))
+    return LabelledPhaseData((), tuple(policy_trees), total_statistics(statistics))

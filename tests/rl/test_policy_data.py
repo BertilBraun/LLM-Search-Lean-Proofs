@@ -1,19 +1,19 @@
 from collections.abc import Mapping, Sequence
-from pathlib import Path
 
 import pytest
 from rl_samples import FAILING, MASKED, PROOF_GRAPH, UNKNOWN, group, sample
 
 from lean_search.policy.prompts import END_OF_TURN
 from lean_search.rl.advantages import CreditMode
+from lean_search.rl.grpo_groups import PolicyGroup
 from lean_search.rl.policy_data import (
     ExpansionTexts,
     PolicyData,
     PolicyDataConfig,
+    PolicySequence,
     SampledCompletion,
+    TreeGroups,
     build_policy_data,
-    read_expansion_texts,
-    write_expansion_texts,
 )
 from lean_search.rl.token_credit import CharacterSpan
 from lean_search.search.texts import InsertedSpan, SampledTokens, TokenSpan
@@ -86,10 +86,21 @@ def policy_data(
                 completion(1, "bad\nworse", recorded=recorded),
             ),
             temperature=0.7,
+            policy_version=3,
         ),
         ExpansionTexts("p", 1, "prompt", (completion(2, "a"), completion(3, "b"))),
     ]
-    return build_policy_data([trained, identical], texts, CharacterTokenizer(), PolicyDataConfig(credit))
+    return single_tree_data([trained, identical], texts, PolicyDataConfig(credit))
+
+
+def single_tree_data(
+    groups: Sequence[PolicyGroup], texts: Sequence[ExpansionTexts], config: PolicyDataConfig
+) -> PolicyData:
+    return build_policy_data([TreeGroups(tuple(groups), tuple(texts))], CharacterTokenizer(), config)
+
+
+def completion_text(sequence: PolicySequence) -> str:
+    return "".join(map(chr, sequence.tokenized.input_ids[sequence.tokenized.prompt_token_count :]))
 
 
 def test_every_recorded_completion_of_a_trained_group_is_a_sequence() -> None:
@@ -113,6 +124,22 @@ def test_prompt_is_the_recorded_prompt() -> None:
 
 def test_temperature_comes_from_the_expansion() -> None:
     assert policy_data().sequences[0].temperature == 0.7
+
+
+def test_policy_version_comes_from_the_expansion() -> None:
+    assert policy_data().sequences[0].policy_version == 3
+
+
+def test_trees_of_the_same_problem_keep_their_own_texts() -> None:
+    first = group(sample("win", PROOF_GRAPH, edge_id=0), sample("oops", FAILING, edge_id=1))
+    second = group(sample("oops", FAILING, edge_id=0), sample("win", PROOF_GRAPH, edge_id=1))
+    trees = [
+        TreeGroups((first,), (ExpansionTexts("p", 0, "prompt", (completion(0, "win"), completion(1, "oops"))),)),
+        TreeGroups((second,), (ExpansionTexts("p", 0, "prompt", (completion(0, "oops"), completion(1, "win"))),)),
+    ]
+    data = build_policy_data(trees, CharacterTokenizer(), PolicyDataConfig())
+    signs = {(completion_text(sequence).count("win"), sum(sequence.advantages) > 0) for sequence in data.sequences}
+    assert signs == {(1, True), (0, False)}
 
 
 def test_sampler_log_probabilities_are_kept() -> None:
@@ -149,7 +176,7 @@ def test_tactic_counts_of_the_trained_groups() -> None:
 def test_forced_answers_are_kept_with_the_inserted_opening_untrained() -> None:
     group_with_forced = group(sample("good", PROOF_GRAPH, edge_id=0), sample("other", FAILING, edge_id=1))
     texts = [ExpansionTexts("p", 0, "prompt", (forced_completion(0, "good"), completion(1, "other")))]
-    data = build_policy_data([group_with_forced], texts, CharacterTokenizer(), PolicyDataConfig())
+    data = single_tree_data([group_with_forced], texts, PolicyDataConfig())
     forced = data.sequences[0]
     assert (data.metrics.forced_sequences, sum(not trained for trained in forced.trained)) == (1, 10)
 
@@ -158,11 +185,8 @@ def test_tokens_that_do_not_decode_to_the_text_fall_back_to_sequence_credit() ->
     broken = completion(0, "good")
     broken = SampledCompletion(0, broken.text, broken.tactic_spans, tokens=SampledTokens((ord("x"),), (-0.5,)))
     texts = [ExpansionTexts("p", 0, "prompt", (broken, completion(1, "bad")))]
-    data = build_policy_data(
-        [group(sample("good", PROOF_GRAPH, edge_id=0), sample("bad", FAILING, edge_id=1))],
-        texts,
-        CharacterTokenizer(),
-        PolicyDataConfig(),
+    data = single_tree_data(
+        [group(sample("good", PROOF_GRAPH, edge_id=0), sample("bad", FAILING, edge_id=1))], texts, PolicyDataConfig()
     )
     assert data.metrics.token_mismatch_sequences == 1
 
@@ -172,20 +196,14 @@ def test_unknown_only_sample_is_not_trained() -> None:
     groups = [
         group(sample("a", PROOF_GRAPH, edge_id=0), sample("b", FAILING, edge_id=1), sample("c", UNKNOWN, edge_id=2))
     ]
-    data = build_policy_data(groups, texts, CharacterTokenizer(), PolicyDataConfig())
+    data = single_tree_data(groups, texts, PolicyDataConfig())
     assert not any(data.sequences[2].trained)
-
-
-def test_expansion_texts_round_trip(tmp_path: Path) -> None:
-    texts = [ExpansionTexts("p", 3, "prompt", (completion(5, "simp"),), temperature=0.8, top_p=1.0)]
-    write_expansion_texts(tmp_path / "texts.jsonl", texts)
-    assert list(read_expansion_texts(tmp_path / "texts.jsonl")) == texts
 
 
 @pytest.mark.parametrize("credit", list(CreditMode))
 def test_inserted_tokens_are_untrained_in_every_credit_mode(credit: CreditMode) -> None:
     group_with_forced = group(sample("good", PROOF_GRAPH, edge_id=0), sample("other", FAILING, edge_id=1))
     texts = [ExpansionTexts("p", 0, "prompt", (forced_completion(0, "good"), completion(1, "other")))]
-    data = build_policy_data([group_with_forced], texts, CharacterTokenizer(), PolicyDataConfig(credit))
+    data = single_tree_data([group_with_forced], texts, PolicyDataConfig(credit))
     opening = data.sequences[0].sampler_log_probabilities.index(None)
     assert not any(data.sequences[0].trained[opening : opening + 10])

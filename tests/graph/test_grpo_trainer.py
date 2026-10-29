@@ -9,7 +9,7 @@ torch = pytest.importorskip("torch")
 pytest.importorskip("transformers")
 pytest.importorskip("peft")
 
-from lean_search.rl.policy_data import PolicyDataConfig, PolicySequence, build_policy_data  # noqa: E402
+from lean_search.rl.policy_data import PolicyDataConfig, PolicySequence, TreeGroups, build_policy_data  # noqa: E402
 from lean_search.rl.policy_trainer import (  # noqa: E402
     CompletionTokenScores,
     GrpoConfig,
@@ -17,7 +17,9 @@ from lean_search.rl.policy_trainer import (  # noqa: E402
     ReferencePolicy,
     completion_log_probabilities,
     plan_grpo_steps,
+    reference_log_probabilities,
     sampler_agreement,
+    sampler_agreement_by_version,
     train_grpo,
 )
 from lean_search.rl.training_phase import TrainingPhaseConfig, label_phase_data  # noqa: E402
@@ -40,10 +42,9 @@ def policy_tree() -> TreeRecord:
 
 def sequences() -> tuple[PolicySequence, ...]:
     record = policy_tree()
-    labelled = label_phase_data([record], TrainingPhaseConfig())
-    return build_policy_data(
-        labelled.groups, expansion_texts(record), CharacterTokenizer(), PolicyDataConfig()
-    ).sequences
+    groups = label_phase_data([record], TrainingPhaseConfig()).groups
+    trees = [TreeGroups(tuple(groups), tuple(expansion_texts(record)))]
+    return build_policy_data(trees, CharacterTokenizer(), PolicyDataConfig()).sequences
 
 
 @pytest.fixture(scope="module")
@@ -51,18 +52,27 @@ def tiny_model(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return save_tiny_model(tmp_path_factory.mktemp("tiny") / "model")
 
 
-@pytest.fixture(scope="module")
-def perturbed_adapter(tiny_model: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
+def random_adapter(model: Path, directory: Path, seed: int) -> Path:
     """An adapter that changes the model's outputs, as a published policy adapter does."""
-    saved, _ = load_trainable_model(str(tiny_model), OptimizationConfig(gradient_checkpointing=False), LORA, CPU)
-    generator = torch.Generator().manual_seed(1)
+    saved, _ = load_trainable_model(str(model), OptimizationConfig(gradient_checkpointing=False), LORA, CPU)
+    generator = torch.Generator().manual_seed(seed)
     with torch.no_grad():
         for parameter in saved.parameters():
             if parameter.requires_grad:
                 parameter.add_(torch.randn(parameter.shape, generator=generator).to(parameter.dtype))
-    directory = tmp_path_factory.mktemp("adapter") / "adapter"
     saved.save_pretrained(directory)
     return directory
+
+
+@pytest.fixture(scope="module")
+def perturbed_adapter(tiny_model: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    return random_adapter(tiny_model, tmp_path_factory.mktemp("adapter") / "adapter", seed=1)
+
+
+@pytest.fixture(scope="module")
+def starting_adapter(tiny_model: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """The starting policy's own adapter, which the published ones continue."""
+    return random_adapter(tiny_model, tmp_path_factory.mktemp("starting") / "adapter", seed=2)
 
 
 def grpo_config(model: Path, passes: int, **changes: object) -> GrpoConfig:
@@ -137,6 +147,44 @@ def test_kl_to_the_phase_start_is_zero_before_the_first_update(
     assert train(config, tmp_path / "adapter")[0].kl_to_reference == pytest.approx(0.0, abs=1e-4)
 
 
+def test_kl_to_the_starting_adapter_is_zero_when_the_phase_continues_it(
+    tiny_model: Path, starting_adapter: Path, tmp_path: Path
+) -> None:
+    config = grpo_config(
+        tiny_model, passes=1, initial_adapter=str(starting_adapter), reference_adapter=str(starting_adapter)
+    )
+    assert train(config, tmp_path / "adapter")[0].kl_to_reference == pytest.approx(0.0, abs=1e-4)
+
+
+def reference_after_continuing(
+    tiny_model: Path, published: Path, starting: Path
+) -> tuple[list[torch.Tensor], torch.nn.Module]:
+    """The reference log-probabilities of a phase continuing `published`, and the module that scored them."""
+    config = grpo_config(tiny_model, passes=1, initial_adapter=str(published), reference_adapter=str(starting))
+    saved, causal_model = load_trainable_model(str(tiny_model), config.optimization, LORA, CPU, str(published))
+    causal_model.eval()
+    examples = [sequence.tokenized for sequence in sequences()]
+    temperatures = [sequence.temperature for sequence in sequences()]
+    scorer = CompletionTokenScores(causal_model)
+    return reference_log_probabilities(config, saved, scorer, examples, temperatures, [], 0, CPU), saved
+
+
+def test_the_reference_is_the_starting_adapter(
+    tiny_model: Path, perturbed_adapter: Path, starting_adapter: Path
+) -> None:
+    reference, _ = reference_after_continuing(tiny_model, perturbed_adapter, starting_adapter)
+    expected = summed_log_probabilities(tiny_model, str(starting_adapter))
+    assert [scores.sum().item() for scores in reference] == pytest.approx(expected, abs=1e-4)
+
+
+def test_scoring_the_reference_leaves_only_the_published_adapter_trainable(
+    tiny_model: Path, perturbed_adapter: Path, starting_adapter: Path
+) -> None:
+    _, saved = reference_after_continuing(tiny_model, perturbed_adapter, starting_adapter)
+    trainable = {name for name, parameter in saved.named_parameters() if parameter.requires_grad}
+    assert trainable and all(".default." in name for name in trainable)
+
+
 def test_replay_examples_report_their_nll(tiny_model: Path, tmp_path: Path) -> None:
     config = grpo_config(tiny_model, passes=1, replay_sequences_per_step=2, replay_weight=0.5)
     replay = [sequence.tokenized for sequence in sequences()[:2]]
@@ -163,6 +211,17 @@ def test_sampler_agreement_compares_the_recorded_log_probabilities() -> None:
     recorded = sequences()
     old = [torch.full((sequence.tokenized.completion_token_count,), -0.75) for sequence in recorded]
     assert sampler_agreement(recorded, old).mean_difference == pytest.approx(-0.75 - -1.0)
+
+
+def test_sampler_agreement_is_reported_per_sampling_version() -> None:
+    recorded = [dataclasses.replace(sequence, policy_version=index % 2) for index, sequence in enumerate(sequences())]
+    old = [
+        torch.full((sequence.tokenized.completion_token_count,), -0.5 - sequence.policy_version)
+        for sequence in recorded
+    ]
+    by_version = sampler_agreement_by_version(recorded, old)
+    differences = [(entry.policy_version, entry.agreement.mean_difference) for entry in by_version]
+    assert differences == [(0, pytest.approx(0.5)), (1, pytest.approx(-0.5))]
 
 
 @pytest.mark.parametrize(("passes", "steps"), [(1, 1), (2, 2)])

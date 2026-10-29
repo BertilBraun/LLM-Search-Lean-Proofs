@@ -128,6 +128,10 @@ class TreeSearcher(Protocol):
 
     def resume(self) -> None: ...
 
+    def serving(self, policy_version: int) -> None:
+        """The servers now answer with this published version (recorded with every expansion's samples)."""
+        ...
+
 
 class PhaseTrainer(Protocol):
     async def train(self, request: TrainingRequest) -> PhaseOutcome:
@@ -248,13 +252,24 @@ def value_published_by(versions: list[ModelVersion], phase: int) -> bool:
     return bool(published) and versions[published[0]].value_adapter != versions[published[0] - 1].value_adapter
 
 
-def phase_config_text(template: str, current: ModelVersion, phase: int, value_share: float, train_value: bool) -> str:
-    """The template with the published adapters to continue from, μ and a per-phase seed; no value part unless due."""
+def phase_config_text(
+    template: str,
+    policy_base_model: str,
+    starting_policy_adapter: str,
+    current: ModelVersion,
+    phase: int,
+    value_share: float,
+    train_value: bool,
+) -> str:
+    """The template with the published adapters to continue from (on the policy base), the starting policy's adapter
+    as the KL reference, μ and a per-phase seed; no value part unless due."""
     table = tomllib.loads(template)
     for section in ("reward", "value_targets"):
         table.setdefault(section, {})["value_share"] = value_share
     policy = table["policy"]
+    policy["model"] = policy_base_model
     policy["initial_adapter"] = current.policy_adapter
+    policy["reference_adapter"] = starting_policy_adapter
     policy.setdefault("optimization", {})["seed"] = phase
     if train_value:
         if current.value_adapter:
@@ -371,7 +386,9 @@ class GrpoLoop:
 
     async def run(self, stop: asyncio.Event) -> None:
         await self.servers.check()
-        await self.servers.serve(read_current(self.paths.models))
+        current = read_current(self.paths.models)
+        await self.servers.serve(current)
+        self.searcher.serving(current.version)
         if self.progress.stage != PhaseStage.SAMPLING:
             self.log(f"Finishing phase {self.progress.phase} from {self.progress.stage}")
             self.collecting = self.progress.phase + 1
@@ -525,7 +542,15 @@ class GrpoLoop:
             training.value_benchmark and training.value_every_phases and phase % training.value_every_phases == 0
         )
         value_share = training.value_share_after_gate if self.progress.value_gate_passed else 0.0
-        config_text = phase_config_text(self.phase_template, current, phase, value_share, train_value)
+        config_text = phase_config_text(
+            self.phase_template,
+            self.config.serving.policy_base_model,
+            self.config.initial.policy_adapter,
+            current,
+            phase,
+            value_share,
+            train_value,
+        )
         request = TrainingRequest(
             phase,
             config_text,
@@ -561,6 +586,7 @@ class GrpoLoop:
                 publish_phase, self.paths.models, self.publisher, outcome, phase_trigger(phase)
             )
         await self.servers.serve(current)
+        self.searcher.serving(current.version)
         if outcome.value is not None and outcome.value.accepted and not self.progress.value_gate_passed:
             self.log(f"Value model of phase {phase} passed the gate: μ = {self.config.training.value_share_after_gate}")
             self.save_progress(value_gate_passed=True)
@@ -568,7 +594,7 @@ class GrpoLoop:
 
     def write_training_metrics(self, outcome: PhaseOutcome, candidate_version: int) -> None:
         if outcome.policy is not None:
-            self.writer.write(grpo_phase_record(outcome.policy, self.progress.sampling_seconds))
+            self.writer.write(grpo_phase_record(outcome.policy, self.progress.sampling_seconds, candidate_version - 1))
         if outcome.value is not None and outcome.value.gate is not None:
             self.writer.write(
                 ValueBenchmarkResult(

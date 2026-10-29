@@ -107,7 +107,7 @@ async def test_tactic_labels_from_a_real_search(record: TreeRecord, block: str, 
 
 def policy_data(record: TreeRecord) -> PolicyData:
     labelled = label_phase_data([record], TrainingPhaseConfig())
-    return build_policy_data(labelled.groups, record.expansions, CharacterTokenizer(), PolicyDataConfig())
+    return build_policy_data(labelled.policy_trees, CharacterTokenizer(), PolicyDataConfig())
 
 
 async def test_every_sample_of_the_root_group_is_a_sequence(record: TreeRecord) -> None:

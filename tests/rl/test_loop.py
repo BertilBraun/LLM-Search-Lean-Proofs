@@ -23,11 +23,19 @@ VERSION = ModelVersion(3, "phase-3/policy/adapter", "phase-2/value/adapter", "20
 
 
 def phase_table(value_share: float = 0.0, train_value: bool = True) -> dict:
-    return tomllib.loads(phase_config_text(TEMPLATE, VERSION, 4, value_share, train_value))
+    return tomllib.loads(phase_config_text(TEMPLATE, "base/model", "sft/adapter", VERSION, 4, value_share, train_value))
 
 
 def test_phase_config_continues_the_published_policy_adapter() -> None:
     assert phase_table()["policy"]["initial_adapter"] == "phase-3/policy/adapter"
+
+
+def test_phase_config_trains_on_the_served_policy_base() -> None:
+    assert phase_table()["policy"]["model"] == "base/model"
+
+
+def test_phase_config_keeps_the_starting_adapter_as_the_reference() -> None:
+    assert phase_table()["policy"]["reference_adapter"] == "sft/adapter"
 
 
 def test_phase_config_continues_the_published_value_adapter() -> None:
@@ -98,6 +106,13 @@ async def test_servers_serve_each_published_version(tmp_path: Path) -> None:
     record_version_zero(world)
     await run_until(world, world.loop(), phases=2)
     assert world.servers.served == [0, 1, 2]
+
+
+async def test_searches_hear_each_served_version(tmp_path: Path) -> None:
+    world = loop_world(tmp_path)
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=2)
+    assert world.searcher.policy_versions == [0, 1, 2]
 
 
 async def test_the_second_phase_continues_from_the_first_phases_adapter(tmp_path: Path) -> None:

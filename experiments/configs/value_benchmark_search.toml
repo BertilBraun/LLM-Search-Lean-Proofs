@@ -1,8 +1,9 @@
 # Trees for the value benchmark (experiments/value_benchmark.py): the starting policy on miniF2F-valid (held out:
 # never trained on), searched without a value model. Otherwise the visible student v2's search
 # (reasoning/phase5_expansions_visible_student_v2.toml); keep sample_count and the budget equal to the phase's
-# searches. Serve the starting policy on each GPU (no value server is needed):
-#   deployment/serve_model.sh policy-gpu<gpu> /workspace/checkpoints/grpo_start/merged <gpu> 810<gpu> \
+# searches. Serve the starting policy on each GPU (no value server is needed; its merged weights are version 0 of the
+# GRPO loop, written by `deployment/grpo_loop.sh init`):
+#   deployment/serve_model.sh policy-gpu<gpu> /workspace/checkpoints/grpo_loop_v1/weights/v0000/policy <gpu> 810<gpu> \
 #       --served-model-name policy-merged --no-enable-lora
 # then
 #   python experiments/run_search.py --config experiments/configs/value_benchmark_search.toml --split valid \

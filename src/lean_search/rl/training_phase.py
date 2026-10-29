@@ -14,7 +14,13 @@ from lean_search.expert_iteration.shards import now
 from lean_search.monitoring.families import GrpoPhase
 from lean_search.reasoning.dataset import ReasoningExample, tokenize_reasoning_example
 from lean_search.rl.grpo_groups import PolicyGroup, RewardConfig, policy_groups
-from lean_search.rl.policy_data import ExpansionTexts, PolicyDataMetrics, PolicyTokenizer, build_policy_data
+from lean_search.rl.policy_data import (
+    PolicyDataMetrics,
+    PolicyTokenizer,
+    SamplerAgreement,
+    TreeGroups,
+    build_policy_data,
+)
 from lean_search.rl.policy_trainer import GrpoConfig, GrpoStepRecord, GrpoTrainingResult, train_grpo
 from lean_search.rl.tree_statistics import GraphStatistics, graph_statistics, total_statistics
 from lean_search.search.graph_labels import label_graph
@@ -69,7 +75,6 @@ class TrainingPhaseConfig:
 @dataclass(frozen=True)
 class PhaseInputs:
     records: Sequence[TreeRecord]
-    texts: Sequence[ExpansionTexts] = ()
     lean_replay: Sequence[ReasoningExample] = ()
     math_replay: Sequence[MathSolution] = ()
     value_replay: Sequence[ValueExample] = ()
@@ -80,9 +85,13 @@ class PhaseInputs:
 @dataclass(frozen=True)
 class LabelledPhaseData:
     trees: tuple[LabelledTree, ...]
-    groups: tuple[PolicyGroup, ...]
+    policy_trees: tuple[TreeGroups, ...]
     # Summed over the trees, for the search family of the dashboard.
     statistics: GraphStatistics
+
+    @property
+    def groups(self) -> list[PolicyGroup]:
+        return [group for tree in self.policy_trees for group in tree.groups]
 
 
 @dataclass(frozen=True)
@@ -115,7 +124,7 @@ class PhaseOutcome:
 def label_phase_data(records: Sequence[TreeRecord], config: TrainingPhaseConfig) -> LabelledPhaseData:
     """Value targets from the recorded estimates (the value version that ran the search) and the GRPO groups."""
     trees = []
-    groups: list[PolicyGroup] = []
+    policy_trees = []
     statistics = []
     for record in records:
         labels = label_graph(record)
@@ -124,9 +133,9 @@ def label_phase_data(records: Sequence[TreeRecord], config: TrainingPhaseConfig)
         tactics = policy_tactics(record, labels)
         tree_groups = policy_groups(record, labels, tactics, estimates, config.reward)
         trees.append(LabelledTree(record, labels, targets))
-        groups.extend(tree_groups)
+        policy_trees.append(TreeGroups(tuple(tree_groups), record.expansions))
         statistics.append(graph_statistics(record, labels, targets, tactics, tree_groups))
-    return LabelledPhaseData(tuple(trees), tuple(groups), total_statistics(statistics))
+    return LabelledPhaseData(tuple(trees), tuple(policy_trees), total_statistics(statistics))
 
 
 def chosen[T](items: Sequence[T], count: int, seed: str) -> list[T]:
@@ -163,7 +172,7 @@ def train_policy_phase(
     directory: Path,
     on_step: Callable[[GrpoStepRecord], None],
 ) -> PolicyOutcome:
-    data = build_policy_data(labelled.groups, inputs.texts, tokenizer, grpo.data)
+    data = build_policy_data(labelled.policy_trees, tokenizer, grpo.data)
     replay = policy_replay_examples(tokenizer, inputs, config.policy_replay, grpo.max_sequence_tokens)
     adapter = directory / "adapter"
     result = train_grpo(grpo, tokenizer.pad_token_id, data.sequences, replay, device, adapter, on_step)
@@ -238,8 +247,19 @@ def run_training_phase(
     return outcome
 
 
-def grpo_phase_record(policy: PolicyOutcome, sampling_seconds: float | None) -> GrpoPhase:
-    """The phase's line of the dashboard's grpo family; `sampling_seconds` is the search time behind the data."""
+def sampler_agreement_by_age(result: GrpoTrainingResult, trained_version: int) -> dict[str, SamplerAgreement]:
+    return {
+        str(trained_version - entry.policy_version): entry.agreement
+        for entry in result.sampler_agreement_by_version
+        if entry.policy_version is not None
+    }
+
+
+def grpo_phase_record(
+    policy: PolicyOutcome, sampling_seconds: float | None, trained_version: int | None = None
+) -> GrpoPhase:
+    """The phase's line of the dashboard's grpo family; `sampling_seconds` is the search time behind the data and
+    `trained_version` the published version the phase trained from (without it the line has no sampling ages)."""
     data = policy.data
     result = policy.result
     return GrpoPhase(
@@ -262,6 +282,7 @@ def grpo_phase_record(policy: PolicyOutcome, sampling_seconds: float | None) -> 
         sampler_log_probability_difference=result.sampler_agreement.mean_difference,
         sampler_absolute_log_probability_difference=result.sampler_agreement.mean_absolute_difference,
         sampler_kl=result.sampler_agreement.kl_sampler_to_trainer,
+        sampler_by_age={} if trained_version is None else sampler_agreement_by_age(result, trained_version),
         forced_answers_kept=data.forced_sequences,
         retokenized_sequences=data.retokenized_sequences,
         sampling_seconds=sampling_seconds,

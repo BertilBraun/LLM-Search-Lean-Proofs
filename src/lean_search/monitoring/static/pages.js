@@ -89,6 +89,15 @@ const GRPO = {
       { label: "KL (k3)", field: "sampler_kl" },
     ],
   },
+  samplerByAge: {
+    title: "Sampler vs trainer by sampling age",
+    subtitle: "mean |difference| per token; age: the version trained from minus the version that sampled", family: "grpo", unit: "number",
+    series: [0, 1, 2].map((age) => ({ label: `age ${age}`, field: `sampler_by_age.${age}.mean_absolute_difference` })),
+  },
+  currentTokens: {
+    title: "Tokens sampled by the version trained from", subtitle: "share of the tokens with a recorded version (age 0)", family: "grpo", unit: "share",
+    series: [{ label: "age 0", field: "sampler_by_age.0.tokens", over: { sum: "sampler_by_age.", suffix: ".tokens" } }],
+  },
 };
 
 const SEARCH = {
@@ -149,7 +158,7 @@ export const PAGES = [
     title: "Policy / GRPO",
     families: ["grpo"],
     sections: [
-      { title: "Stability", charts: [GRPO.kl, GRPO.clip, GRPO.sampler] },
+      { title: "Stability", charts: [GRPO.kl, GRPO.clip, GRPO.sampler, GRPO.samplerByAge, GRPO.currentTokens] },
       {
         title: "Signal",
         charts: [

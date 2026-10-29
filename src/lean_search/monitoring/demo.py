@@ -22,6 +22,7 @@ from lean_search.monitoring.families import (
     ValueBenchmarkResult,
 )
 from lean_search.monitoring.store import LoopContext, MetricsWriter
+from lean_search.rl.policy_data import SamplerAgreement
 from lean_search.rl.tree_statistics import EdgeKindCounts, GraphStatistics, SizeHistogram
 from lean_search.search.tactic_labels import TacticLabelCounts
 from lean_search.value.benchmark import (
@@ -279,6 +280,15 @@ class DemoRun:
                 sampler_log_probability_difference=self.noise(0.002) - 0.001,
                 sampler_absolute_log_probability_difference=0.012 + abs(self.noise(0.002)),
                 sampler_kl=0.0008 + abs(self.noise(0.0002)),
+                sampler_by_age={
+                    str(age): SamplerAgreement(
+                        tokens=round(samples * trained_share * 180 * share),
+                        mean_difference=self.noise(0.002) - 0.001 - 0.01 * age,
+                        mean_absolute_difference=0.012 + 0.02 * age + abs(self.noise(0.002)),
+                        kl_sampler_to_trainer=0.0008 + 0.002 * age + abs(self.noise(0.0002)),
+                    )
+                    for age, share in ((0, 0.85), (1, 0.12), (2, 0.03))
+                },
                 forced_answers_kept=round(samples * trained_share * 0.027 * (1 - 0.5 * learned)),
                 sampling_seconds=(self.schedule.phase_minutes - self.schedule.training_minutes) * 60,
             ),

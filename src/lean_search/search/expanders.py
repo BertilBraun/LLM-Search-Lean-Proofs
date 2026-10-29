@@ -59,6 +59,8 @@ class CandidateBatch:
     # The policy's sampling settings, recorded with the samples' log-probabilities.
     temperature: float | None = None
     top_p: float | None = None
+    # The published policy version that sampled it (the GRPO loop's gated searches only).
+    policy_version: int | None = None
 
 
 @dataclass(frozen=True)
