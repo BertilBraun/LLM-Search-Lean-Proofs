@@ -176,9 +176,11 @@ minus the version that sampled, forced answers kept, training and sampling time)
 
 One long-running process. `sampling.concurrency` workers take statements from the statement source and search them
 with the new search (`search_theorem`; n = 8, harvesting and ε on, `grpo/search/visible_student_v2.toml` on the
-loop's servers), one Lean REPL each; every finished tree goes gzipped to `trees/phase_<k>/` of the phase collecting at
-that moment, with a line in `trees/index.jsonl` (`tree_store.py`). A phase starts once `min_sampling_minutes` of
-sampling produced `min_solved_trees` solved trees (or after `max_sampling_minutes` with one) and runs:
+loop's servers at the loop's own budget, `sampling.max_expansions` = 32), one Lean REPL each; every finished tree goes
+gzipped to `trees/phase_<k>/` of the phase collecting at that moment, with a line in `trees/index.jsonl`
+(`tree_store.py`) holding its `TreeSummary` ("Health checks and budget signals" below). A phase starts once
+`min_sampling_minutes` (45) of sampling produced `min_trainable_groups` (300) groups the policy trains on (counted per
+finished tree), or after `max_sampling_minutes` (90) with at least one, and runs:
 
 | Stage | What happens |
 |---|---|
@@ -186,6 +188,7 @@ sampling produced `min_solved_trees` solved trees (or after `max_sampling_minute
 | training | the paused searches' REPL processes stop (`training.paused_repl_memory_gib`, "Host memory" below); the servers on the training GPUs drain and sleep (level 2: weights and KV cache freed, `release_gpu`); `grpo_phase.py --merge-adapters` runs on those GPUs (`SubprocessTrainer`; several GPUs: `torchrun --standalone`, one rank each; log in `training/phase_<k>.log`): labels the phase's trees, trains the policy (two passes) and, every `value_every_phases` (4) with a gate benchmark, the value model on the window of recent phases' trees plus its gate (main rank; "The value model in the loop" below), then merges the new policy adapter and an accepted value adapter into their bases on the GPUs (`<adapter>/../merged`, one rank per adapter); the loop labels the same trees meanwhile for the `search` and `curriculum` metrics |
 | publishing | `training_phase.publish_phase`: version k + 1 with the new policy adapter and the new value adapter only if it passed the gate, its weights the job's GPU merges moved into `weights/v<k+1>/` (`merging.merge`; without them, e.g. after a crash, merged on the CPU into `serving.policy_base_model` and `value_base_model`, `MergedPublisher`); sleeping servers wake with it (`restore_gpu`: memory back, `reload_weights` of the new directory, KV cache back), servers off the training GPUs swap in place (`publish_weights`), and the searches' pause gate records the version for the samples to come |
 | evaluating | the paused searches' REPL processes stop (`evaluation.paused_repl_memory_gib`, "Host memory" below); due fixed targets run as their own jobs (`grpo_evaluate.py`) while the searches stay paused: by loop hours (`every_hours`), once before the first phase (`at_start`; `baseline_runs` independent runs), or when requested (`grpo_loop.py request-evaluation`); the value servers serve the evaluations' fixed value model meanwhile and the published one again afterwards; the value A/B search runs both its arms here |
+| health | the phase's budget and health lines and alerts ("Health checks and budget signals"); the hard stop ends the loop here |
 | resume | the searches continue with the new weights |
 
 GPU layout (`loop.toml`): while sampling, each of the four GPUs serves the merged policy (62% of its memory) and the
@@ -245,7 +248,7 @@ Metrics per phase (`MetricsWriter`, `<run>/metrics/`): `status` every `status_se
 per expansion, block length), `grpo` (from the trainer's `phase.json`), `value` per value retrain with a benchmark
 (the gate statistic, both models' benchmark metrics, `ValueDiagnostics`), `timing` (sampling, training, publishing and
 evaluation seconds, and the pause's segments, below), `fixed_targets` from the evaluations, `value_ab` from the value
-A/B search; `system`
+A/B search; `budget` and `health` after each phase's evaluations ("Health checks and budget signals"); `system`
 from `dashboard.py record-system`, including host memory (the limit, what is available, the Lean REPLs' private
 memory in total and at p90, the vLLM processes' private memory). Failure tiers are a message-based approximation
 (`phase_metrics.py`).
@@ -325,7 +328,7 @@ about fourfold while `trainer_start`, the loads, `compile`, `gate`, the merges a
 
 If the pause still costs too much, two levers:
 
-- Longer sampling phases (`min_sampling_minutes`, `min_solved_trees`): the fixed part of the pause (start, loads,
+- Longer sampling phases (`min_sampling_minutes`, `min_trainable_groups`): the fixed part of the pause (start, loads,
   compile, gate, merges, wake) is paid per phase, so its share falls with the sampling time, at the price of fewer and
   staler updates per hour.
 - A trainer that stays alive between phases (not implemented): the ranks would keep their processes, NCCL group and
@@ -334,6 +337,60 @@ If the pause still costs too much, two levers:
   value bases in bf16, about 9 + 4.5 GB, so about 54 GB for four ranks (or about 14 GB with one shared copy), next to
   the 112 REPLs and eight vLLM processes of "Host memory", plus a CUDA context (~0.5 GB) left on each GPU that the
   servers' memory shares must leave free.
+
+## Health checks and budget signals (`health_checks.py`, `budget_signals.py`, `tree_summary.py`)
+
+Every finished tree gets a `TreeSummary` in the tree index as it finishes (a worker thread labels a solved tree once):
+the groups the policy would train on (`trainable_groups`: groups at proof-graph nodes with a policy proof, as
+`require_policy_proof` keeps them, and a non-zero advantage, as the trainer keeps them; μ is left out), the expansion
+of the first proof, the shortest proof's top-level tactics (the root's remaining steps), the search's expansion budget,
+and per policy expansion the distinct blocks (identical blocks run once), distinct sample texts, samples cut off at the
+token cap and repetition loops among them. The phase trigger sums `trainable_groups` over the phase's entries, so it
+never reads a tree again.
+
+After a phase's evaluations, before the phase closes, the loop writes a `budget` line and a `health` line
+(`PhaseHealth`, also appended to `<run>/health.jsonl`, which the next phases read back) and logs every alert to
+`loop.log` (`Health of phase <k> (<severity>, <check>): ...`); the dashboard's Training page charts each signal with
+its threshold dashed, and its alert list shows the latest phase's alerts. Thresholds are `[health]` in the loop config
+(`HealthConfig`); the defaults are first guesses, to be calibrated on the first phases:
+
+| Check | Signal | Default threshold | Reference |
+|---|---|---|---|
+| `kl_to_starting_policy` | KL (k3, per token) to the starting policy, last pass (`final_kl_to_reference`) | > 0.02 | absolute (version 0's is 0; review F expects 1e-4 to 1e-3 after 5-10 phases at lr 1e-5) |
+| `clip_fraction` | clip fraction of the last pass's trained tokens | > 0.1 | absolute (PPO runs usually stay below 0.1-0.2) |
+| `distinct_samples` | distinct blocks per policy expansion (of n = 8) | < 0.75 × reference | mean of the first `reference_phases` (2) phases |
+| `explanation_length` | mean explanation tokens of the trained samples | outside 0.5-2 × reference | the first phases |
+| `cut_off_samples` | share of policy samples cut off at the token cap (repetition loops shown with it) | > max(2 × reference, reference + 0.01) | the first phases |
+| `held_out_valid_lean` | share of held-out samples whose block runs completely in Lean | < 0.9 × version 0's (warning); **< 0.7 × version 0's: hard stop** | version 0's held-out evaluation |
+| `held_out_success` | held-out per-sample success | < 0.9 × version 0's | version 0's held-out evaluation |
+| `search_budget` | share of solves in the budget's last quarter, pooled over the last 3 phases | > 0.10 (a note) | absolute |
+
+The held-out checks run only after phases whose held-out evaluation ran (every 6 hours of loop time with the probe).
+Relative thresholds stay unset (no alert) until their reference exists.
+
+**Hard stop and rollback.** When the held-out valid-Lean rate falls below `stop_held_out_valid_fraction` (0.7; 0
+never stops) of version 0's, the loop closes the phase, writes `<run>/health_stop.json` (the phase, the version that
+collapsed, the last good version, the reason) and stops cleanly; it refuses to start while that file exists. The last
+good version is the newest one whose held-out evaluation stayed above the stop threshold (version 0 before any); its
+policy adapter is never pruned by the retention ("Disk"). With the loop stopped:
+
+- `python experiments/grpo_loop.py --config <loop.toml> rollback` publishes the last good version's policy adapter
+  (`--version N` for another) with the current value adapter as a new version (merged on the CPU, trigger
+  `rollback to v<N>`) and keeps the stop beside it as `health_stop_<time>.json`. The next phase continues training
+  from that adapter; lower the learning rate (or the passes) in the phase config before restarting, or it may collapse
+  again.
+- `python experiments/grpo_loop.py --config <loop.toml> clear-health-stop` keeps the current version (a false alarm, or
+  a threshold to recalibrate in `[health]`).
+- Then `deployment/grpo_loop.sh loop` as after any stop; `status` prints a pending health stop.
+
+**Search budget.** The loop's searches run `sampling.max_expansions` (32) expansions, overriding the shared search
+template's 64; the probe (16), miniF2F (64) and the gate search keep their own budgets. A budget that cuts off harder
+proofs shows on the Training page as solves crowding into the last quarter (expansions 25-32), a distribution of
+expansions to the first proof piling up at the top bucket, proof lengths (shortest proof-graph route, top-level
+tactics) that stop growing, and a curriculum difficulty of the solved statements that stops rising. When the pooled
+last-quarter share exceeds `max_late_solve_share` (0.10) over `late_solve_phases` (3) phases, the health check notes it
+(`search_budget`); raise `[sampling] max_expansions` (e.g. 64) in the loop config and restart the loop (each tree
+records its own budget, so the signals stay comparable). In the visible run, expansions 17-64 added 8 of 171 solves.
 
 ## Host memory
 
@@ -376,7 +433,8 @@ What grows per phase: the phase's gzipped trees (estimated 150-250 MB; kept, the
 them), the policy adapter (~0.5 GB in fp32) and every fourth phase a value adapter (~0.26 GB). After each publish the
 loop deletes the phase adapters (and any GPU merge left beside them) of versions older than the last
 `retention.adapter_versions` (5) unless still used: the current version's and the value adapter the next value
-training continues (`retention.py`; 0 keeps every adapter). The starting adapters live outside the loop's
+training continues, and the health check's last good version's policy adapter, the rollback target
+(`retention.py`; 0 keeps every adapter). The starting adapters live outside the loop's
 checkpoints and are never touched. Merged weights (`MergedPublisher.prune`): the current version's and version 0's
 (the baselines' weights, `weights/v0000/`), the evaluations' fixed value model under `weights/kept_value/`, and while
 publishing the next version's beside them. The system sampler records the fullest filesystem of the run and the

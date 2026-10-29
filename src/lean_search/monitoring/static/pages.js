@@ -3,6 +3,7 @@
 //
 // series: {label, field} | {label, fields: [...]} (summed) | {label, mean: "prefix."} | {label, sum: "prefix.", suffix}
 //         | {expand: "prefix.", label} (one series per column), optionally {over: "field" | "prefix."} (a ratio)
+//         and dashed: true (a threshold, drawn dashed)
 // chart:  {title, family, kind: "line" | "stacked" | "bands" | "reliability" | "histogram", x: "time" | "policy_version"
 //          | ..., unit, series, compare (overlay the other runs), baseline (first value as a reference), allTime,
 //          thresholds: [{key, label}] (from the config), references: [{value, label, kind}], band: {low, high} (keys),
@@ -40,7 +41,7 @@ const FIXED = {
   heldOut: {
     title: "Held-out states, per-sample success", subtitle: "512 states, by policy version",
     family: "fixed_targets", x: "policy_version", unit: "share", compare: true, baseline: true, allTime: true,
-    series: [{ label: "success", field: "held_out_success" }],
+    series: [{ label: "success", field: "held_out_success" }, { label: "valid Lean", field: "held_out_valid_rate" }],
   },
   probe: {
     title: "Probe set solved", subtitle: "held-out pool statements at 16 expansions, by policy version",
@@ -69,7 +70,7 @@ const GRPO = {
   },
   clip: {
     title: "Clip fraction", family: "grpo", unit: "share",
-    thresholds: [{ key: "max_clip_fraction", label: "max" }], series: [{ label: "clip", field: "clip_fraction" }],
+    series: [{ label: "clip", field: "clip_fraction" }],
   },
   ratioBySign: {
     title: "Probability ratio by advantage sign",
@@ -201,6 +202,96 @@ const VALUE = {
   },
 };
 
+const EXPANSION_BUCKETS = ["1", "2", "3-4", "5-8", "9-16", "17-24", "25-32", "33-48", "49-64", "65+"];
+const PROOF_STEP_BUCKETS = ["1", "2", "3", "4-5", "6-8", "9+"];
+// A threshold the loop judged the phase against (the `health` family's thresholds.*), drawn dashed.
+const limit = (label, field) => ({ label, field: `thresholds.${field}`, dashed: true });
+
+const HEALTH = {
+  kl: {
+    title: "KL to the starting policy", subtitle: "per token (k3), last pass; dashed: the alert threshold", family: "health", x: "phase", unit: "number",
+    series: [{ label: "KL", field: "measured.kl_to_starting_policy" }, limit("max", "max_kl_to_starting_policy")],
+  },
+  clip: {
+    title: "Clip fraction", subtitle: "last pass's trained tokens", family: "health", x: "phase", unit: "share",
+    series: [{ label: "clip", field: "measured.clip_fraction" }, limit("max", "max_clip_fraction")],
+  },
+  distinct: {
+    title: "Distinct samples per expansion", subtitle: "of n = 8: blocks (identical ones run once) and texts; a fall is collapse", family: "health", x: "phase", unit: "number",
+    series: [
+      { label: "blocks", field: "measured.distinct_samples_per_expansion" },
+      { label: "texts", field: "measured.distinct_texts_per_expansion" },
+      limit("min blocks", "min_distinct_samples_per_expansion"),
+    ],
+  },
+  heldOut: {
+    title: "Held-out states", subtitle: "per sample, after the phases they ran; dashed: alert and stop thresholds (fractions of version 0's)", family: "health", x: "phase", unit: "share",
+    series: [
+      { label: "valid Lean", field: "measured.held_out_valid_rate" },
+      { label: "success", field: "measured.held_out_success" },
+      limit("min valid", "min_held_out_valid_rate"),
+      limit("stop", "stop_held_out_valid_rate"),
+      limit("min success", "min_held_out_success"),
+    ],
+  },
+  explanation: {
+    title: "Explanation length", subtitle: "trained samples' explanation tokens; dashed: the band around the first phases", family: "health", x: "phase", unit: "number",
+    series: [
+      { label: "tokens", field: "measured.mean_explanation_tokens" },
+      limit("min", "min_explanation_tokens"),
+      limit("max", "max_explanation_tokens"),
+    ],
+  },
+  cutOff: {
+    title: "Samples cut off at the token cap", subtitle: "share of policy samples (answers forced), and repetition loops among them", family: "health", x: "phase", unit: "share",
+    series: [
+      { label: "cut off", field: "measured.cut_off_share" },
+      { label: "repetition loops", field: "measured.repetition_loop_share" },
+      limit("max cut off", "max_cut_off_share"),
+    ],
+  },
+};
+
+const BUDGET = {
+  lateSolves: {
+    title: "Solves in the budget's last quarter", subtitle: "share of solved searches (expansions 25-32 of 32); pooled over the last phases against its threshold", family: "budget", x: "phase", unit: "share",
+    series: [
+      { label: "this phase", field: "late_solve_share" },
+      { label: "last phases", field: "recent_late_solve_share" },
+      { label: "max", field: "max_late_solve_share", dashed: true },
+    ],
+  },
+  expansions: {
+    title: "Expansions to the first proof", subtitle: "share of solved searches per bucket", family: "budget", x: "phase", kind: "stacked",
+    series: EXPANSION_BUCKETS.map((bucket) => ({ label: bucket, field: `expansions_to_solve.${bucket}` })),
+  },
+  meanExpansions: {
+    title: "Mean expansions to the first proof", subtitle: "against the budget", family: "budget", x: "phase", unit: "number",
+    series: [{ label: "mean", field: "mean_expansions_to_solve" }, { label: "budget", field: "expansion_budget", dashed: true }],
+  },
+  proofSteps: {
+    title: "Proof length of solved searches", subtitle: "top-level tactics of the shortest proof on the proof graph", family: "budget", x: "phase", kind: "stacked",
+    series: PROOF_STEP_BUCKETS.map((bucket) => ({ label: bucket, field: `proof_steps.${bucket}` })),
+  },
+  meanProofSteps: {
+    title: "Mean proof length", subtitle: "top-level tactics; should not shrink while harder proofs are still found", family: "budget", x: "phase", unit: "number",
+    series: [{ label: "tactics", field: "mean_proof_steps" }],
+  },
+  difficulty: {
+    title: "Difficulty of solved statements", subtitle: "the curriculum's estimate; should rise with the band", family: "budget", x: "phase", unit: "number",
+    series: [
+      { label: "solved, mean", field: "mean_difficulty_solved" },
+      { label: "solved, median", field: "median_difficulty_solved" },
+      { label: "solved, p90", field: "p90_difficulty_solved" },
+      { label: "searched, mean", field: "mean_difficulty_searched" },
+    ],
+  },
+  groups: {
+    title: "Trainable groups per phase", subtitle: "the phase trigger's count (min_trainable_groups) and the solved searches behind it", family: "budget", x: "phase", unit: "count",
+    series: [{ label: "trainable groups", field: "trainable_groups" }, { label: "solved searches", field: "solved_trees" }],
+  },
+};
+
 const DIFFICULTY_RATE = { label: "solve rate", sum: "by_difficulty.", suffix: ".solved", over: { sum: "by_difficulty.", suffix: ".attempts" } };
 
 export const PAGES = [
@@ -212,6 +303,7 @@ export const PAGES = [
       { title: "Status", tiles: "overview" },
       { title: "Fixed targets", charts: [FIXED.probe, FIXED.minif2f, FIXED.heldOut, FIXED.math] },
       { title: "RL health", charts: [GRPO.kl, GRPO.clip, GRPO.mixed, GRPO.rewards] },
+      { title: "Training health", charts: [HEALTH.kl, HEALTH.heldOut, HEALTH.distinct, BUDGET.lateSolves] },
       { title: "Value health", charts: [VALUE.gate, VALUE.abSolved] },
       { title: "Search behaviour", charts: [SEARCH.samples, SEARCH.noProgress, SEARCH.continuation, SEARCH.loops] },
     ],
@@ -462,6 +554,18 @@ export const PAGES = [
             series: [{ label: "explored", field: "graph.exploration_expansions", over: "graph.expanded_nodes" }],
           },
         ],
+      },
+    ],
+  },
+  {
+    id: "training",
+    title: "Training",
+    families: ["health", "budget"],
+    sections: [
+      { title: "Health checks", charts: [HEALTH.kl, HEALTH.clip, HEALTH.heldOut, HEALTH.distinct, HEALTH.explanation, HEALTH.cutOff] },
+      {
+        title: "Search budget",
+        charts: [BUDGET.lateSolves, BUDGET.expansions, BUDGET.meanExpansions, BUDGET.proofSteps, BUDGET.meanProofSteps, BUDGET.difficulty, BUDGET.groups],
       },
     ],
   },

@@ -2,17 +2,18 @@
 
 A tree belongs to the phase that was collecting when its search finished; a phase trains on its own directory. The
 index (trees/index.jsonl, one `TreeEntry` per tree) is what a restart reads back: per-phase counts, the statements
-already searched and the curriculum outcomes. Tree files are written to a temporary name and renamed, so a crash
-never leaves a truncated tree for the trainer.
+already searched, the curriculum outcomes and each tree's `TreeSummary` (trainable groups, budget and health signals).
+Tree files are written to a temporary name and renamed, so a crash never leaves a truncated tree for the trainer.
 """
 
 import gzip
 import json
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
+from lean_search.rl.tree_summary import TreeSummary
 from lean_search.search.records import TreeRecord, from_json_object, read_tree, to_json
 
 INDEX_FILE = "index.jsonl"
@@ -33,6 +34,7 @@ class TreeEntry:
     difficulty: float | None
     wall_seconds: float
     finished_time: float
+    summary: TreeSummary = field(default_factory=TreeSummary)
 
 
 def phase_directory_name(phase: int) -> str:
@@ -51,7 +53,14 @@ class TreeStore:
     def phase_directory(self, phase: int) -> Path:
         return self.directory / phase_directory_name(phase)
 
-    def add(self, record: TreeRecord, phase: int, policy_version: int, difficulty: float | None) -> TreeEntry:
+    def add(
+        self,
+        record: TreeRecord,
+        phase: int,
+        policy_version: int,
+        difficulty: float | None,
+        summary: TreeSummary,
+    ) -> TreeEntry:
         sequence = len(self.entries)
         relative = f"{phase_directory_name(phase)}/{sequence:07d}_{record.problem_name}.json.gz"
         path = self.directory / relative
@@ -72,6 +81,7 @@ class TreeStore:
             difficulty=difficulty,
             wall_seconds=record.result.accounting.wall_seconds,
             finished_time=time.time(),
+            summary=summary,
         )
         with self.index.open("a", encoding="utf-8") as handle:
             handle.write(to_json(entry) + "\n")

@@ -75,6 +75,7 @@ max_num_seqs = 96
 
 [sampling]
 search_config = "experiments/configs/grpo/search/visible_student_v2.toml"
+max_expansions = 32
 # The real run's concurrency, so host memory and Lean CPU are measured under the real load.
 concurrency = 112
 status_seconds = 30.0
@@ -84,7 +85,7 @@ phase_config = "experiments/configs/grpo/phase_smoke.toml"
 gpus = [0, 1, 2, 3]
 min_sampling_minutes = 5.0
 max_sampling_minutes = 10.0
-min_solved_trees = 10
+min_trainable_groups = 30
 check_seconds = 30.0
 # A value phase every phase, on that phase's trees, gated on the tiny benchmark above.
 value_every_phases = 1

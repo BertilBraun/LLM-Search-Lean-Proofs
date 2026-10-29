@@ -96,6 +96,7 @@ async def evaluate_held_out_states(
         started_at=started_at,
         finished_at=now(),
         samples=success.samples,
+        valid_samples=success.valid,
     )
     (directory / "summary.json").write_text(to_json(summary), encoding="utf-8")
     return summary

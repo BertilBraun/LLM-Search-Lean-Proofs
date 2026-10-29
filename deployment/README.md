@@ -373,7 +373,13 @@ searches keep failing on a server (`src/lean_search/rl/README.md`, "The loop", s
 error if a restarted server stays down.
 
 Restart after a crash: `deployment/grpo_loop.sh loop` again (servers still up; otherwise `servers` first: they start on
-the current version). The loop finishes an interrupted phase before sampling again. Milestones: `python
+the current version). The loop finishes an interrupted phase before sampling again. After the health check's hard stop
+(`loop.log`: "The loop stopped after phase <k> on its health check", `$LEAN_SEARCH_RUNS/<loop>/health_stop.json`; the
+held-out valid-Lean rate fell below 0.7 × version 0's) the loop refuses to start until `python
+experiments/grpo_loop.py --config <loop.toml> rollback` (the last good version's policy as a new version; lower the
+learning rate first) or `clear-health-stop` (keep the current version) ran (`src/lean_search/rl/README.md`, "Health
+checks and budget signals"). The search budget (`[sampling] max_expansions`, 32) and the `[health]` thresholds change
+the same way: edit the loop config, `stop`, `loop`. Milestones: `python
 experiments/grpo_loop.py --config experiments/configs/grpo/loop.toml request-evaluation --target minif2f` (run at the
 next pause); with the loop stopped, `python experiments/grpo_evaluate.py --loop-directory $LEAN_SEARCH_RUNS/grpo_loop_v1
 --target minif2f`. To end: `deployment/grpo_loop.sh stop`, then the final miniF2F and probe with grpo_evaluate.py.
@@ -428,7 +434,25 @@ First-hour checks:
   and restart of the servers.
 - Curriculum (main loop, after about 2 hours): the realized solve rate (Curriculum page) within the 30-70% band; each
   band is judged on the first 50 statements fed at it once all finished, so slow unsolved searches no longer pull it
-  down. Also expansions and trees per hour and trained groups per phase, to set the phase length once.
+  down. Also expansions and trees per hour and trainable groups per phase (Training page, "Trainable groups per
+  phase"; `loop.log`'s `Phase <k>: ... trainable groups`): a phase ends at 300 within 45-90 min; phases that always
+  hit the 90-minute cap, or always stop at 45 minutes far above 300, mean the trigger should be set once.
+- Health (Training page and `loop.log`'s `Health of phase <k>` lines, from phase 1): KL to the starting policy and
+  the clip fraction against their thresholds (0.02 and 0.1), distinct blocks per expansion (~5-7 of 8 expected),
+  explanation length and cut-off samples; the relative thresholds appear from phase 3 on (the mean of phases 1-2) and
+  the held-out ones once version 0's held-out evaluation exists. Version 0's held-out valid-Lean rate and success
+  (Evaluations page) set the hard stop (0.7 × valid-Lean rate). At lr 3e-5 watch the first phases' KL and clip
+  fraction closely.
+
+First-day checks:
+
+- Health thresholds: after 4-6 phases compare each signal's spread with its threshold and recalibrate `[health]` once
+  (restart to apply): no alert should fire on phase-to-phase noise; the held-out checks after the first 6-hour
+  evaluation.
+- Search budget (Training page, "Search budget"): the share of solves in expansions 25-32 (a note above 10% over 3
+  phases), the expansions-to-first-proof distribution, the mean proof length and the difficulty of the solved
+  statements over phases. Solves crowding into the last quarter while proof lengths and solved difficulty stall mean
+  32 expansions cut off harder proofs: raise `[sampling] max_expansions` to 64.
 - Disk: `disk_free_gib` (System page) and its fall per phase against the projection above.
 - Training memory: `peak_memory_gib` in `$LEAN_SEARCH_CHECKPOINTS/grpo_loop_v1_phase_0001/phase.json`, against
   24 GiB minus the sleeping servers' remainder.

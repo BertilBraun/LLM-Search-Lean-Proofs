@@ -67,6 +67,8 @@ class EvaluationSummary:
     started_at: str
     finished_at: str
     samples: int = 0
+    # Held-out states: the samples whose block runs completely in Lean (valid Lean, whatever state it reaches).
+    valid_samples: int = 0
     # Searches stopped by the per-problem wall-clock cap rather than the expansion budget.
     wall_clock_stops: int = 0
     # The value A/B's published arm, once the reference arm ran: the paired comparison.
@@ -248,6 +250,7 @@ def fixed_targets_record(summary: EvaluationSummary, comparison: RepeatCompariso
             return FixedTargets(
                 held_out_success=summary.solved / summary.samples if summary.samples else None,
                 held_out_states=summary.problems,
+                held_out_valid_rate=summary.valid_samples / summary.samples if summary.samples else None,
                 evaluation_seconds=summary.wall_seconds,
             )
         case EvaluationKind.VALUE_AB:
