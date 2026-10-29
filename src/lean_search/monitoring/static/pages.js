@@ -246,7 +246,7 @@ const VALUE = {
     ],
   },
   arm: {
-    title: "Value arm: published minus v0, per slot", subtitle: "paired probe solve rate on the slot's third, exact McNemar interval",
+    title: "Value arm: published minus v0, per value model", subtitle: "one arm per published value model, at the next probe slot: paired solve rate on that slot's third, exact McNemar interval",
     family: "value_arm", x: "slot", unit: "share", allTime: true, references: ZERO, dots: true,
     series: interval("this_slot", "this slot"),
   },
@@ -317,7 +317,7 @@ const HEALTH = {
       { label: "valid Lean", field: "measured.held_out_valid_rate" },
       { label: "success", field: "measured.held_out_success" },
       limit("min valid", "min_held_out_valid_rate"),
-      limit("stop", "stop_held_out_valid_rate"),
+      limit("collapse", "stop_held_out_valid_rate"),
       limit("min success", "min_held_out_success"),
     ],
   },

@@ -106,7 +106,8 @@ check_seconds = 30.0
 # The value model every 2 phases on the last 4 phases' trees (with 45-90-minute phases a retrain every 1.5-3 h on 3-6 h
 # of trees), continuing the last value adapter trained; every one is published and searched with (no gate; the value
 # benchmark and the value arms are trends on the dashboard). The persistent trainer labels the window while the value
-# phase samples. μ is 0 until set by hand: deployment/grpo_loop.sh value-share 0.15 (read when each phase starts training).
+# phase samples. μ is 0 until set by hand: deployment/grpo_loop.sh value-share 0.15 (read when each phase starts
+# training).
 value_every_phases = 2
 value_window_phases = 4
 # Under $LEAN_SEARCH_DATA: the starting policy's SFT data, flat proofs without nested `have ... := by` (data_rewrite.py
@@ -160,7 +161,8 @@ paused_repl_memory_gib = 0.0
 # time (sampling and training), so the whole set every ~6 hours; the dashboard draws each slot against version 0's runs
 # of the same third, the last three together, and the raw rates. Before the first phase every part twice (version 0's
 # baseline and its run-to-run noise). The wall cap is an emergency stop: the expansions are the budget
-# (wall_clock_stops ~ 0). Every evaluation runs 112 REPLs, as many as the sampling: the paused searches' REPLs stop first.
+# (wall_clock_stops ~ 0). Every evaluation runs 112 REPLs, as many as the sampling: the paused searches' REPLs stop
+# first.
 probe_parts = 3
 
 [evaluation.probe]
@@ -207,7 +209,8 @@ at_start = true
 
 # After each publish, the phase adapters of versions older than the last 5 are deleted unless still used (the current
 # version's, the value adapter the next value training continues, the policy adapters of the last 3 versions whose
-# held-out evaluation raised no alert: the rollback targets); 0 keeps every adapter. src/lean_search/rl/README.md, "Disk".
+# held-out evaluation raised no alert: the rollback targets); 0 keeps every adapter. src/lean_search/rl/README.md,
+# "Disk".
 [retention]
 adapter_versions = 5
 healthy_versions = 3
