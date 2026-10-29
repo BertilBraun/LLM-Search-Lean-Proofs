@@ -1,0 +1,91 @@
+import asyncio
+import contextlib
+import json
+import os
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+
+import pytest
+
+from lean_search.expert_iteration.serving import write_json_atomically
+from lean_search.rl.loop_services import ChildProcess, live_children, run_logged, running_start_ticks
+from lean_search.search.records import from_json_object
+
+pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="process groups and /proc are POSIX")
+
+SLEEPER = "import time; time.sleep(60)"
+# Writes the process id of a sleeping child of its own to argv[1], then sleeps.
+PARENT_OF_A_SLEEPER = (
+    "import subprocess, sys, time; "
+    f"child = subprocess.Popen([sys.executable, '-c', {SLEEPER!r}]); "
+    "open(sys.argv[1], 'w').write(str(child.pid)); time.sleep(60)"
+)
+
+
+@dataclass
+class RunningJob:
+    task: asyncio.Task[None]
+    child: ChildProcess
+
+
+async def start_job(root: Path, arguments: list[str]) -> RunningJob:
+    record = root / "children" / "job.pid"
+    task = asyncio.create_task(run_logged(arguments, root / "job.log", dict(os.environ), record))
+    while not record.exists():
+        await asyncio.sleep(0.01)
+    return RunningJob(task, from_json_object(ChildProcess, json.loads(record.read_text())))
+
+
+async def cancel(task: asyncio.Task[None]) -> None:
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+
+async def ends_within(process_id: int, seconds: float) -> bool:
+    """Killed processes outside our own children are reaped by init, a moment later."""
+    for _ in range(int(seconds / 0.05)):
+        if running_start_ticks(process_id) is None:
+            return True
+        await asyncio.sleep(0.05)
+    return False
+
+
+async def test_cancelling_a_job_stops_its_process(tmp_path: Path) -> None:
+    job = await start_job(tmp_path, [sys.executable, "-c", SLEEPER])
+    await cancel(job.task)
+    assert running_start_ticks(job.child.process_id) is None
+
+
+async def test_cancelling_a_job_stops_the_processes_it_started(tmp_path: Path) -> None:
+    grandchild_file = tmp_path / "grandchild"
+    job = await start_job(tmp_path, [sys.executable, "-c", PARENT_OF_A_SLEEPER, str(grandchild_file)])
+    while not grandchild_file.exists() or not grandchild_file.read_text():
+        await asyncio.sleep(0.01)
+    await cancel(job.task)
+    assert await ends_within(int(grandchild_file.read_text()), seconds=5.0)
+
+
+async def test_a_finished_job_removes_its_record(tmp_path: Path) -> None:
+    record = tmp_path / "children" / "job.pid"
+    await run_logged([sys.executable, "-c", "pass"], tmp_path / "job.log", dict(os.environ), record)
+    assert not record.exists()
+
+
+def own_start_ticks() -> int:
+    start_ticks = running_start_ticks(os.getpid())
+    assert start_ticks is not None
+    return start_ticks
+
+
+async def test_a_job_does_not_start_while_an_earlier_loops_job_runs(tmp_path: Path) -> None:
+    earlier = ChildProcess(os.getpid(), own_start_ticks(), "earlier")
+    write_json_atomically(tmp_path / "children" / "training.pid", earlier)
+    with pytest.raises(RuntimeError):
+        await run_logged([sys.executable, "-c", "pass"], tmp_path / "job.log", {}, tmp_path / "children" / "job.pid")
+
+
+def test_a_record_whose_process_id_was_reused_is_not_a_live_job(tmp_path: Path) -> None:
+    write_json_atomically(tmp_path / "training.pid", ChildProcess(os.getpid(), own_start_ticks() + 1, "earlier"))
+    assert live_children(tmp_path) == []

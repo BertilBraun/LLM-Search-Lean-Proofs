@@ -10,10 +10,11 @@
 The arms are the two short fine-tunes of the data rewrite (experiments/configs/data_rewrite/sft_{numbered,named}.toml).
 `probe` merges an arm's adapter (once, on the CPU), swaps it into the loop's policy servers in place and searches the
 probe set at its budget with the loop's search template and value model; the named arm searches renamed statements
-(grpo_fixed_sets.py rename) and every proof it finds is verified against the original statement. `report` compares
-the arms on the probe (solved, by stratum), the unknown-name error rate per policy sample of the probe searches and
-MATH-500 (the retention run's scores, when present), into $LEAN_SEARCH_RUNS/<name>/report.md. The winner becomes the
-GRPO starting policy (with `[renaming] enabled = true` in the loop config if it is the named arm).
+(grpo_fixed_sets.py rename) and every proof it finds is verified against the original statement. The value model (v0,
+trained on numbered names) scores the named arm's states with the original names, so only the policy sees the new ones.
+`report` compares the arms on the probe (solved, by stratum), the unknown-name error rate per policy sample of the probe
+searches and MATH-500 (the retention run's scores, when present), into $LEAN_SEARCH_RUNS/<name>/report.md. The winner
+becomes the GRPO starting policy (with `[renaming] enabled = true` in the loop config if it is the named arm).
 """
 
 import argparse
@@ -91,7 +92,11 @@ async def probe(config: NamingAbConfig, arm: NamingArm) -> None:
         await publish_weights(server.url, merged)
     log(f"Serving {arm.name} on {len(loop.serving.policy_servers)} policy servers")
     template = served_run_config(load_run_config(REPOSITORY_DIRECTORY / loop.sampling.search_config), loop.serving)
-    renamings = read_renamings([DATA_DIRECTORY / path for path in arm.renamings]) if arm.renamings else None
+    renamings = (
+        read_renamings([DATA_DIRECTORY / path for path in arm.renamings], original_names_for_value=True)
+        if arm.renamings
+        else None
+    )
     directory = arm_directory(config, arm) / "probe"
     directory.mkdir(parents=True, exist_ok=True)
     summary = await evaluate_target(

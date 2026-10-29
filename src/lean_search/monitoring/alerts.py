@@ -43,6 +43,7 @@ class AlertThresholds:
     min_solve_rate: float = 0.3
     max_solve_rate: float = 0.7
     failed_gates_in_a_row: int = 3
+    min_available_memory_share: float = 0.15
 
 
 @dataclass(frozen=True)
@@ -214,6 +215,28 @@ def failing_gates(reader: RunReader, thresholds: AlertThresholds, now: float) ->
     return Alert(Severity.INFO, "Value gate failing", detail, "value")
 
 
+def low_host_memory(reader: RunReader, thresholds: AlertThresholds, now: float) -> Alert | None:
+    system = reader.series("system")
+    total = latest(system.columns.get("memory_total_gib", []))
+    available = latest(system.columns.get("memory_available_gib", []))
+    if not total or available is None or available / total >= thresholds.min_available_memory_share:
+        return None
+    detail = f"{available:.1f} of {total:.0f} GiB available: the OOM killer may stop a server or the loop."
+    return Alert(Severity.CRITICAL, "Host memory low", detail, "system")
+
+
+def server_failures(reader: RunReader, thresholds: AlertThresholds, now: float) -> Alert | None:
+    status = reader.series("status")
+    failures = latest(status.columns.get("server_failures", []))
+    if not failures:
+        return None
+    given_up = latest(status.columns.get("statements_given_up", [])) or 0.0
+    detail = (
+        f"{failures:.0f} searches failed on a policy or value server this session; {given_up:.0f} statements dropped."
+    )
+    return Alert(Severity.WARNING, "Server failures", detail, "system")
+
+
 RULES = (
     loop_silence,
     stale_publish,
@@ -226,6 +249,8 @@ RULES = (
     idle_gpus,
     solve_rate_off_target,
     failing_gates,
+    low_host_memory,
+    server_failures,
 )
 
 SEVERITY_ORDER = {Severity.CRITICAL: 0, Severity.WARNING: 1, Severity.INFO: 2}

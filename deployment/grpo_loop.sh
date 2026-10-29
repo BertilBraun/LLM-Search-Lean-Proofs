@@ -9,7 +9,7 @@
 #   deployment/grpo_loop.sh dashboard            # system sampler and dashboard on port ${DASHBOARD_PORT:-8600}
 #   deployment/grpo_loop.sh loop                 # the loop in the background; rerun after a crash to resume
 #   deployment/grpo_loop.sh status               # progress, versions, trees, the last phase
-#   deployment/grpo_loop.sh stop                 # stops the loop (SIGTERM; it saves its state) and the servers
+#   deployment/grpo_loop.sh stop                 # stops the loop (SIGTERM: saves its state, stops its job), servers
 #
 # LOOP_CONFIG (default experiments/configs/grpo/loop.toml) picks the loop, e.g. loop_overfit.toml for the overfit test.
 # HOURLY_PRICE (0.80) feeds the dashboard's cost; BACKGROUND_CPUS, if set, pins the loop (its Lean REPLs) through

@@ -5,7 +5,7 @@ import contextlib
 import logging
 from collections.abc import AsyncIterator, Sequence
 
-from lean_search.lean.repl import LeanRepl, LeanReplConfig
+from lean_search.lean.repl import LeanRepl, LeanReplConfig, MemoryUsage
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +56,13 @@ class LeanReplPool:
             self._schedule_restart(repl)
         else:
             self._idle.put_nowait(repl)
+
+    async def stop_processes(self, above_anonymous_bytes: int) -> list[MemoryUsage]:
+        """Stops every process (in use or idle) at or above the private memory; returns what each held."""
+        usages = [(repl, repl.memory_usage()) for repl in self.repls if repl.process_id is not None]
+        stopping = [(repl, usage) for repl, usage in usages if usage.anonymous_bytes >= above_anonymous_bytes]
+        await asyncio.gather(*(repl.stop() for repl, _ in stopping))
+        return [usage for _, usage in stopping]
 
     async def close(self) -> None:
         """Cancels and awaits the restarts and stops every process; REPLs still in use raise on their next call."""

@@ -5,12 +5,26 @@ import pytest
 from loop_fakes import solved_tree
 
 from lean_search.data import Problem, Split
-from lean_search.data_rewrite.naming import NameChange, NameSource
+from lean_search.data_rewrite.naming import NameChange, NameSource, renamed_text
 from lean_search.data_rewrite.statement_renaming import StatementRenaming
 from lean_search.monitoring.families import BandOutcome
-from lean_search.rl.evaluation import EvaluationKind, EvaluationSummary, StratumOutcome, fixed_targets_record
+from lean_search.rl.evaluation import (
+    EvaluationKind,
+    EvaluationProblem,
+    EvaluationSummary,
+    StratumOutcome,
+    compare_repeats,
+    fixed_targets_record,
+    search_summary,
+)
 from lean_search.rl.loop_config import EvaluationTarget
-from lean_search.rl.renaming import RenamedStatement, StatementRenamings, read_renamings, write_renamings
+from lean_search.rl.renaming import (
+    RenamedStatement,
+    StatementRenamings,
+    original_goals,
+    read_renamings,
+    write_renamings,
+)
 from lean_search.rl.search_models import evaluation_run_config, run_config_text
 from lean_search.rl.tree_store import TreeStore
 from lean_search.search import Accounting, RunConfig, SearchResult, StopReason, tree_record
@@ -95,3 +109,61 @@ def test_renamings_read_back(tmp_path: Path) -> None:
     items = [RenamedStatement(name, renaming) for name, renaming in renamings().by_name.items()]
     write_renamings(tmp_path / "renamings.jsonl", items)
     assert read_renamings([tmp_path / "renamings.jsonl"]).by_name == renamings().by_name
+
+
+def test_original_goals_restore_the_numbered_names() -> None:
+    goals = ("x : ℕ\nh₀ : x = 1\n⊢ x = 1", "x : ℕ\nh₀ : x = 1\nthis : 1 = x := h₀.symm\n⊢ x + 0 = 1")
+    changes = renamings().by_name[PROBLEM.name].changes
+    renamed = tuple(renamed_text(goal, changes) for goal in goals)
+    assert original_goals(renamed, changes) == goals
+
+
+def result(name: str, stop_reason: StopReason) -> SearchResult:
+    proved = stop_reason == StopReason.PROVED
+    return SearchResult(name, proved, stop_reason, None, (), (), Accounting(), None, 0, 1)
+
+
+def test_an_evaluation_summary_counts_the_searches_stopped_on_the_wall_clock() -> None:
+    stops = [StopReason.WALL_CLOCK_BUDGET, StopReason.EXPANSION_BUDGET, StopReason.PROVED, StopReason.WALL_CLOCK_BUDGET]
+    results = [result(f"test.t{number}", stop) for number, stop in enumerate(stops)]
+    problems = [EvaluationProblem(dataclasses.replace(PROBLEM, name=item.problem_name)) for item in results]
+    summary = search_summary(EvaluationKind.PROBE, "probe_v0000", (0, 0), problems, results, template(), "", 1.0)
+    assert summary.wall_clock_stops == 2
+
+
+@pytest.mark.parametrize(
+    ("kind", "field"),
+    [(EvaluationKind.PROBE, "probe_wall_clock_stops"), (EvaluationKind.MINIF2F, "minif2f_wall_clock_stops")],
+)
+def test_the_fixed_targets_line_reports_wall_clock_stops(kind: EvaluationKind, field: str) -> None:
+    summary = dataclasses.replace(zero_summary(kind), wall_clock_stops=3)
+    assert getattr(fixed_targets_record(summary), field) == 3
+
+
+def zero_summary(kind: EvaluationKind) -> EvaluationSummary:
+    return EvaluationSummary(kind, "run", 0, 0, 4, 2, (), 16, 0, 0, 0.0, 0.0, "", "")
+
+
+FIRST_RUN = [
+    result("test.a", StopReason.PROVED),
+    result("test.b", StopReason.PROVED),
+    result("test.c", StopReason.EXPANSION_BUDGET),
+]
+SECOND_RUN = [
+    result("test.a", StopReason.PROVED),
+    result("test.b", StopReason.EXPANSION_BUDGET),
+    result("test.c", StopReason.PROVED),
+]
+
+
+def test_a_repeat_comparison_counts_problems_solved_by_one_run_only() -> None:
+    assert compare_repeats(FIRST_RUN, SECOND_RUN).discordant == 2
+
+
+def test_a_repeat_comparison_reports_the_solved_difference() -> None:
+    assert compare_repeats(FIRST_RUN, SECOND_RUN[:2] + [result("test.c", StopReason.EXPANSION_BUDGET)]).difference == -1
+
+
+def test_the_repeated_probe_line_reports_the_difference() -> None:
+    comparison = compare_repeats(FIRST_RUN, SECOND_RUN)
+    assert fixed_targets_record(zero_summary(EvaluationKind.PROBE), comparison).probe_repeat_difference == 0

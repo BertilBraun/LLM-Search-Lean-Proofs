@@ -1,7 +1,8 @@
 """Fixed-target evaluations: a problem set searched at a fixed budget with the served version, resumable.
 
 A run directory holds config.toml (the search's run config, which the value benchmark reads for provenance),
-results.jsonl (one SearchResult per problem), trees/<problem>.json.gz and, once complete, summary.json.
+results.jsonl (one SearchResult per problem), trees/<problem>.json.gz and, once complete, summary.json; a repeated run
+of the same version also holds comparison.json against the first.
 """
 
 import asyncio
@@ -20,7 +21,7 @@ from lean_search.lean import LeanReplConfig, LeanReplPool
 from lean_search.monitoring.families import BandOutcome, FixedTargets
 from lean_search.rl.renaming import StatementRenamings, search_problem
 from lean_search.rl.search_models import open_search_models, run_config_text
-from lean_search.search import CompletedSearch, RunConfig, SearchResult, read_results, tree_record
+from lean_search.search import CompletedSearch, RunConfig, SearchResult, StopReason, read_results, tree_record
 from lean_search.search.records import from_json_object, to_json, write_tree
 
 
@@ -62,10 +63,32 @@ class EvaluationSummary:
     started_at: str
     finished_at: str
     samples: int = 0
+    # Searches stopped by the per-problem wall-clock cap rather than the expansion budget.
+    wall_clock_stops: int = 0
 
     @property
     def solve_rate(self) -> float:
         return self.solved / self.problems if self.problems else 0.0
+
+
+@dataclass(frozen=True)
+class RepeatComparison:
+    """Two runs of one version on the same problems: the run-to-run noise."""
+
+    problems: int
+    first_solved: int
+    second_solved: int
+    # Solved by one run only; the difference's paired spread.
+    only_first: int
+    only_second: int
+
+    @property
+    def difference(self) -> int:
+        return self.second_solved - self.first_solved
+
+    @property
+    def discordant(self) -> int:
+        return self.only_first + self.only_second
 
 
 @dataclass(frozen=True)
@@ -87,6 +110,10 @@ class EvaluationPaths:
     @property
     def summary(self) -> Path:
         return self.directory / "summary.json"
+
+    @property
+    def comparison(self) -> Path:
+        return self.directory / "comparison.json"
 
 
 def now() -> str:
@@ -131,10 +158,24 @@ def search_summary(
         wall_seconds=wall_seconds,
         started_at=started_at,
         finished_at=now(),
+        wall_clock_stops=sum(result.stop_reason == StopReason.WALL_CLOCK_BUDGET for result in results),
     )
 
 
-def fixed_targets_record(summary: EvaluationSummary) -> FixedTargets:
+def compare_repeats(first: Sequence[SearchResult], second: Sequence[SearchResult]) -> RepeatComparison:
+    first_solved = {result.problem_name for result in first if result.proved}
+    second_solved = {result.problem_name for result in second if result.proved}
+    assert {result.problem_name for result in first} == {result.problem_name for result in second}
+    return RepeatComparison(
+        problems=len(first),
+        first_solved=len(first_solved),
+        second_solved=len(second_solved),
+        only_first=len(first_solved - second_solved),
+        only_second=len(second_solved - first_solved),
+    )
+
+
+def fixed_targets_record(summary: EvaluationSummary, comparison: RepeatComparison | None = None) -> FixedTargets:
     match summary.kind:
         case EvaluationKind.PROBE:
             return FixedTargets(
@@ -145,6 +186,9 @@ def fixed_targets_record(summary: EvaluationSummary) -> FixedTargets:
                     outcome.stratum: BandOutcome(outcome.problems, outcome.solved) for outcome in summary.by_stratum
                 },
                 evaluation_seconds=summary.wall_seconds,
+                probe_wall_clock_stops=summary.wall_clock_stops,
+                probe_repeat_difference=None if comparison is None else comparison.difference,
+                probe_repeat_discordant=None if comparison is None else comparison.discordant,
             )
         case EvaluationKind.MINIF2F:
             return FixedTargets(
@@ -152,6 +196,7 @@ def fixed_targets_record(summary: EvaluationSummary) -> FixedTargets:
                 minif2f_valid_problems=summary.problems,
                 expansion_budget=summary.expansion_budget,
                 evaluation_seconds=summary.wall_seconds,
+                minif2f_wall_clock_stops=summary.wall_clock_stops,
             )
         case EvaluationKind.HELD_OUT_STATES:
             return FixedTargets(

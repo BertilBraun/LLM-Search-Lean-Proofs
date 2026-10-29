@@ -13,7 +13,7 @@ publishing  version k + 1 (the new policy adapter, the new value adapter only if
             recorded; every server swaps to it in place, the sleeping ones wake with it; μ turns on with the first
             value model that passed the gate
 evaluating  the fixed targets that are due (by loop hours, at the start, or requested) run as separate jobs while
-            the searches stay paused
+            the searches stay paused, after the paused searches' REPL processes stopped to free host memory
 resume      the searches continue with the new weights
 
 The boundaries to the outside (the searches with Lean and vLLM, the training job, the vLLM servers, the evaluation
@@ -52,7 +52,7 @@ from lean_search.rl.evaluation import EvaluationKind, EvaluationSummary
 from lean_search.rl.fixed_targets import target_config
 from lean_search.rl.loop_config import EvaluationTarget, GrpoLoopConfig
 from lean_search.rl.phase_metrics import search_phase_record
-from lean_search.rl.statement_sources import StatementSource
+from lean_search.rl.statement_sources import FedStatement, StatementSource
 from lean_search.rl.training_phase import (
     PhaseOutcome,
     TrainingPhaseConfig,
@@ -65,7 +65,7 @@ from lean_search.search import CompletedSearch, tree_record
 from lean_search.search.records import from_json_object, to_json
 
 IDLE_SECONDS = 30.0
-FAILURE_PAUSE_SECONDS = 5.0
+GIB = 2**30
 PHASE_OUTCOME_FILE = "phase.json"
 
 
@@ -110,6 +110,13 @@ class PhaseRecord:
 
 
 @dataclass(frozen=True)
+class ReleasedLeanMemory:
+    stopped_processes: int
+    # Their private (anonymous) memory when they stopped.
+    freed_bytes: int
+
+
+@dataclass(frozen=True)
 class TrainingRequest:
     phase: int
     config_text: str
@@ -127,6 +134,10 @@ class TreeSearcher(Protocol):
         ...
 
     def resume(self) -> None: ...
+
+    async def release_lean_memory(self, above_bytes: int) -> ReleasedLeanMemory:
+        """Stops the REPL processes above `above_bytes` of private memory; their proof states replay on next use."""
+        ...
 
 
 class PhaseTrainer(Protocol):
@@ -150,7 +161,9 @@ class ModelServers(Protocol):
 
 
 class Evaluations(Protocol):
-    async def evaluate(self, kind: EvaluationKind, phase: int) -> EvaluationSummary: ...
+    async def evaluate(self, kind: EvaluationKind, phase: int, repeat: int) -> EvaluationSummary:
+        """`repeat` > 0: another independent run of the same version (the probe's noise at the start)."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -206,6 +219,11 @@ class GrpoLoopPaths:
         return self.directory / "loop.log"
 
     @property
+    def children(self) -> Path:
+        """A record per running training or evaluation job, so a restarted loop never starts a second one."""
+        return self.directory / "children"
+
+    @property
     def weights(self) -> Path:
         return self.checkpoints_root / self.name / "weights"
 
@@ -215,8 +233,8 @@ class GrpoLoopPaths:
     def phase_checkpoints(self, phase: int) -> Path:
         return self.checkpoints_root / self.phase_run_name(phase)
 
-    def evaluation_directory(self, kind: EvaluationKind, version: int) -> Path:
-        return self.evaluations / f"{kind}_v{version:04d}"
+    def evaluation_directory(self, kind: EvaluationKind, version: int, repeat: int = 0) -> Path:
+        return self.evaluations / (f"{kind}_v{version:04d}" + (f"_repeat{repeat}" if repeat else ""))
 
 
 def now() -> str:
@@ -339,6 +357,9 @@ class GrpoLoop:
         self.session_started = clock()
         self.session_trees = 0
         self.session_proofs = 0
+        self.server_failures: dict[str, int] = {}
+        self.session_server_failures = 0
+        self.statements_given_up = 0
         self.failure: BaseException | None = None
         self.phase_template = phase_template
         from_json_object(TrainingPhaseConfig, tomllib.loads(phase_template))
@@ -370,25 +391,13 @@ class GrpoLoop:
         return minutes >= training.min_sampling_minutes and solved >= training.min_solved_trees
 
     async def run(self, stop: asyncio.Event) -> None:
-        await self.servers.check()
-        await self.servers.serve(read_current(self.paths.models))
-        if self.progress.stage != PhaseStage.SAMPLING:
-            self.log(f"Finishing phase {self.progress.phase} from {self.progress.stage}")
-            self.collecting = self.progress.phase + 1
-            await self.finish_phase()
-        await self.run_evaluations(self.due_evaluations(at_start=True), self.progress.phase - 1)
-        self.sampling_since = self.clock()
-        coroutines: list[Coroutine[None, None, None]] = [
-            self.work(stop) for _ in range(self.config.sampling.concurrency)
-        ]
-        coroutines += [self.watch(stop), self.report_status(stop)]
-        tasks = [asyncio.create_task(self.stopping_on_failure(coroutine, stop)) for coroutine in coroutines]
+        session = asyncio.create_task(self.stopping_on_failure(self.session(stop), stop))
         try:
             await stop.wait()
         finally:
-            for task in tasks:
-                task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+            # Cancelling also stops a training or evaluation job in flight (`loop_services.run_logged`).
+            session.cancel()
+            await asyncio.gather(session, return_exceptions=True)
             if self.progress.stage == PhaseStage.SAMPLING:
                 self.save_progress(sampling_seconds=self.sampling_seconds())
             self.loop_state = LoopState.STOPPED
@@ -396,6 +405,21 @@ class GrpoLoop:
             self.log(f"Stopped after {self.session_trees:,} trees and {self.session_proofs:,} proofs this session")
         if self.failure is not None:
             raise RuntimeError("The loop stopped on a failure; a restart resumes it") from self.failure
+
+    async def session(self, stop: asyncio.Event) -> None:
+        await self.servers.check()
+        await self.servers.serve(read_current(self.paths.models))
+        if self.progress.stage != PhaseStage.SAMPLING:
+            self.log(f"Finishing phase {self.progress.phase} from {self.progress.stage}")
+            self.collecting = self.progress.phase + 1
+            await self.finish_phase()
+        await self.run_evaluations(self.due_evaluations(at_start=True), self.progress.phase - 1, at_start=True)
+        self.sampling_since = self.clock()
+        coroutines: list[Coroutine[None, None, None]] = [
+            self.work(stop) for _ in range(self.config.sampling.concurrency)
+        ]
+        coroutines += [self.watch(stop), self.report_status(stop)]
+        await asyncio.gather(*(self.stopping_on_failure(coroutine, stop) for coroutine in coroutines))
 
     async def stopping_on_failure(self, coroutine: Coroutine[None, None, None], stop: asyncio.Event) -> None:
         try:
@@ -415,9 +439,8 @@ class GrpoLoop:
             try:
                 completed = await self.searcher.search(pool_problem(fed.statement))
             except httpx.HTTPError as error:
-                self.statements.abandon(fed.name)
-                self.log(f"{fed.name}: {type(error).__name__}: {error}; abandoned")
-                await asyncio.sleep(FAILURE_PAUSE_SECONDS)
+                self.server_failed(fed, error)
+                await asyncio.sleep(self.config.sampling.server_failure_pause_seconds)
                 continue
             except BaseException:
                 self.statements.abandon(fed.name)
@@ -432,15 +455,30 @@ class GrpoLoop:
                 async with self.store_lock:
                     await asyncio.to_thread(self.store.add, record, self.collecting, version, fed.difficulty)
             self.statements.record_outcome(fed.name, result.proved)
+            self.server_failures.pop(fed.name, None)
             self.session_trees += 1
             self.session_proofs += result.accounting.proofs
+
+    def server_failed(self, fed: FedStatement, error: httpx.HTTPError) -> None:
+        """A policy or value server failed the search, which says nothing about the statement: it is fed again."""
+        self.session_server_failures += 1
+        failures = self.server_failures.get(fed.name, 0) + 1
+        if failures <= self.config.sampling.server_failure_retries:
+            self.server_failures[fed.name] = failures
+            self.statements.retry(fed)
+            self.log(f"{fed.name}: {type(error).__name__}: {error}; fed again ({failures} failures)")
+            return
+        self.server_failures.pop(fed.name, None)
+        self.statements_given_up += 1
+        self.statements.abandon(fed.name)
+        self.log(f"{fed.name}: {type(error).__name__}: {error}; given up after {failures} failures")
 
     async def watch(self, stop: asyncio.Event) -> None:
         while not stop.is_set():
             await asyncio.sleep(self.config.training.check_seconds)
             for message in self.statements.refresh():
                 self.log(message)
-            if self.phase_due():
+            if not stop.is_set() and self.phase_due():
                 await self.run_phase()
             elif self.sampling_since is not None:
                 self.save_progress(sampling_seconds=self.sampling_seconds())
@@ -465,6 +503,8 @@ class GrpoLoop:
                 proofs_per_hour=self.session_proofs / hours,
                 statements_per_hour=self.session_trees / hours,
                 last_publish_time=published_time(current) if current.version else None,
+                server_failures=self.session_server_failures,
+                statements_given_up=self.statements_given_up,
             )
         )
 
@@ -589,18 +629,40 @@ class GrpoLoop:
                 due.append(kind)
         return due
 
-    async def run_evaluations(self, kinds: list[EvaluationKind], phase: int) -> None:
+    async def run_evaluations(self, kinds: list[EvaluationKind], phase: int, at_start: bool = False) -> None:
         if not kinds:
             return
         # Only between phases or before the workers start: the searches are paused or not running.
         self.loop_state = LoopState.EVALUATING
         self.write_status()
+        threshold = int(self.config.evaluation.paused_repl_memory_gib * GIB)
+        released = await self.searcher.release_lean_memory(threshold)
+        self.log(
+            f"Stopped {released.stopped_processes} search REPL processes ({released.freed_bytes / GIB:.1f} GiB) "
+            "for the evaluations"
+        )
         for kind in kinds:
-            summary = await self.evaluations.evaluate(kind, phase)
-            self.log(f"Evaluation {kind} of version {summary.policy_version}: {summary.solved}/{summary.problems}")
+            summaries = [
+                await self.evaluations.evaluate(kind, phase, repeat) for repeat in range(self.runs(kind, at_start))
+            ]
+            for repeat, summary in enumerate(summaries):
+                self.log(
+                    f"Evaluation {kind} of version {summary.policy_version}"
+                    + (f" (repeat {repeat})" if repeat else "")
+                    + f": {summary.solved}/{summary.problems}, {summary.wall_clock_stops} stopped on the wall clock"
+                )
+            if len(summaries) > 1:
+                solved = [summary.solved for summary in summaries]
+                self.log(f"Evaluation {kind} run to run: solved {solved}, difference {max(solved) - min(solved)}")
             self.progress = evaluated(self.progress, kind)
             self.save_progress()
             (self.paths.requests / kind.value).unlink(missing_ok=True)
+
+    def runs(self, kind: EvaluationKind, at_start: bool) -> int:
+        """Independent runs of the version: `baseline_runs` for version 0's baseline, else one."""
+        target = target_config(self.config.evaluation, kind)
+        baseline = at_start and target.at_start and last_evaluation(self.progress, kind) is None
+        return target.baseline_runs if baseline else 1
 
     def close_phase(self, phase: int, kinds: list[EvaluationKind], evaluation_seconds: float) -> None:
         entries = self.store.phase_entries(phase)

@@ -1,11 +1,14 @@
 """System usage of the node for the `system` family: GPUs (if NVML is available), the cgroup's CPU and memory, the CPU
-time of the Lean REPL processes, and the money spent at an hourly price."""
+time and private memory of the Lean REPL processes, the vLLM processes' memory, and the money spent at an hourly
+price."""
 
+import math
 import os
 import time
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple
 
 from lean_search.monitoring.families import SystemUsage
 from lean_search.monitoring.store import MetricsWriter, RunReader
@@ -13,6 +16,9 @@ from lean_search.monitoring.store import MetricsWriter, RunReader
 CGROUP = Path("/sys/fs/cgroup")
 PROC = Path("/proc")
 LEAN_PROCESS_NAMES = ("repl", "lean")
+# vLLM's API servers run as python with vllm on the command line; its engine processes are named VLLM::<role>.
+VLLM_COMMAND_MARKER = b"vllm"
+VLLM_PROCESS_PREFIX = "VLLM"
 
 
 @dataclass(frozen=True)
@@ -30,6 +36,15 @@ class CpuUsage:
     cores_used: float
     lean_cores_used: float
     throttled_fraction: float
+
+
+@dataclass(frozen=True)
+class HostMemory:
+    total_bytes: int
+    available_bytes: int
+    # Private (anonymous) resident memory per Lean process: shared Mathlib .olean mappings are not counted.
+    lean_private_bytes: tuple[int, ...]
+    vllm_private_bytes: int
 
 
 @dataclass(frozen=True)
@@ -114,6 +129,51 @@ def memory_used_gib(cgroup: Path, proc: Path) -> float:
     return (info["MemTotal"] - info["MemAvailable"]) / 2**20
 
 
+def memory_limit_bytes(cgroup: Path, host_total: int) -> int:
+    path = cgroup / "memory.max"
+    if path.exists() and (limit := path.read_text().strip()) != "max":
+        return min(int(limit), host_total)
+    return host_total
+
+
+class PrivateMemory(NamedTuple):
+    lean_bytes: tuple[int, ...]
+    vllm_bytes: int
+
+
+def private_memory(proc: Path, lean_names: Collection[str]) -> PrivateMemory:
+    """RssAnon of every Lean process, and the sum over vLLM's processes."""
+    lean = []
+    vllm = 0
+    for status in proc.glob("[0-9]*/status"):
+        try:
+            text = status.read_text()
+            command_line = (status.parent / "cmdline").read_bytes()
+        except OSError:
+            continue
+        fields = {key: value.strip() for key, _, value in (line.partition(":") for line in text.splitlines())}
+        private = int(fields.get("RssAnon", "0 kB").split()[0]) * 1024
+        if fields["Name"] in lean_names:
+            lean.append(private)
+        elif fields["Name"].startswith(VLLM_PROCESS_PREFIX) or VLLM_COMMAND_MARKER in command_line:
+            vllm += private
+    return PrivateMemory(tuple(lean), vllm)
+
+
+def host_memory(cgroup: Path, proc: Path, lean_names: Collection[str]) -> HostMemory:
+    lines = (proc / "meminfo").read_text().splitlines()
+    info = {line.split(":")[0]: int(line.split()[1]) * 1024 for line in lines}
+    total = memory_limit_bytes(cgroup, info["MemTotal"])
+    available = min(info["MemAvailable"], total - round(memory_used_gib(cgroup, proc) * 2**30))
+    processes = private_memory(proc, lean_names)
+    return HostMemory(total, available, processes.lean_bytes, processes.vllm_bytes)
+
+
+def percentile_90(values: Collection[int]) -> int:
+    ordered = sorted(values)
+    return ordered[math.ceil(0.9 * len(ordered)) - 1] if ordered else 0
+
+
 class GpuReader:
     def __init__(self) -> None:
         try:
@@ -157,6 +217,7 @@ def record_system(
         current = cpu_snapshot(CGROUP, PROC, process_names)
         cpu = cpu_usage(previous, current)
         gpu = gpus.usage()
+        memory = host_memory(CGROUP, PROC, process_names)
         now = time.time()
         writer.write(
             SystemUsage(
@@ -171,6 +232,12 @@ def record_system(
                 memory_used_gib=memory_used_gib(CGROUP, PROC),
                 hourly_price=hourly_price,
                 cost_so_far=hourly_price * (now - started_at) / 3600,
+                memory_total_gib=memory.total_bytes / 2**30,
+                memory_available_gib=memory.available_bytes / 2**30,
+                lean_processes=len(memory.lean_private_bytes),
+                lean_private_memory_gib=sum(memory.lean_private_bytes) / 2**30,
+                lean_private_memory_p90_gib=percentile_90(memory.lean_private_bytes) / 2**30,
+                vllm_private_memory_gib=memory.vllm_private_bytes / 2**30,
             ),
             record_time=now,
         )

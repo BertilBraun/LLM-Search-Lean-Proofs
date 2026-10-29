@@ -34,6 +34,9 @@ class LoopStatus:
     proofs_per_hour: float
     statements_per_hour: float
     last_publish_time: float | None
+    # Searches a server failed this session, and statements dropped after repeated failures.
+    server_failures: int = 0
+    statements_given_up: int = 0
 
 
 @dataclass(frozen=True)
@@ -51,6 +54,13 @@ class SystemUsage:
     memory_used_gib: float
     hourly_price: float
     cost_so_far: float
+    # The limit (cgroup, else host) and what is left; private memory of all Lean REPLs and of vLLM (rl/README.md).
+    memory_total_gib: float = 0.0
+    memory_available_gib: float = 0.0
+    lean_processes: int = 0
+    lean_private_memory_gib: float = 0.0
+    lean_private_memory_p90_gib: float = 0.0
+    vllm_private_memory_gib: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -75,6 +85,12 @@ class FixedTargets:
     probe_problems: int | None = None
     probe_expansion_budget: int | None = None
     probe_by_difficulty: dict[str, BandOutcome] = field(default_factory=dict)
+    # Problems whose search stopped on the wall-clock cap rather than the expansion budget.
+    probe_wall_clock_stops: int | None = None
+    minif2f_wall_clock_stops: int | None = None
+    # A repeated run against the first run of the version: solved difference, problems solved by one only.
+    probe_repeat_difference: int | None = None
+    probe_repeat_discordant: int | None = None
     # Wall time of the evaluation this line reports.
     evaluation_seconds: float | None = None
 

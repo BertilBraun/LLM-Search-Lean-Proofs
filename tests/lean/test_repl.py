@@ -309,6 +309,12 @@ async def test_state_survives_a_restart(repl: LeanRepl, substituted_state: Proof
     assert isinstance(result.outcome, ProofState) and result.outcome.is_proved
 
 
+async def test_state_survives_a_stopped_process(repl: LeanRepl, substituted_state: ProofState) -> None:
+    await repl.stop()
+    result = await repl.apply_tactic(substituted_state, "subst h₁\nrfl")
+    assert isinstance(result.outcome, ProofState) and result.outcome.is_proved
+
+
 async def test_wall_clock_timeout_restarts_the_process_before_returning(
     repl: LeanRepl, initial_state: ProofState
 ) -> None:
@@ -496,6 +502,13 @@ async def test_pool_restarts_a_process_past_its_limits_on_release() -> None:
         async with pool.acquire() as repl:
             restart_count = repl.restart_count
     assert restart_count == 1
+
+
+async def test_pool_stops_processes_in_use_at_the_memory_threshold() -> None:
+    async with LeanReplPool(1) as pool, pool.acquire() as repl:
+        await start(repl, STATEMENT)
+        stopped = await pool.stop_processes(0)
+        assert (len(stopped), repl.process_id) == (1, None)
 
 
 async def test_pool_restarts_a_process_whose_user_raised() -> None:

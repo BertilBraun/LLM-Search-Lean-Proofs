@@ -78,6 +78,14 @@ def failing_gates(writer: MetricsWriter) -> None:
     write_all(writer, [value_result(gate_passed=False)] * 3)
 
 
+def low_host_memory(writer: MetricsWriter) -> None:
+    writer.write(system_usage(memory_available_gib=6.0), record_time=NOW)
+
+
+def failing_servers(writer: MetricsWriter) -> None:
+    writer.write(loop_status(last_publish_time=NOW - 60, server_failures=12), record_time=NOW - 30)
+
+
 @pytest.mark.parametrize(
     ("scenario", "title"),
     [
@@ -94,6 +102,8 @@ def failing_gates(writer: MetricsWriter) -> None:
         (idle_gpus, "GPUs underused"),
         (solve_rate_too_high, "Curriculum off target"),
         (failing_gates, "Value gate failing"),
+        (low_host_memory, "Host memory low"),
+        (failing_servers, "Server failures"),
     ],
 )
 def test_rule_fires(tmp_path: Path, scenario: Callable[[MetricsWriter], None], title: str) -> None:

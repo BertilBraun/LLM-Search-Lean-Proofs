@@ -2,6 +2,7 @@
 
 import json
 import math
+from collections import deque
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -39,8 +40,12 @@ class StatementSource(Protocol):
 
     def record_outcome(self, name: str, solved: bool) -> None: ...
 
+    def retry(self, fed: FedStatement) -> None:
+        """A search that a server failed: the statement is fed again (the curriculum before new ones)."""
+        ...
+
     def abandon(self, name: str) -> None:
-        """A search that ended without an outcome (a server failed, the loop stopped)."""
+        """A search that ended without an outcome and is not retried (the loop stopped, too many server failures)."""
         ...
 
     def refresh(self) -> list[str]:
@@ -89,6 +94,7 @@ class CurriculumStatements:
         self.curriculum = Curriculum(config, 0)
         self.verified_offset = 0
         self.unavailable = set(held_out) | set(searched)
+        self.retrying: deque[FedStatement] = deque()
         self.read_verified()
         if config.unverified:
             self.curriculum.add_unverified(read_index(data_root / config.unverified), self.unavailable)
@@ -101,6 +107,8 @@ class CurriculumStatements:
         return len(self.curriculum.add(records, self.unavailable))
 
     def next_statement(self) -> FedStatement | None:
+        if self.retrying:
+            return self.retrying.popleft()
         statement = self.curriculum.next_statement()
         if statement is None:
             return None
@@ -112,8 +120,12 @@ class CurriculumStatements:
         self.curriculum.record_outcome(name, solved)
         write_json_atomically(self.state_path, self.curriculum.state())
 
+    def retry(self, fed: FedStatement) -> None:
+        # Still fed in the curriculum's books: its outcome counts while the band it was fed from is current.
+        self.retrying.append(fed)
+
     def abandon(self, name: str) -> None:
-        # The curriculum feeds each statement once per loop; a rare server failure costs that statement.
+        # The curriculum feeds each statement once per loop; a restart offers the ones without a tree again.
         pass
 
     def refresh(self) -> list[str]:
@@ -155,6 +167,9 @@ class FixedStatements:
 
     def record_outcome(self, name: str, solved: bool) -> None:
         self.running.discard(name)
+
+    def retry(self, fed: FedStatement) -> None:
+        self.running.discard(fed.name)
 
     def abandon(self, name: str) -> None:
         self.running.discard(name)

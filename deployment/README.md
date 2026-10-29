@@ -290,7 +290,10 @@ The search-tree GRPO loop (`src/lean_search/rl/README.md`, "The loop") on 4x RTX
 | 1-3 | serving: the merged policy (port 810x, 62% of memory, `--logprobs-mode processed_logprobs`) and the merged value model (port 820x, 28%, `MAX_NUM_SEQS=96`) |
 
 The loop process holds one Lean REPL per concurrent search (`[sampling] concurrency`, 112) and runs the training and
-evaluation jobs as child processes. Servers on the training GPU (none by default) would sleep during each phase.
+evaluation jobs as child processes, each in its own process group and recorded in `$LEAN_SEARCH_RUNS/<loop>/children/`
+while it runs; stopping the loop stops the job too. A loop that refuses to start because "Jobs of an earlier loop
+still run" died without stopping one: check it with `ps -o pid,cmd -g <process id>`, stop it with `kill -TERM
+-<process id>`, then start the loop again. Servers on the training GPU (none by default) would sleep during each phase.
 
 Bring-up on a fresh node, after the rebuild (`setup_remote.sh`, pool v3 verified statements under
 `$LEAN_SEARCH_DATA/expert_iteration/pool_v3/`, from `node_backup/` the merged starting policy at
@@ -323,13 +326,22 @@ First-hour checks:
   is missing. `serve-commands` starts policy servers with `--logprobs-mode processed_logprobs`; after the first phase the dashboard's sampler-vs-trainer
   difference (`grpo` family, `sampler_absolute_log_probability_difference`) must be small (bf16 resolution, ~0.01-0.05
   nats); a raw-mode server shows a systematic offset from the 1/0.8 temperature scaling.
-- Timings: the version-0 probe and held-out-states runs before the first phase give the probe's wall time
-  (`fixed_targets.evaluation_seconds`; target 40-60 min, else lower `probe_per_stratum` to 100 and re-select before the
-  loop starts); the first phase's `timing` line gives sampling vs training (two passes if training stays well below
-  sampling, else `passes_per_phase = 1` in `phase.toml`) and publishing (~20 s merge plus swaps).
-- Memory and CPU (System page): the paused searches' REPLs plus the evaluation's own pool during the probe; lower
-  `[evaluation.probe] concurrency` or `[sampling] concurrency` if memory runs short. Lean cores near the thread count
-  and GPU utilization above ~80% mean the concurrency fits.
+- Timings: the two version-0 probe runs and the held-out-states run before the first phase give the probe's wall time
+  (`fixed_targets.evaluation_seconds`; target 40-60 min per run at concurrency 64, else lower `probe_per_stratum` to
+  100 and re-select before the loop starts); the first phase's `timing` line gives sampling vs training (two passes if
+  training stays well below sampling, else `passes_per_phase = 1` in `phase.toml`) and publishing (~20 s merge plus
+  swaps).
+- Probe validity: `fixed_targets.probe_wall_clock_stops` must be ~0 (the 1-hour cap is an emergency stop; if it binds,
+  the probe measures load). The second version-0 run gives the noise: `probe_repeat_difference` and
+  `probe_repeat_discordant` (also `evaluations/probe_v0000_repeat1/comparison.json` and `loop.log`); later probe
+  differences smaller than about twice the discordant count's square root are noise.
+- Memory (System page, budget in `src/lean_search/rl/README.md`, "Host memory"): `memory_total_gib`,
+  `memory_available_gib`, `lean_private_memory_gib` and its p90, `vllm_private_memory_gib`, once while sampling, once
+  while publishing (the merge) and once during the probe. `loop.log` reports the paused REPL processes stopped before
+  each evaluation. Lower `[evaluation.probe] concurrency` or `[sampling] concurrency` if available memory falls below
+  ~15% of the limit. Lean cores near the thread count and GPU utilization above ~80% mean the concurrency fits.
+- Server failures: `status.server_failures` stays at 0 on a healthy run; failed searches feed their statement again
+  (`[sampling] server_failure_retries`), `statements_given_up` counts the dropped ones.
 - Training memory: `peak_memory_gib` in `$LEAN_SEARCH_CHECKPOINTS/grpo_loop_v1_phase_0001/phase.json`.
 
 Cheap tests (DESIGN.md "Order of work", step 3), with the same servers:

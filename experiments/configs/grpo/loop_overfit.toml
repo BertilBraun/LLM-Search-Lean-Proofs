@@ -90,12 +90,15 @@ fixed = "grpo/fixed_sets/overfit_300.jsonl"
 [evaluation]
 probe_set = "grpo/fixed_sets/probe.jsonl"
 held_out_states_file = "phase5_eval_visible_student_v2_visible/states.jsonl"
+# Before evaluating, the paused searches' REPL processes above this private memory stop (0: all); they restart and
+# replay their proof states on the next request. Memory budget: src/lean_search/rl/README.md, "Host memory".
+paused_repl_memory_gib = 0.0
 
 # Only when requested (grpo_loop.py request-evaluation --target probe).
 [evaluation.probe]
 max_expansions = 16
-max_wall_seconds = 600.0
-concurrency = 96
+max_wall_seconds = 3600.0
+concurrency = 64
 every_hours = 0.0
 at_start = false
 
@@ -103,7 +106,7 @@ at_start = false
 [evaluation.minif2f]
 max_expansions = 64
 max_wall_seconds = 7200.0
-concurrency = 120
+concurrency = 64
 every_hours = 0.0
 at_start = false
 

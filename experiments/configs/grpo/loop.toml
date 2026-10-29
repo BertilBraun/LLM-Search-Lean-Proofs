@@ -59,9 +59,12 @@ max_num_seqs = 96
 # n = 8, harvesting and ε on, heartbeat limits, flattening; server URLs come from [serving].
 search_config = "experiments/configs/grpo/search/visible_student_v2.toml"
 # One REPL per search; most searches wait on the GPUs. Tune by the first hour (Lean cores and memory on the
-# dashboard's system page; a REPL holds 0.25-2 GiB of private memory).
+# dashboard's system page; a REPL holds 0.25-2 GiB of private memory; budget in src/lean_search/rl/README.md).
 concurrency = 112
 status_seconds = 30.0
+# A search a policy or value server failed feeds its statement again, up to this many times.
+server_failure_retries = 3
+server_failure_pause_seconds = 5.0
 
 [training]
 phase_config = "experiments/configs/grpo/phase.toml"
@@ -103,20 +106,25 @@ seed = "grpo-curriculum"
 [evaluation]
 probe_set = "grpo/fixed_sets/probe.jsonl"
 held_out_states_file = "phase5_eval_visible_student_v2_visible/states.jsonl"
+# Before evaluating, the paused searches' REPL processes above this private memory stop (0: all); they restart and
+# replay their proof states on the next request. Memory budget: src/lean_search/rl/README.md, "Host memory".
+paused_repl_memory_gib = 0.0
 
-# Every ~6 hours of loop time (sampling and training), and once before the first phase (version 0's baseline).
+# Every ~6 hours of loop time (sampling and training), and before the first phase twice (version 0's baseline and
+# its run-to-run noise). The wall cap is an emergency stop: the expansions are the budget (wall_clock_stops ~ 0).
 [evaluation.probe]
 max_expansions = 16
-max_wall_seconds = 600.0
-concurrency = 96
+max_wall_seconds = 3600.0
+concurrency = 64
 every_hours = 6.0
 at_start = true
+baseline_runs = 2
 
 # Milestones only: grpo_loop.py request-evaluation --target minif2f (or grpo_evaluate.py with the loop stopped).
 [evaluation.minif2f]
 max_expansions = 64
 max_wall_seconds = 7200.0
-concurrency = 120
+concurrency = 64
 every_hours = 0.0
 at_start = false
 

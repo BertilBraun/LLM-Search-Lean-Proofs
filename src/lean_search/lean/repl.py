@@ -470,6 +470,11 @@ class LeanRepl:
         async with self._lock:
             await self._replace_process()
 
+    async def stop(self) -> None:
+        """Stops the process, not the REPL: the next request starts a new one and replays the proof states it needs."""
+        async with self._lock:
+            await self._stop_process()
+
     async def close(self) -> None:
         """Final: later calls raise ReplClosedError instead of starting a process that nothing would close."""
         self._closed = True
