@@ -117,7 +117,7 @@ bin tokens, prompts too long) to
 ## Search-graph targets (`graph_targets.py`, `ranking.py`, `benchmark.py`)
 
 For the next phase (DESIGN.md, "Value model"), on graphs labelled by `search.graph_labels.label_graph`, every
-expanded state gets `y = (1 − μ) · z + μ · q` (`value_share` = μ; 0 until a value model passed the gate, then 0.15):
+expanded state gets `y = (1 − μ) · z + μ · q` (`value_share` = μ; 0 until the owner sets it for the loop):
 
 | Node | z (concrete label) | q (value part) | Weight |
 |---|---|---|---|
@@ -145,36 +145,37 @@ with s the log-odds of the proof probability `log(1 - p_dead) - log p_dead` (or 
 pair members train in the same micro-batch; exact and dead v0 examples (v0's own training data, `value/v0/train.jsonl`)
 are replayed as `replay_share` of the pointwise items, drawn anew by each phase's optimization seed.
 
-## The gate (`gate_statistics.py`)
+## The pair statistic (`pair_statistics.py`)
 
-`run_value_gate` scores the benchmark fresh with the candidate and the published adapter (`benchmark_scores`, the same
-`BenchmarkScores` as the served path) and `value_gate` decides on the quantity A* orders its frontier by: for every
-labelled sibling pair of the benchmark (`labelled_pairs`: a proof-graph child against a dead-end sibling, or against
-an off-graph sibling the search explored, `min_expanded_nodes`), whether the proof-graph child gets the lower
-`h = Σ p_k · steps_k` (ties count half). The statistic is the candidate's share of such pairs minus the published
-model's, and its interval a percentile interval from a paired cluster bootstrap: problems are drawn with replacement
-with all their pairs (`bootstrap_resamples` 5000, fixed `seed`, `confidence` 0.95). The candidate passes when the lower
-bound lies above `min_lower_bound` (0) and the benchmark holds no value-model-guided tree (`guided_trees = "refuse"`;
-`"warn"` only reports them in `warnings`). `GateStatistic` reports the problems and pairs behind it, the pairs the two
-models order differently, and the effective pairs: the independent pairs that would give the bootstrap's spread
-(fewer than the pairs when the pairs of one problem move together). The benchmark metrics of both models (AUC, Brier,
-pair accuracy by p_dead, Spearman) are kept in `GateResult` as diagnostics, never as pass criteria; v0 has no
-meaningful p_dead (≈ 1e-7 everywhere), so any metric of p_dead favours every new model.
+There is no value gate (owner decision 2026-10-29): every value model the loop trains is published. The benchmark is
+a trend: `pair_share` gives one model's share of labelled sibling pairs (`labelled_pairs`: a proof-graph child
+against a dead-end sibling, or against an off-graph sibling the search explored, `min_expanded_nodes`) whose
+proof-graph child gets the lower `h = Σ p_k · steps_k` (ties count half), the quantity A* orders its frontier by, and
+`pair_statistic` compares a model with a reference on the pairs both scored: the share difference, and its interval
+from a paired cluster bootstrap (problems drawn with replacement with all their pairs; `bootstrap_resamples` 5000,
+fixed `seed`, `confidence` 0.95). `PairStatistic` reports the problems and pairs behind it, the pairs the two models
+order differently, and the effective pairs: the independent pairs that would give the bootstrap's spread (fewer than
+the pairs when the pairs of one problem move together). The loop (`rl/value_trends.py`) compares each served value
+model with v0 and with the value model served before it, next to the benchmark metrics (AUC, Brier, pair accuracy by
+kind, Spearman); v0 has no meaningful p_dead (≈ 1e-7 everywhere), so any p_dead metric favours every new model.
 
 What it can detect, measured on the value-free row-2 trees (miniF2F-valid, log-probability search of SFT v2, 244
 trees): 52 labelled pairs (50 proof over expanded, 2 proof over dead end) over only 13 problems (16, 8, 6, 5, 5, 3, 2,
 2 and five with one); `min_expanded_nodes = 1` would give 95 pairs over 24 problems. A model against itself gives the
-interval [0, 0]. In simulations on that pair structure (a candidate changing 10-40% of the pairs, independently per
-pair), the 95% half-width is 0.08-0.17, a candidate without a real gain passes in 2-4% of retrains, and a gain of
-+0.10 in pairs ordered by h passes 22-61% of the time (60% only when the candidate changes few pairs); when the pairs
-of a problem change together, power is lower still. The gate set's 402 problems give about 1.6 times the pairs.
+interval [0, 0]. In simulations on that pair structure (a model changing 10-40% of the pairs, independently per pair),
+the 95% half-width is 0.08-0.17, a model without a real gain lies entirely above zero in 2-4% of retrains, and a gain
+of +0.10 in 22-61%; when the pairs of a problem change together, power is lower still. The gate set's 402 problems
+give about 1.6 times the pairs.
 
-`diagnostics.py` records per retrain (`ValueDiagnostics`, the dashboard's value page): the label distribution of the
-window's targets per bin (proof graph, off graph in solved and in unsolved trees, v0 replay; weight-averaged, with
-counts and weights), the predicted distributions (mean per bin, p_dead per tenth, expected steps given alive per step)
-of the candidate and the published model on the benchmark and of the serving model on the phase's expanded and
-frontier states (the recorded bins), and the calibration of the predicted proof probability against z on expanded
-states (the candidate on the benchmark, the serving model on the phase).
+`diagnostics.py` (the dashboard's value page): label distributions per bin by source and tree outcome (proof graph,
+off graph in solved and in unsolved trees; weight-averaged, with counts and weights; `label_distributions`, exact steps
+smoothed by `sigma` or not at 0), predicted distributions (mean per bin, p_dead per tenth, expected steps given alive
+per step; `prediction_distribution`), the calibration of the predicted proof probability against z on expanded states
+(reliability bins, ECE, Brier; `recorded_calibration` from a search's recorded bins, `benchmark_calibration` from
+fresh scores) and the recorded remaining steps against the proof graph's exact ones (`recorded_steps`). Per phase the
+loop records `phase_value_metrics` of the phase's trees (labels and the recorded predictions of the same states, the
+frontier's, calibration, steps); per retrain the training job records the window's label distributions (smoothed as
+trained) and the v0 replay's (`ValueOutcome.labels`, `replay_labels`).
 
 ## Value benchmark (`benchmark.py`, `benchmark_scoring.py`, `experiments/value_benchmark.py`)
 
@@ -184,8 +185,7 @@ expansions. The benchmark therefore records each run's provenance (`TreeProvenan
 `value_free` (cumulative log-probability or depth plus goals), `heuristic_value` (A* on the goal count),
 `value_model` (A* on a named served adapter or merged value model) or `unknown_value` (trees with recorded estimates
 and no config). `guidance_conflicts` lists the runs guided by a compared model (by served name; `None` compares every
-value model, and an unknown guide always conflicts); `build` refuses them unless `--guided-trees warn`, and so does
-the gate (`GateConfig.guided_trees`). Benchmark trees come from a value-free search of the starting policy on
+value model, and an unknown guide always conflicts); `build` refuses them unless `--guided-trees warn`. Benchmark trees come from a value-free search of the starting policy on
 miniF2F-valid (`experiments/configs/value_benchmark_search.toml`, the commands are in its header).
 
 `build_benchmark` keeps one tree per statement (the first run listing it), every sibling group with a proof-graph

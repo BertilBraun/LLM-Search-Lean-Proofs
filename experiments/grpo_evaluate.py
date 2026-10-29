@@ -1,24 +1,26 @@
 """One fixed-target evaluation of a GRPO loop's published version, written to the loop's dashboard.
 
-    python experiments/grpo_evaluate.py --loop-directory $LEAN_SEARCH_RUNS/<loop> --target probe [--phase 12]
-    python experiments/grpo_evaluate.py --loop-directory ... --target probe --repeat 1    # a second, independent run
+    python experiments/grpo_evaluate.py --loop-directory $LEAN_SEARCH_RUNS/<loop> --target probe --slot 7 [--phase 12]
+    python experiments/grpo_evaluate.py --loop-directory ... --target probe --slot 7 --repeat 1   # independent rerun
+    python experiments/grpo_evaluate.py --loop-directory ... --target probe --slot 7 --value-arm  # published value
+    python experiments/grpo_evaluate.py --loop-directory ... --target probe                       # the whole set
     python experiments/grpo_evaluate.py --loop-directory ... --target minif2f
     python experiments/grpo_evaluate.py --loop-directory ... --target held_out_states
-    python experiments/grpo_evaluate.py --loop-directory ... --target value_ab --value-model initial    # then published
 
 Targets (src/lean_search/rl/fixed_targets.py, budgets in the loop config's [evaluation]): `probe` (the held-out pool
-statements of grpo_fixed_sets.py select, 16 expansions, a 1-hour emergency cap per problem), `minif2f` (miniF2F-valid at
-the full budget, 64 expansions), `held_out_states` (per-sample success on the 512 held-out states, one request each) and
-`value_ab` (the value A/B search: part of the probe set, once with each value model).
-The servers must serve the loop's current policy and the value model named by --value-model (default: the loop
-config's `evaluation.value_model`, value v0 unless changed, so the probe and miniF2F measure the policy alone): the
-running loop serves them and calls this inside its phase pauses (searches paused, GPUs free); without a running loop
-(before the first phase, after the last) serve them and run it directly.
-Results go to $LEAN_SEARCH_RUNS/<loop>/evaluations/<target>_v<version>/ (resumable: rerun the same command), the
-fixed_targets line to the loop's metrics and a line to evaluations.jsonl. `--repeat k` searches the same version again
-into <target>_v<version>_repeat<k>/ and compares it with the first run (comparison.json, the fixed_targets line). The
-value A/B's arms go to value_ab_v<version>_<value model>/; the published arm, run after the initial one, compares
-the two per problem (comparison.json, the value_ab line).
+statements of grpo_fixed_sets.py select, 16 expansions, a 1-hour emergency cap per problem; with --slot only the part
+slot % probe_parts of the set, stratified like it), `minif2f` (miniF2F-valid at the full budget, 64 expansions) and
+`held_out_states` (per-sample success on the 512 held-out states, one request each).
+The servers must serve the loop's current policy and the loop config's `evaluation.value_model` (value v0 unless
+changed, so the probe and miniF2F measure the policy alone), or for --value-arm the published value model: the running
+loop serves them and calls this inside its phase pauses (searches paused, GPUs free); without a running loop (before
+the first phase, after the last) serve them and run it directly.
+Results go to $LEAN_SEARCH_RUNS/<loop>/evaluations/<target>[_slot<slot>]_v<version>/ (resumable: rerun the same
+command), the fixed_targets line to the loop's metrics (a probe slot's with the rolling whole set of the last
+probe_parts slots) and a line to evaluations.jsonl. `--repeat k` searches the same version (and part) again into
+..._repeat<k>/ and compares it with the first run (comparison.json, the fixed_targets line). `--value-arm` searches a
+slot's part with the published value model into ..._value_arm/ and pairs it per problem with the slot's run
+(comparison.json, pooled with the earlier value arms; the value_arm line).
 """
 
 import argparse
@@ -29,21 +31,25 @@ import os
 from pathlib import Path
 
 from lean_search.expert_iteration.serving import read_current, read_versions
-from lean_search.monitoring.families import ValueAbResult
 from lean_search.monitoring.store import LoopContext, MetricsWriter
 from lean_search.rl.evaluation import (
     EvaluationKind,
     EvaluationPaths,
+    EvaluationRun,
     EvaluationSummary,
     RepeatComparison,
+    RollingProbe,
     compare_repeats,
     fixed_targets_record,
-    value_ab_result,
+    read_summary,
+    rolling_probe,
+    value_arm_result,
+    value_arm_text,
 )
 from lean_search.rl.fixed_targets import evaluate_target
 from lean_search.rl.loop import (
     GrpoLoopPaths,
-    earlier_value_ab_results,
+    earlier_value_arm_results,
     read_progress,
     value_adapter_version,
     value_version,
@@ -65,20 +71,26 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--loop-directory", type=Path, required=True)
     parser.add_argument("--target", type=EvaluationKind, choices=list(EvaluationKind), required=True)
     parser.add_argument("--phase", type=int, help="the metrics line's phase (default: the last finished one)")
+    parser.add_argument("--slot", type=int, help="a probe slot: only its part of the probe set")
     parser.add_argument(
         "--repeat", type=int, default=0, help="k > 0: another run of the version, compared with the first"
     )
     parser.add_argument(
-        "--value-model",
-        type=EvaluationValueModel,
-        choices=list(EvaluationValueModel),
-        help="the value model the servers serve (default: the loop config's evaluation.value_model)",
+        "--value-arm", action="store_true", help="the slot's part with the published value model, paired with the slot"
     )
     return parser.parse_args()
 
 
 def log(message: str) -> None:
     print(f"{datetime.datetime.now().isoformat(timespec='seconds')} {message}", flush=True)
+
+
+def evaluation_run(arguments: argparse.Namespace) -> EvaluationRun:
+    if arguments.slot is not None and arguments.target != EvaluationKind.PROBE:
+        raise SystemExit("--slot is a probe slot: use it with --target probe.")
+    if arguments.value_arm and (arguments.slot is None or arguments.repeat):
+        raise SystemExit("--value-arm pairs a probe slot's first run: give --slot, not --repeat.")
+    return EvaluationRun(arguments.target, arguments.slot, arguments.repeat, arguments.value_arm)
 
 
 def served_value_version(config: GrpoLoopConfig, paths: GrpoLoopPaths, value_model: EvaluationValueModel) -> int:
@@ -91,45 +103,37 @@ def served_value_version(config: GrpoLoopConfig, paths: GrpoLoopPaths, value_mod
 
 
 async def evaluate(arguments: argparse.Namespace) -> None:
+    run = evaluation_run(arguments)
     config = load_loop_config(arguments.loop_directory / "loop.toml")
     paths = GrpoLoopPaths(RUNS_DIRECTORY, DATA_DIRECTORY, CHECKPOINTS_DIRECTORY, config.name)
     current = read_current(paths.models)
-    value_model = arguments.value_model or config.evaluation.value_model
+    value_model = EvaluationValueModel.PUBLISHED if run.value_arm else config.evaluation.value_model
     versions = (current.version, served_value_version(config, paths, value_model))
     phase = arguments.phase if arguments.phase is not None else read_progress(paths.progress).phase - 1
     template = served_run_config(load_run_config(REPOSITORY_DIRECTORY / config.sampling.search_config), config.serving)
     renamings = load_renamings(config.renaming, DATA_DIRECTORY)
-    arm = value_model if arguments.target == EvaluationKind.VALUE_AB else None
-    directory = paths.evaluation_directory(arguments.target, current.version, arguments.repeat, arm)
+    directory = paths.evaluation_directory(run, current.version)
     directory.mkdir(parents=True, exist_ok=True)
-    log(f"{arguments.target} of version {current.version} (value version {versions[1]}) into {directory}")
+    log(f"{run} of version {current.version} (value version {versions[1]}) into {directory}")
     summary = await evaluate_target(
-        arguments.target,
-        config.evaluation,
-        template,
-        directory,
-        versions,
-        DATA_DIRECTORY,
-        RUNS_DIRECTORY,
-        renamings,
-        log,
+        run, config.evaluation, template, directory, versions, DATA_DIRECTORY, RUNS_DIRECTORY, renamings, log
     )
     context = LoopContext(phase=phase, policy_version=versions[0], value_version=versions[1])
     writer = MetricsWriter(paths.directory, context)
-    if arguments.target == EvaluationKind.VALUE_AB:
-        if value_model == EvaluationValueModel.PUBLISHED:
-            summary = compare_value_arms(config, paths, current.version, summary, directory)
-            if summary.value_ab is not None:
-                writer.write(summary.value_ab)
-                log(value_ab_text(summary.value_ab))
+    if run.value_arm:
+        summary = compare_value_arm(config, paths, run, current.version, summary, directory)
+        assert summary.value_arm is not None
+        writer.write(summary.value_arm)
+        log(value_arm_text(summary.value_arm))
     else:
         comparison = None
-        if arguments.repeat and arguments.target != EvaluationKind.HELD_OUT_STATES:
-            first = EvaluationPaths(paths.evaluation_directory(arguments.target, current.version))
+        if run.repeat and run.kind != EvaluationKind.HELD_OUT_STATES:
+            first = EvaluationPaths(paths.evaluation_directory(dataclasses.replace(run, repeat=0), current.version))
             comparison = compare_repeats(read_results(first.results), read_results(EvaluationPaths(directory).results))
             EvaluationPaths(directory).comparison.write_text(to_json(comparison), encoding="utf-8")
             log(repeat_text(comparison))
-        writer.write(fixed_targets_record(summary, comparison))
+        rolling = None if run.slot is None or run.repeat else last_slots(config, paths, run.slot)
+        writer.write(fixed_targets_record(summary, comparison, rolling))
     with (paths.directory / "evaluations.jsonl").open("a", encoding="utf-8") as handle:
         handle.write(to_json(summary) + "\n")
     log(
@@ -138,26 +142,40 @@ async def evaluate(arguments: argparse.Namespace) -> None:
     )
 
 
-def compare_value_arms(
-    config: GrpoLoopConfig, paths: GrpoLoopPaths, version: int, summary: EvaluationSummary, directory: Path
+def last_slots(config: GrpoLoopConfig, paths: GrpoLoopPaths, slot: int) -> RollingProbe | None:
+    """This slot and the ones before it, each part of the probe set once, once all of them ran."""
+    first = slot - config.evaluation.probe_parts + 1
+    directories = [paths.probe_slot_directory(number) for number in range(first, slot + 1)] if first >= 0 else []
+    if not directories or any(directory is None for directory in directories):
+        return None
+    return rolling_probe([read_summary(directory / "summary.json") for directory in directories if directory])
+
+
+def compare_value_arm(
+    config: GrpoLoopConfig,
+    paths: GrpoLoopPaths,
+    run: EvaluationRun,
+    version: int,
+    summary: EvaluationSummary,
+    directory: Path,
 ) -> EvaluationSummary:
-    """The published arm against the initial arm of the same version, once that ran; the summary then carries it."""
-    reference = EvaluationPaths(
-        paths.evaluation_directory(EvaluationKind.VALUE_AB, version, 0, EvaluationValueModel.INITIAL)
-    )
+    """The value arm against the slot's run with the reference value model, which the loop runs first."""
+    assert run.slot is not None
+    reference = EvaluationPaths(paths.evaluation_directory(dataclasses.replace(run, value_arm=False), version))
     if not reference.summary.exists():
-        log(f"No initial arm in {reference.directory} yet: nothing to compare")
-        return summary
+        raise SystemExit(f"No run of slot {run.slot} in {reference.directory}: run the slot before its value arm.")
     published = EvaluationPaths(directory)
     value_versions = (served_value_version(config, paths, EvaluationValueModel.INITIAL), summary.value_version)
-    result = value_ab_result(
+    result = value_arm_result(
         read_results(reference.results),
         read_results(published.results),
-        config.evaluation.value_ab_test,
+        run.slot,
+        run.slot % config.evaluation.probe_parts,
         value_versions,
-        earlier_value_ab_results(paths, version, summary.value_version),
+        earlier_value_arm_results(paths, directory),
+        config.evaluation.value_arm,
     )
-    compared = dataclasses.replace(summary, value_ab=result)
+    compared = dataclasses.replace(summary, value_arm=result)
     published.comparison.write_text(to_json(result), encoding="utf-8")
     published.summary.write_text(to_json(compared), encoding="utf-8")
     return compared
@@ -168,17 +186,6 @@ def repeat_text(comparison: RepeatComparison) -> str:
         f"Against the first run: {comparison.first_solved} -> {comparison.second_solved} solved of "
         f"{comparison.problems} (difference {comparison.difference:+d}; {comparison.only_first} solved only by the "
         f"first, {comparison.only_second} only by this one)"
-    )
-
-
-def value_ab_text(result: ValueAbResult) -> str:
-    return (
-        f"Value A/B: published v{result.published_value_version} {result.published_solved}, reference "
-        f"v{result.reference_value_version} {result.reference_solved} of {result.problems} ({result.only_published} "
-        f"solved by the published only, {result.only_reference} by the reference only; p = {result.p_value:.3f}); "
-        f"pooled over {result.pooled_runs} A/B runs {result.pooled_only_published} vs {result.pooled_only_reference}, "
-        f"p(better) = {result.better_p_value:.3f}, p(worse) = {result.worse_p_value:.3f}: "
-        + ("better" if result.passed else "worse" if result.worse else "no significant difference")
     )
 
 

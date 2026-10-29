@@ -12,8 +12,14 @@ from lean_search.rl.policy_data import SamplerAgreement, SignedRatios
 from lean_search.rl.tree_statistics import GraphStatistics
 from lean_search.search.tactic_labels import TacticLabelCounts
 from lean_search.value.benchmark import BenchmarkMetrics
-from lean_search.value.diagnostics import ValueDiagnostics
-from lean_search.value.gate_statistics import GateStatistic
+from lean_search.value.diagnostics import (
+    Calibration,
+    LabelDistribution,
+    LabelDistributions,
+    PhaseValueMetrics,
+    PredictionDistribution,
+)
+from lean_search.value.pair_statistics import PairShare, PairStatistic
 
 
 class LoopState(StrEnum):
@@ -96,7 +102,16 @@ class FixedTargets:
     # Problems whose search stopped on the wall-clock cap rather than the expansion budget.
     probe_wall_clock_stops: int | None = None
     minif2f_wall_clock_stops: int | None = None
-    # A repeated run against the first run of the version: solved difference, problems solved by one only.
+    # The probe runs one part of the set per slot, the parts in turn (part = slot % parts); a repeated run's line
+    # carries its part and the repeat fields only.
+    probe_slot: int | None = None
+    probe_part: int | None = None
+    # The last `probe_parts` slots together, each part once: the whole set (across their policy versions).
+    probe_rolling_solved: int | None = None
+    probe_rolling_problems: int | None = None
+    probe_rolling_by_difficulty: dict[str, BandOutcome] = field(default_factory=dict)
+    # A repeated run against the first run of the version: solved, difference, problems solved by one only.
+    probe_repeat_solved: int | None = None
     probe_repeat_difference: int | None = None
     probe_repeat_discordant: int | None = None
     # Wall time of the evaluation this line reports.
@@ -147,49 +162,83 @@ class GrpoPhase:
 
 
 @dataclass(frozen=True)
-class ValueBenchmarkResult:
-    """One value retrain: the gate against the published model, diagnostics, and what it trained on and predicts."""
+class ValueTraining:
+    """One value retrain, published with the next version: what it trained on."""
 
-    family: ClassVar[str] = "value"
-    candidate_version: int
-    # Ordered labelled siblings by h better than the published value model beyond the bootstrap's noise: published.
-    gate_passed: bool
-    # The candidate's benchmark metrics: diagnostics, not pass criteria.
-    benchmark: BenchmarkMetrics
-    training_loss: float | None = None
-    gate: GateStatistic | None = None
-    published_benchmark: BenchmarkMetrics | None = None
+    family: ClassVar[str] = "value_training"
+    value_version: int
     # Trees of the training window.
-    trees: int | None = None
-    diagnostics: ValueDiagnostics | None = None
+    trees: int
+    training_loss: float | None = None
+    # The window's targets per bin by source (smoothed as trained) and the v0 replay.
+    labels: LabelDistributions | None = None
+    replay_labels: LabelDistribution | None = None
 
 
 @dataclass(frozen=True)
-class ValueAbResult:
-    """The value A/B search: one policy version with the reference value model (v0) and the published one."""
+class ValueBenchmarkTrend:
+    """The value benchmark scored fresh through the value servers by a newly served value model, against v0 and
+    against the value model served before it: a trend, never a decision."""
 
-    family: ClassVar[str] = "value_ab"
+    family: ClassVar[str] = "value_benchmark"
+    value_version: int
+    # Labelled sibling pairs whose proof-graph child gets the lower h (ties half).
+    pairs: PairShare
+    reference_value_version: int | None
+    previous_value_version: int | None
+    # This model's share minus the other's, with a paired cluster bootstrap interval over problems.
+    against_reference: PairStatistic | None
+    against_previous: PairStatistic | None
+    # AUC, Brier, ECE, pair accuracy by p_dead, Spearman and MAE of the steps.
+    metrics: BenchmarkMetrics
+    predictions: PredictionDistribution
+    calibration: Calibration
+    scoring_seconds: float = 0.0
+
+
+@dataclass(frozen=True)
+class ValuePhase:
+    """Free per phase: μ in effect, and the serving value model against the phase's own labelled search graphs."""
+
+    family: ClassVar[str] = "value_phase"
+    value_share: float
+    metrics: PhaseValueMetrics
+
+
+@dataclass(frozen=True)
+class PairedDifference:
+    """Solve rates of the published value model's runs minus v0's on the same problems, paired per problem."""
+
+    runs: int
     problems: int
-    reference_solved: int
-    published_solved: int
-    # Problems only one arm solved in this run: the paired test's evidence.
     only_reference: int
     only_published: int
-    # Exact McNemar test on this run's, two-sided.
-    p_value: float
-    # One-sided exact McNemar tests, pooled over every A/B of this published value model: worse, better.
+    # (only_published - only_reference) / problems, and its exact interval given the discordant problems.
+    difference: float | None
+    lower: float | None
+    upper: float | None
+    # One-sided exact McNemar tests.
     worse_p_value: float
-    # Better than the reference at the configured level (pooled): μ may turn on.
-    passed: bool
+    better_p_value: float
+
+
+@dataclass(frozen=True)
+class ValueArmResult:
+    """A probe slot's part searched again with the published value model, paired with the slot's run with v0."""
+
+    family: ClassVar[str] = "value_arm"
+    slot: int
+    part: int
     reference_value_version: int
     published_value_version: int
-    better_p_value: float = 1.0
-    # Worse than the reference at that level (pooled): the loop publishes the reference value model again.
-    worse: bool = False
-    # The A/B runs pooled, this one included, and their problems solved by one arm only.
-    pooled_runs: int = 1
-    pooled_only_reference: int = 0
-    pooled_only_published: int = 0
+    reference_solved: int
+    published_solved: int
+    this_slot: PairedDifference
+    # Pooled with the earlier value arms of the same published value model, and of every value model.
+    same_value_version: PairedDifference
+    all_value_versions: PairedDifference
+    # Worse than v0 at the configured level, pooled over the same value model: an alert, no automatic action.
+    worse: bool
 
 
 @dataclass(frozen=True)
@@ -245,7 +294,6 @@ class PauseSegments:
     policy_training_seconds: float = 0.0
     # Loading, compiling, training and saving the value model.
     value_training_seconds: float = 0.0
-    gate_seconds: float = 0.0
     # Merging the new adapters into their bases on the GPUs, and writing them (and the policy adapter).
     merge_seconds: float = 0.0
     write_seconds: float = 0.0
@@ -262,7 +310,7 @@ class PhaseTiming:
 
     family: ClassVar[str] = "timing"
     sampling_seconds: float
-    # The training job as a whole (model loading, policy and value training, the value gate).
+    # The training job as a whole (model loading, policy and value training, the merges).
     training_seconds: float
     publishing_seconds: float
     evaluation_seconds: float
@@ -393,8 +441,10 @@ FAMILIES = (
     SystemUsage,
     FixedTargets,
     GrpoPhase,
-    ValueBenchmarkResult,
-    ValueAbResult,
+    ValueTraining,
+    ValueBenchmarkTrend,
+    ValuePhase,
+    ValueArmResult,
     SearchPhase,
     CurriculumPhase,
     PhaseTiming,

@@ -1,5 +1,6 @@
-"""The value gate: does a candidate order labelled siblings by h, as A* orders its frontier, better than the published
-model, by more than which problems the benchmark happens to hold could explain."""
+"""The benchmark's pair statistic: how often a value model gives the proof-graph child of a labelled sibling pair the
+lower h (the quantity A* orders its frontier by), and how a model compares with a reference model beyond what the
+problems the benchmark happens to hold could explain."""
 
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -9,31 +10,21 @@ import numpy
 from lean_search.search.graph_labels import NodeClass
 from lean_search.value.benchmark import (
     BenchmarkConfig,
-    BenchmarkMetrics,
     BenchmarkPairKind,
     BenchmarkScores,
-    GuidedTrees,
     TreeKey,
     ValueBenchmark,
-    benchmark_metrics,
-    conflict_message,
-    fresh_estimates,
-    guidance_conflicts,
     labelled,
 )
 from lean_search.value.bins import Readout
 
 
 @dataclass(frozen=True)
-class GateConfig:
+class PairStatisticConfig:
     # Problems are resampled with replacement, each with all its pairs; the interval is the percentile interval.
     bootstrap_resamples: int = 5000
     confidence: float = 0.95
     seed: int = 0
-    # The candidate passes when the interval's lower bound on its gain lies above this.
-    min_lower_bound: float = 0.0
-    # Benchmark trees from an A* search on a value model: the current model (or its ancestor) chose their labels.
-    guided_trees: GuidedTrees = GuidedTrees.REFUSE
 
 
 @dataclass(frozen=True)
@@ -80,23 +71,42 @@ def lower_h_outcome(preferred: float, other: float) -> float:
 
 
 @dataclass(frozen=True)
-class TreeOutcomes:
+class PairShare:
+    """One model's pairs: those it scored, their problems, and the share whose proof-graph state gets the lower h."""
+
+    problems: int
     pairs: int
-    candidate: float
-    current: float
+    share: float | None
+
+
+def pair_share(benchmark: ValueBenchmark, steps: Sequence[float | None], config: BenchmarkConfig) -> PairShare:
+    outcomes: dict[TreeKey, list[float]] = {}
+    for pair in labelled_pairs(benchmark, config):
+        preferred, other = steps[pair.preferred], steps[pair.other]
+        if preferred is not None and other is not None:
+            outcomes.setdefault(pair.tree, []).append(lower_h_outcome(preferred, other))
+    values = [value for tree in outcomes.values() for value in tree]
+    return PairShare(len(outcomes), len(values), sum(values) / len(values) if values else None)
 
 
 @dataclass(frozen=True)
-class GateStatistic:
+class TreeOutcomes:
+    pairs: int
+    model: float
+    reference: float
+
+
+@dataclass(frozen=True)
+class PairStatistic:
     # Problems with a pair scored by both models, and those pairs.
     problems: int
     pairs: int
     # Pairs the two models order differently.
     discordant_pairs: int
     # Share of pairs whose proof-graph state gets the lower h (ties half).
-    candidate_accuracy: float | None
-    current_accuracy: float | None
-    # Candidate minus current, and its bootstrap interval over problems.
+    model_share: float | None
+    reference_share: float | None
+    # Model minus reference, and its bootstrap interval over problems.
     difference: float | None
     lower: float | None
     upper: float | None
@@ -108,33 +118,34 @@ class GateStatistic:
 
 
 def bootstrap_differences(trees: Sequence[TreeOutcomes], resamples: int, seed: int) -> numpy.ndarray:
-    """The pooled accuracy difference over problems drawn with replacement, once per resample."""
+    """The pooled share difference over problems drawn with replacement, once per resample."""
     pairs = numpy.array([tree.pairs for tree in trees], dtype=float)
-    gains = numpy.array([tree.candidate - tree.current for tree in trees])
+    gains = numpy.array([tree.model - tree.reference for tree in trees])
     drawn = numpy.random.default_rng(seed).integers(0, len(trees), size=(resamples, len(trees)))
     return gains[drawn].sum(axis=1) / pairs[drawn].sum(axis=1)
 
 
-def search_order_statistic(
+def pair_statistic(
     benchmark: ValueBenchmark,
-    candidate: Sequence[float | None],
-    current: Sequence[float | None],
+    model: Sequence[float | None],
+    reference: Sequence[float | None],
     benchmark_config: BenchmarkConfig,
-    config: GateConfig,
-) -> GateStatistic:
-    """Per labelled pair, whether each model gives the proof-graph state the lower h; candidate minus current."""
+    config: PairStatisticConfig,
+) -> PairStatistic:
+    """Per labelled pair scored by both, whether each model gives the proof-graph state the lower h; a paired cluster
+    bootstrap over problems of the model's share minus the reference's."""
     by_tree: dict[TreeKey, list[tuple[float, float]]] = {}
     for pair in labelled_pairs(benchmark, benchmark_config):
-        steps = (candidate[pair.preferred], candidate[pair.other], current[pair.preferred], current[pair.other])
+        steps = (model[pair.preferred], model[pair.other], reference[pair.preferred], reference[pair.other])
         if any(value is None for value in steps):
             continue
-        candidate_preferred, candidate_other, current_preferred, current_other = steps
+        model_preferred, model_other, reference_preferred, reference_other = steps
         by_tree.setdefault(pair.tree, []).append(
-            (lower_h_outcome(candidate_preferred, candidate_other), lower_h_outcome(current_preferred, current_other))
+            (lower_h_outcome(model_preferred, model_other), lower_h_outcome(reference_preferred, reference_other))
         )
     outcomes = [outcome for tree_outcomes in by_tree.values() for outcome in tree_outcomes]
     if not outcomes:
-        return GateStatistic(0, 0, 0, None, None, None, None, None, None, config.bootstrap_resamples, config.confidence)
+        return PairStatistic(0, 0, 0, None, None, None, None, None, None, config.bootstrap_resamples, config.confidence)
     trees = [
         TreeOutcomes(len(pairs), sum(first for first, _ in pairs), sum(second for _, second in pairs))
         for pairs in by_tree.values()
@@ -144,72 +155,18 @@ def search_order_statistic(
     lower, upper = numpy.quantile(differences, [tail, 1 - tail])
     pair_gains = numpy.array([first - second for first, second in outcomes])
     spread = float(differences.var())
-    candidate_accuracy = sum(first for first, _ in outcomes) / len(outcomes)
-    current_accuracy = sum(second for _, second in outcomes) / len(outcomes)
-    return GateStatistic(
+    model_share = sum(first for first, _ in outcomes) / len(outcomes)
+    reference_share = sum(second for _, second in outcomes) / len(outcomes)
+    return PairStatistic(
         problems=len(trees),
         pairs=len(outcomes),
         discordant_pairs=sum(first != second for first, second in outcomes),
-        candidate_accuracy=candidate_accuracy,
-        current_accuracy=current_accuracy,
-        difference=candidate_accuracy - current_accuracy,
+        model_share=model_share,
+        reference_share=reference_share,
+        difference=model_share - reference_share,
         lower=float(lower),
         upper=float(upper),
         effective_pairs=float(pair_gains.var()) / spread if spread > 0 else None,
         resamples=config.bootstrap_resamples,
         confidence=config.confidence,
-    )
-
-
-def gate_reasons(statistic: GateStatistic, config: GateConfig) -> tuple[str, ...]:
-    if statistic.lower is None:
-        return ("no labelled sibling pair scored by both models",)
-    if statistic.lower <= config.min_lower_bound:
-        return (
-            f"gain in pairs ordered by h {statistic.difference:+.3f}, {config.confidence:.0%} interval "
-            f"[{statistic.lower:+.3f}, {statistic.upper:+.3f}] over {statistic.problems} problems and "
-            f"{statistic.pairs} pairs; lower bound not above {config.min_lower_bound:+g}",
-        )
-    return ()
-
-
-@dataclass(frozen=True)
-class GateResult:
-    passed: bool
-    reasons: tuple[str, ...]
-    statistic: GateStatistic
-    # Diagnostics only (AUC, Brier, pair accuracy by p_dead, Spearman), never pass criteria.
-    new: BenchmarkMetrics
-    current: BenchmarkMetrics
-    warnings: tuple[str, ...] = ()
-
-
-def value_gate(
-    benchmark: ValueBenchmark,
-    new: BenchmarkScores,
-    current: BenchmarkScores,
-    readout: Readout,
-    benchmark_config: BenchmarkConfig,
-    config: GateConfig,
-) -> GateResult:
-    """Passes when the bootstrap interval of the candidate's gain in h-ordered pairs lies above the bound."""
-    statistic = search_order_statistic(
-        benchmark, remaining_steps(new, readout), remaining_steps(current, readout), benchmark_config, config
-    )
-    reasons = gate_reasons(statistic, config)
-    # The current adapter (or its ancestor) usually guided any value-model search, so every such tree conflicts.
-    conflicts = tuple(conflict_message(source) for source in guidance_conflicts(benchmark.provenance, None))
-    warnings: tuple[str, ...] = ()
-    match config.guided_trees:
-        case GuidedTrees.REFUSE:
-            reasons += conflicts
-        case GuidedTrees.WARN:
-            warnings = conflicts
-    return GateResult(
-        passed=not reasons,
-        reasons=reasons,
-        statistic=statistic,
-        new=benchmark_metrics(benchmark, fresh_estimates(benchmark, new, readout), benchmark_config),
-        current=benchmark_metrics(benchmark, fresh_estimates(benchmark, current, readout), benchmark_config),
-        warnings=warnings,
     )

@@ -1,4 +1,4 @@
-"""One search-tree GRPO training phase: label the trees, train the policy and/or the value model, gate, publish."""
+"""One search-tree GRPO training phase: label the trees, train the policy and/or the value model, publish."""
 
 import dataclasses
 import gc
@@ -33,9 +33,8 @@ from lean_search.search.tactic_labels import policy_tactics
 from lean_search.training.data_parallel import SINGLE_PROCESS, Ranks, broadcast_from_main, largest
 from lean_search.training.math_data import MathSolution, tokenize_math_solution
 from lean_search.training.sft_data import TokenizedExample
-from lean_search.value.benchmark import LabelledTree, ValueBenchmark
-from lean_search.value.diagnostics import ValueDiagnostics, value_diagnostics
-from lean_search.value.gate_statistics import GateResult
+from lean_search.value.benchmark import LabelledTree
+from lean_search.value.diagnostics import LabelDistribution, LabelDistributions, label_distribution, label_distributions
 from lean_search.value.graph_targets import (
     RemainingStepsReadout,
     ValueTargetConfig,
@@ -47,7 +46,6 @@ from lean_search.value.graph_trainer import (
     GraphValueStepRecord,
     GraphValueTrainingResult,
     build_graph_value_data,
-    run_value_gate,
     train_graph_value_model,
 )
 from lean_search.value.labels import ValueExample
@@ -67,7 +65,7 @@ class PolicyReplayConfig:
 class TrainingPhaseConfig:
     reward: RewardConfig = field(default_factory=RewardConfig)
     readout: RemainingStepsReadout = field(default_factory=RemainingStepsReadout)
-    # value_share (μ) stays 0 until a value model passed the gate.
+    # value_share (μ): the loop sets it per phase (0 until the owner turns it on).
     value_targets: ValueTargetConfig = field(
         default_factory=lambda: ValueTargetConfig(value_share=0.0, max_targets_per_tree=64)
     )
@@ -84,8 +82,6 @@ class PhaseInputs:
     lean_replay: Sequence[ReasoningExample] = ()
     math_replay: Sequence[MathSolution] = ()
     value_replay: Sequence[ValueExample] = ()
-    # Without a benchmark the new value adapter is trained but not accepted.
-    value_benchmark: ValueBenchmark | None = None
     # The value model's window of recent phases' trees, this phase's included; empty: this phase's trees alone. Only
     # the main rank's are read.
     value_records: Sequence[TreeRecord] = ()
@@ -117,19 +113,14 @@ class PolicyOutcome:
 class ValueOutcome:
     adapter: str
     result: GraphValueTrainingResult
-    gate: GateResult | None
     # The window's trees the value model trained on.
     trees: int = 0
-    # Present when the gate ran (on the main rank).
-    diagnostics: ValueDiagnostics | None = None
+    # What it trained on per bin (the main rank's; the window's targets as smoothed for training, and the v0 replay).
+    labels: LabelDistributions | None = None
+    replay_labels: LabelDistribution | None = None
     data_seconds: float = 0.0
     # Loading, compiling, training and saving.
     training_seconds: float = 0.0
-    gate_seconds: float = 0.0
-
-    @property
-    def accepted(self) -> bool:
-        return self.gate is not None and self.gate.passed
 
 
 @dataclass(frozen=True)
@@ -143,7 +134,6 @@ class TrainerTimings:
     scoring_seconds: float = 0.0
     policy_training_seconds: float = 0.0
     value_training_seconds: float = 0.0
-    gate_seconds: float = 0.0
     # Merging the new adapters into their bases on the GPUs (grpo_phase.py --merge-adapters), the slowest rank.
     merge_seconds: float = 0.0
     # The policy adapter and the merged weights written.
@@ -251,7 +241,6 @@ def train_value_phase(
     config: TrainingPhaseConfig,
     value: GraphValueConfig,
     window: Sequence[LabelledTree],
-    labelled: LabelledPhaseData,
     inputs: PhaseInputs,
     tokenizer: ValueTokenizer,
     pad_token_id: int,
@@ -261,8 +250,7 @@ def train_value_phase(
     ranks: Ranks = SINGLE_PROCESS,
 ) -> ValueOutcome:
     """Trains on the window's trees, split across the ranks: the main rank holds the window and builds the data, the
-    others receive it. With a benchmark, the gate against the published adapter and the diagnostics on the main rank
-    alone (the other ranks' outcomes have none)."""
+    others receive it. Only the main rank's outcome has the label distributions."""
     started = time.perf_counter()
     built = (
         build_graph_value_data(window, config.ranking, inputs.value_replay, tokenizer, value) if ranks.is_main else None
@@ -271,33 +259,21 @@ def train_value_phase(
     data_built = time.perf_counter()
     adapter = directory / "adapter"
     result = train_graph_value_model(value, tokenizer, pad_token_id, data, device, adapter, on_step, ranks)
-    trained = time.perf_counter()
     outcome = ValueOutcome(
         str(adapter),
         result,
-        None,
         data.trees,
         data_seconds=data_built - started,
-        training_seconds=trained - data_built,
+        training_seconds=time.perf_counter() - data_built,
     )
-    if inputs.value_benchmark is None or not ranks.is_main:
+    if built is None:
         return outcome
-    scored = run_value_gate(
-        value, tokenizer, pad_token_id, inputs.value_benchmark, str(adapter), value.published_adapter, device
+    replay = [(item.distribution, item.weight) for item in built.pointwise if item.target is None]
+    return dataclasses.replace(
+        outcome,
+        labels=label_distributions(window, value.smoothing_sigma),
+        replay_labels=label_distribution(replay),
     )
-    replay = [(item.distribution, item.weight) for item in data.pointwise if item.target is None]
-    diagnostics = value_diagnostics(
-        window,
-        replay,
-        labelled.trees,
-        inputs.value_benchmark,
-        scored.new_scores,
-        scored.current_scores,
-        value.readout,
-        value.smoothing_sigma,
-    )
-    gate_seconds = time.perf_counter() - trained
-    return dataclasses.replace(outcome, gate=scored.result, diagnostics=diagnostics, gate_seconds=gate_seconds)
 
 
 def released_memory(stage: TrainingStage, device: torch.device, ranks: Ranks) -> StageMemory:
@@ -369,7 +345,6 @@ def run_training_phase(
             config,
             config.value,
             window,
-            labelled,
             inputs,
             value_tokenizer,
             value_tokenizer.pad_token_id,
@@ -378,8 +353,7 @@ def run_training_phase(
             lambda record: append_json_line(directory / "steps.jsonl", record),
             ranks,
         )
-        if broadcast_from_main(value.accepted, ranks):
-            merges.append(PremergedWeights(config.value.model, value.adapter))
+        merges.append(PremergedWeights(config.value.model, value.adapter))
         memory.append(released_memory(TrainingStage.VALUE, device, ranks))
     merged = MergeSeconds()
     if merge_adapters:
@@ -421,7 +395,6 @@ def trainer_timings(
             timings,
             preparation_seconds=timings.preparation_seconds + value.data_seconds,
             value_training_seconds=value.training_seconds,
-            gate_seconds=value.gate_seconds,
         )
     return timings
 
@@ -470,14 +443,12 @@ def grpo_phase_record(
 
 
 def publish_phase(paths: LoopPaths, publisher: Publisher, outcome: PhaseOutcome, trigger: str) -> ModelVersion:
-    """The next version: the new policy adapter if one trained, the new value adapter only if it passed the gate."""
+    """The next version: the new policy adapter and the new value adapter, each if one trained."""
     current = read_current(paths)
     version = ModelVersion(
         version=current.version + 1,
         policy_adapter=current.policy_adapter if outcome.policy is None else outcome.policy.adapter,
-        value_adapter=outcome.value.adapter
-        if outcome.value is not None and outcome.value.accepted
-        else current.value_adapter,
+        value_adapter=current.value_adapter if outcome.value is None else outcome.value.adapter,
         published_at=now(),
         trigger=trigger,
     )

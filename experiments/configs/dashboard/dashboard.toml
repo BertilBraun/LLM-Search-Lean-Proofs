@@ -24,7 +24,6 @@ min_gpu_utilization = 60.0
 # The curriculum's target solve rate.
 min_solve_rate = 0.3
 max_solve_rate = 0.7
-failed_gates_in_a_row = 3
 # Available host memory below this share of the limit (the OOM killer's margin; src/lean_search/rl/README.md).
 min_available_memory_share = 0.15
 # Free disk on the fullest filesystem of the run and its checkpoints (a full disk stops the loop).

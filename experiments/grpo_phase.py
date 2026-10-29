@@ -6,12 +6,12 @@ data-parallel on several under torchrun (each optimizer step equals the one-GPU 
         [--merge-adapters] [--metrics-run runs/<loop> --phase 12 --sampling-seconds 1500]
 
 Writes the adapters to $LEAN_SEARCH_CHECKPOINTS/<run-name>/{policy,value}/adapter, the step records next to them and
-the phase's outcome (data metrics, training results, the value gate, the job's timings) to phase.json there. With
---merge-adapters the new policy adapter and an accepted value adapter are also merged into their bases on the GPUs
-(<adapter>/../merged), which the GRPO loop's publisher takes over. The policy texts come from the tree records
+the phase's outcome (data metrics, training results, the value labels, the job's timings) to phase.json there. With
+--merge-adapters the new adapters are also merged into their bases on the GPUs (<adapter>/../merged), which the GRPO
+loop's publisher takes over. The policy texts come from the tree records
 (`TreeRecord.expansions`). The value model trains on --value-trees (the loop's window of recent phases, --trees among
 them; default --trees), which only the main rank reads (without the other phases' texts) and turns into the value data
-it sends to the other ranks. The replay files and the value benchmark are optional. With --metrics-run the policy
+it sends to the other ranks. The replay files are optional. With --metrics-run the policy
 outcome is appended to that run's dashboard metrics (the grpo family).
 """
 
@@ -31,7 +31,6 @@ from lean_search.search import TreeRecord, read_tree
 from lean_search.search.records import from_json_object
 from lean_search.training.data_parallel import start_process_group, stop_process_group
 from lean_search.training.math_data import read_solutions
-from lean_search.value.benchmark import read_benchmark
 from lean_search.value.labels import read_examples as read_value_examples
 
 CHECKPOINTS_DIRECTORY = Path(os.environ.get("LEAN_SEARCH_CHECKPOINTS", "/workspace/checkpoints"))
@@ -45,7 +44,6 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--lean-replay", type=Path, help="reasoning data set JSON lines (Lean SFT replay)")
     parser.add_argument("--math-replay", type=Path, help="math solutions JSON lines")
     parser.add_argument("--value-replay", type=Path, help="v0 value examples JSON lines")
-    parser.add_argument("--value-benchmark", type=Path, help="a value benchmark; without it no value model is accepted")
     parser.add_argument("--part", choices=("policy", "value"), help="train only this model")
     parser.add_argument("--merge-adapters", action="store_true", help="merge the new adapters on the GPUs")
     parser.add_argument("--run-name", required=True)
@@ -88,7 +86,6 @@ def main() -> None:
         lean_replay=list(read_reasoning_examples(arguments.lean_replay)) if arguments.lean_replay else [],
         math_replay=list(read_solutions(arguments.math_replay)) if arguments.math_replay else [],
         value_replay=list(read_value_examples(arguments.value_replay)) if arguments.value_replay else [],
-        value_benchmark=read_benchmark(arguments.value_benchmark) if arguments.value_benchmark else None,
         value_records=value_records(arguments, records)
         if config.value and arguments.value_trees and ranks.is_main
         else [],
@@ -110,12 +107,7 @@ def main() -> None:
             writer = MetricsWriter(arguments.metrics_run, LoopContext(phase=arguments.phase))
             writer.write(grpo_phase_record(outcome.policy, arguments.sampling_seconds))
     if outcome.value is not None:
-        accepted = "accepted" if outcome.value.accepted else "not accepted"
-        print(f"value ({accepted}): {outcome.value.result}", flush=True)
-        if outcome.value.gate is not None:
-            print(f"gate: {outcome.value.gate.reasons or 'passed'}", flush=True)
-            for warning in outcome.value.gate.warnings:
-                print(f"gate warning: {warning}", flush=True)
+        print(f"value: {outcome.value.result}", flush=True)
 
 
 if __name__ == "__main__":

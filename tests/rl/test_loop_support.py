@@ -8,19 +8,22 @@ from loop_fakes import solved_tree
 from lean_search.data import Problem, Split
 from lean_search.data_rewrite.naming import NameChange, NameSource, renamed_text
 from lean_search.data_rewrite.statement_renaming import StatementRenaming
-from lean_search.monitoring.families import BandOutcome, ValueAbResult
+from lean_search.monitoring.families import BandOutcome, ValueArmResult
 from lean_search.rl.evaluation import (
     EvaluationKind,
     EvaluationProblem,
     EvaluationSummary,
     StratumOutcome,
+    clopper_pearson,
     compare_repeats,
     fixed_targets_record,
+    paired_difference,
+    rolling_probe,
     search_summary,
-    value_ab_result,
+    value_arm_result,
 )
-from lean_search.rl.fixed_targets import first_problems_by_stratum
-from lean_search.rl.loop_config import EvaluationTarget, SamplingConfig, ValueAbConfig
+from lean_search.rl.fixed_targets import first_problems_by_stratum, probe_part
+from lean_search.rl.loop_config import EvaluationTarget, SamplingConfig, ValueArmConfig
 from lean_search.rl.renaming import (
     RenamedStatement,
     StatementRenamings,
@@ -197,8 +200,12 @@ def solved_runs(solved: list[bool]) -> list[SearchResult]:
     ]
 
 
-def value_ab(reference: list[bool], published: list[bool], earlier: Sequence[ValueAbResult] = ()) -> ValueAbResult:
-    return value_ab_result(solved_runs(reference), solved_runs(published), ValueAbConfig(), (0, 3), earlier)
+def value_arm(
+    reference: list[bool], published: list[bool], earlier: Sequence[ValueArmResult] = (), value_version: int = 3
+) -> ValueArmResult:
+    return value_arm_result(
+        solved_runs(reference), solved_runs(published), 4, 1, (0, value_version), earlier, ValueArmConfig()
+    )
 
 
 def discordant(only_reference: int, only_published: int) -> tuple[list[bool], list[bool]]:
@@ -208,38 +215,35 @@ def discordant(only_reference: int, only_published: int) -> tuple[list[bool], li
     return reference, published
 
 
-def test_the_value_ab_counts_problems_only_the_published_model_solved() -> None:
-    assert value_ab([True, False, False], [True, True, True]).only_published == 2
+def test_a_value_arm_counts_problems_only_the_published_model_solved() -> None:
+    assert value_arm([True, False, False], [True, True, True]).this_slot.only_published == 2
 
 
-@pytest.mark.parametrize(("only_reference", "only_published"), [(0, 1), (0, 4), (2, 8), (10, 18)])
-def test_the_value_ab_does_not_pass_without_one_sided_evidence(only_reference: int, only_published: int) -> None:
-    assert not value_ab(*discordant(only_reference, only_published)).passed
+def test_a_value_arm_reports_the_paired_solve_rate_difference() -> None:
+    assert value_arm([True, False, False, False], [True, True, True, False]).this_slot.difference == 0.5
 
 
-@pytest.mark.parametrize(("only_reference", "only_published"), [(0, 5), (2, 10), (10, 22)])
-def test_the_value_ab_passes_when_the_published_model_is_significantly_better(
-    only_reference: int, only_published: int
-) -> None:
-    assert value_ab(*discordant(only_reference, only_published)).passed
+def test_a_value_arm_finds_a_significantly_worse_published_model() -> None:
+    assert value_arm(*discordant(8, 1)).worse
 
 
-def test_the_value_ab_finds_a_significantly_worse_published_model() -> None:
-    assert value_ab(*discordant(8, 1)).worse
+def test_a_value_arm_does_not_call_a_small_deficit_worse() -> None:
+    assert not value_arm(*discordant(4, 1)).worse
 
 
-def test_the_value_ab_does_not_call_a_small_deficit_worse() -> None:
-    assert not value_ab(*discordant(4, 1)).worse
+def test_value_arms_of_one_model_pool_their_evidence() -> None:
+    earlier = value_arm(*discordant(4, 0))
+    assert value_arm(*discordant(4, 0), earlier=[earlier]).worse
 
 
-def test_repeated_value_abs_of_one_model_pool_their_evidence() -> None:
-    earlier = value_ab(*discordant(0, 3))
-    assert value_ab(*discordant(0, 3), earlier=[earlier]).passed
+def test_value_arms_of_other_models_do_not_pool_into_this_ones_test() -> None:
+    earlier = value_arm(*discordant(4, 0), value_version=2)
+    assert not value_arm(*discordant(4, 0), earlier=[earlier]).worse
 
 
-def test_the_pooled_value_ab_counts_every_run() -> None:
-    earlier = value_ab(*discordant(1, 4))
-    assert value_ab(*discordant(2, 3), earlier=[earlier, earlier]).pooled_only_published == 11
+def test_the_pooled_difference_over_every_value_model_counts_every_run() -> None:
+    earlier = value_arm(*discordant(1, 4), value_version=2)
+    assert value_arm(*discordant(2, 3), earlier=[earlier, earlier]).all_value_versions.only_published == 11
 
 
 @pytest.mark.parametrize(
@@ -247,13 +251,73 @@ def test_the_pooled_value_ab_counts_every_run() -> None:
     [(0, 0, 1.0), (3, 0, 0.125), (0, 3, 1.0), (2, 1, 0.5)],
 )
 def test_the_one_sided_mcnemar_p_value(only_reference: int, only_published: int, worse_p_value: float) -> None:
-    assert value_ab(*discordant(only_reference, only_published)).worse_p_value == pytest.approx(worse_p_value)
+    assert value_arm(*discordant(only_reference, only_published)).this_slot.worse_p_value == pytest.approx(
+        worse_p_value
+    )
 
 
-def test_the_two_sided_mcnemar_p_value_is_twice_the_smaller_tail() -> None:
-    assert value_ab([True] * 3, [False] * 3).p_value == pytest.approx(0.25)
+@pytest.mark.parametrize(
+    ("successes", "trials", "expected"),
+    [(5, 10, (0.187086, 0.812914)), (0, 10, (0.0, 0.308494)), (10, 10, (0.691506, 1.0))],
+)
+def test_the_clopper_pearson_interval_matches_the_beta_quantiles(
+    successes: int, trials: int, expected: tuple[float, float]
+) -> None:
+    assert clopper_pearson(successes, trials, 0.95) == pytest.approx(expected, abs=1e-5)
+
+
+def test_the_paired_interval_holds_the_difference() -> None:
+    difference = paired_difference(1, 100, 5, 15, 0.95)
+    assert difference.lower < difference.difference < difference.upper
+
+
+def test_without_discordant_problems_the_paired_interval_is_zero() -> None:
+    difference = paired_difference(1, 50, 0, 0, 0.95)
+    assert (difference.lower, difference.upper) == (0.0, 0.0)
+
+
+def test_a_one_sided_paired_difference_excludes_zero() -> None:
+    assert paired_difference(1, 100, 0, 12, 0.95).lower > 0
 
 
 def test_first_problems_by_stratum_take_the_strata_in_turn() -> None:
     problems = [EvaluationProblem(PROBLEM, stratum) for stratum in ("easy", "easy", "medium", "hard", "hard")]
     assert [problem.stratum for problem in first_problems_by_stratum(problems, 4)] == ["easy", "medium", "hard", "easy"]
+
+
+def stratified(counts: dict[str, int]) -> list[EvaluationProblem]:
+    return [EvaluationProblem(PROBLEM, stratum) for stratum, count in counts.items() for _ in range(count)]
+
+
+def test_probe_parts_together_are_the_whole_set() -> None:
+    problems = stratified({"easy": 7, "medium": 5, "hard": 6})
+    assert sum(len(probe_part(problems, part, 3)) for part in range(3)) == len(problems)
+
+
+def test_a_probe_part_is_stratified_like_the_set() -> None:
+    part = probe_part(stratified({"easy": 6, "medium": 6, "hard": 6}), 1, 3)
+    assert [problem.stratum for problem in part] == ["easy"] * 2 + ["medium"] * 2 + ["hard"] * 2
+
+
+def slot_summary(slot: int, solved: int, outcomes: tuple[StratumOutcome, ...]) -> EvaluationSummary:
+    summary = dataclasses.replace(zero_summary(EvaluationKind.PROBE), slot=slot, solved=solved, problems=6)
+    return dataclasses.replace(summary, by_stratum=outcomes)
+
+
+def test_the_rolling_probe_sums_its_slots_per_stratum() -> None:
+    summaries = [
+        slot_summary(slot, 2, (StratumOutcome("easy", 3, 2), StratumOutcome("hard", 3, 0))) for slot in range(3)
+    ]
+    assert rolling_probe(summaries).by_stratum == (StratumOutcome("easy", 9, 6), StratumOutcome("hard", 9, 0))
+
+
+def test_the_probe_line_carries_the_rolling_whole_set() -> None:
+    rolling = rolling_probe([slot_summary(slot, 2, ()) for slot in range(3)])
+    record = fixed_targets_record(slot_summary(2, 2, ()), rolling=rolling)
+    assert (record.probe_slot, record.probe_rolling_solved, record.probe_rolling_problems) == (2, 6, 18)
+
+
+def test_the_repeated_probe_line_keeps_out_of_the_slot_series() -> None:
+    comparison = compare_repeats(FIRST_RUN, SECOND_RUN)
+    record = fixed_targets_record(slot_summary(1, 2, ()), comparison)
+    assert (record.probe_slot, record.probe_solved, record.probe_repeat_solved) == (None, None, 2)

@@ -17,7 +17,7 @@ node's checkout.
 | `serve_model.sh` | node | Start a detached vLLM server for one model on one GPU (prefix caching, runtime LoRA). |
 | `stop_model.sh` | node | Stop servers started by `serve_model.sh` (by name or `--all`). |
 | `background.sh` | node | Run a CPU-heavy job pinned to the last `BACKGROUND_CPUS` (32) CPUs at nice 19 (CPU budget). |
-| `grpo_loop.sh` | node | The GRPO loop step by step: held-out sets, version 0, servers, checks, gate, dashboard, loop, status. |
+| `grpo_loop.sh` | node | The GRPO loop step by step: held-out sets, version 0, servers, checks, value benchmark, dashboard, loop, status, μ. |
 | `setup_lean.sh` | node | Install elan, the pinned Lean toolchain, Mathlib (from cache) and the REPL. |
 
 ## First-time setup
@@ -286,7 +286,7 @@ The search-tree GRPO loop (`src/lean_search/rl/README.md`, "The loop") on 4x RTX
 
 | GPUs | While sampling | During a phase's pause (every search paused) |
 |---|---|---|
-| 0-3 | each serves the merged policy (port 810x, `GPU_MEMORY_UTILIZATION=0.62`, `--logprobs-mode processed_logprobs`) and the merged value model (port 820x, 0.28, `MAX_NUM_SEQS=96`), all with `SLEEP_MODE=1` | the servers drain and sleep (level 2, ~0.8 GiB each left in use); `grpo_phase.py` trains on all four with `torchrun` (`[training] gpus`): policy GRPO, the value model, its gate (rank 0), the merges; then the servers wake with the new weights |
+| 0-3 | each serves the merged policy (port 810x, `GPU_MEMORY_UTILIZATION=0.62`, `--logprobs-mode processed_logprobs`) and the merged value model (port 820x, 0.28, `MAX_NUM_SEQS=96`), all with `SLEEP_MODE=1` | the servers drain and sleep (level 2, ~0.8 GiB each left in use); `grpo_phase.py` trains on all four with `torchrun` (`[training] gpus`): policy GRPO, the value model, the merges; then the servers wake with the new weights |
 
 Fallback if the data-parallel pause costs too much (`src/lean_search/rl/README.md`, "Timing"): `gpus = [0]` in
 `[training]`; GPU 0's two servers sleep and one process trains there, the other six stay loaded and idle and swap to
@@ -336,19 +336,22 @@ Order on a fresh node (each step catches what would otherwise surface hours late
 2. **Rebuild**, then the heartbeat replay (`python experiments/heartbeat_replay.py ...`, DESIGN.md "Lean execution and
    harness"), which fixes the caps every later search uses.
 3. **Smoke cycle** (`experiments/configs/grpo/loop_smoke.toml`, about an hour): the whole loop on the overfit
-   statements with visible student v2 as the starting policy, 5-10-minute phases, a value phase every phase whose gate
-   every candidate passes (`phase_smoke.toml`) and every evaluation at a tiny size (probe 12 problems twice, miniF2F 8,
-   held-out states 32, the value A/B on 12). It runs the at-start baselines, a pause with policy and value training on
-   four ranks, both GPU merges, the publish and the wake, the swap to the fixed v0 value model and the A/B's two arms,
-   and the adapter pruning after the second phase. Go through the first-hour checks below on it, stop it after two
-   phases and delete `$LEAN_SEARCH_RUNS/grpo_smoke*` and `$LEAN_SEARCH_CHECKPOINTS/grpo_smoke*`.
+   statements with visible student v2 as the starting policy, 5-10-minute phases, a value phase every phase (always
+   published) and every evaluation at a tiny size (probe 12 problems, 4 per part, every part twice at the start;
+   miniF2F 8; held-out states 32; a value arm every slot). It runs the at-start baselines, v0 scoring the tiny value
+   benchmark through the value servers, a pause with policy and value training on four ranks, both GPU merges, the
+   publish and the wake, the new value model scoring the benchmark, the swap to the fixed v0 value model for a probe
+   slot and to the published one for its value arm, and the adapter pruning after the second phase. Go through the
+   first-hour checks below on it, stop it after two phases and delete `$LEAN_SEARCH_RUNS/grpo_smoke*` and
+   `$LEAN_SEARCH_CHECKPOINTS/grpo_smoke*`.
 4. **Cheap tests** (below): single-step GRPO with both credits (go or no-go on the learning rate), then the SFT stage
    and the naming A/B (`src/lean_search/data_rewrite/README.md`).
-5. **Gate benchmark** with the starting policy served (`gate`, ~1-2 h).
-6. **Main loop**: a fresh `init`, then `loop`. Version 0's baselines run before the first phase: the probe twice, the
-   held-out states and miniF2F (`[evaluation.minif2f] at_start = true`; the loop evaluates only the version it serves,
-   so a baseline missed here needs version 0 served again: its merged weights stay under `weights/v0000/`, never
-   pruned).
+5. **Value benchmark** (the gate set) with the starting policy served (`gate`, ~1-2 h): every served value model
+   scores it, a dashboard trend.
+6. **Main loop**: a fresh `init`, then `loop`. Version 0's baselines run before the first phase: every probe part
+   twice, the held-out states and miniF2F (`[evaluation.minif2f] at_start = true`; the loop evaluates only the version
+   it serves, so a baseline missed here needs version 0 served again: its merged weights stay under `weights/v0000/`,
+   never pruned).
 
 ```bash
 deployment/grpo_loop.sh node-check   # step 1
@@ -362,11 +365,20 @@ LOOP_CONFIG=experiments/configs/grpo/loop_smoke.toml deployment/grpo_loop.sh loo
 deployment/grpo_loop.sh init         # step 6: the starting policy's and the value v0 adapter merged into their bases
 deployment/grpo_loop.sh servers      # eight vLLM servers: a GPU's two one after another, the GPUs in parallel
 deployment/grpo_loop.sh check        # one live request per policy server (below)
-deployment/grpo_loop.sh gate         # step 5: the value gate's benchmark, ~1-2 h, before value phases can publish
+deployment/grpo_loop.sh gate         # step 5: the value benchmark (gate set, no value model), ~1-2 h
 deployment/grpo_loop.sh dashboard    # http://<node>:8600 (open; tunnel or mapped port: "Dashboard" above)
-deployment/grpo_loop.sh loop         # version 0's probe (twice), held-out states and miniF2F first, then sampling
+deployment/grpo_loop.sh loop         # version 0's probe (every part twice), held-out states, miniF2F, then sampling
 deployment/grpo_loop.sh status       # or the dashboard; `tail -f $LEAN_SEARCH_RUNS/grpo_loop_v1/loop.log`
+deployment/grpo_loop.sh value-share 0.15   # μ on from the next phase that trains (0: off again); starts at 0
 ```
+
+There is no value gate: every value model the loop trains is published, and μ (the value share of the reward and the
+value targets) stays 0 until set by hand with `value-share`, which writes `$LEAN_SEARCH_RUNS/<loop>/value_share.json`;
+the loop reads it when each phase starts training (`status` prints it, the Value page charts the μ in effect per
+phase). The value statistics are trends only: the value benchmark (Value page, per served value model, against v0 and
+the previous model), the value arms (every other probe slot, paired with v0; an alert in `loop.log` and on the
+dashboard when the published value model is significantly worse than v0, nothing more) and the per-phase calibration
+and label/prediction distributions.
 
 `servers` starts only the servers that do not answer, on the current version; the loop does the same by itself when
 searches keep failing on a server (`src/lean_search/rl/README.md`, "The loop", server failures) and stops with an
@@ -398,15 +410,16 @@ First-hour checks:
   `clip_fraction` 0 (`steps.jsonl` of the phase's policy output).
 - Publishing keeps the update: after phase 1, `weights/v0001/policy` should differ from `v0000/policy` in a large
   share of the adapted layers' elements (merging the continued SFT adapter into the raw base, not into merged weights).
-- Timings: the two version-0 probe runs and the held-out-states run before the first phase give the probe's wall time
-  (`fixed_targets.evaluation_seconds`; target 40-60 min per run at concurrency 64, else lower `probe_per_stratum` to
-  100 and re-select before the loop starts); the first phase's `timing` line gives sampling vs training (two passes if
+- Timings: version 0's probe (three parts, each twice) and the held-out-states run before the first phase give a
+  probe slot's wall time (`fixed_targets.evaluation_seconds` per part; target 13-20 min at concurrency 64, a slot every
+  ~2 h and a value arm every other slot, ~10-15% of the loop; else lower `probe_per_stratum` to 100 and re-select
+  before the loop starts); the first phase's `timing` line gives sampling vs training (two passes if
   training stays well below sampling, else `passes_per_phase = 1` in `phase.toml`) and publishing.
 - The pause, segment by segment (`loop.log`'s `Phase <k> pause:` line, the `timing` family's `pause.*`, the System
   page's "Pause segments"; `src/lean_search/rl/README.md`, "Timing"). Expected on four GPUs: `drain` and
   `server_sleep` seconds; `trainer_start` under a minute (torchrun, imports, NCCL, reading the trees); `policy_load`
   and `compile` 1-2 minutes together; `scoring` plus `policy_training` about a quarter of the one-GPU 4-8 minutes;
-  `value_training` and `gate` (rank 0 alone, ~2-3 minutes) next; `merge` and `write` well under a minute (policy and
+  `value_training` (~2-3 minutes) next; `merge` and `write` well under a minute (policy and
   value merge on different GPUs in parallel); `publish` seconds (the merges are moved, not redone: a `publish` of a
   minute or more means the CPU merge ran, see `training/phase_<k>.log`); `wake` a few seconds per server. If the
   fixed segments dominate, compare one phase with `gpus = [0]` before deciding.
@@ -418,9 +431,14 @@ First-hour checks:
   a hang in the first all-reduce on a PCIe node without peer-to-peer access is fixed with `NCCL_P2P_DISABLE=1` in the
   loop's environment.
 - Probe validity: `fixed_targets.probe_wall_clock_stops` must be ~0 (the 1-hour cap is an emergency stop; if it binds,
-  the probe measures load). The second version-0 run gives the noise: `probe_repeat_difference` and
-  `probe_repeat_discordant` (also `evaluations/probe_v0000_repeat1/comparison.json` and `loop.log`); later probe
-  differences smaller than about twice the discordant count's square root are noise.
+  the probe measures load). The second version-0 run of each part gives the noise: `probe_repeat_difference` and
+  `probe_repeat_discordant` per part (Evaluations page; `evaluations/probe_slot000<k>_v0000_repeat1/comparison.json`,
+  and the sum over the parts in `loop.log`); later differences of the whole set smaller than about twice the summed
+  discordant count's square root are noise.
+- Value statistics: `loop.log` has a `Value benchmark of value v0: ...` line soon after the start (v0 scoring the
+  benchmark through the value servers while the searches run; seconds, not minutes) and one per published value model;
+  the Value page shows the per-phase `value_phase` charts from phase 1 on and the first value arm at the first even
+  probe slot after the first value retrain. Set μ only by hand (`value-share`).
 - Memory (System page, budget in `src/lean_search/rl/README.md`, "Host memory"): `memory_total_gib`,
   `memory_available_gib`, `lean_private_memory_gib` and its p90, `vllm_private_memory_gib`, once while sampling, once
   while training (four ranks, each with the phase's trees, after the paused searches' REPLs stopped) and once during

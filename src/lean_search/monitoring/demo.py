@@ -22,13 +22,16 @@ from lean_search.monitoring.families import (
     HealthThresholds,
     LoopState,
     LoopStatus,
+    PairedDifference,
     PauseSegments,
     PhaseHealth,
     PhaseTiming,
     SearchPhase,
     SystemUsage,
-    ValueAbResult,
-    ValueBenchmarkResult,
+    ValueArmResult,
+    ValueBenchmarkTrend,
+    ValuePhase,
+    ValueTraining,
 )
 from lean_search.monitoring.store import LoopContext, MetricsWriter
 from lean_search.rl.policy_data import AdvantageSignRatios, SamplerAgreement, SignedRatios
@@ -52,16 +55,21 @@ from lean_search.value.diagnostics import (
     Calibration,
     LabelDistribution,
     LabelDistributions,
+    PhaseValueMetrics,
     PredictionDistribution,
-    ValueDiagnostics,
+    PredictionDistributions,
 )
-from lean_search.value.gate_statistics import GateStatistic
+from lean_search.value.pair_statistics import PairShare, PairStatistic
 
 GPUS = 4
 CORES = 92.0
 HOURLY_PRICE = 0.80
 MINIF2F_VALID = 244
 DIFFICULTY_BANDS = ("0-1", "1-2", "2-3", "3-4", "4-5", "5+")
+# The probe's strata, their solve rates at the start, and problems per part (a third of 167).
+PROBE_STRATA = (("easy", 0.8), ("medium", 0.45), ("hard", 0.15))
+PROBE_PART_PROBLEMS = 56
+PROBE_PARTS = 3
 
 
 @dataclass(frozen=True)
@@ -70,8 +78,13 @@ class DemoSchedule:
     training_minutes: float = 5.0
     status_seconds: float = 120.0
     system_seconds: float = 60.0
-    evaluation_every_phases: int = 6
+    evaluation_every_phases: int = 15
+    # A probe slot about every 2 hours.
+    probe_every_phases: int = 5
     value_every_phases: int = 4
+    value_arm_every_slots: int = 2
+    # The owner turns μ on after this many hours (never in the control).
+    value_share_after_hours: float = 30.0
 
 
 @dataclass(frozen=True)
@@ -132,7 +145,7 @@ def calibration_curve(states: int, bias: float) -> Calibration:
         )
         for index in range(CALIBRATION_BINS)
     )
-    return Calibration(states, abs(bias), bins)
+    return Calibration(states, abs(bias), abs(bias) + 0.12, bins)
 
 
 def scaled(values: EdgeKindCounts, factor: float) -> EdgeKindCounts:
@@ -163,8 +176,13 @@ class DemoRun:
         self.statements_attempted = 0
         self.statements_solved = 0
         self.band_low = 1.0
+        self.probe_slots: list[FixedTargets] = []
+        # Problems solved by one arm only, by published value version: (v0 only, published only, problems).
+        self.value_arms: dict[int, list[tuple[int, int, int]]] = {}
         self.context()
         self.write_fixed_targets(started_at)
+        for _ in range(PROBE_PARTS):
+            self.write_probe_slot(started_at)
 
     def progress(self, moment: float) -> float:
         hours = (moment - self.started_at) / 3600
@@ -249,22 +267,33 @@ class DemoRun:
             record_time=moment,
         )
 
+    def value_share(self, moment: float) -> float:
+        hours = (moment - self.started_at) / 3600
+        return 0.15 if not self.profile.control and hours >= self.schedule.value_share_after_hours else 0.0
+
     def finish_phase(self, moment: float) -> None:
         self.write_search(moment)
         self.write_curriculum(moment)
+        self.write_value_phase(moment)
         self.write_grpo(moment + 240)
         self.write_timing(moment + 270)
         self.write_budget(moment + 275)
         self.write_health(moment + 276)
         self.phase += 1
         self.last_publish = moment + 270
-        self.context()
         if self.phase % self.schedule.value_every_phases == 0:
-            self.write_value(moment + 280)
-        if self.phase % (2 * self.schedule.value_every_phases) == 0:
-            self.write_value_ab(moment + 300)
+            self.write_value_training(moment + 275)
+            self.value_version = self.phase
+        self.context()
+        if self.phase % self.schedule.probe_every_phases == 0:
+            slot = len(self.probe_slots)
+            self.write_probe_slot(moment + 290)
+            if slot % self.schedule.value_arm_every_slots == 0 and self.value_version:
+                self.write_value_arm(moment + 295, slot)
         if self.phase % self.schedule.evaluation_every_phases == 0:
-            self.write_fixed_targets(moment + 290)
+            self.write_fixed_targets(moment + 300)
+        if self.phase % self.schedule.value_every_phases == 0:
+            self.write_value_benchmark(moment + 600)
 
     def write_timing(self, moment: float) -> None:
         schedule = self.schedule
@@ -279,7 +308,6 @@ class DemoRun:
             scoring_seconds=0.08 * training_seconds,
             policy_training_seconds=0.3 * training_seconds,
             value_training_seconds=0.2 * training_seconds,
-            gate_seconds=0.1 * training_seconds,
             merge_seconds=15.0,
             write_seconds=25.0,
             publish_seconds=2.0,
@@ -395,17 +423,48 @@ class DemoRun:
                 held_out_states=512,
                 math500_visible=0.876 + self.profile.math500_drift * learned + self.noise(0.006),
                 math500_thinking=0.845 + self.profile.math500_drift * learned * 0.5 + self.noise(0.006),
-                probe_solved=round(250 + self.profile.minif2f_gain * 2 * learned + self.noise(4)),
-                probe_problems=501,
-                probe_expansion_budget=16,
-                probe_by_difficulty={
-                    stratum: BandOutcome(167, round(167 * rate * (1 + 0.2 * learned) + self.noise(3)))
-                    for stratum, rate in (("easy", 0.8), ("medium", 0.45), ("hard", 0.15))
-                },
-                evaluation_seconds=2900 + self.noise(120),
+                evaluation_seconds=4200 + self.noise(120),
             ),
             record_time=moment,
         )
+
+    def probe_part_solved(self, moment: float, rate: float) -> int:
+        solved = PROBE_PART_PROBLEMS * rate * (1 + 0.2 * self.progress(moment)) + self.noise(2)
+        return min(PROBE_PART_PROBLEMS, max(0, round(solved)))
+
+    def write_probe_slot(self, moment: float) -> None:
+        """A third of the probe set, and the last three slots together once there are three."""
+        slot = len(self.probe_slots)
+        by_difficulty = {
+            stratum: BandOutcome(PROBE_PART_PROBLEMS, self.probe_part_solved(moment, rate))
+            for stratum, rate in PROBE_STRATA
+        }
+        record = FixedTargets(
+            probe_solved=sum(outcome.solved for outcome in by_difficulty.values()),
+            probe_problems=PROBE_PART_PROBLEMS * len(PROBE_STRATA),
+            probe_expansion_budget=16,
+            probe_by_difficulty=by_difficulty,
+            evaluation_seconds=1000 + self.noise(60),
+            probe_wall_clock_stops=0,
+            probe_slot=slot,
+            probe_part=slot % PROBE_PARTS,
+        )
+        window = [*self.probe_slots[-(PROBE_PARTS - 1) :], record] if slot >= PROBE_PARTS - 1 else []
+        if window:
+            record = dataclasses.replace(
+                record,
+                probe_rolling_solved=sum(part.probe_solved or 0 for part in window),
+                probe_rolling_problems=sum(part.probe_problems or 0 for part in window),
+                probe_rolling_by_difficulty={
+                    stratum: BandOutcome(
+                        sum(part.probe_by_difficulty[stratum].attempts for part in window),
+                        sum(part.probe_by_difficulty[stratum].solved for part in window),
+                    )
+                    for stratum, _ in PROBE_STRATA
+                },
+            )
+        self.probe_slots.append(record)
+        self.writer.write(record, record_time=moment)
 
     def write_grpo(self, moment: float) -> None:
         learned = self.progress(moment)
@@ -629,11 +688,64 @@ class DemoRun:
             record_time=moment,
         )
 
-    def write_value(self, moment: float) -> None:
+    def write_value_phase(self, moment: float) -> None:
         learned = self.progress(moment)
-        passed = self.random.random() < 0.5
-        if passed:
-            self.value_version += 1
+        dead = 0.05 + 0.25 * learned
+        metrics = PhaseValueMetrics(
+            labels=LabelDistributions(
+                proof_graph=LabelDistribution(280, 280.0, step_bins_with_dead(2.5, 0.0)),
+                off_graph_solved_trees=LabelDistribution(650, 150.0, step_bins_with_dead(4.0, 1.0)),
+                off_graph_unsolved_trees=LabelDistribution(1300, 380.0, step_bins_with_dead(5.0, 1.0)),
+            ),
+            predictions=PredictionDistributions(
+                proof_graph=predictions(280, 2.8, dead * 0.4),
+                off_graph_solved_trees=predictions(650, 3.6, dead),
+                off_graph_unsolved_trees=predictions(1300, 4.2, dead * 1.3),
+            ),
+            frontier=predictions(9000, 4.2, dead * 1.2),
+            calibration=calibration_curve(2400, 0.15 - 0.08 * learned),
+            steps=StepMetrics(
+                proof_graph_states=560,
+                mean_absolute_error=1.6 - 0.4 * learned + self.noise(0.05),
+                spearman=0.6 + 0.12 * learned + self.noise(0.02),
+            ),
+        )
+        self.writer.write(ValuePhase(self.value_share(moment), metrics), record_time=moment)
+
+    def write_value_training(self, moment: float) -> None:
+        learned = self.progress(moment)
+        self.writer.write(
+            ValueTraining(
+                value_version=self.phase,
+                trees=round(480 + self.noise(20)),
+                training_loss=0.9 - 0.2 * learned + self.noise(0.02),
+                labels=LabelDistributions(
+                    proof_graph=LabelDistribution(1100, 1100.0, step_bins_with_dead(2.5, 0.0)),
+                    off_graph_solved_trees=LabelDistribution(2600, 610.0, step_bins_with_dead(4.0, 1.0)),
+                    off_graph_unsolved_trees=LabelDistribution(5200, 1500.0, step_bins_with_dead(5.0, 1.0)),
+                ),
+                replay_labels=LabelDistribution(1000, 1000.0, step_bins_with_dead(3.5, 0.0)),
+            ),
+            record_time=moment,
+        )
+
+    def pair_statistic(self, difference: float) -> PairStatistic:
+        return PairStatistic(
+            problems=150,
+            pairs=420,
+            discordant_pairs=round(60 + self.noise(6)),
+            model_share=0.64 + difference,
+            reference_share=0.64,
+            difference=difference,
+            lower=difference - 0.045,
+            upper=difference + 0.045,
+            effective_pairs=210 + self.noise(10),
+            resamples=5000,
+            confidence=0.95,
+        )
+
+    def write_value_benchmark(self, moment: float) -> None:
+        learned = self.progress(moment)
         bins = tuple(
             ReliabilityBin(
                 lower=index / 10,
@@ -644,10 +756,10 @@ class DemoRun:
             )
             for index in range(10)
         )
-        benchmark = BenchmarkMetrics(
-            estimates=f"fresh scores of value-v{self.value_version + 1}",
+        metrics = BenchmarkMetrics(
+            estimates="fresh scores of value-merged",
             kind=EstimateKind.FRESH,
-            model=f"value-v{self.value_version + 1}",
+            model="value-merged",
             circular_runs=(),
             states=3800,
             groups=1450,
@@ -679,67 +791,61 @@ class DemoRun:
                 spearman=0.62 + 0.12 * learned + self.noise(0.015),
             ),
         )
-        difference = 0.02 + 0.06 * learned + self.noise(0.02)
-        gate = GateStatistic(
-            problems=150,
-            pairs=420,
-            discordant_pairs=round(60 + self.noise(6)),
-            candidate_accuracy=0.64 + difference,
-            current_accuracy=0.64,
-            difference=difference,
-            lower=difference - 0.045,
-            upper=difference + 0.045,
-            effective_pairs=210 + self.noise(10),
-            resamples=5000,
-            confidence=0.95,
-        )
-        dead = 0.05 + 0.25 * learned
-        diagnostics = ValueDiagnostics(
-            labels=LabelDistributions(
-                proof_graph=LabelDistribution(1100, 1100.0, step_bins_with_dead(2.5, 0.0)),
-                off_graph_solved_trees=LabelDistribution(2600, 610.0, step_bins_with_dead(4.0, 1.0)),
-                off_graph_unsolved_trees=LabelDistribution(5200, 1500.0, step_bins_with_dead(5.0, 1.0)),
-                replay=LabelDistribution(1000, 1000.0, step_bins_with_dead(3.5, 0.0)),
-            ),
-            benchmark_candidate=predictions(3800, 3.0, dead),
-            benchmark_published=predictions(3800, 3.2, max(0.0, dead - 0.05)),
-            benchmark_candidate_calibration=calibration_curve(2300, 0.12 - 0.08 * learned),
-            phase_expanded=predictions(2400, 3.4, dead * 0.8),
-            phase_frontier=predictions(9000, 4.2, dead * 1.2),
-            phase_calibration=calibration_curve(2400, 0.15 - 0.08 * learned),
-        )
+        gain = 0.08 * learned + self.noise(0.01)
+        previous = self.value_version - self.schedule.value_every_phases
         self.writer.write(
-            ValueBenchmarkResult(
-                candidate_version=self.value_version if passed else self.value_version + 1,
-                gate_passed=passed,
-                benchmark=benchmark,
-                training_loss=0.9 - 0.2 * learned + self.noise(0.02),
-                gate=gate,
-                published_benchmark=benchmark,
-                trees=round(480 + self.noise(20)),
-                diagnostics=diagnostics,
+            ValueBenchmarkTrend(
+                value_version=self.value_version,
+                pairs=PairShare(problems=150, pairs=420, share=0.64 + gain),
+                reference_value_version=0,
+                previous_value_version=previous if previous > 0 else 0,
+                against_reference=self.pair_statistic(gain),
+                against_previous=self.pair_statistic(0.01 + self.noise(0.02)),
+                metrics=metrics,
+                predictions=predictions(3800, 3.0, 0.05 + 0.25 * learned),
+                calibration=calibration_curve(2300, 0.12 - 0.08 * learned),
+                scoring_seconds=30 + abs(self.noise(5)),
             ),
             record_time=moment,
         )
 
-    def write_value_ab(self, moment: float) -> None:
+    def paired(self, arms: list[tuple[int, int, int]]) -> PairedDifference:
+        only_reference = sum(arm[0] for arm in arms)
+        only_published = sum(arm[1] for arm in arms)
+        problems = sum(arm[2] for arm in arms)
+        difference = (only_published - only_reference) / problems
+        spread = 1.96 * math.sqrt(only_reference + only_published) / problems
+        return PairedDifference(
+            runs=len(arms),
+            problems=problems,
+            only_reference=only_reference,
+            only_published=only_published,
+            difference=difference,
+            lower=difference - spread,
+            upper=difference + spread,
+            worse_p_value=0.5 if only_reference <= only_published else 0.2,
+            better_p_value=0.5 if only_published <= only_reference else 0.2,
+        )
+
+    def write_value_arm(self, moment: float, slot: int) -> None:
         learned = self.progress(moment)
-        reference = round(150 + self.noise(3))
-        only_published = round(14 + 6 * learned + self.noise(2))
-        only_reference = round(12 + self.noise(2))
+        problems = PROBE_PART_PROBLEMS * len(PROBE_STRATA)
+        reference = self.probe_slots[slot].probe_solved or 0
+        arm = (max(0, round(6 + self.noise(2))), max(0, round(6 + 3 * learned + self.noise(2))), problems)
+        self.value_arms.setdefault(self.value_version, []).append(arm)
+        every = [entry for arms in self.value_arms.values() for entry in arms]
         self.writer.write(
-            ValueAbResult(
-                problems=250,
-                reference_solved=reference,
-                published_solved=reference + only_published - only_reference,
-                only_reference=only_reference,
-                only_published=only_published,
-                p_value=0.5,
-                worse_p_value=0.8,
-                passed=only_published > only_reference + 8,
+            ValueArmResult(
+                slot=slot,
+                part=slot % PROBE_PARTS,
                 reference_value_version=0,
                 published_value_version=self.value_version,
-                better_p_value=0.3,
+                reference_solved=reference,
+                published_solved=reference + arm[1] - arm[0],
+                this_slot=self.paired([arm]),
+                same_value_version=self.paired(self.value_arms[self.value_version]),
+                all_value_versions=self.paired(every),
+                worse=False,
             ),
             record_time=moment,
         )

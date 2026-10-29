@@ -1,4 +1,4 @@
-"""Held-out pool statements for the fixed targets: the probe set and the value gate's set, disjoint and fixed once.
+"""Held-out pool statements for the fixed targets: the probe set and the gate set (value benchmark), disjoint.
 
 Both come from the curriculum's verified statements (pool v3: a known proof compiled here, the automation sweep alone
 does not close it), stratified by the curriculum's difficulty estimate into easy, medium and hard, the same number from

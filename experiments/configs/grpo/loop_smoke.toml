@@ -1,10 +1,11 @@
 # The smoke cycle before anything long (deployment/README.md, "GRPO loop", bring-up step 3): the whole loop on the
 # overfit statements with visible student v2 as the starting policy (the SFT stage's adapter does not exist yet), short
-# phases, a value phase every phase whose gate every candidate passes (phase_smoke.toml), and every evaluation at a
-# tiny size, so the first hour sees: the at-start baselines (probe twice, miniF2F, held-out states), one pause with
-# policy and value training, both GPU merges, the publish and the wake, then the value servers' swap to the fixed v0
-# model for the probe and the value A/B search with both arms. Run two phases, check the first-hour list, stop it and
-# delete its run and checkpoints (grpo_smoke*).
+# phases, a value phase every phase, and every evaluation at a tiny size, so the first hour sees: the at-start
+# baselines (every probe part twice, miniF2F, held-out states), the value benchmark scored by v0 through the value
+# servers, one pause with policy and value training, both GPU merges, the publish and the wake, the new value model
+# scoring the benchmark, then the value servers' swap to the fixed v0 model for a probe slot and to the published one
+# for its value arm. Run two phases, check the first-hour list, stop it and delete its run and checkpoints
+# (grpo_smoke*).
 #   python experiments/grpo_fixed_sets.py --config experiments/configs/grpo/fixed_sets.toml gate-benchmark \
 #       --search-config experiments/configs/grpo/gate_search.toml --run-name grpo_smoke_gate_search \
 #       --output grpo_smoke_gate/benchmark.json.gz --problems 60     # with the smoke's version 0 served
@@ -81,17 +82,15 @@ concurrency = 112
 status_seconds = 30.0
 
 [training]
-phase_config = "experiments/configs/grpo/phase_smoke.toml"
+phase_config = "experiments/configs/grpo/phase.toml"
 gpus = [0, 1, 2, 3]
 min_sampling_minutes = 5.0
 max_sampling_minutes = 10.0
 min_trainable_groups = 30
 check_seconds = 30.0
-# A value phase every phase, on that phase's trees, gated on the tiny benchmark above.
+# A value phase every phase, on that phase's trees.
 value_every_phases = 1
 value_window_phases = 1
-value_share_after_gate = 0.15
-value_benchmark = "grpo_smoke_gate/benchmark.json.gz"
 # The SFT stage's replay data do not exist yet; v0's value data come from the node backup.
 lean_replay = ""
 math_replay = ""
@@ -108,7 +107,10 @@ value_model = "initial"
 held_out_states_file = "phase5_eval_visible_student_v2_visible/states.jsonl"
 paused_repl_memory_gib = 0.0
 
-# At the start twice (the repeat comparison), then after every phase (the swap to v0's kept value weights).
+# Every part at the start twice (the repeat comparison), then a slot after every phase (the swap to v0's kept value
+# weights), each with its value arm once a value model other than v0 is published; 12 problems: 4 per part.
+probe_parts = 3
+
 [evaluation.probe]
 max_expansions = 16
 max_wall_seconds = 3600.0
@@ -117,6 +119,15 @@ every_hours = 0.01
 at_start = true
 baseline_runs = 2
 problems = 12
+
+[evaluation.value_arm]
+every_slots = 1
+confidence = 0.95
+significance = 0.05
+
+# The tiny benchmark above.
+[evaluation.value_benchmark]
+path = "grpo_smoke_gate/benchmark.json.gz"
 
 [evaluation.minif2f]
 max_expansions = 64
@@ -133,17 +144,6 @@ concurrency = 64
 every_hours = 0.0
 at_start = true
 problems = 32
-
-# After the first phase published a value model.
-[evaluation.value_ab]
-max_expansions = 16
-max_wall_seconds = 3600.0
-concurrency = 64
-every_hours = 0.01
-
-[evaluation.value_ab_test]
-problems = 12
-significance = 0.05
 
 [retention]
 adapter_versions = 1

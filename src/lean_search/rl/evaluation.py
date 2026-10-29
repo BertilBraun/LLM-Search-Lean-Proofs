@@ -2,11 +2,13 @@
 
 A run directory holds config.toml (the search's run config, which the value benchmark reads for provenance),
 results.jsonl (one SearchResult per problem), trees/<problem>.json.gz and, once complete, summary.json; a repeated run
-of the same version also holds comparison.json against the first.
+of the same version holds comparison.json against the first, a probe slot's value arm comparison.json against the
+slot's run with the reference value model.
 """
 
 import asyncio
 import contextlib
+import dataclasses
 import datetime
 import json
 import math
@@ -19,8 +21,8 @@ from pathlib import Path
 from lean_search.data import Problem
 from lean_search.expert_iteration.pool_search import PRELOADED_HEADER_SHARE, common_headers
 from lean_search.lean import LeanReplConfig, LeanReplPool
-from lean_search.monitoring.families import BandOutcome, FixedTargets, ValueAbResult
-from lean_search.rl.loop_config import ValueAbConfig
+from lean_search.monitoring.families import BandOutcome, FixedTargets, PairedDifference, ValueArmResult
+from lean_search.rl.loop_config import ValueArmConfig
 from lean_search.rl.renaming import StatementRenamings, search_problem
 from lean_search.rl.search_models import open_search_models, run_config_text
 from lean_search.search import CompletedSearch, RunConfig, SearchResult, StopReason, read_results, tree_record
@@ -31,8 +33,17 @@ class EvaluationKind(StrEnum):
     PROBE = "probe"
     MINIF2F = "minif2f"
     HELD_OUT_STATES = "held_out_states"
-    # Part of the probe set searched twice by one policy version, with the reference and the published value model.
-    VALUE_AB = "value_ab"
+
+
+@dataclass(frozen=True)
+class EvaluationRun:
+    kind: EvaluationKind
+    # A probe slot: the part slot % probe_parts of the probe set; None: the whole set, or another target.
+    slot: int | None = None
+    # > 0: another independent run of the same version and part (the run-to-run noise).
+    repeat: int = 0
+    # The slot's part searched again with the published value model, paired with the slot's run.
+    value_arm: bool = False
 
 
 @dataclass(frozen=True)
@@ -71,8 +82,11 @@ class EvaluationSummary:
     valid_samples: int = 0
     # Searches stopped by the per-problem wall-clock cap rather than the expansion budget.
     wall_clock_stops: int = 0
-    # The value A/B's published arm, once the reference arm ran: the paired comparison.
-    value_ab: ValueAbResult | None = None
+    # A probe slot and its part of the probe set.
+    slot: int | None = None
+    part: int | None = None
+    # A value arm: the paired comparison with the slot's run.
+    value_arm: ValueArmResult | None = None
 
     @property
     def solve_rate(self) -> float:
@@ -183,60 +197,197 @@ def compare_repeats(first: Sequence[SearchResult], second: Sequence[SearchResult
     )
 
 
+@dataclass(frozen=True)
+class RollingProbe:
+    """The last slots together, each part of the probe set once."""
+
+    slots: tuple[int, ...]
+    problems: int
+    solved: int
+    by_stratum: tuple[StratumOutcome, ...]
+
+
+def rolling_probe(summaries: Sequence[EvaluationSummary]) -> RollingProbe:
+    strata: dict[str, tuple[int, int]] = {}
+    for summary in summaries:
+        for outcome in summary.by_stratum:
+            problems, solved = strata.get(outcome.stratum, (0, 0))
+            strata[outcome.stratum] = (problems + outcome.problems, solved + outcome.solved)
+    return RollingProbe(
+        slots=tuple(summary.slot for summary in summaries if summary.slot is not None),
+        problems=sum(summary.problems for summary in summaries),
+        solved=sum(summary.solved for summary in summaries),
+        by_stratum=tuple(StratumOutcome(stratum, problems, solved) for stratum, (problems, solved) in strata.items()),
+    )
+
+
 def binomial_upper_tail(successes: int, trials: int) -> float:
     """P(X >= successes) for X ~ Binomial(trials, 1/2)."""
     return sum(math.comb(trials, count) for count in range(successes, trials + 1)) / 2**trials
 
 
-def value_ab_result(
-    reference: Sequence[SearchResult],
-    published: Sequence[SearchResult],
-    config: ValueAbConfig,
-    value_versions: tuple[int, int],
-    earlier: Sequence[ValueAbResult] = (),
-) -> ValueAbResult:
-    """Paired per problem; the exact McNemar tests count only the problems one arm solved, the one-sided ones over
-    this run and the `earlier` A/Bs of the same published value model."""
-    comparison = compare_repeats(reference, published)
-    run_worse = binomial_upper_tail(comparison.only_first, comparison.discordant)
-    run_better = binomial_upper_tail(comparison.only_second, comparison.discordant)
-    only_reference = comparison.only_first + sum(result.only_reference for result in earlier)
-    only_published = comparison.only_second + sum(result.only_published for result in earlier)
-    worse = binomial_upper_tail(only_reference, only_reference + only_published)
-    better = binomial_upper_tail(only_published, only_reference + only_published)
-    return ValueAbResult(
-        problems=comparison.problems,
-        reference_solved=comparison.first_solved,
-        published_solved=comparison.second_solved,
-        only_reference=comparison.only_first,
-        only_published=comparison.only_second,
-        p_value=min(1.0, 2 * min(run_worse, run_better)),
-        worse_p_value=worse,
-        passed=better < config.significance,
-        reference_value_version=value_versions[0],
-        published_value_version=value_versions[1],
-        better_p_value=better,
-        worse=worse < config.significance,
-        pooled_runs=1 + len(earlier),
-        pooled_only_reference=only_reference,
-        pooled_only_published=only_published,
+def binomial_cumulative(successes: int, trials: int, probability: float) -> float:
+    """P(X <= successes) for X ~ Binomial(trials, probability), 0 < probability < 1."""
+    log_success, log_failure = math.log(probability), math.log1p(-probability)
+    total = sum(
+        math.exp(
+            math.lgamma(trials + 1)
+            - math.lgamma(count + 1)
+            - math.lgamma(trials - count + 1)
+            + count * log_success
+            + (trials - count) * log_failure
+        )
+        for count in range(successes + 1)
+    )
+    return min(1.0, total)
+
+
+def bisected(decreasing: Callable[[float], float], target: float) -> float:
+    """The probability in (0, 1) where a function decreasing in it crosses the target."""
+    low, high = 0.0, 1.0
+    for _ in range(60):
+        middle = (low + high) / 2
+        if decreasing(middle) > target:
+            low = middle
+        else:
+            high = middle
+    return (low + high) / 2
+
+
+def clopper_pearson(successes: int, trials: int, confidence: float) -> tuple[float, float]:
+    """The exact interval of a binomial probability; [0, 1] without trials."""
+    tail = (1 - confidence) / 2
+    lower = 0.0
+    if successes > 0:
+        lower = 1 - bisected(lambda share: binomial_cumulative(trials - successes, trials, share), tail)
+    upper = 1.0
+    if successes < trials:
+        upper = bisected(lambda share: binomial_cumulative(successes, trials, share), tail)
+    return lower, upper
+
+
+def paired_difference(
+    runs: int, problems: int, only_reference: int, only_published: int, confidence: float
+) -> PairedDifference:
+    """The paired solve-rate difference with McNemar's exact interval: given the d problems one arm solved, the
+    published arm's share of them is binomial, and the difference is (2 · share − 1) · d / problems."""
+    discordant = only_reference + only_published
+    lower_share, upper_share = clopper_pearson(only_published, discordant, confidence)
+    known = problems > 0
+    return PairedDifference(
+        runs=runs,
+        problems=problems,
+        only_reference=only_reference,
+        only_published=only_published,
+        difference=(only_published - only_reference) / problems if known else None,
+        lower=(2 * lower_share - 1) * discordant / problems if known else None,
+        upper=(2 * upper_share - 1) * discordant / problems if known else None,
+        worse_p_value=binomial_upper_tail(only_reference, discordant),
+        better_p_value=binomial_upper_tail(only_published, discordant),
     )
 
 
-def fixed_targets_record(summary: EvaluationSummary, comparison: RepeatComparison | None = None) -> FixedTargets:
+def pooled_difference(
+    this_slot: PairedDifference, earlier: Sequence[ValueArmResult], confidence: float
+) -> PairedDifference:
+    return paired_difference(
+        this_slot.runs + len(earlier),
+        this_slot.problems + sum(result.this_slot.problems for result in earlier),
+        this_slot.only_reference + sum(result.this_slot.only_reference for result in earlier),
+        this_slot.only_published + sum(result.this_slot.only_published for result in earlier),
+        confidence,
+    )
+
+
+def value_arm_result(
+    reference: Sequence[SearchResult],
+    published: Sequence[SearchResult],
+    slot: int,
+    part: int,
+    value_versions: tuple[int, int],
+    earlier: Sequence[ValueArmResult],
+    config: ValueArmConfig,
+) -> ValueArmResult:
+    """Paired per problem with the slot's run with the reference value model; pooled with the `earlier` value arms of
+    the same published value model and of every one."""
+    comparison = compare_repeats(reference, published)
+    this_slot = paired_difference(
+        1, comparison.problems, comparison.only_first, comparison.only_second, config.confidence
+    )
+    same_version = [result for result in earlier if result.published_value_version == value_versions[1]]
+    same_value_version = pooled_difference(this_slot, same_version, config.confidence)
+    return ValueArmResult(
+        slot=slot,
+        part=part,
+        reference_value_version=value_versions[0],
+        published_value_version=value_versions[1],
+        reference_solved=comparison.first_solved,
+        published_solved=comparison.second_solved,
+        this_slot=this_slot,
+        same_value_version=same_value_version,
+        all_value_versions=pooled_difference(this_slot, earlier, config.confidence),
+        worse=same_value_version.worse_p_value < config.significance,
+    )
+
+
+def difference_text(name: str, difference: PairedDifference) -> str:
+    if difference.difference is None or difference.lower is None or difference.upper is None:
+        return f"{name}: no problems"
+    return (
+        f"{name} {difference.difference:+.3f} [{difference.lower:+.3f}, {difference.upper:+.3f}] over "
+        f"{difference.problems} problems in {difference.runs} runs ({difference.only_published} solved by the "
+        f"published model only, {difference.only_reference} by v0 only; p(worse) = {difference.worse_p_value:.3f})"
+    )
+
+
+def value_arm_text(result: ValueArmResult) -> str:
+    return (
+        f"Value arm of probe slot {result.slot} (part {result.part}): value v{result.published_value_version} "
+        f"{result.published_solved}, v{result.reference_value_version} {result.reference_solved}; "
+        + "; ".join(
+            (
+                difference_text("this slot", result.this_slot),
+                difference_text("pooled over this value model", result.same_value_version),
+                difference_text("pooled over every value model", result.all_value_versions),
+            )
+        )
+        + ("; worse than v0" if result.worse else "")
+    )
+
+
+def band_outcomes(outcomes: Sequence[StratumOutcome]) -> dict[str, BandOutcome]:
+    return {outcome.stratum: BandOutcome(outcome.problems, outcome.solved) for outcome in outcomes}
+
+
+def fixed_targets_record(
+    summary: EvaluationSummary, comparison: RepeatComparison | None = None, rolling: RollingProbe | None = None
+) -> FixedTargets:
+    """`comparison`: a repeated run against the first; `rolling`: a probe slot's last slots, each part once."""
     match summary.kind:
+        case EvaluationKind.PROBE if comparison is not None:
+            return FixedTargets(
+                probe_part=summary.part,
+                probe_problems=summary.problems,
+                probe_expansion_budget=summary.expansion_budget,
+                evaluation_seconds=summary.wall_seconds,
+                probe_wall_clock_stops=summary.wall_clock_stops,
+                probe_repeat_solved=summary.solved,
+                probe_repeat_difference=comparison.difference,
+                probe_repeat_discordant=comparison.discordant,
+            )
         case EvaluationKind.PROBE:
             return FixedTargets(
                 probe_solved=summary.solved,
                 probe_problems=summary.problems,
                 probe_expansion_budget=summary.expansion_budget,
-                probe_by_difficulty={
-                    outcome.stratum: BandOutcome(outcome.problems, outcome.solved) for outcome in summary.by_stratum
-                },
+                probe_by_difficulty=band_outcomes(summary.by_stratum),
                 evaluation_seconds=summary.wall_seconds,
                 probe_wall_clock_stops=summary.wall_clock_stops,
-                probe_repeat_difference=None if comparison is None else comparison.difference,
-                probe_repeat_discordant=None if comparison is None else comparison.discordant,
+                probe_slot=summary.slot,
+                probe_part=summary.part,
+                probe_rolling_solved=None if rolling is None else rolling.solved,
+                probe_rolling_problems=None if rolling is None else rolling.problems,
+                probe_rolling_by_difficulty={} if rolling is None else band_outcomes(rolling.by_stratum),
             )
         case EvaluationKind.MINIF2F:
             return FixedTargets(
@@ -253,8 +404,6 @@ def fixed_targets_record(summary: EvaluationSummary, comparison: RepeatCompariso
                 held_out_valid_rate=summary.valid_samples / summary.samples if summary.samples else None,
                 evaluation_seconds=summary.wall_seconds,
             )
-        case EvaluationKind.VALUE_AB:
-            raise AssertionError("The value A/B writes a value_ab line, not a fixed target.")
 
 
 def keep_config(paths: EvaluationPaths, config: RunConfig) -> None:
@@ -325,13 +474,17 @@ async def run_problem_set_evaluation(
     paths: EvaluationPaths,
     log: Callable[[str], None],
     renamings: StatementRenamings | None = None,
+    slot: int | None = None,
+    part: int | None = None,
 ) -> EvaluationSummary:
+    """`slot` and `part`: the probe slot and the part of the probe set the problems are."""
     started_at = now()
     started = time.monotonic()
     results = await search_problem_set(problems, config, paths, log, renamings)
     summary = search_summary(
         kind, run_name, versions, problems, results, config, started_at, time.monotonic() - started
     )
+    summary = dataclasses.replace(summary, slot=slot, part=part)
     paths.summary.write_text(to_json(summary), encoding="utf-8")
     return summary
 

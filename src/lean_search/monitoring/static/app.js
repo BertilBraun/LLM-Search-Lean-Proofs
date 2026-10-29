@@ -20,7 +20,14 @@ const RANGES = [
   { label: "All", seconds: 0 },
 ];
 const THEMES = ["auto", "light", "dark"];
-const X_NAMES = { policy_version: "policy v", value_version: "value v", phase: "phase " };
+const X_NAMES = {
+  policy_version: "policy v",
+  value_version: "value v",
+  phase: "phase ",
+  probe_slot: "slot ",
+  slot: "slot ",
+  probe_part: "part ",
+};
 
 const state = {
   run: null,
@@ -91,7 +98,7 @@ function wantedSeries(page) {
       if (chart.compare) otherRuns().forEach((run) => add(run, chart.family, chart.allTime));
     }
     if (section.tiles) ["status", "system"].forEach((family) => add(state.run, family, false));
-    if (section.tiles) ["fixed_targets", "value"].forEach((family) => add(state.run, family, true));
+    if (section.tiles) ["fixed_targets", "value_phase", "value_arm"].forEach((family) => add(state.run, family, true));
     if (section.table) add(state.run, section.table, true);
   }
   page.families.forEach((family) => add(state.run, family, false));
@@ -159,8 +166,10 @@ function evaluate(data, spec) {
   return values;
 }
 
+// A version or phase of the line's context, else a numeric field of the record (e.g. a probe slot).
 function xValues(data, axis) {
-  return axis && axis !== "time" ? data[axis] : data.time;
+  if (!axis || axis === "time") return data.time;
+  return data[axis] || data.columns[axis] || data.time.map(() => null);
 }
 
 function points(data, axis, values) {
@@ -250,14 +259,20 @@ function lookup(fields, path) {
   return path.split(".").reduce((value, key) => (value === null || value === undefined ? undefined : value[key]), fields);
 }
 
-const ANCHOR_CALIBRATION = [{ label: "observed", path: "benchmark.calibration.anchor_bins" }];
+// "phase 12; " for a chart of a family's latest record, from that record's context (chart.at, default the phase).
+function latestCaption(chart, family) {
+  const latest = state.overview.latest[family];
+  const at = chart.at || "phase";
+  return latest && latest[at] !== null && latest[at] !== undefined ? `${X_NAMES[at] || ""}${latest[at]}; ` : "";
+}
 
-// chart.curves: [{label, path}], each path to a list of reliability bins in the family's latest record.
+// chart.curves: [{label, path, family}], each path to a list of reliability bins in the latest record of the curve's
+// family (default the chart's).
 function reliabilitySpec(chart) {
-  const fields = latestFields(chart.family || "value");
-  const curves = chart.curves || ANCHOR_CALIBRATION;
-  const subtitle = fields ? `candidate v${fields.candidate_version}; ${chart.subtitle}` : chart.subtitle;
+  const curves = chart.curves;
+  const subtitle = `${latestCaption(chart, chart.family)}${chart.subtitle}`;
   const series = curves.map((curve, slot) => {
+    const fields = latestFields(curve.family || chart.family);
     const bins = (fields && lookup(fields, curve.path)) || [];
     const known = bins.filter((bin) => bin.mean_predicted !== null && bin.mean_target !== null);
     return { label: curve.label, slot, markers: true, points: known.map((bin) => ({ x: bin.mean_predicted, y: bin.mean_target })) };
@@ -276,12 +291,13 @@ function reliabilitySpec(chart) {
   };
 }
 
-// chart.series: [{label, path, normalize, detail: {count, weight}}], each path to a list of numbers (one per category)
-// in the family's latest record; `normalize` divides by their sum, `detail` names fields shown in the legend.
+// chart.series: [{label, path, family, normalize, detail: {count, weight}}], each path to a list of numbers (one per
+// category) in the latest record of the series' family (default the chart's); `normalize` divides by their sum,
+// `detail` names fields shown in the legend.
 function histogramSpec(chart) {
-  const fields = latestFields(chart.family);
-  const subtitle = fields ? `candidate v${fields.candidate_version}; ${chart.subtitle}` : chart.subtitle;
+  const subtitle = `${latestCaption(chart, chart.family)}${chart.subtitle}`;
   const series = chart.series.map((spec, slot) => {
+    const fields = latestFields(spec.family || chart.family);
     const values = (fields && lookup(fields, spec.path)) || [];
     const total = values.reduce((sum, value) => sum + (value || 0), 0);
     const parent = fields && spec.detail ? lookup(fields, spec.path.split(".").slice(0, -1).join(".")) : null;
@@ -330,7 +346,6 @@ function overviewTiles(parent) {
   const statusSeries = series(state.run, "status", false);
   const system = series(state.run, "system", false);
   const fixed = series(state.run, "fixed_targets", true);
-  const value = series(state.run, "value", true);
 
   if (status) {
     const age = now - status.time;
@@ -426,15 +441,18 @@ function overviewTiles(parent) {
       spark: visible,
     });
   }
-  if (value) {
-    const passed = (value.columns.gate_passed || []).filter((item) => item !== null);
-    const recent = passed.slice(-5);
-    const last = passed.at(-1);
+  const valuePhase = latest.value_phase;
+  const arm = latest.value_arm;
+  if (valuePhase || arm) {
+    const pooled = arm ? arm.fields.same_value_version : null;
+    const versus = pooled && pooled.difference !== null
+      ? `value arms vs v0 ${formatValue(pooled.difference, "share")} [${formatValue(pooled.lower, "share")}, ${formatValue(pooled.upper, "share")}]`
+      : "no value arm yet";
     tile(grid, {
-      label: "Value gate",
-      status: last === undefined ? null : last ? "good" : "warning",
-      value: last === undefined ? "–" : last ? "Passed" : "Failed",
-      sub: `${recent.filter(Boolean).length} of the last ${recent.length} passed`,
+      label: "Value model",
+      status: arm ? (arm.fields.worse ? "warning" : "good") : null,
+      value: `value v${(status && status.value_version) ?? "–"} · μ ${valuePhase ? formatValue(valuePhase.fields.value_share, "number") : "0"}`,
+      sub: versus,
     });
   }
 }
