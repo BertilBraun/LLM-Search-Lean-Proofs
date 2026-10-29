@@ -20,6 +20,7 @@ import transformers
 
 from lean_search.policy.adapters import LORA_TARGET_PATTERN, copy_tokenizer_and_processor_files, load_base_model
 from lean_search.policy.prompts import END_OF_TURN, FENCE, normalize_tactic_block
+from lean_search.training.data_parallel import COLLECTIVE_TIMEOUT
 from lean_search.training.packing import (
     enable_packed_sequences,
     packed_hidden_states,
@@ -197,7 +198,8 @@ def distributed_context() -> DistributedContext:
         return DistributedContext(0, 1, torch.device("cuda"))
     local_rank = int(os.environ["LOCAL_RANK"])
     torch.cuda.set_device(local_rank)
-    torch.distributed.init_process_group("nccl")
+    # The main rank's greedy evaluation can outlast NCCL's 10-minute default while the other ranks wait.
+    torch.distributed.init_process_group("nccl", timeout=COLLECTIVE_TIMEOUT)
     return DistributedContext(torch.distributed.get_rank(), world_size, torch.device("cuda", local_rank))
 
 
