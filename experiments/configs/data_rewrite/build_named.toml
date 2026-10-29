@@ -2,11 +2,14 @@
 # states, `have`s and explanations.
 #   python experiments/data_rewrite.py build --config experiments/configs/data_rewrite/build_named.toml \
 #       --name visible_student_v3_named
-# Everything but `variant` matches build_numbered.toml, so both arms hold the same items and chunks.
+# Everything but `variant` matches build_numbered.toml, so both arms hold the same items, chunks and explanations
+# (the named arm's text; the numbered arm's is renamed back).
 rewrite_run = "data_rewrite_v1"
 variant = "named"
-chunk_examples_per_reasoning_example = 1.0
+visible_chunk_examples_per_reasoning_example = 1.0
+non_visible_share = 0.5
 validation_chunk_examples = 500
+validation_visible_chunk_examples = 500
 max_prompt_tokens = 2048
 max_completion_tokens = 512
 tokenizer = "Qwen/Qwen3.5-4B"

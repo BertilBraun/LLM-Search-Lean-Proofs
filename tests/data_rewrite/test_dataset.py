@@ -1,113 +1,77 @@
 import dataclasses
 
 import pytest
+from rewritten_records import COUNTS, GOALS, TACTICS, example, proof
 
 from lean_search.corpora.records import DataSplit
 from lean_search.data_rewrite.chunks import ChunkLength
 from lean_search.data_rewrite.dataset import (
     BuildConfig,
+    ChunkExample,
+    ChunkPosition,
     NameVariant,
-    TokenCounts,
     build_data,
+    chunk_training_example,
+    plan_chunks,
     proof_versions,
 )
-from lean_search.data_rewrite.naming import NameChange, NameSource, renamed_text
 from lean_search.data_rewrite.records import (
-    ExampleStatus,
-    NamedExample,
-    NamedProof,
+    ChunkExplanation,
+    ExplanationOutcome,
     NamedStatus,
     ProofStatus,
-    RewrittenExample,
     RewrittenProof,
 )
-from lean_search.reasoning.dataset import ReasoningExample, ReasoningOrigin
+from lean_search.data_rewrite.statistics import visible_block_tactics
+from lean_search.policy.prompts import render_prompt, render_visible_completion
+from lean_search.reasoning.dataset import ReasoningOrigin, tokenize_reasoning_example
 
-CHANGES = (NameChange("h₀", "hx_pos", NameSource.RULES),)
-TACTICS = ("have h₁ : 0 < x + 1", "linarith [h₀]", "nlinarith [h₀, h₁]")
-GOALS = (
-    ("x : ℝ\nh₀ : 0 < x\n⊢ 0 < x ^ 2 + 1",),
-    ("case h₁\nx : ℝ\nh₀ : 0 < x\n⊢ 0 < x + 1", "x : ℝ\nh₀ : 0 < x\nh₁ : 0 < x + 1\n⊢ 0 < x ^ 2 + 1"),
-    ("x : ℝ\nh₀ : 0 < x\nh₁ : 0 < x + 1\n⊢ 0 < x ^ 2 + 1",),
-    (),
-)
 CONFIG = BuildConfig(
     rewrite_run="run",
     variant=NameVariant.NUMBERED,
     chunk_lengths=(ChunkLength(1), ChunkLength(0)),
-    chunk_examples_per_reasoning_example=0.0,
+    non_visible_share=1.0,
     seed="test",
 )
-COUNTS = TokenCounts(prompt=lambda goals: sum(len(goal) for goal in goals), completion=len)
+# One reasoning example: every chunk of one proof is planned for the visible mode.
+VISIBLE_CONFIG = dataclasses.replace(CONFIG, visible_chunk_examples_per_reasoning_example=3.0, non_visible_share=0.0)
+NAMED_EXPLANATION = "Since `hx_pos` makes $x$ positive, the shifted square is positive as well."
+NUMBERED_EXPLANATION = "Since `h₀` makes $x$ positive, the shifted square is positive as well."
 
 
-def renamed_goals(goals: tuple[tuple[str, ...], ...]) -> tuple[tuple[str, ...], ...]:
-    return tuple(tuple(renamed_text(goal, CHANGES) for goal in state) for state in goals)
+class CharacterTokenizer:
+    """Qwen3.5's chat format with thinking off, one token per character."""
+
+    def apply_chat_template(
+        self, conversation: list[dict[str, str]], *, tokenize: bool, add_generation_prompt: bool, enable_thinking: bool
+    ) -> str:
+        turns = "".join(f"<|im_start|>{turn['role']}\n{turn['content']}<|im_end|>\n" for turn in conversation)
+        return turns + "<|im_start|>assistant\n<think>\n\n</think>\n\n"
+
+    def encode(self, text: str, *, add_special_tokens: bool) -> list[int]:
+        return [ord(character) for character in text]
 
 
-def proof(
-    identifier: str,
-    split: DataSplit = DataSplit.TRAIN,
-    status: ProofStatus = ProofStatus.KEPT,
-    named_status: NamedStatus = NamedStatus.RENAMED,
-) -> RewrittenProof:
-    named = NamedProof(
-        named_status,
-        CHANGES,
-        (),
-        "",
-        tuple(renamed_text(tactic, CHANGES) for tactic in TACTICS),
-        renamed_goals(GOALS),
-    )
-    return RewrittenProof(
-        source="test",
-        proof_identifier=identifier,
-        split=split,
-        header="",
-        formal_statement=f"theorem {identifier.replace('/', '_')} (x : ℝ) (h₀ : 0 < x) : 0 < x ^ 2 + 1 := by",
-        original_tactics=2,
-        flattened=True,
-        status=status,
-        message="",
-        tactics=TACTICS,
-        goals=GOALS,
-        named=named,
-        lean_seconds=1.0,
-    )
+def explanations_for(
+    proofs: list[RewrittenProof], config: BuildConfig, outcome: ExplanationOutcome = ExplanationOutcome.EXPLAINED
+) -> dict[ChunkPosition, ChunkExplanation]:
+    explained = outcome is ExplanationOutcome.EXPLAINED
+    return {
+        planned.position: ChunkExplanation(
+            *planned.position,
+            outcome,
+            NAMED_EXPLANATION if explained else "",
+            NUMBERED_EXPLANATION if explained else "",
+            (),
+        )
+        for planned in plan_chunks(proofs, [example()], config, COUNTS).visible
+    }
 
 
-def example(split: DataSplit = DataSplit.TRAIN, named_status: NamedStatus = NamedStatus.RENAMED) -> RewrittenExample:
-    original = ReasoningExample(
-        "test",
-        "test/reasoning",
-        0,
-        GOALS[0],
-        "have h₁ : 0 < x + 1 := by\n  linarith [h₀]\nnlinarith [h₀, h₁]",
-        "Since h₀ gives 0 < x, the square plus one is positive.",
-        "",
-        ReasoningOrigin.SAMPLED,
-        visible=True,
-    )
-    named = NamedExample(
-        named_status,
-        CHANGES,
-        (),
-        renamed_goals(GOALS)[0],
-        renamed_text("have h₁ : 0 < x + 1\nlinarith [h₀]\nnlinarith [h₀, h₁]", CHANGES),
-        renamed_text(original.reasoning or "", CHANGES),
-        (),
-    )
-    return RewrittenExample(
-        original,
-        split,
-        ExampleStatus.KEPT,
-        "",
-        True,
-        "have h₁ : 0 < x + 1\nlinarith [h₀]\nnlinarith [h₀, h₁]",
-        (),
-        named,
-        1.0,
-    )
+def visible_chunk_examples(variant: NameVariant, outcome: ExplanationOutcome) -> list[ChunkExample]:
+    config = dataclasses.replace(VISIBLE_CONFIG, variant=variant)
+    data = build_data([proof("p/1")], [example()], config, COUNTS, explanations_for([proof("p/1")], config, outcome))
+    return list(data.train_chunks)
 
 
 @pytest.mark.parametrize(
@@ -159,16 +123,111 @@ def test_identical_chunks_of_two_proofs_are_kept_once() -> None:
     assert data.duplicate_chunks == len(data.train_chunks)
 
 
-def test_train_chunks_follow_the_reasoning_ratio() -> None:
-    config = dataclasses.replace(CONFIG, chunk_examples_per_reasoning_example=2.0, chunk_lengths=(ChunkLength(1),))
-    proofs = [dataclasses.replace(proof(f"p/{index}"), goals=((f"x{index}",), *GOALS[1:])) for index in range(4)]
-    data = build_data(proofs, [example()], config, COUNTS)
+def distinct_one_tactic_proofs(count: int) -> list[RewrittenProof]:
+    return [dataclasses.replace(proof(f"p/{index}"), goals=((f"x{index}",), *GOALS[1:])) for index in range(count)]
+
+
+def test_non_visible_train_chunks_make_up_their_share_of_the_train_examples() -> None:
+    config = dataclasses.replace(CONFIG, non_visible_share=2 / 3, chunk_lengths=(ChunkLength(1),))
+    data = build_data(distinct_one_tactic_proofs(4), [example()], config, COUNTS)
     assert len(data.train_chunks) == 2
+
+
+def test_visible_train_chunks_follow_their_ratio_to_the_reasoning_examples() -> None:
+    config = dataclasses.replace(
+        CONFIG, visible_chunk_examples_per_reasoning_example=2.0, non_visible_share=0.0, chunk_lengths=(ChunkLength(1),)
+    )
+    plan = plan_chunks(distinct_one_tactic_proofs(4), [example()], config, COUNTS)
+    assert [planned.visible for planned in plan.train] == [True, True]
+
+
+def test_non_visible_share_counts_the_visible_chunk_examples() -> None:
+    config = dataclasses.replace(
+        CONFIG, visible_chunk_examples_per_reasoning_example=1.0, non_visible_share=0.5, chunk_lengths=(ChunkLength(1),)
+    )
+    plan = plan_chunks(distinct_one_tactic_proofs(4), [example()], config, COUNTS)
+    assert sum(not planned.visible for planned in plan.train) == 2
+
+
+def test_explain_pass_and_both_arms_plan_the_same_visible_chunks() -> None:
+    proofs = distinct_one_tactic_proofs(4)
+    numbered = plan_chunks(proofs, [example()], VISIBLE_CONFIG, COUNTS)
+    named = plan_chunks(proofs, [example()], dataclasses.replace(VISIBLE_CONFIG, variant=NameVariant.NAMED), COUNTS)
+    assert [planned.position for planned in numbered.visible] == [planned.position for planned in named.visible]
+
+
+def test_explained_chunks_become_visible_mode_examples() -> None:
+    data = build_data(
+        [proof("p/1")], [example()], VISIBLE_CONFIG, COUNTS, explanations_for([proof("p/1")], VISIBLE_CONFIG)
+    )
+    chunks = [entry for entry in data.train if entry.origin is ReasoningOrigin.RATIONALIZED]
+    assert [(entry.visible, entry.reasoning) for entry in chunks] == [(True, NUMBERED_EXPLANATION)] * 3
+
+
+@pytest.mark.parametrize(
+    ("variant", "explanation"),
+    [(NameVariant.NUMBERED, NUMBERED_EXPLANATION), (NameVariant.NAMED, NAMED_EXPLANATION)],
+)
+def test_each_arm_takes_its_variant_of_the_explanation(variant: NameVariant, explanation: str) -> None:
+    chunks = visible_chunk_examples(variant, ExplanationOutcome.EXPLAINED)
+    assert {chunk.explanation for chunk in chunks} == {explanation}
+
+
+@pytest.mark.parametrize("outcome", [ExplanationOutcome.REJECTED, ExplanationOutcome.REQUEST_FAILED])
+def test_chunk_without_an_accepted_explanation_stays_non_visible(outcome: ExplanationOutcome) -> None:
+    chunks = visible_chunk_examples(NameVariant.NUMBERED, outcome)
+    assert [chunk_training_example(chunk).reasoning for chunk in chunks] == [None] * 3
+
+
+def test_planned_chunks_without_explanation_records_count_as_not_requested() -> None:
+    data = build_data([proof("p/1")], [example()], VISIBLE_CONFIG, COUNTS, {})
+    assert data.explanation_outcomes == {ExplanationOutcome.NOT_REQUESTED: 3}
+
+
+def test_visible_chunk_example_is_prompted_in_the_visible_format() -> None:
+    chunk = visible_chunk_examples(NameVariant.NAMED, ExplanationOutcome.EXPLAINED)[0]
+    tokenizer = CharacterTokenizer()
+    tokenized = tokenize_reasoning_example(tokenizer, chunk_training_example(chunk))
+    prompt = "".join(map(chr, tokenized.input_ids[: tokenized.prompt_token_count]))
+    assert prompt == render_prompt(tokenizer, chunk.goals, visible=True)
+
+
+def test_visible_chunk_example_completes_with_explanation_then_block() -> None:
+    chunk = visible_chunk_examples(NameVariant.NAMED, ExplanationOutcome.EXPLAINED)[0]
+    tokenized = tokenize_reasoning_example(CharacterTokenizer(), chunk_training_example(chunk))
+    completion = "".join(map(chr, tokenized.input_ids[tokenized.prompt_token_count :]))
+    assert completion == render_visible_completion(NAMED_EXPLANATION, chunk.tactic_block)
+
+
+def test_visible_block_lengths_add_the_explained_chunks_to_the_reasoning_examples() -> None:
+    data = build_data(
+        [proof("p/1")], [example()], VISIBLE_CONFIG, COUNTS, explanations_for([proof("p/1")], VISIBLE_CONFIG)
+    )
+    assert sum(row.after - row.before for row in visible_block_tactics(data)) == 3
 
 
 def test_validation_lists_chunk_examples_before_reasoning_examples() -> None:
     data = build_data([proof("p/1", DataSplit.VALIDATION)], [example(DataSplit.VALIDATION)], CONFIG, COUNTS)
     assert [entry.reasoning is None for entry in data.validation] == [True, True, True, False]
+
+
+def test_validation_lists_non_visible_chunks_then_visible_chunks_then_reasoning() -> None:
+    config = dataclasses.replace(CONFIG, validation_chunk_examples=1, validation_visible_chunk_examples=2)
+    proofs = [proof("p/1", DataSplit.VALIDATION)]
+    examples = [example(DataSplit.VALIDATION)]
+    explanations = {
+        planned.position: ChunkExplanation(
+            *planned.position, ExplanationOutcome.EXPLAINED, NAMED_EXPLANATION, NUMBERED_EXPLANATION, ()
+        )
+        for planned in plan_chunks(proofs, examples, config, COUNTS).visible
+    }
+    data = build_data(proofs, examples, config, COUNTS, explanations)
+    assert [entry.origin for entry in data.validation] == [
+        ReasoningOrigin.REPLAY,
+        ReasoningOrigin.RATIONALIZED,
+        ReasoningOrigin.RATIONALIZED,
+        ReasoningOrigin.SAMPLED,
+    ]
 
 
 def test_numbered_reasoning_example_keeps_its_explanation_with_the_flat_block() -> None:
