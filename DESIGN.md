@@ -428,9 +428,17 @@ sleep, the others stay loaded, idle and swap in place) is the configurable fallb
 (drain, server sleep, trainer start, preparation, loads, compile, scoring, policy and value training, merge,
 write, publish, wake, resume; `rl/README.md`, "Timing"). Estimate before the node: ~10–15 min per pause on one GPU,
 of which training compute 4–8 min; on four GPUs the compute shrinks about fourfold while start, loads, compile,
-merges and wake do not; GPU utilization ~80–87%. Levers if the pause costs too much: longer sampling phases (the
-fixed part is paid per phase), or a trainer that stays alive between phases (not built; saves start, loads and
-recompilation, ~1–3 min per phase, at ~54 GB of host RAM for four ranks).
+merges and wake do not (an estimated 5–8 min of fixed part); GPU utilization ~80–87%.
+
+**Persistent trainer** (decided 2026-10-29, built): one training job for the whole loop, a rank per GPU, keeps its
+processes, NCCL group, tokenizers, models and compiled graphs across phases. Between phases each rank parks its models
+in host memory (one shared tmpfs copy of the 4B and 2B bases for all ranks, ~14 GB) and frees its GPU but for its CUDA
+context; the trees are read and labelled while sampling (main rank, one background CPU), so the pause starts with GPU
+work; the new adapters are merged on the GPUs into host memory and the servers load them from there, the disk copy and
+the version's record following in the background after the searches resumed (never recorded before its files exist).
+Estimated fixed part ~1 min per phase (start and first compilation once per job); the per-phase job stays the fallback
+(`training.persistent = false`). Details: `rl/README.md`, "Persistent trainer". Lever if the pause still costs too
+much: longer sampling phases (the fixed part is paid per phase).
 
 **Loop systems** (decided 2026-10-29, after reviews C and D): training and evaluation jobs run in their own process
 groups with PID records and a marker in every job process's environment (torchrun's workers leave the group);
@@ -438,7 +446,8 @@ stopping the loop stops the job and every marked process, and a restarted loop r
 server, while a recorded job still runs. A search that ends on a policy or value server failure says nothing about
 its statement, which is fed again (up to 3 retries) and counted; when half of the last 20 searches failed on a server,
 the searches pause, dead servers are restarted, and the loop stops if one stays down. Host memory has a budget (loop
-concurrency × p90 REPL memory + evaluation concurrency × p90 + vLLM + merge + training ranks ≤ 0.85 × RAM;
+concurrency × p90 REPL memory + evaluation concurrency × p90 + vLLM + merge + training ranks + the persistent
+trainer's parked bases and handed-off merges ≤ 0.85 × RAM, checked in `loop.log` at each stage of a pause;
 `rl/README.md`, "Host memory"): the paused searches' REPL processes stop before training and before evaluations
 (they replay their states on resume), and evaluations run at concurrency 64. The
 policy's NLL replay is the rewritten, flattened SFT data of the starting arm. Groups and texts are matched per tree
@@ -962,12 +971,13 @@ Paper names in the last three rows are from memory and still need checking befor
   with an alert when the value model is worse than v0), μ a manual switch starting at 0 (`grpo_loop.sh value-share`),
   the probe in rotating thirds every ~2 h, per-phase value metrics from the training searches; phases ending at 300
   trainable groups within 45–90 min; 32 expansions per loop search with budget signals; per-phase health checks
-  (alerts, a hard stop on a valid-Lean collapse with rollback), their thresholds calibrated in the first phases. Being
-  implemented: a persistent trainer with in-memory weight handoff; learning rate 1e-5 vs 3e-5 decided by the
-  single-step test on the node.
+  (alerts, a hard stop on a valid-Lean collapse with rollback), their thresholds calibrated in the first phases; a
+  persistent trainer with in-memory weight handoff (built, not yet run on a GPU). Open: learning rate 1e-5 vs 3e-5
+  decided by the single-step test on the node.
 - Serving precision: fp16-merged vs bf16-merged vs unmerged LoRA, decided by the node test against fp32.
-- Whether the four-GPU pause pays for its fixed segments (else `gpus = [0]`), and whether a persistent trainer is
-  worth its host memory.
+- Whether the four-GPU pause with the persistent trainer meets its ~1 min fixed part on the node (smoke cycle: pause
+  segments, `compiled_graphs` 0 after the first phase, the wake's memory next to the parked ranks' CUDA contexts, the
+  sampling condition of the host memory budget during the handoff); else `gpus = [0]` or `persistent = false`.
 - Reward magnitudes (δ, c, the closing bonus, the off-graph evidence threshold), the A* priority formula combining
   proof probability and steps, the value-average temperature, the exact weights by subtree size, the expansion
   budget of the fixed miniF2F evaluation.

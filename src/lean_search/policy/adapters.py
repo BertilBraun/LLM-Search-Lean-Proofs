@@ -1,4 +1,5 @@
 import dataclasses
+import hashlib
 import json
 import shutil
 import time
@@ -135,10 +136,47 @@ def premerge_adapter(model: str, adapter_directory: Path, device: torch.device) 
     if device.type == "cuda":
         torch.cuda.synchronize(device)
     merged_at = time.perf_counter()
-    directory = premerged_directory(adapter_directory)
-    shutil.rmtree(directory, ignore_errors=True)
-    merged.save_pretrained(directory)
-    copy_tokenizer_and_processor_files(model, directory)
-    marker = PremergedWeights(model, str(adapter_directory))
-    (directory / PREMERGED_MARKER).write_text(json.dumps(dataclasses.asdict(marker)), encoding="utf-8")
+    write_premerged(
+        merged, None, PremergedWeights(model, str(adapter_directory)), premerged_directory(adapter_directory)
+    )
     return MergeSeconds(merged_at - started, time.perf_counter() - merged_at)
+
+
+def write_premerged(
+    model: transformers.PreTrainedModel,
+    state_dict: dict[str, torch.Tensor] | None,
+    marker: PremergedWeights,
+    directory: Path,
+) -> None:
+    """The merged weights (`state_dict`, else the model's own) as a servable checkpoint, written beside the directory
+    and renamed into place with the marker inside, so a directory with a marker is always complete."""
+    temporary = directory.with_name(directory.name + ".tmp")
+    shutil.rmtree(temporary, ignore_errors=True)
+    model.save_pretrained(temporary, state_dict=state_dict)
+    copy_tokenizer_and_processor_files(marker.base_model, temporary)
+    (temporary / PREMERGED_MARKER).write_text(json.dumps(dataclasses.asdict(marker)), encoding="utf-8")
+    shutil.rmtree(directory, ignore_errors=True)
+    temporary.rename(directory)
+
+
+def load_adapter_weights(saved_module: peft.PeftModel, weights: dict[str, torch.Tensor]) -> None:
+    """Adapter weights (as saved, or as `peft.get_peft_model_state_dict` gives them) into the trained adapter's
+    existing parameters: the modules stay, so compiled layers keep their graphs."""
+    with torch.no_grad():
+        loaded = peft.set_peft_model_state_dict(saved_module, weights)
+    assert not loaded.unexpected_keys, loaded.unexpected_keys
+
+
+def saved_adapter_weights(adapter_directory: Path, device: torch.device) -> dict[str, torch.Tensor]:
+    return safetensors.torch.load_file(adapter_directory / ADAPTER_WEIGHTS_FILE, device=str(device))
+
+
+def handoff_directory(root: Path, adapter: str) -> Path:
+    """Where the persistent training job leaves an adapter merged into its base in host memory, for the servers."""
+    return root / hashlib.sha256(adapter.encode()).hexdigest()[:16]
+
+
+def handed_off_weights(root: Path, base_model: str, adapter: str) -> Path | None:
+    """The merged weights of this adapter on this base the training job left under `root`, if complete."""
+    directory = handoff_directory(root, adapter)
+    return directory if read_premerged(directory) == PremergedWeights(base_model, adapter) else None

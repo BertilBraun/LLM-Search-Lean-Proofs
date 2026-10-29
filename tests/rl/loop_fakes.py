@@ -6,6 +6,7 @@ import dataclasses
 import enum
 import itertools
 import json
+import shutil
 import types
 import typing
 from collections.abc import Callable, Sequence
@@ -26,6 +27,7 @@ from lean_search.expert_iteration.serving import (
 from lean_search.lean import ProofState
 from lean_search.monitoring.families import ValueArmResult
 from lean_search.monitoring.store import MetricsWriter
+from lean_search.policy.adapters import PREMERGED_MARKER, PremergedWeights, handed_off_weights, handoff_directory
 from lean_search.policy.server_control import PhaseSeconds
 from lean_search.rl.evaluation import EvaluationKind, EvaluationRun, EvaluationSummary
 from lean_search.rl.fixed_sets import HeldOutStatement, Stratum
@@ -236,17 +238,25 @@ class FakeSearcher:
 
 @dataclass
 class FakeTrainer:
-    """Writes phase.json as the training job does: a new policy adapter, and a value adapter when one trains."""
+    """Writes phase.json as the training job does: a new policy adapter, and a value adapter when one trains; with a
+    `handoff` root, also the new adapters' merges there, as the persistent job leaves them in host memory."""
 
     fail_phases: set[int] = field(default_factory=set)
     requests: list[TrainingRequest] = field(default_factory=list)
+    prepared: list[TrainingRequest] = field(default_factory=list)
     timings: TrainerTimings = field(default_factory=TrainerTimings)
     events: list[str] = field(default_factory=list)
     # A job of an earlier loop still running.
     earlier_job: str | None = None
+    handoff: Path | None = None
+    policy_base_model: str = "start-policy"
+    value_base_model: str = "value-base"
 
     def earlier_jobs(self) -> str | None:
         return self.earlier_job
+
+    async def prepare(self, request: TrainingRequest) -> None:
+        self.prepared.append(request)
 
     async def train(self, request: TrainingRequest) -> PhaseOutcome:
         self.requests.append(request)
@@ -261,8 +271,20 @@ class FakeTrainer:
         outcome = PhaseOutcome(trees=trees, groups=1, policy=policy, value=value, timings=self.timings)
         for adapter in (policy.adapter, *([] if value is None else [value.adapter])):
             Path(adapter).mkdir(parents=True, exist_ok=True)
+        if self.handoff is not None:
+            hand_off(self.handoff, PremergedWeights(self.policy_base_model, policy.adapter))
+            if value is not None:
+                hand_off(self.handoff, PremergedWeights(self.value_base_model, value.adapter))
         (request.output_directory / PHASE_OUTCOME_FILE).write_text(to_json(outcome), encoding="utf-8")
         return outcome
+
+
+def hand_off(root: Path, weights: PremergedWeights) -> None:
+    """A merge in host memory as the persistent job leaves it: a directory with its marker."""
+    directory = handoff_directory(root, weights.adapter)
+    directory.mkdir(parents=True)
+    (directory / "merged.json").write_text(json.dumps([weights.base_model, weights.adapter]), encoding="utf-8")
+    (directory / PREMERGED_MARKER).write_text(json.dumps(dataclasses.asdict(weights)), encoding="utf-8")
 
 
 # What every fake release and wake reports as the slowest server's seconds.
@@ -278,6 +300,8 @@ class FakeServers:
     names: tuple[str, ...] = ()
     released: tuple[str, ...] = ()
     served: list[int] = field(default_factory=list)
+    # The policy weights each `serve` loaded.
+    served_policy_weights: list[str] = field(default_factory=list)
     releases: int = 0
     # Merged value weights served in place of the version's, in order.
     value_weights: list[str] = field(default_factory=list)
@@ -308,6 +332,7 @@ class FakeServers:
 
     async def serve(self, version: ModelVersion) -> PhaseSeconds:
         self.served.append(version.version)
+        self.served_policy_weights.append(version.policy_weights)
         self.events += [f"{'wake' if name in self.asleep else 'swap'} {name} v{version.version}" for name in self.names]
         self.asleep.clear()
         return SERVE_SECONDS
@@ -388,6 +413,21 @@ def merge_by_writing(base_model: str, adapter: str, output: Path) -> None:
     (output / "merged.json").write_text(json.dumps([base_model, adapter]), encoding="utf-8")
 
 
+def taking_over_handoff(handoff: Path, events: list[str]) -> Callable[[str, str, Path], None]:
+    """The production merge's take-over of merges handed off in host memory, else `merge_by_writing` for the CPU
+    merge; every merge is an event."""
+
+    def merge(base_model: str, adapter: str, output: Path) -> None:
+        handed_off = handed_off_weights(handoff, base_model, adapter)
+        events.append(f"write {output.parent.name}/{output.name.removesuffix('.tmp')}")
+        if handed_off is None:
+            merge_by_writing(base_model, adapter, output)
+        else:
+            shutil.copytree(handed_off, output)
+
+    return merge
+
+
 class SteppingClock:
     """Every reading is a minute later, so sampling triggers a phase within a few checks."""
 
@@ -406,6 +446,7 @@ class LoopWorld:
     trainer: FakeTrainer
     servers: FakeServers
     evaluations: FakeEvaluations
+    merge: Callable[[str, str, Path], None] = merge_by_writing
     scorer: FakeValueScorer | None = None
 
     def loop(self, statement_count: int = 6) -> GrpoLoop:
@@ -416,7 +457,7 @@ class LoopWorld:
             self.searcher,
             self.trainer,
             self.servers,
-            MergedPublisher(self.config.serving, self.paths.weights, merge_by_writing),
+            MergedPublisher(self.config.serving, self.paths.weights, self.merge),
             self.evaluations,
             MetricsWriter(self.paths.directory),
             print,
@@ -451,7 +492,7 @@ def loop_world(
     servers.down = searcher.servers_down
     evaluations = evaluations or FakeEvaluations()
     evaluations.paths = paths
-    return LoopWorld(config, paths, searcher, trainer, servers, evaluations, scorer)
+    return LoopWorld(config, paths, searcher, trainer, servers, evaluations, scorer=scorer)
 
 
 def record_version_zero(world: LoopWorld) -> None:

@@ -78,6 +78,13 @@ class LoopTrainingConfig:
     value_replay: str = ""
     # Command prefix of the training job, e.g. "nice -n 5"; the job runs with CUDA_VISIBLE_DEVICES=gpus.
     command_prefix: str = ""
+    # One training job for the whole loop (experiments/grpo_trainer.py; rl/README.md, "Persistent trainer"): its ranks
+    # keep their models parked in host memory between phases and hand the merged weights to the servers in memory;
+    # false starts grpo_phase.py for every phase.
+    persistent: bool = False
+    # The persistent job's host memory, a tmpfs, per loop under <host_directory>/<name>: one shared copy of each parked
+    # base (~9.4 GB policy, ~4.5 GB value) and the merged weights handed to the servers until written to disk.
+    host_directory: str = "/dev/shm/lean_search"
     # Paused searches' REPL processes above this private memory (0: all) stop before the training job starts, to
     # leave host memory to its ranks; they replay their proof states later. A large value keeps them.
     paused_repl_memory_gib: float = 0.0
@@ -208,6 +215,10 @@ class GrpoLoopConfig:
     def released_servers(self) -> tuple[ServerEndpoint, ...]:
         """Servers on the training GPUs: asleep while a phase trains."""
         return tuple(server for server in self.serving.servers if server.gpu in self.training.gpus)
+
+    def host_directory(self) -> Path:
+        """The persistent training job's host memory for this loop (`training.resident.HostDirectories`)."""
+        return Path(self.training.host_directory) / self.name
 
 
 def parse_loop_config(text: str) -> GrpoLoopConfig:

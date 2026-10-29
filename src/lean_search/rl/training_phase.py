@@ -11,6 +11,7 @@ from enum import StrEnum
 from pathlib import Path
 
 import torch
+import torch._dynamo.utils
 
 from lean_search.expert_iteration.serving import LoopPaths, ModelVersion, Publisher, read_current, record_published
 from lean_search.expert_iteration.shards import now
@@ -19,11 +20,15 @@ from lean_search.policy.adapters import MergeSeconds, PremergedWeights, premerge
 from lean_search.reasoning.dataset import ReasoningExample, tokenize_reasoning_example
 from lean_search.rl.grpo_groups import PolicyGroup, RewardConfig, policy_groups
 from lean_search.rl.policy_data import (
+    PolicyData,
+    PolicyDataConfig,
     PolicyDataMetrics,
+    PolicyDataParts,
     PolicyTokenizer,
     PolicyTree,
     SamplerAgreement,
     build_policy_data,
+    tree_policy_data,
 )
 from lean_search.rl.policy_trainer import GrpoConfig, GrpoStepRecord, GrpoTrainingResult, train_grpo
 from lean_search.rl.tree_statistics import GraphStatistics, graph_statistics, total_statistics
@@ -32,6 +37,7 @@ from lean_search.search.records import TreeRecord, to_json
 from lean_search.search.tactic_labels import policy_tactics
 from lean_search.training.data_parallel import SINGLE_PROCESS, Ranks, broadcast_from_main, largest
 from lean_search.training.math_data import MathSolution, tokenize_math_solution
+from lean_search.training.sft import TrainableLoader, load_trainable_model
 from lean_search.training.sft_data import TokenizedExample
 from lean_search.value.benchmark import LabelledTree
 from lean_search.value.diagnostics import LabelDistribution, LabelDistributions, label_distribution, label_distributions
@@ -136,9 +142,17 @@ class TrainerTimings:
     value_training_seconds: float = 0.0
     # Merging the new adapters into their bases on the GPUs (grpo_phase.py --merge-adapters), the slowest rank.
     merge_seconds: float = 0.0
-    # The policy adapter and the merged weights written.
+    # The policy adapter and the merged weights written (to disk; the persistent job's merges are `handoff`).
     write_seconds: float = 0.0
     total_seconds: float = 0.0
+    # The persistent job (rl/README.md, "Persistent trainer"): building resident models this phase (once per job),
+    # moving the models onto the GPUs and back to host memory, and writing the merges to host memory for the servers.
+    build_seconds: float = 0.0
+    unpark_seconds: float = 0.0
+    park_seconds: float = 0.0
+    handoff_seconds: float = 0.0
+    # torch.compile graphs compiled during the phase: a persistent job's should fall to 0 after its first phase.
+    compiled_graphs: int = 0
 
 
 class TrainingStage(StrEnum):
@@ -230,11 +244,40 @@ def train_policy_phase(
 ) -> PolicyOutcome:
     started = time.perf_counter()
     data = build_policy_data(labelled.policy_trees, tokenizer, grpo.data)
+    return train_policy_data(
+        config, grpo, data, time.perf_counter() - started, inputs, tokenizer, device, directory, on_step, ranks
+    )
+
+
+def train_policy_data(
+    config: TrainingPhaseConfig,
+    grpo: GrpoConfig,
+    data: PolicyData,
+    data_seconds: float,
+    inputs: PhaseInputs,
+    tokenizer: PolicyTokenizer,
+    device: torch.device,
+    directory: Path,
+    on_step: Callable[[GrpoStepRecord], None],
+    ranks: Ranks = SINGLE_PROCESS,
+    load: TrainableLoader = load_trainable_model,
+) -> PolicyOutcome:
+    """GRPO on the built sequences (`data_seconds` building them), with the phase's replay examples."""
+    started = time.perf_counter()
     replay = policy_replay_examples(tokenizer, inputs, config.policy_replay, grpo.max_sequence_tokens)
-    data_seconds = time.perf_counter() - started
+    data_seconds += time.perf_counter() - started
     adapter = directory / "adapter"
-    result = train_grpo(grpo, tokenizer.pad_token_id, data.sequences, replay, device, adapter, on_step, ranks)
+    result = train_grpo(grpo, tokenizer.pad_token_id, data.sequences, replay, device, adapter, on_step, ranks, load)
     return PolicyOutcome(str(adapter), data.metrics, len(replay), result, data_seconds)
+
+
+def prepare_policy_tree(
+    record: TreeRecord, config: TrainingPhaseConfig, tokenizer: PolicyTokenizer, data: PolicyDataConfig
+) -> PolicyDataParts:
+    """One tree's policy sequences, as `train_policy_phase` builds them for the whole phase; nothing of the record
+    is kept, so trees can be prepared one by one while the searches run."""
+    labelled = label_phase_data([record], config)
+    return tree_policy_data(labelled.policy_trees[0], tokenizer, data)
 
 
 def train_value_phase(
@@ -248,6 +291,7 @@ def train_value_phase(
     directory: Path,
     on_step: Callable[[GraphValueStepRecord], None],
     ranks: Ranks = SINGLE_PROCESS,
+    load: TrainableLoader = load_trainable_model,
 ) -> ValueOutcome:
     """Trains on the window's trees, split across the ranks: the main rank holds the window and builds the data, the
     others receive it. Only the main rank's outcome has the label distributions."""
@@ -258,7 +302,7 @@ def train_value_phase(
     data = broadcast_from_main(built, ranks)
     data_built = time.perf_counter()
     adapter = directory / "adapter"
-    result = train_graph_value_model(value, tokenizer, pad_token_id, data, device, adapter, on_step, ranks)
+    result = train_graph_value_model(value, tokenizer, pad_token_id, data, device, adapter, on_step, ranks, load)
     outcome = ValueOutcome(
         str(adapter),
         result,
@@ -274,6 +318,11 @@ def train_value_phase(
         labels=label_distributions(window, value.smoothing_sigma),
         replay_labels=label_distribution(replay),
     )
+
+
+def compiled_graphs() -> int:
+    """Graphs torch.compile compiled in this process so far."""
+    return torch._dynamo.utils.counters["stats"]["unique_graphs"]
 
 
 def released_memory(stage: TrainingStage, device: torch.device, ranks: Ranks) -> StageMemory:
@@ -313,6 +362,7 @@ def run_training_phase(
     """Adapters under output_directory/{policy,value}/adapter, step records next to them, phase.json at the top, all
     written by the main rank; `merge_adapters` also merges the new adapters on the GPUs (`premerged_directory`)."""
     started = time.perf_counter()
+    graphs_before = compiled_graphs()
     labelled = label_phase_data(inputs.records, config)
     labelling_seconds = time.perf_counter() - started
     memory = [released_memory(TrainingStage.LABELLING, device, ranks)]
@@ -360,6 +410,7 @@ def run_training_phase(
         merged = merge_on_gpus(merges, device, ranks)
         memory.append(released_memory(TrainingStage.MERGE, device, ranks))
     timings = trainer_timings(labelling_seconds, policy, value, merged, time.perf_counter() - started)
+    timings = dataclasses.replace(timings, compiled_graphs=compiled_graphs() - graphs_before)
     outcome = PhaseOutcome(len(labelled.trees), len(labelled.groups), policy, value, timings, tuple(memory))
     if ranks.is_main:
         (output_directory / "phase.json").write_text(to_json(outcome), encoding="utf-8")
@@ -442,17 +493,20 @@ def grpo_phase_record(
     )
 
 
-def publish_phase(paths: LoopPaths, publisher: Publisher, outcome: PhaseOutcome, trigger: str) -> ModelVersion:
-    """The next version: the new policy adapter and the new value adapter, each if one trained."""
-    current = read_current(paths)
-    version = ModelVersion(
+def next_version(current: ModelVersion, outcome: PhaseOutcome, trigger: str) -> ModelVersion:
+    """The new policy adapter and the new value adapter, each if one trained; no weights yet."""
+    return ModelVersion(
         version=current.version + 1,
         policy_adapter=current.policy_adapter if outcome.policy is None else outcome.policy.adapter,
         value_adapter=current.value_adapter if outcome.value is None else outcome.value.adapter,
         published_at=now(),
         trigger=trigger,
     )
-    prepared = publisher.prepare(version)
+
+
+def publish_phase(paths: LoopPaths, publisher: Publisher, outcome: PhaseOutcome, trigger: str) -> ModelVersion:
+    """The next version, recorded once its merged weights are on disk (`Publisher.prepare`)."""
+    prepared = publisher.prepare(next_version(read_current(paths), outcome, trigger))
     record_published(paths, prepared)
     publisher.prune(prepared)
     return prepared

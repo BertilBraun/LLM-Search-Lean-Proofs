@@ -283,12 +283,21 @@ class PauseSegments:
     drain_seconds: float = 0.0
     # The servers on the training GPUs draining and sleeping (freeing their memory).
     server_sleep_seconds: float = 0.0
-    # The training job outside its own parts: process and rank start, imports, reading the trees, exit.
+    # The training job outside its own parts: process and rank start, imports, reading the trees, exit. The
+    # persistent job's start and model building, once per job: 0 in a pause it was already running for.
     trainer_start_seconds: float = 0.0
-    # Labelling the trees and building the policy and value data.
+    # Labelling the trees and building the policy and value data (the persistent job: what was left at the pause).
     preparation_seconds: float = 0.0
+    # Loading the policy (the persistent job: unparking it and loading the adapter to continue).
     policy_load_seconds: float = 0.0
+    # Compiling the compiled layers: every phase in the per-phase job, once per persistent job.
     compile_seconds: float = 0.0
+    # The persistent job moving its models onto the GPUs (part of the policy load, the value training and the merge)
+    # and back into host memory, every time, the slowest rank.
+    unpark_seconds: float = 0.0
+    park_seconds: float = 0.0
+    # The persistent job writing the merged weights to host memory for the servers, the slowest rank.
+    handoff_seconds: float = 0.0
     # Old and reference log-probabilities.
     scoring_seconds: float = 0.0
     policy_training_seconds: float = 0.0
@@ -302,6 +311,9 @@ class PauseSegments:
     # The slowest server waking (or swapping in place) with the new weights, then resuming.
     wake_seconds: float = 0.0
     resume_seconds: float = 0.0
+    # Not part of the pause: weights the servers loaded from host memory written to disk and the version recorded,
+    # while the searches already ran again.
+    durable_write_seconds: float = 0.0
 
 
 @dataclass(frozen=True)

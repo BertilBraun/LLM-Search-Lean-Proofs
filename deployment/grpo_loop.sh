@@ -40,8 +40,9 @@ case "$1" in
         cat /sys/fs/cgroup/cpu.max 2>/dev/null || true
         nvidia-smi topo -m
         shm_mebibytes=$(( $(df -k --output=size /dev/shm | tail -n 1) / 1024 ))
-        if (( shm_mebibytes < 1024 )); then
-            echo "/dev/shm holds ${shm_mebibytes} MiB, too small for NCCL (docker --shm-size 16g)" >&2
+        # The persistent trainer keeps its parked bases (~14 GiB) and the merges it hands to the servers (~14 GiB) there.
+        if (( shm_mebibytes < 30720 )); then
+            echo "/dev/shm holds ${shm_mebibytes} MiB, too small for the persistent trainer and NCCL (docker --shm-size 32g)" >&2
             exit 1
         fi
         python -m torch.distributed.run --standalone --nproc-per-node "$(nvidia-smi -L | wc -l)" experiments/nccl_check.py

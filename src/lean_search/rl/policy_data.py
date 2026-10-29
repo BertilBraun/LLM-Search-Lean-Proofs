@@ -210,45 +210,66 @@ def policy_sequence(
     return sequence, mismatch
 
 
-def build_policy_data(trees: Sequence[PolicyTree], tokenizer: PolicyTokenizer, config: PolicyDataConfig) -> PolicyData:
-    """Every recorded completion of a group with a signal is one sequence; groups whose advantages are all 0 drop."""
+@dataclass(frozen=True)
+class PolicyDataParts:
+    """One tree's share of the phase's policy data, which `combined_policy_data` joins in tree order."""
+
+    sequences: tuple[PolicySequence, ...]
+    groups: tuple[PolicyGroup, ...]
+    trained_groups: tuple[tuple[PolicyGroup, GroupAdvantages], ...]
+    without_text: int
+    mismatches: int
+
+
+def tree_policy_data(tree: PolicyTree, tokenizer: PolicyTokenizer, config: PolicyDataConfig) -> PolicyDataParts:
     sequences: list[PolicySequence] = []
     trained_groups: list[tuple[PolicyGroup, GroupAdvantages]] = []
     without_text = 0
     mismatches = 0
-    for tree in trees:
-        texts_by_node = {expansion.node_id: expansion for expansion in tree.texts}
-        for group in tree.groups:
-            advantages = group_advantages(group)
-            if not advantages.has_signal(config.credit):
-                continue
-            trained_groups.append((group, advantages))
-            expansion = texts_by_node.get(group.node_id)
-            if expansion is None:
-                without_text += group.sample_count
-                continue
-            prompt_ids = tokenizer.encode(expansion.prompt, add_special_tokens=False)
-            temperature = config.default_temperature if expansion.temperature is None else expansion.temperature
-            for sample, sample_advantages in zip(group.samples, advantages.samples, strict=True):
-                completions = [item for item in expansion.completions if item.edge_id in sample.edge_ids]
-                if not completions:
-                    without_text += sample.multiplicity
-                for completion in completions:
-                    sequence, mismatch = policy_sequence(
-                        tokenizer,
-                        group,
-                        expansion,
-                        prompt_ids,
-                        completion,
-                        temperature,
-                        sample_advantages,
-                        config.credit,
-                    )
-                    sequences.append(sequence)
-                    mismatches += mismatch
-    groups = [group for tree in trees for group in tree.groups]
-    metrics = data_metrics(groups, trained_groups, sequences, without_text, mismatches)
+    texts_by_node = {expansion.node_id: expansion for expansion in tree.texts}
+    for group in tree.groups:
+        advantages = group_advantages(group)
+        if not advantages.has_signal(config.credit):
+            continue
+        trained_groups.append((group, advantages))
+        expansion = texts_by_node.get(group.node_id)
+        if expansion is None:
+            without_text += group.sample_count
+            continue
+        prompt_ids = tokenizer.encode(expansion.prompt, add_special_tokens=False)
+        temperature = config.default_temperature if expansion.temperature is None else expansion.temperature
+        for sample, sample_advantages in zip(group.samples, advantages.samples, strict=True):
+            completions = [item for item in expansion.completions if item.edge_id in sample.edge_ids]
+            if not completions:
+                without_text += sample.multiplicity
+            for completion in completions:
+                sequence, mismatch = policy_sequence(
+                    tokenizer,
+                    group,
+                    expansion,
+                    prompt_ids,
+                    completion,
+                    temperature,
+                    sample_advantages,
+                    config.credit,
+                )
+                sequences.append(sequence)
+                mismatches += mismatch
+    return PolicyDataParts(tuple(sequences), tree.groups, tuple(trained_groups), without_text, mismatches)
+
+
+def combined_policy_data(parts: Sequence[PolicyDataParts]) -> PolicyData:
+    sequences = [sequence for part in parts for sequence in part.sequences]
+    groups = [group for part in parts for group in part.groups]
+    trained_groups = [trained for part in parts for trained in part.trained_groups]
+    without_text = sum(part.without_text for part in parts)
+    metrics = data_metrics(groups, trained_groups, sequences, without_text, sum(part.mismatches for part in parts))
     return PolicyData(tuple(sequences), metrics)
+
+
+def build_policy_data(trees: Sequence[PolicyTree], tokenizer: PolicyTokenizer, config: PolicyDataConfig) -> PolicyData:
+    """Every recorded completion of a group with a signal is one sequence; groups whose advantages are all 0 drop."""
+    return combined_policy_data([tree_policy_data(tree, tokenizer, config) for tree in trees])
 
 
 def weighted_samples(groups: Iterable[PolicyGroup]) -> list[GroupSample]:

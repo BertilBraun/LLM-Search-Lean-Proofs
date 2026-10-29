@@ -96,6 +96,8 @@ lean_replay = ""
 math_replay = ""
 value_replay = "value/v0/train.jsonl"
 paused_repl_memory_gib = 0.0
+# The persistent trainer, as the main loop runs it.
+persistent = true
 
 [statements]
 kind = "fixed"

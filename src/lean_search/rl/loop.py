@@ -12,8 +12,10 @@ training    the paused searches' REPL processes stop to free host memory and the
             policy (GRPO) with the μ set for the run (`set_value_share`, 0 until set) and, every
             `value_every_phases`, the value model on the window of recent phases' trees, and merges the new adapters on
             the GPUs; meanwhile the loop labels the phase's trees for the search, curriculum and value metrics
-publishing  version k + 1 (the new policy adapter and a new value adapter) is recorded with the job's merges; the
-            sleeping servers wake with it, the others swap to it in place
+publishing  version k + 1 (the new policy adapter and a new value adapter): with the persistent job's merges in host
+            memory the sleeping servers wake with them (the others swap in place), the searches resume unless
+            evaluations are due, and the version is recorded once the merges are on disk; otherwise it is recorded
+            with the job's merges (or merged on the CPU) first, then served
 evaluating  the fixed targets that are due (by loop hours, at the start, or requested) run as separate jobs while
             the searches stay paused, after the paused searches' REPL processes stopped to free host memory; the value
             servers serve the evaluations' fixed value model meanwhile. The probe runs one part of its set per slot;
@@ -31,6 +33,7 @@ import asyncio
 import dataclasses
 import datetime
 import json
+import shutil
 import time
 import tomllib
 import traceback
@@ -44,6 +47,7 @@ from typing import Protocol
 import httpx
 
 from lean_search.data import Problem
+from lean_search.expert_iteration.loop_config import ServingConfig
 from lean_search.expert_iteration.pool import pool_problem
 from lean_search.expert_iteration.serving import (
     LoopPaths,
@@ -65,6 +69,7 @@ from lean_search.monitoring.families import (
     ValueTraining,
 )
 from lean_search.monitoring.store import MetricsWriter
+from lean_search.policy.adapters import handed_off_weights
 from lean_search.policy.server_control import PhaseSeconds
 from lean_search.rl.advantages import CreditMode
 from lean_search.rl.budget_signals import budget_phase_record
@@ -91,6 +96,7 @@ from lean_search.rl.training_phase import (
     TrainingPhaseConfig,
     grpo_phase_record,
     label_phase_data,
+    next_version,
     publish_phase,
 )
 from lean_search.rl.tree_store import TreeStore
@@ -105,6 +111,7 @@ from lean_search.rl.value_trends import (
 )
 from lean_search.search import CompletedSearch, tree_record
 from lean_search.search.records import from_json_object, to_json
+from lean_search.training.resident import HostDirectories
 from lean_search.value.benchmark import BenchmarkScores, ValueBenchmark
 from lean_search.value.bins import Readout
 from lean_search.value.diagnostics import phase_value_metrics
@@ -202,8 +209,13 @@ class TreeSearcher(Protocol):
 
 
 class PhaseTrainer(Protocol):
+    async def prepare(self, request: TrainingRequest) -> None:
+        """Sampling of the phase began: a trainer may read and label its trees as they arrive (CPU only)."""
+        ...
+
     async def train(self, request: TrainingRequest) -> PhaseOutcome:
-        """Trains on the phase's trees; the outcome is also in output_directory/phase.json."""
+        """Trains on the phase's trees; the outcome is also in output_directory/phase.json. A persistent trainer also
+        leaves the new adapters merged in host memory (`adapters.handoff_directory`)."""
         ...
 
     def earlier_jobs(self) -> str | None:
@@ -474,19 +486,43 @@ def read_value_share(paths: GrpoLoopPaths) -> float:
 
 
 def with_trainer_timings(pause: PauseSegments, timings: TrainerTimings, job_seconds: float) -> PauseSegments:
-    """The training job's parts; what its own clock did not see is the job's start (and exit)."""
+    """The training job's parts; what its own clock did not see is the job's start (and exit), to which a persistent
+    job's model building in this phase belongs."""
     return dataclasses.replace(
         pause,
-        trainer_start_seconds=max(0.0, job_seconds - timings.total_seconds),
+        trainer_start_seconds=max(0.0, job_seconds - timings.total_seconds) + timings.build_seconds,
         preparation_seconds=timings.preparation_seconds,
         policy_load_seconds=timings.policy_load_seconds,
         compile_seconds=timings.compile_seconds,
+        unpark_seconds=timings.unpark_seconds,
+        park_seconds=timings.park_seconds,
         scoring_seconds=timings.scoring_seconds,
         policy_training_seconds=timings.policy_training_seconds,
         value_training_seconds=timings.value_training_seconds,
         merge_seconds=timings.merge_seconds,
         write_seconds=timings.write_seconds,
+        handoff_seconds=timings.handoff_seconds,
     )
+
+
+def handed_off_version(
+    version: ModelVersion, current: ModelVersion, handoff_root: Path, serving: ServingConfig
+) -> ModelVersion | None:
+    """The version as the servers can load it from the merges the persistent job left in host memory (a model that
+    did not change from the current version's weights); None when a new model's merge is not there."""
+    policy = (
+        Path(current.policy_weights)
+        if version.policy_adapter == current.policy_adapter
+        else handed_off_weights(handoff_root, serving.policy_base_model, version.policy_adapter)
+    )
+    value = (
+        Path(current.value_weights)
+        if version.value_adapter == current.value_adapter
+        else handed_off_weights(handoff_root, serving.value_base_model, version.value_adapter)
+    )
+    if policy is None or value is None:
+        return None
+    return dataclasses.replace(version, policy_weights=str(policy), value_weights=str(value))
 
 
 def pause_text(pause: PauseSegments) -> str:
@@ -573,6 +609,12 @@ class GrpoLoop:
         self.failure: BaseException | None = None
         # The merged value weights the value servers serve: the published version's, or an evaluation's fixed ones.
         self.served_value_weights = ""
+        # The version the servers serve: ahead of models/current.json while handed-off weights are written to disk.
+        self.served_version = 0
+        # Merged weights the persistent training job left in host memory for the servers.
+        self.handoff_root = HostDirectories(config.host_directory()).handoff
+        # The loop's own labelling of the phase's trees for the search metrics, from the training on.
+        self.search_metrics: asyncio.Task[None] | None = None
         self.phase_template = phase_template
         template = from_json_object(TrainingPhaseConfig, tomllib.loads(phase_template))
         # What the phase trigger counts trainable groups with.
@@ -640,6 +682,7 @@ class GrpoLoop:
         current = read_current(self.paths.models)
         await self.servers.serve(current)
         self.served_value_weights = current.value_weights
+        self.served_version = current.version
         self.searcher.serving(current.version)
         if self.progress.stage != PhaseStage.SAMPLING:
             self.log(f"Finishing phase {self.progress.phase} from {self.progress.stage}")
@@ -648,6 +691,7 @@ class GrpoLoop:
             if stop.is_set():
                 return
         await self.run_evaluations(self.due_evaluations(at_start=True), self.progress.phase - 1, at_start=True)
+        await self.prepare_training()
         self.schedule_benchmark_scoring()
         self.sampling_since = self.clock()
         coroutines: list[Coroutine[None, None, None]] = [
@@ -691,12 +735,13 @@ class GrpoLoop:
             if completed.tree is not None:
                 # The statement searched: the renamed one when the loop renames hypotheses.
                 record = tree_record(completed.tree, completed.tree.root.state.statement, result)
-                version = read_current(self.paths.models).version
                 summary = await asyncio.to_thread(
                     tree_summary, record, self.reward_config, self.credit, self.config.sampling.max_expansions
                 )
                 async with self.store_lock:
-                    await asyncio.to_thread(self.store.add, record, self.collecting, version, fed.difficulty, summary)
+                    await asyncio.to_thread(
+                        self.store.add, record, self.collecting, self.served_version, fed.difficulty, summary
+                    )
             self.statements.record_outcome(fed.name, result.proved)
             self.server_failures.pop(fed.name, None)
             self.session_trees += 1
@@ -817,6 +862,9 @@ class GrpoLoop:
         )
         await self.log_host_memory("at the pause")
         await self.finish_phase()
+        assert self.stop is not None
+        if not self.stop.is_set():
+            await self.prepare_training()
 
     async def finish_phase(self) -> None:
         phase = self.progress.phase
@@ -832,39 +880,54 @@ class GrpoLoop:
             finished = self.clock()
             await self.log_host_memory("after training")
             pause = with_trainer_timings(self.progress.pause, outcome.timings, finished - released)
+            progress = self.progress
+            # The evaluation clock includes this phase from here on, so that the evaluations due are known before
+            # the searches may resume early.
             self.save_progress(
                 stage=PhaseStage.PUBLISHING,
                 training_seconds=finished - started,
                 pause=dataclasses.replace(pause, server_sleep_seconds=released - started),
+                loop_seconds=progress.loop_seconds + progress.sampling_seconds + finished - started,
             )
+        resumed_early = False
         if self.progress.stage == PhaseStage.PUBLISHING:
             self.loop_state = LoopState.PUBLISHING
             self.write_status()
             started = self.clock()
-            await self.publish(phase)
-            progress = self.progress
-            self.save_progress(
-                stage=PhaseStage.EVALUATING,
-                publishing_seconds=self.clock() - started,
-                loop_seconds=progress.loop_seconds + progress.sampling_seconds + progress.training_seconds,
-            )
+            durable = await self.publish(phase)
+            publishing_seconds = self.clock() - started
+            if durable is not None:
+                if not self.due_evaluations(at_start=False):
+                    self.resume_searches()
+                    resumed_early = True
+                await durable
+            self.save_progress(stage=PhaseStage.EVALUATING, publishing_seconds=publishing_seconds)
             await self.log_host_memory("after publishing")
         started = self.clock()
-        kinds = self.due_evaluations(at_start=False)
+        # Searches that resumed early leave a request made since then to the next pause.
+        kinds = [] if resumed_early else self.due_evaluations(at_start=False)
         await self.run_evaluations(kinds, phase)
+        evaluation_seconds = self.clock() - started
+        if self.search_metrics is not None:
+            await self.search_metrics
+            self.search_metrics = None
         hard_stop = await asyncio.to_thread(self.check_health, phase, kinds)
-        self.close_phase(phase, kinds, self.clock() - started)
+        self.close_phase(phase, kinds, evaluation_seconds)
         if hard_stop:
             assert self.stop is not None
             self.stop.set()
             return
+        self.resume_searches()
+        # Only now: the version is recorded, so the scoring is of the value version the servers serve.
+        self.schedule_benchmark_scoring()
+
+    def resume_searches(self) -> None:
         if self.paused:
             self.searcher.resume()
             self.paused = False
+            self.sampling_since = self.clock()
         self.loop_state = LoopState.SEARCHING
-        self.sampling_since = self.clock()
         self.write_status()
-        self.schedule_benchmark_scoring()
 
     def schedule_benchmark_scoring(self) -> None:
         """Scores the value benchmark through the value servers while the searches run, once per value version."""
@@ -966,13 +1029,12 @@ class GrpoLoop:
         first = max(1, phase - training.value_window_phases + 1)
         return tuple(self.store.phase_directory(number) for number in range(first, phase + 1))
 
-    async def train(self, phase: int) -> PhaseOutcome:
+    def training_request(self, phase: int, value_share: float) -> TrainingRequest:
+        """The phase's training as the published version, μ and the value schedule define it. The version and the
+        schedule change only between phases; μ (value_share.json) is read again when the phase starts training, and a
+        persistent job that prepared the phase with another μ prepares it again."""
         current = read_current(self.paths.models)
         value_trees = self.value_window(phase)
-        value_share = read_value_share(self.paths)
-        if value_share != self.progress.value_share:
-            self.log(f"μ = {value_share} from phase {phase} on ({self.paths.value_share})")
-            self.save_progress(value_share=value_share)
         config_text = phase_config_text(
             self.phase_template,
             self.config.serving.policy_base_model,
@@ -982,7 +1044,7 @@ class GrpoLoop:
             value_share,
             (self.progress.value_adapter or current.value_adapter) if value_trees else None,
         )
-        request = TrainingRequest(
+        return TrainingRequest(
             phase,
             config_text,
             self.store.phase_directory(phase),
@@ -991,9 +1053,23 @@ class GrpoLoop:
             bool(value_trees),
             value_trees,
         )
-        labelling = asyncio.create_task(asyncio.to_thread(self.write_search_metrics, phase, config_text))
+
+    async def prepare_training(self) -> None:
+        """Sampling of the phase begins: the trainer may read and label its trees as they arrive."""
+        phase = self.progress.phase
+        await self.trainer.prepare(self.training_request(phase, read_value_share(self.paths)))
+
+    async def train(self, phase: int) -> PhaseOutcome:
+        value_share = read_value_share(self.paths)
+        if value_share != self.progress.value_share:
+            self.log(f"μ = {value_share} from phase {phase} on ({self.paths.value_share})")
+            self.save_progress(value_share=value_share)
+        request = self.training_request(phase, value_share)
+        # Awaited only before the phase closes: the publish need not wait for the loop's own labelling.
+        self.search_metrics = asyncio.create_task(
+            asyncio.to_thread(self.write_search_metrics, phase, request.config_text)
+        )
         outcome = await self.trainer.train(request)
-        await labelling
         if outcome.value is not None:
             self.save_progress(value_adapter=outcome.value.adapter)
         self.log(
@@ -1014,18 +1090,27 @@ class GrpoLoop:
         metrics = phase_value_metrics(labelled.trees, self.value_readout)
         self.writer.write(ValuePhase(config.reward.value_share, metrics))
 
-    async def publish(self, phase: int) -> None:
+    async def publish(self, phase: int) -> asyncio.Task[None] | None:
+        """Serves version k + 1. When the persistent job left its merges in host memory the servers load those, and
+        the returned task writes them to disk and only then records the version; otherwise the version is recorded
+        first (the job's GPU merges moved into place, else merged on the CPU), then served. A restart after the
+        servers loaded the merges but before the record finds them in host memory again, or merges on the CPU."""
         outcome = read_phase_outcome(self.paths.phase_checkpoints(phase) / PHASE_OUTCOME_FILE)
         current = read_current(self.paths.models)
         started = self.clock()
+        handed_off = None
         if current.trigger != phase_trigger(phase):
             self.write_training_metrics(outcome, current.version + 1)
-            current = await asyncio.to_thread(
-                publish_phase, self.paths.models, self.publisher, outcome, phase_trigger(phase)
-            )
-            await asyncio.to_thread(self.prune_adapters)
+            candidate = next_version(current, outcome, phase_trigger(phase))
+            handed_off = handed_off_version(candidate, current, self.handoff_root, self.config.serving)
+            if handed_off is None:
+                current = await asyncio.to_thread(
+                    publish_phase, self.paths.models, self.publisher, outcome, phase_trigger(phase)
+                )
+                await asyncio.to_thread(self.prune_adapters)
+        served_version = current if handed_off is None else handed_off
         published = self.clock()
-        served = await self.servers.serve(current)
+        served = await self.servers.serve(served_version)
         self.save_progress(
             pause=dataclasses.replace(
                 self.progress.pause,
@@ -1034,10 +1119,27 @@ class GrpoLoop:
                 resume_seconds=served.resume,
             )
         )
-        self.served_value_weights = current.value_weights
-        self.searcher.serving(current.version)
+        self.served_value_weights = served_version.value_weights
+        self.served_version = served_version.version
+        self.searcher.serving(served_version.version)
         value = "" if outcome.value is None else f" with the value model of phase {phase}"
-        self.log(f"Published version {current.version}{value}")
+        source = " from host memory" if handed_off else ""
+        self.log(f"Published version {served_version.version}{value}{source}")
+        return None if handed_off is None else asyncio.create_task(self.record_durably(phase, outcome))
+
+    async def record_durably(self, phase: int, outcome: PhaseOutcome) -> None:
+        """The handed-off merges copied to disk (a temporary directory renamed once complete), then the version
+        recorded and older weights and adapters pruned, then host memory cleared."""
+        started = self.clock()
+        current = await asyncio.to_thread(
+            publish_phase, self.paths.models, self.publisher, outcome, phase_trigger(phase)
+        )
+        await asyncio.to_thread(self.prune_adapters)
+        await asyncio.to_thread(shutil.rmtree, self.handoff_root, True)
+        self.served_value_weights = current.value_weights
+        seconds = self.clock() - started
+        self.save_progress(pause=dataclasses.replace(self.progress.pause, durable_write_seconds=seconds))
+        self.log(f"Version {current.version} written to disk and recorded in {seconds:.0f} s")
 
     def prune_adapters(self) -> None:
         """Deletes the phase adapters of versions older than the retention that nothing uses any more."""
