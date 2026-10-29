@@ -58,12 +58,10 @@ from lean_search.evaluation.serving_precision import (
 from lean_search.policy.adapters import (
     ADAPTER_CONFIG_FILE,
     ADAPTER_WEIGHTS_FILE,
-    copy_tokenizer_and_processor_files,
     load_adapter_weights,
     load_base_model,
     lora_rank,
     lora_scale,
-    merge_adapter,
     saved_adapter_weights,
 )
 from lean_search.policy.client import PolicyClient
@@ -80,6 +78,7 @@ REPOSITORY_DIRECTORY = Path(__file__).resolve().parents[1]
 RUNS_DIRECTORY = Path(os.environ["LEAN_SEARCH_RUNS"])
 SERVE_SCRIPT = REPOSITORY_DIRECTORY / "deployment" / "serve_model.sh"
 STOP_SCRIPT = REPOSITORY_DIRECTORY / "deployment" / "stop_model.sh"
+PUBLISH_SCRIPT = REPOSITORY_DIRECTORY / "experiments" / "publish_weights.py"
 BASE_ADAPTER = "base"
 REPEAT = "repeat"
 REQUEST_TIMEOUT_SECONDS = 1800.0
@@ -267,15 +266,6 @@ def prepare_perturbations(config: ServingPrecisionConfig, paths: RunPaths) -> No
         log(f"Perturbation {perturbation.name}: {size}")
 
 
-def merge_fp16(base_model: str, adapter: Path, output: Path) -> None:
-    """Merged in fp32, then cast: one rounding, to the fp16 grid."""
-    model = load_base_model(base_model, "cpu").float()
-    merged = peft.PeftModel.from_pretrained(model, adapter).merge_and_unload().to(torch.float16)
-    merged.config.dtype = torch.float16
-    merged.save_pretrained(output)
-    copy_tokenizer_and_processor_files(base_model, output)
-
-
 class ModeSession:
     """One vLLM mode on one GPU: its server, its weights per adapter, its scores."""
 
@@ -309,9 +299,23 @@ class ModeSession:
         started = time.monotonic()
         match self.mode:
             case ServingMode.BF16_MERGED:
-                merge_adapter(self.config.base_model, source, output, self.config.merge_device)
+                options = ["--device", self.config.merge_device]
             case ServingMode.FP16_MERGED:
-                merge_fp16(self.config.base_model, source, output)
+                options = ["--dtype", "float16"]
+        # A process per merge: concurrent model loads in this process's threads leave the tied lm_head on meta.
+        command = [
+            sys.executable,
+            str(PUBLISH_SCRIPT),
+            "merge",
+            "--base-model",
+            self.config.base_model,
+            "--adapter",
+            str(source),
+            "--output",
+            str(output),
+            *options,
+        ]
+        subprocess.run(command, check=True)
         log(f"{self.mode.value}: merged {adapter} in {time.monotonic() - started:.0f} s")
         return output
 
