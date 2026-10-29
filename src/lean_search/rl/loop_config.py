@@ -35,6 +35,9 @@ class SamplingConfig:
     # Concurrent searches, each holding a Lean REPL; most wait on the GPUs, so this may exceed the core count.
     concurrency: int = 112
     status_seconds: float = 30.0
+    # A search a server failed feeds its statement again up to this many times, each after the pause.
+    server_failure_retries: int = 3
+    server_failure_pause_seconds: float = 5.0
 
 
 @dataclass(frozen=True)
@@ -67,30 +70,34 @@ class LoopTrainingConfig:
 @dataclass(frozen=True)
 class EvaluationTarget:
     max_expansions: int
-    # Per problem; a backstop next to the expansion budget.
+    # Per problem; an emergency cap, so that the expansions are the budget and the result does not measure load.
     max_wall_seconds: float
-    # Lean REPLs of the evaluation's own pool (the paused searches keep theirs).
+    # Lean REPLs of the evaluation's own pool, next to the paused searches' (rl/README.md, "Host memory").
     concurrency: int
     # Hours of loop time (sampling and training, evaluations excluded) between runs; 0: only when requested.
     every_hours: float = 0.0
     # Run once before the first phase (the baseline of version 0).
     at_start: bool = False
+    # Independent runs of that baseline; two measure the run-to-run noise.
+    baseline_runs: int = 1
 
 
 @dataclass(frozen=True)
 class EvaluationConfig:
     # The probe set: ~500 held-out pool statements stratified by difficulty, at a small budget.
     probe: EvaluationTarget = field(
-        default_factory=lambda: EvaluationTarget(16, 600.0, 96, every_hours=6.0, at_start=True)
+        default_factory=lambda: EvaluationTarget(16, 3600.0, 64, every_hours=6.0, at_start=True, baseline_runs=2)
     )
     # miniF2F-valid at the full budget, at milestones (grpo_loop.py request-evaluation) and at the start and end.
-    minif2f: EvaluationTarget = field(default_factory=lambda: EvaluationTarget(64, 7200.0, 120))
+    minif2f: EvaluationTarget = field(default_factory=lambda: EvaluationTarget(64, 7200.0, 64))
     # Per-sample success on the held-out states (one policy request per state, no search).
     held_out_states: EvaluationTarget = field(default_factory=lambda: EvaluationTarget(1, 600.0, 64))
     # Under $LEAN_SEARCH_DATA: the probe set, and the states (a phase5 run's states.jsonl, under $LEAN_SEARCH_RUNS).
     probe_set: str = "grpo/fixed_sets/probe.jsonl"
     held_out_states_file: str = "phase5_eval_visible_student_v2_visible/states.jsonl"
     command_prefix: str = ""
+    # Paused searches' REPL processes above this private memory (0: all) stop before evaluating; they replay later.
+    paused_repl_memory_gib: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -123,6 +130,9 @@ def parse_loop_config(text: str) -> GrpoLoopConfig:
     training = config.training
     if not 0 < training.min_sampling_minutes <= training.max_sampling_minutes or training.min_solved_trees < 1:
         raise ValueError("training needs 0 < min_sampling_minutes <= max_sampling_minutes and min_solved_trees >= 1.")
+    evaluation = config.evaluation
+    if any(target.baseline_runs < 1 for target in (evaluation.probe, evaluation.minif2f, evaluation.held_out_states)):
+        raise ValueError("evaluation targets need baseline_runs >= 1.")
     return config
 
 

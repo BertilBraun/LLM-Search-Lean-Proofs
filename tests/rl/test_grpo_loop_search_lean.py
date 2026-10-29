@@ -5,12 +5,13 @@ import pytest
 import pytest_asyncio
 
 from lean_search.data import Problem, Split
-from lean_search.data_rewrite.naming import NameChange, NameSource
+from lean_search.data_rewrite.naming import NameChange, NameSource, renamed_text
 from lean_search.data_rewrite.statement_renaming import StatementRenaming
 from lean_search.lean import LeanRepl, LeanReplConfig, ProofState
 from lean_search.lean.repl import PROJECT_DIRECTORY, REPL_BINARY
 from lean_search.rl.renaming import StatementRenamings, search_problem
 from lean_search.search import (
+    AStar,
     Candidate,
     CandidateBatch,
     CandidateBatches,
@@ -19,6 +20,7 @@ from lean_search.search import (
     SearchConfig,
     SearchContext,
     StepSource,
+    ValueEstimates,
     search_theorem,
 )
 
@@ -62,8 +64,27 @@ def problem() -> Problem:
     return Problem("test.renamed_sum", Split.VALID, HEADER, STATEMENT, "", "")
 
 
-def renamings(statement: str) -> StatementRenamings:
-    return StatementRenamings({problem().name: StatementRenaming(STATEMENT, statement, CHANGES)})
+def renamings(statement: str, original_names_for_value: bool = False) -> StatementRenamings:
+    renaming = StatementRenaming(STATEMENT, statement, CHANGES)
+    return StatementRenamings({problem().name: renaming}, original_names_for_value)
+
+
+class RecordingValue:
+    """The value server's side: records the goals of every state it scores."""
+
+    def __init__(self) -> None:
+        self.goals: list[tuple[str, ...]] = []
+
+    async def estimate(self, nodes: Sequence[Node]) -> ValueEstimates:
+        self.goals += [node.goals for node in nodes]
+        return ValueEstimates(tuple(1.0 for _ in nodes))
+
+
+async def value_queries(repl: LeanRepl, statement_renamings: StatementRenamings | None) -> list[tuple[str, ...]]:
+    value = RecordingValue()
+    policy = FixedPolicy(["simp only [Nat.add_zero]"])
+    await search_problem(problem(), repl, policy, AStar(value, 1.0), CONFIG, statement_renamings)
+    return value.goals
 
 
 async def test_a_search_starts_from_a_state_inside_the_proof(repl: LeanRepl) -> None:
@@ -85,3 +106,15 @@ async def test_a_proof_that_fails_the_original_statement_counts_as_unsolved(repl
         problem(), repl, FixedPolicy(["exact True.intro"]), DepthPlusGoals(), CONFIG, renamings(WRONG)
     )
     assert (completed.result.proved, completed.tree) == (False, None)
+
+
+async def test_the_value_model_scores_a_renamed_search_with_the_original_names(repl: LeanRepl) -> None:
+    original = await value_queries(repl, None)
+    renamed = await value_queries(repl, renamings(RENAMED, original_names_for_value=True))
+    assert (bool(original), renamed) == (True, original)
+
+
+async def test_without_the_switch_the_value_model_scores_the_renamed_states(repl: LeanRepl) -> None:
+    original = await value_queries(repl, None)
+    renamed = await value_queries(repl, renamings(RENAMED))
+    assert renamed == [tuple(renamed_text(goal, CHANGES) for goal in state) for state in original]

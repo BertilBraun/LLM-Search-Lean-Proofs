@@ -11,6 +11,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import httpx
+
 from lean_search.corpora.records import StatementRecord
 from lean_search.data import Problem
 from lean_search.expert_iteration.serving import MergedPublisher, ModelVersion, record_published
@@ -18,7 +20,7 @@ from lean_search.lean import ProofState
 from lean_search.monitoring.store import MetricsWriter
 from lean_search.rl.evaluation import EvaluationKind, EvaluationSummary
 from lean_search.rl.fixed_sets import HeldOutStatement, Stratum
-from lean_search.rl.loop import PHASE_OUTCOME_FILE, GrpoLoop, GrpoLoopPaths, TrainingRequest
+from lean_search.rl.loop import PHASE_OUTCOME_FILE, GrpoLoop, GrpoLoopPaths, ReleasedLeanMemory, TrainingRequest
 from lean_search.rl.loop_config import GrpoLoopConfig, parse_loop_config
 from lean_search.rl.statement_sources import FixedStatements
 from lean_search.rl.training_phase import PhaseOutcome, PolicyOutcome, ValueOutcome
@@ -158,19 +160,24 @@ def solved_tree(problem: Problem) -> SearchTree:
 
 
 class FakeSearcher:
-    """Every search proves its statement at once; requests wait while paused."""
+    """Every search proves its statement at once (after its `server_failures`); requests wait while paused."""
 
-    def __init__(self) -> None:
+    def __init__(self, server_failures: dict[str, int] | None = None) -> None:
         self.open = asyncio.Event()
         self.open.set()
         self.searched: list[str] = []
         self.pauses = 0
         self.policy_versions: list[int] = []
+        self.server_failures = dict(server_failures or {})
+        self.memory_releases: list[int] = []
 
     async def search(self, problem: Problem) -> CompletedSearch:
         await self.open.wait()
         await asyncio.sleep(0.001)
         self.searched.append(problem.name)
+        if self.server_failures.get(problem.name, 0) > 0:
+            self.server_failures[problem.name] -= 1
+            raise httpx.ConnectError("policy server down")
         accounting = Accounting(expansions=1, nodes=2, edges=2, proofs=1)
         result = SearchResult(
             problem.name, True, StopReason.PROVED, "trivial", ("trivial",), (), accounting, None, 0, 1
@@ -186,6 +193,10 @@ class FakeSearcher:
 
     def serving(self, policy_version: int) -> None:
         self.policy_versions.append(policy_version)
+
+    async def release_lean_memory(self, above_bytes: int) -> ReleasedLeanMemory:
+        self.memory_releases.append(above_bytes)
+        return ReleasedLeanMemory(0, 0)
 
 
 @dataclass
@@ -230,11 +241,13 @@ class FakeServers:
 
 @dataclass
 class FakeEvaluations:
+    # First runs of a version; repeated runs in `repeats`.
     runs: list[tuple[EvaluationKind, int]] = field(default_factory=list)
+    repeats: list[tuple[EvaluationKind, int]] = field(default_factory=list)
 
-    async def evaluate(self, kind: EvaluationKind, phase: int) -> EvaluationSummary:
-        self.runs.append((kind, phase))
-        return dataclasses.replace(zero(EvaluationSummary), kind=kind, problems=10, solved=4)
+    async def evaluate(self, kind: EvaluationKind, phase: int, repeat: int) -> EvaluationSummary:
+        (self.repeats if repeat else self.runs).append((kind, repeat if repeat else phase))
+        return dataclasses.replace(zero(EvaluationSummary), kind=kind, problems=10, solved=4 + repeat)
 
 
 def merge_by_writing(base_model: str, adapter: str, output: Path) -> None:
@@ -281,10 +294,14 @@ class LoopWorld:
         return len(self.paths.phases.read_text(encoding="utf-8").splitlines()) if self.paths.phases.exists() else 0
 
 
-def loop_world(root: Path, toml: str = LOOP_TOML, trainer: FakeTrainer | None = None) -> LoopWorld:
+def loop_world(
+    root: Path, toml: str = LOOP_TOML, trainer: FakeTrainer | None = None, searcher: FakeSearcher | None = None
+) -> LoopWorld:
     config = parse_loop_config(toml)
     paths = GrpoLoopPaths(root / "runs", root / "data", root / "checkpoints", config.name)
-    return LoopWorld(config, paths, FakeSearcher(), trainer or FakeTrainer(), FakeServers(), FakeEvaluations())
+    return LoopWorld(
+        config, paths, searcher or FakeSearcher(), trainer or FakeTrainer(), FakeServers(), FakeEvaluations()
+    )
 
 
 def record_version_zero(world: LoopWorld) -> None:
@@ -301,9 +318,10 @@ async def run_until(
     task = asyncio.create_task(loop.run(stop))
     if on_sampling is not None:
         while not world.searcher.searched and not task.done():
-            await asyncio.sleep(0.001)
+            await asyncio.sleep(0)
         on_sampling()
+    # Each event-loop step: the watcher sleeps after closing a phase and starts none once `stop` is set.
     while world.phases_done() < phases and not task.done():
-        await asyncio.sleep(0.01)
+        await asyncio.sleep(0)
     stop.set()
     await task

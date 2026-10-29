@@ -1,13 +1,25 @@
+import asyncio
 import tomllib
 from pathlib import Path
 
 import pytest
-from loop_fakes import LOOP_TOML, FakeTrainer, loop_world, record_version_zero, run_until
+from loop_fakes import (
+    LOOP_TOML,
+    FakeSearcher,
+    FakeTrainer,
+    LoopWorld,
+    loop_world,
+    record_version_zero,
+    run_until,
+    statement,
+)
 
+from lean_search.expert_iteration.pool import problem_name
 from lean_search.expert_iteration.serving import ModelVersion, read_current, read_versions
 from lean_search.monitoring.store import RunReader
 from lean_search.rl.evaluation import EvaluationKind
 from lean_search.rl.loop import (
+    GrpoLoop,
     PhaseStage,
     evaluation_due,
     phase_config_text,
@@ -205,3 +217,75 @@ async def test_a_baseline_evaluation_runs_before_the_first_phase(tmp_path: Path)
     record_version_zero(world)
     await run_until(world, world.loop(), phases=1)
     assert world.evaluations.runs == [(EvaluationKind.PROBE, 0)]
+
+
+BASELINE_TOML = LOOP_TOML.replace(
+    "every_hours = 0.0\nat_start = false\n\n[evaluation.held_out_states]",
+    "every_hours = 0.0\nat_start = true\nbaseline_runs = 2\n\n[evaluation.held_out_states]",
+)
+
+
+async def test_the_baseline_probe_runs_a_second_time(tmp_path: Path) -> None:
+    world = loop_world(tmp_path, toml=BASELINE_TOML)
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=1)
+    assert world.evaluations.repeats == [(EvaluationKind.PROBE, 1)]
+
+
+async def test_a_requested_probe_after_the_baseline_runs_once(tmp_path: Path) -> None:
+    world = loop_world(tmp_path, toml=BASELINE_TOML)
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=1)
+    request_evaluation(world.paths, EvaluationKind.PROBE)
+    await run_until(world, world.loop(), phases=2)
+    assert world.evaluations.repeats == [(EvaluationKind.PROBE, 1)]
+
+
+async def test_the_paused_searches_release_their_lean_memory_before_evaluating(tmp_path: Path) -> None:
+    world = loop_world(tmp_path, toml=BASELINE_TOML)
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=1)
+    assert world.searcher.memory_releases == [0]
+
+
+FAILING = problem_name(statement(0).statement)
+
+
+def failing_world(root: Path, failures: int) -> LoopWorld:
+    toml = LOOP_TOML.replace("status_seconds = 0.01\n", "status_seconds = 0.01\nserver_failure_pause_seconds = 0.0\n")
+    return loop_world(root, toml=toml, searcher=FakeSearcher({FAILING: failures}))
+
+
+async def run_until_searched(world: LoopWorld, loop: GrpoLoop, times: int) -> None:
+    """Runs the loop until FAILING was searched `times` times, then stops it (the stop writes a last status)."""
+    stop = asyncio.Event()
+    task = asyncio.create_task(loop.run(stop))
+    while world.searcher.searched.count(FAILING) < times and not task.done():
+        await asyncio.sleep(0)
+    stop.set()
+    await task
+
+
+def last_status(world: LoopWorld, column: str) -> float | None:
+    return RunReader(world.paths.directory).series("status").columns[column][-1]
+
+
+async def test_server_failures_are_counted_in_the_status(tmp_path: Path) -> None:
+    world = failing_world(tmp_path, failures=2)
+    record_version_zero(world)
+    await run_until_searched(world, world.loop(), times=3)
+    assert last_status(world, "server_failures") == 2
+
+
+async def test_a_statement_is_given_up_after_its_retries(tmp_path: Path) -> None:
+    world = failing_world(tmp_path, failures=10)
+    record_version_zero(world)
+    await run_until_searched(world, world.loop(), times=4)
+    assert last_status(world, "statements_given_up") == 1
+
+
+async def test_a_statement_is_not_given_up_within_its_retries(tmp_path: Path) -> None:
+    world = failing_world(tmp_path, failures=10)
+    record_version_zero(world)
+    await run_until_searched(world, world.loop(), times=3)
+    assert last_status(world, "statements_given_up") == 0

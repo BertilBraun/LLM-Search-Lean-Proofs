@@ -89,3 +89,19 @@ def test_the_curriculum_never_feeds_held_out_statements(tmp_path: Path) -> None:
 
 def test_the_curriculum_does_not_feed_statements_searched_before_a_restart(tmp_path: Path) -> None:
     assert fed_names(curriculum(tmp_path, set(), {"s.t0", "s.t2"})) == {"s.t1", "s.t3"}
+
+
+def test_a_retried_curriculum_statement_is_fed_before_new_ones(tmp_path: Path) -> None:
+    source = curriculum(tmp_path, set(), set())
+    failed = source.next_statement()
+    assert failed is not None
+    source.retry(failed)
+    assert source.next_statement() == failed
+
+
+def test_an_abandoned_curriculum_statement_is_not_fed_again(tmp_path: Path) -> None:
+    source = curriculum(tmp_path, set(), set())
+    abandoned = source.next_statement()
+    assert abandoned is not None
+    source.abandon(abandoned.name)
+    assert abandoned.name not in fed_names(source)

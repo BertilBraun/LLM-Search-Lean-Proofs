@@ -19,9 +19,9 @@ the record. With `tensorboard=True` every numeric field is also logged as the sc
 
 | Family | Record | Written | Contents |
 |---|---|---|---|
-| `status` | `LoopStatus` | every heartbeat | loop state, searches running, statements and proofs (cumulative and per hour), last publish time, heartbeat interval |
-| `system` | `SystemUsage` | `record-system`, every 30 s | per-GPU utilization, memory and power; cgroup cores used and available; Lean REPL cores; throttling; memory; hourly price and money spent |
-| `fixed_targets` | `FixedTargets` | after evaluations (`grpo_evaluate.py`) | miniF2F-valid solved / problems at the fixed budget, the probe set solved (by difficulty stratum, at its budget), held-out per-sample success, MATH-500 visible and thinking, the evaluation's wall time; version 0 is the baseline |
+| `status` | `LoopStatus` | every heartbeat | loop state, searches running, statements and proofs (cumulative and per hour), last publish time, heartbeat interval, searches a server failed and statements dropped after repeated failures (this session) |
+| `system` | `SystemUsage` | `record-system`, every 30 s | per-GPU utilization, memory and power; cgroup cores used and available; Lean REPL cores; throttling; memory used, the limit and what is available; private memory of the Lean REPLs (total, p90) and the vLLM processes; hourly price and money spent |
+| `fixed_targets` | `FixedTargets` | after evaluations (`grpo_evaluate.py`) | miniF2F-valid solved / problems at the fixed budget, the probe set solved (by difficulty stratum, at its budget), held-out per-sample success, MATH-500 visible and thinking, the evaluation's wall time, searches stopped on the wall clock, a repeated probe's difference and discordant problems against the first run; version 0 is the baseline |
 | `grpo` | `GrpoPhase` | per training phase (`training_phase.grpo_phase_record`) | proof-graph groups, trained groups (non-zero advantage) and their share, trained tactics by credit label, mean local and global reward per known tactic, local share of the advantages, KL to the data-collecting policy, clip fraction, sampler-vs-trainer log-probability difference (overall and by sampling age: the version trained from minus the version that sampled), forced answers kept, explanation and block length, loss, tokens, training and sampling time |
 | `value` | `ValueBenchmarkResult` | per value candidate | `BenchmarkMetrics` (ranking, calibration with reliability bins, separation, steps), gate passed, A/B search solved, loss |
 | `search` | `SearchPhase` | per phase | `GraphStatistics` summed over the phase's trees (edge kinds of all / policy / automation edges and policy samples, proof graph, dead ends, value targets by source, tactics by credit label, groups, rewards, proofs with their tactics and blocks, harvest yield, ε-picks), failure tiers, Lean seconds per expansion, forced answers, repetition loops, block length |
@@ -46,4 +46,4 @@ default, or a new dataclass with its own `family`.
 - Alerts (`alerts.py`, thresholds in `experiments/configs/dashboard/dashboard.toml`): loop silent, no publish,
   no-progress share rising or high, repetition loops, KL and clip fraction high, MATH-500 below its minimum or
   dropping from the baseline, few groups with mixed rewards, GPUs underused, curriculum solve rate off its band,
-  value gate failing repeatedly.
+  value gate failing repeatedly, host memory low, searches failing on a server.

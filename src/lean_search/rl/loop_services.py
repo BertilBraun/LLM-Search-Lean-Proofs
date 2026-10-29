@@ -3,8 +3,10 @@ the evaluation jobs, the servers' start commands and the first-hour check of a p
 
 import asyncio
 import contextlib
+import json
 import os
 import shlex
+import signal
 import statistics
 import sys
 from collections.abc import AsyncIterator, Callable, Sequence
@@ -14,7 +16,7 @@ from pathlib import Path
 from lean_search.data import Problem
 from lean_search.expert_iteration.loop_config import ServerEndpoint, ServingConfig
 from lean_search.expert_iteration.loop_search import PauseGate
-from lean_search.expert_iteration.serving import MergedPublisher, ModelVersion
+from lean_search.expert_iteration.serving import MergedPublisher, ModelVersion, write_json_atomically
 from lean_search.lean import FORBIDDEN_TOKENS, LeanReplConfig, LeanReplPool
 from lean_search.policy.client import PolicyClient
 from lean_search.policy.config import PolicyConfig
@@ -22,17 +24,26 @@ from lean_search.policy.expander import load_tokenizer
 from lean_search.policy.prompts import parse_samples, render_prompt, stop_sequences
 from lean_search.policy.server_control import is_healthy, is_sleeping, publish_weights, release_gpu, restore_gpu
 from lean_search.rl.evaluation import EvaluationKind, EvaluationSummary, read_summary
-from lean_search.rl.loop import PHASE_OUTCOME_FILE, GrpoLoopPaths, TrainingRequest, read_phase_outcome
+from lean_search.rl.loop import (
+    PHASE_OUTCOME_FILE,
+    GrpoLoopPaths,
+    ReleasedLeanMemory,
+    TrainingRequest,
+    read_phase_outcome,
+)
 from lean_search.rl.loop_config import GrpoLoopConfig, LoopTrainingConfig
 from lean_search.rl.renaming import StatementRenamings, search_problem
 from lean_search.rl.search_models import SearchModels, open_search_models
 from lean_search.rl.training_phase import PhaseOutcome
 from lean_search.search import CompletedSearch, RunConfig
+from lean_search.search.records import from_json_object
 
 REPOSITORY_DIRECTORY = Path(__file__).resolve().parents[3]
 # The GRPO trainer compares the sampler's log-probabilities with its own at the sampling temperature.
 POLICY_SERVER_ARGUMENTS = "--logprobs-mode processed_logprobs"
 CHECK_GOALS = ("x : ℝ\nh₀ : 3 * x + 2 = 11\n⊢ x = 3",)
+# A stopped job's process group gets SIGTERM, then SIGKILL after this long.
+CHILD_STOP_SECONDS = 30.0
 
 
 class LeanTreeSearcher:
@@ -72,6 +83,10 @@ class LeanTreeSearcher:
     def serving(self, policy_version: int) -> None:
         self.gate.policy_version = policy_version
 
+    async def release_lean_memory(self, above_bytes: int) -> ReleasedLeanMemory:
+        stopped = await self.pool.stop_processes(above_bytes)
+        return ReleasedLeanMemory(len(stopped), sum(usage.anonymous_bytes for usage in stopped))
+
 
 @contextlib.asynccontextmanager
 async def open_tree_searcher(
@@ -87,7 +102,53 @@ async def open_tree_searcher(
         yield LeanTreeSearcher(config, pool, models, gate, renamings)
 
 
-async def run_logged(arguments: Sequence[str], log_path: Path, environment: dict[str, str]) -> None:
+@dataclass(frozen=True)
+class ChildProcess:
+    process_id: int
+    # Clock ticks after boot when the process started, so a reused process id is not taken for the child.
+    start_ticks: int
+    command: str
+
+
+def running_start_ticks(process_id: int) -> int | None:
+    """The process's start time, or None once it ended (zombies included)."""
+    try:
+        text = Path(f"/proc/{process_id}/stat").read_text()
+    except FileNotFoundError:
+        return None
+    fields = text[text.rindex(")") + 2 :].split()
+    return None if fields[0] == "Z" else int(fields[19])
+
+
+def live_children(directory: Path) -> list[ChildProcess]:
+    children = [from_json_object(ChildProcess, json.loads(path.read_text())) for path in directory.glob("*.pid")]
+    return [child for child in children if running_start_ticks(child.process_id) == child.start_ticks]
+
+
+def signal_group(process_id: int, signal_number: signal.Signals) -> None:
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(process_id, signal_number)
+
+
+async def stop_process_group(process: asyncio.subprocess.Process) -> None:
+    signal_group(process.pid, signal.SIGTERM)
+    try:
+        await asyncio.wait_for(process.wait(), CHILD_STOP_SECONDS)
+    except TimeoutError:
+        signal_group(process.pid, signal.SIGKILL)
+        await process.wait()
+    # Its own children (Lean REPLs, data loader workers) share the group and may outlive it.
+    signal_group(process.pid, signal.SIGKILL)
+
+
+async def run_logged(arguments: Sequence[str], log_path: Path, environment: dict[str, str], record_path: Path) -> None:
+    """The job in its own process group, recorded in `record_path` until it ends; cancelling stops the group."""
+    # A job recorded beside it still running means an earlier loop died without stopping it.
+    running = live_children(record_path.parent)
+    if running:
+        raise RuntimeError(
+            f"Jobs of an earlier loop still run: {running}; stop them (kill -TERM -<process_id>) before restarting."
+        )
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("ab") as log_file:
         process = await asyncio.create_subprocess_exec(
@@ -96,9 +157,21 @@ async def run_logged(arguments: Sequence[str], log_path: Path, environment: dict
             stdout=log_file,
             stderr=asyncio.subprocess.STDOUT,
             env=environment,
+            start_new_session=True,
         )
-        if await process.wait():
-            raise RuntimeError(f"{shlex.join(arguments)} failed; see {log_path}")
+        try:
+            start_ticks = running_start_ticks(process.pid)
+            if start_ticks is not None:
+                write_json_atomically(record_path, ChildProcess(process.pid, start_ticks, shlex.join(arguments)))
+            return_code = await process.wait()
+        except BaseException:
+            await stop_process_group(process)
+            raise
+        finally:
+            if process.returncode is not None:
+                record_path.unlink(missing_ok=True)
+    if return_code:
+        raise RuntimeError(f"{shlex.join(arguments)} failed; see {log_path}")
 
 
 class SubprocessTrainer:
@@ -141,7 +214,8 @@ class SubprocessTrainer:
             "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
         }
         log_path = self.paths.training / f"phase_{request.phase:04d}.log"
-        await run_logged(self.arguments(request, config_path), log_path, environment)
+        arguments = self.arguments(request, config_path)
+        await run_logged(arguments, log_path, environment, self.paths.children / "training.pid")
         return read_phase_outcome(request.output_directory / PHASE_OUTCOME_FILE)
 
 
@@ -181,9 +255,9 @@ class SubprocessEvaluations:
         self.command_prefix = command_prefix
         self.current_version = current_version
 
-    async def evaluate(self, kind: EvaluationKind, phase: int) -> EvaluationSummary:
+    async def evaluate(self, kind: EvaluationKind, phase: int, repeat: int) -> EvaluationSummary:
         version = self.current_version()
-        directory = self.paths.evaluation_directory(kind, version)
+        directory = self.paths.evaluation_directory(kind, version, repeat)
         arguments = [
             *shlex.split(self.command_prefix),
             sys.executable,
@@ -194,8 +268,11 @@ class SubprocessEvaluations:
             kind.value,
             "--phase",
             str(phase),
+            "--repeat",
+            str(repeat),
         ]
-        await run_logged(arguments, directory.with_name(directory.name + ".log"), dict(os.environ))
+        log_path = directory.with_name(directory.name + ".log")
+        await run_logged(arguments, log_path, dict(os.environ), self.paths.children / "evaluation.pid")
         return read_summary(directory / "summary.json")
 
 
