@@ -44,6 +44,7 @@ class AlertThresholds:
     max_solve_rate: float = 0.7
     failed_gates_in_a_row: int = 3
     min_available_memory_share: float = 0.15
+    min_free_disk_gib: float = 50.0
 
 
 @dataclass(frozen=True)
@@ -225,6 +226,16 @@ def low_host_memory(reader: RunReader, thresholds: AlertThresholds, now: float) 
     return Alert(Severity.CRITICAL, "Host memory low", detail, "system")
 
 
+def low_disk(reader: RunReader, thresholds: AlertThresholds, now: float) -> Alert | None:
+    system = reader.series("system")
+    total = latest(system.columns.get("disk_total_gib", []))
+    free = latest(system.columns.get("disk_free_gib", []))
+    if not total or free is None or free >= thresholds.min_free_disk_gib:
+        return None
+    detail = f"{free:.0f} of {total:.0f} GiB free: a full disk fails the next write or merge and stops the loop."
+    return Alert(Severity.CRITICAL, "Disk almost full", detail, "system")
+
+
 def server_failures(reader: RunReader, thresholds: AlertThresholds, now: float) -> Alert | None:
     status = reader.series("status")
     failures = latest(status.columns.get("server_failures", []))
@@ -250,6 +261,7 @@ RULES = (
     solve_rate_off_target,
     failing_gates,
     low_host_memory,
+    low_disk,
     server_failures,
 )
 

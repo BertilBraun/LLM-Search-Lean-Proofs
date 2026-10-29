@@ -186,6 +186,12 @@ every_hours = 12.0
 problems = 250
 significance = 0.05
 
+# After each publish, the phase adapters of versions older than the last 5 are deleted unless still used (the current
+# version's, the value adapter the next value training continues); 0 keeps every adapter. src/lean_search/rl/README.md,
+# "Disk".
+[retention]
+adapter_versions = 5
+
 # On only when the starting policy is the naming A/B's named arm (grpo_fixed_sets.py rename first).
 [renaming]
 enabled = false

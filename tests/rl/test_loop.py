@@ -303,6 +303,36 @@ async def test_mu_turns_off_when_the_ab_finds_the_published_value_model_worse(tm
     assert value_shares(world)[1] == 0.0
 
 
+def remaining_adapters(world: LoopWorld, kind: str) -> list[str]:
+    root = world.paths.checkpoints_root
+    return sorted(path.parent.parent.name for path in root.glob(f"*_phase_*/{kind}/adapter"))
+
+
+def retention_world(root: Path, adapter_versions: int) -> LoopWorld:
+    return loop_world(root, LOOP_TOML + f"\n[retention]\nadapter_versions = {adapter_versions}\n")
+
+
+async def test_policy_adapters_of_versions_beyond_the_retention_are_deleted(tmp_path: Path) -> None:
+    world = retention_world(tmp_path, adapter_versions=2)
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=4)
+    assert remaining_adapters(world, "policy") == ["test_loop_phase_0003", "test_loop_phase_0004"]
+
+
+async def test_the_value_adapter_the_next_value_training_continues_is_kept(tmp_path: Path) -> None:
+    world = retention_world(tmp_path, adapter_versions=2)
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=4)
+    assert remaining_adapters(world, "value") == ["test_loop_phase_0004"]
+
+
+async def test_a_retention_of_zero_keeps_every_adapter(tmp_path: Path) -> None:
+    world = retention_world(tmp_path, adapter_versions=0)
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=3)
+    assert len(remaining_adapters(world, "policy")) == 3
+
+
 def write_value_ab(paths: GrpoLoopPaths, version: int, published_value_version: int) -> None:
     directory = paths.evaluation_directory(EvaluationKind.VALUE_AB, version, 0, EvaluationValueModel.PUBLISHED)
     result = dataclasses.replace(zero(ValueAbResult), published_value_version=published_value_version)

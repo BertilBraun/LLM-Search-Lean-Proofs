@@ -138,6 +138,14 @@ class EvaluationConfig:
 
 
 @dataclass(frozen=True)
+class RetentionConfig:
+    # The phase adapters (policy and value) of the last this many published versions stay on disk, and those still in
+    # use (the value adapter the next value training continues); older ones are deleted after each publish, ~0.5 GB of
+    # fp32 policy adapter per phase. 0 keeps every adapter. Merged weights: only the current version's and version 0's.
+    adapter_versions: int = 5
+
+
+@dataclass(frozen=True)
 class GrpoLoopConfig:
     # The run directory $LEAN_SEARCH_RUNS/<name>; checkpoints under $LEAN_SEARCH_CHECKPOINTS/<name>_phase_<k>.
     name: str
@@ -150,6 +158,7 @@ class GrpoLoopConfig:
     evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
     # Descriptive hypothesis names at search time (loop, probe, miniF2F), for a policy trained on named data.
     renaming: RenamingConfig = field(default_factory=RenamingConfig)
+    retention: RetentionConfig = field(default_factory=RetentionConfig)
 
     def released_servers(self) -> tuple[ServerEndpoint, ...]:
         """Servers on the training GPUs: asleep while a phase trains."""

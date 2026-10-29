@@ -250,7 +250,8 @@ class FakeTrainer:
             )
         trees = len(list(request.trees.glob("*.json.gz")))
         outcome = PhaseOutcome(trees=trees, groups=1, policy=policy, value=value, timings=self.timings)
-        request.output_directory.mkdir(parents=True, exist_ok=True)
+        for adapter in (policy.adapter, *([] if value is None else [value.adapter])):
+            Path(adapter).mkdir(parents=True, exist_ok=True)
         (request.output_directory / PHASE_OUTCOME_FILE).write_text(to_json(outcome), encoding="utf-8")
         return outcome
 

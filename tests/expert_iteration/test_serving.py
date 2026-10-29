@@ -55,6 +55,13 @@ def test_pruning_keeps_only_the_current_versions_weights(tmp_path: Path) -> None
     ]
 
 
+def test_pruning_keeps_version_zeros_weights(tmp_path: Path) -> None:
+    publisher = MergedPublisher(CONFIG, tmp_path, RecordingMerge())
+    publisher.prepare(ModelVersion(0, "/policy0", "/value0", "now", "initial"))
+    publisher.prune(publisher.prepare(ModelVersion(1, "/policy1", "/value1", "now", "proofs")))
+    assert sorted(path.name for path in (tmp_path / "v0000").iterdir()) == ["policy", "value"]
+
+
 def test_each_instance_serves_its_kind_of_weights(tmp_path: Path) -> None:
     publisher = MergedPublisher(CONFIG, tmp_path, RecordingMerge())
     version = publisher.prepare(ModelVersion(2, "/policy2", "/value2", "now", "proofs"))

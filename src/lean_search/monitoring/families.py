@@ -64,6 +64,9 @@ class SystemUsage:
     lean_private_memory_gib: float = 0.0
     lean_private_memory_p90_gib: float = 0.0
     vllm_private_memory_gib: float = 0.0
+    # The fullest filesystem of the sampled paths (the run directory and the checkpoints).
+    disk_total_gib: float = 0.0
+    disk_free_gib: float = 0.0
 
 
 @dataclass(frozen=True)

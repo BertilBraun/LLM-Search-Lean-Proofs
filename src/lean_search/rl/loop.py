@@ -66,6 +66,7 @@ from lean_search.rl.evaluation import EvaluationKind, EvaluationSummary
 from lean_search.rl.fixed_targets import target_config
 from lean_search.rl.loop_config import EvaluationTarget, EvaluationValueModel, GrpoLoopConfig
 from lean_search.rl.phase_metrics import search_phase_record
+from lean_search.rl.retention import kept_adapters, prune_phase_adapters
 from lean_search.rl.statement_sources import FedStatement, StatementSource
 from lean_search.rl.training_phase import (
     PhaseOutcome,
@@ -833,6 +834,7 @@ class GrpoLoop:
             current = await asyncio.to_thread(
                 publish_phase, self.paths.models, self.publisher, outcome, phase_trigger(phase)
             )
+            await asyncio.to_thread(self.prune_adapters)
         published = self.clock()
         served = await self.servers.serve(current)
         self.save_progress(
@@ -849,6 +851,18 @@ class GrpoLoop:
             self.log(f"Value model of phase {phase} passed the gate and is published")
             self.save_progress(value_gate_passed=True)
         self.log(f"Published version {current.version}")
+
+    def prune_adapters(self) -> None:
+        """Deletes the phase adapters of versions older than the retention that nothing uses any more."""
+        retention = self.config.retention
+        if not retention.adapter_versions:
+            return
+        versions = read_versions(self.paths.models)
+        kept = kept_adapters(versions, retention.adapter_versions, [self.progress.value_adapter])
+        phases = (self.paths.phase_checkpoints(number) for number in range(1, self.progress.phase + 1))
+        removed = prune_phase_adapters(phases, kept)
+        if removed:
+            self.log(f"Deleted {len(removed)} adapter directories of old phases: {[str(path) for path in removed]}")
 
     def write_training_metrics(self, outcome: PhaseOutcome, candidate_version: int) -> None:
         if outcome.policy is not None:
@@ -937,6 +951,7 @@ class GrpoLoop:
             self.config.initial.value_adapter,
             f"value v{value_version} worse than v0 in the A/B",
         )
+        await asyncio.to_thread(self.prune_adapters)
         await self.servers.serve(current)
         self.served_value_weights = current.value_weights
         self.searcher.serving(current.version)

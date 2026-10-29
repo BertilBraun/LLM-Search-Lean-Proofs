@@ -82,6 +82,10 @@ def low_host_memory(writer: MetricsWriter) -> None:
     writer.write(system_usage(memory_available_gib=6.0), record_time=NOW)
 
 
+def low_disk(writer: MetricsWriter) -> None:
+    writer.write(system_usage(disk_free_gib=20.0), record_time=NOW)
+
+
 def failing_servers(writer: MetricsWriter) -> None:
     writer.write(loop_status(last_publish_time=NOW - 60, server_failures=12), record_time=NOW - 30)
 
@@ -103,6 +107,7 @@ def failing_servers(writer: MetricsWriter) -> None:
         (solve_rate_too_high, "Curriculum off target"),
         (failing_gates, "Value gate failing"),
         (low_host_memory, "Host memory low"),
+        (low_disk, "Disk almost full"),
         (failing_servers, "Server failures"),
     ],
 )

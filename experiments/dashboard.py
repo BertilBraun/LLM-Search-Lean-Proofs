@@ -54,6 +54,12 @@ def parse_arguments() -> argparse.Namespace:
     system.add_argument("--interval", type=float, default=30.0)
     system.add_argument("--hourly-price", type=float, required=True)
     system.add_argument("--process-name", action="append", help="Lean process names (default: repl, lean)")
+    system.add_argument(
+        "--disk-path",
+        type=Path,
+        action="append",
+        help="paths whose filesystems to watch, the fullest reported (default: the run directory and the checkpoints)",
+    )
     return parser.parse_args()
 
 
@@ -71,6 +77,11 @@ def read_password(password_file: Path | None) -> str | None:
     if len(password) < MINIMUM_PASSWORD_LENGTH:
         print(f"warning: the dashboard password is shorter than {MINIMUM_PASSWORD_LENGTH} characters", file=sys.stderr)
     return password
+
+
+def default_disk_paths(run_directory: Path) -> list[Path]:
+    checkpoints = os.environ.get("LEAN_SEARCH_CHECKPOINTS")
+    return [run_directory, *([Path(checkpoints)] if checkpoints else [])]
 
 
 def compared_run(text: str) -> RunSource:
@@ -118,7 +129,8 @@ def main() -> None:
             demo(arguments)
         case "record-system":
             names = tuple(arguments.process_name or LEAN_PROCESS_NAMES)
-            record_system(arguments.run_directory, arguments.interval, arguments.hourly_price, names)
+            disk_paths = arguments.disk_path or default_disk_paths(arguments.run_directory)
+            record_system(arguments.run_directory, arguments.interval, arguments.hourly_price, names, disk_paths)
 
 
 if __name__ == "__main__":

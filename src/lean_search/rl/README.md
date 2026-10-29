@@ -186,7 +186,8 @@ searched statements and per-phase trees. `grpo_loop.py run` after a crash first 
 version, finishes the interrupted stage (training again, publishing only if `current.json` lacks the phase's
 version, the remaining evaluations), then resumes sampling. Searches cut off by the crash are lost (the curriculum
 feeds each statement once; the fixed list feeds it again). The node's disk is not persistent: back up the run's
-`metrics/`, `phases.jsonl`, `evaluations*/summary.json` and `report.md`; trees and adapters stay on the node.
+`metrics/`, `phases.jsonl`, `evaluations*/summary.json` and `report.md`; trees and the retained adapters ("Disk")
+stay on the node.
 
 Jobs: the training and evaluation jobs run in their own process groups, each recorded in `children/<job>.pid` (process
 id, start time and a marker) while it runs. Every process of a job carries the marker in its environment
@@ -337,6 +338,19 @@ first hour with a probe running and lower `sampling.concurrency` or an evaluatio
 fails; if training does not fit, the ranks' tree loading is what to shrink. Stopping the REPLs before training costs
 each paused search a REPL restart and a replay of its proof states after the pause (a large
 `training.paused_repl_memory_gib` keeps them).
+
+## Disk
+
+What grows per phase: the phase's gzipped trees (estimated 150-250 MB; kept, the value window and the analysis read
+them), the policy adapter (~0.5 GB in fp32) and every fourth phase a value adapter (~0.26 GB). After each publish the
+loop deletes the phase adapters (and any GPU merge left beside them) of versions older than the last
+`retention.adapter_versions` (5) unless still used: the current version's and the value adapter the next value
+training continues (`retention.py`; 0 keeps every adapter). The starting adapters live outside the loop's
+checkpoints and are never touched. Merged weights (`MergedPublisher.prune`): the current version's and version 0's
+(the baselines' weights, `weights/v0000/`), the evaluations' fixed value model under `weights/kept_value/`, and while
+publishing the next version's beside them. The system sampler records the fullest filesystem of the run and the
+checkpoints (`system.disk_total_gib`, `disk_free_gib`, `record-system --disk-path`); the dashboard warns below
+`min_free_disk_gib` (50) free.
 
 ## Fixed targets (`fixed_sets.py`, `fixed_targets.py`, `evaluation.py`)
 

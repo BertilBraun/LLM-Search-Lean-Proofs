@@ -87,7 +87,9 @@ def grpo_phase(kl: float = 0.01, clip_fraction: float = 0.05, mixed_share: float
     )
 
 
-def system_usage(gpu_utilization: float = 90.0, memory_available_gib: float = 60.0) -> SystemUsage:
+def system_usage(
+    gpu_utilization: float = 90.0, memory_available_gib: float = 60.0, disk_free_gib: float = 400.0
+) -> SystemUsage:
     return SystemUsage(
         gpu_utilization=(gpu_utilization, gpu_utilization),
         gpu_memory_used_gib=(20.0, 20.0),
@@ -102,6 +104,8 @@ def system_usage(gpu_utilization: float = 90.0, memory_available_gib: float = 60
         cost_so_far=10.0,
         memory_total_gib=120.0,
         memory_available_gib=memory_available_gib,
+        disk_total_gib=500.0,
+        disk_free_gib=disk_free_gib,
     )
 
 

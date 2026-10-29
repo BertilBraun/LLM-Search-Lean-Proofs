@@ -521,6 +521,10 @@ export const PAGES = [
           },
           { title: "CPU throttled", subtitle: "share of cgroup periods", family: "system", unit: "share", series: [{ label: "throttled", field: "cpu_throttled_fraction" }] },
           { title: "Memory used", family: "system", unit: "gib", series: [{ label: "anonymous", field: "memory_used_gib" }] },
+          {
+            title: "Disk", subtitle: "the fullest filesystem of the run and its checkpoints", family: "system", unit: "gib", yMin: 0,
+            series: [{ label: "size", field: "disk_total_gib" }, { label: "free", field: "disk_free_gib" }],
+          },
           { title: "Cost so far", family: "system", unit: "dollars", series: [{ label: "spent", field: "cost_so_far" }] },
         ],
       },
