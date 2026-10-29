@@ -22,7 +22,14 @@ from lean_search.expert_iteration.loop_config import ServerEndpoint, ServingConf
 from lean_search.expert_iteration.loop_search import PauseGate
 from lean_search.expert_iteration.serving import MergedPublisher, ModelVersion, write_json_atomically
 from lean_search.lean import FORBIDDEN_TOKENS, LeanReplConfig, LeanReplPool
-from lean_search.monitoring.system_sampler import CGROUP, LEAN_PROCESS_NAMES, PROC, host_memory, percentile_90
+from lean_search.monitoring.system_sampler import (
+    CGROUP,
+    LEAN_PROCESS_NAMES,
+    PROC,
+    GpuReader,
+    host_memory,
+    percentile_90,
+)
 from lean_search.policy.client import PolicyClient
 from lean_search.policy.config import PolicyConfig
 from lean_search.policy.expander import load_tokenizer
@@ -693,6 +700,24 @@ def host_memory_text(config: GrpoLoopConfig | None = None) -> str:
         f"{text}; persistent trainer {terms.parked:.1f} GiB parked, {terms.handoff:.1f} GiB handed off; "
         f"{budget_text(conditions)} (training ranks and merges not measured)"
     )
+
+
+def gpu_memory_text(config: GrpoLoopConfig) -> str:
+    """Each training GPU's free memory before its servers wake, beside what their shares take back once awake (each
+    sleeping server still holds ~0.8 GiB of it): the persistent trainer's CUDA context and NCCL buffers, or a stray
+    process, show as the difference."""
+    usage = GpuReader().usage()
+    if not usage.memory_total_gib:
+        return "not measured (no NVML)"
+    parts = []
+    for gpu in config.training.gpus:
+        total = usage.memory_total_gib[gpu]
+        shares = sum(server.memory_share for server in config.serving.servers if server.gpu == gpu)
+        parts.append(
+            f"GPU {gpu} {total - usage.memory_used_gib[gpu]:.1f} of {total:.1f} GiB free, its servers' shares "
+            f"{shares * total:.1f} GiB"
+        )
+    return "; ".join(parts)
 
 
 def serve_commands(config: GrpoLoopConfig, publisher: MergedPublisher, version: ModelVersion) -> list[str]:

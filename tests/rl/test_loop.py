@@ -713,6 +713,18 @@ async def test_the_host_memory_is_logged_at_the_pause_stages(tmp_path: Path) -> 
     ]
 
 
+async def test_the_gpu_memory_is_logged_before_the_wake(tmp_path: Path) -> None:
+    world = loop_world(tmp_path)
+    record_version_zero(world)
+    messages: list[str] = []
+    loop = world.loop()
+    loop.log = messages.append
+    loop.gpu_memory = lambda: "GPU 0 2.0 of 24.0 GiB free"
+    await run_until(world, loop, phases=1)
+    wake = messages.index("GPU memory before the wake: GPU 0 2.0 of 24.0 GiB free")
+    assert messages[wake + 1].startswith("Published version 1")
+
+
 FAILING = problem_name(statement(0).statement)
 
 

@@ -553,7 +553,7 @@ def published_time(version: ModelVersion) -> float:
     return datetime.datetime.fromisoformat(version.published_at).timestamp()
 
 
-def unmeasured_host_memory() -> str:
+def not_measured() -> str:
     return "not measured"
 
 
@@ -608,19 +608,22 @@ class GrpoLoop:
         log: Callable[[str], None],
         phase_template: str,
         clock: Callable[[], float] = time.monotonic,
-        host_memory: Callable[[], str] = unmeasured_host_memory,
+        host_memory: Callable[[], str] = not_measured,
         value_readout: Readout = DEFAULT_READOUT,
         value_benchmark: ValueBenchmarkScoring | None = None,
+        gpu_memory: Callable[[], str] = not_measured,
     ) -> None:
         """`phase_template`: the text of the training phase config (config.training.phase_config); `host_memory`
-        describes the node's memory for the log at the pause's stage boundaries; `value_readout`: A*'s readout of the
-        value bins, for the value metrics; `value_benchmark`: scored by every newly served value model."""
+        describes the node's memory for the log at the pause's stage boundaries, `gpu_memory` the training GPUs' free
+        memory before their servers wake; `value_readout`: A*'s readout of the value bins, for the value metrics;
+        `value_benchmark`: scored by every newly served value model."""
         self.config = config
         self.value_readout = value_readout
         self.value_benchmark = value_benchmark
         # The value benchmark's scoring in flight, during sampling.
         self.scoring: asyncio.Task[None] | None = None
         self.host_memory = host_memory
+        self.gpu_memory = gpu_memory
         self.paths = paths
         self.statements = statements
         self.searcher = searcher
@@ -1233,6 +1236,7 @@ class GrpoLoop:
             await asyncio.to_thread(self.recorded)
         served_version = current if handed_off is None else handed_off
         published = self.clock()
+        self.log(f"GPU memory before the wake: {await asyncio.to_thread(self.gpu_memory)}")
         served = await self.servers.serve(served_version)
         self.save_progress(
             pause=dataclasses.replace(

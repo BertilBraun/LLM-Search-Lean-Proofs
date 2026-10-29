@@ -67,6 +67,7 @@ from lean_search.rl.loop_services import (
     SubprocessEvaluations,
     VllmServers,
     check_policy_server,
+    gpu_memory_text,
     host_memory_text,
     open_trainer,
     open_tree_searcher,
@@ -225,6 +226,7 @@ async def run(config: GrpoLoopConfig, paths: GrpoLoopPaths) -> None:
             host_memory=host_memory,
             value_readout=search_run_config(config).value.readout,
             value_benchmark=value_benchmark_scoring(config),
+            gpu_memory=functools.partial(gpu_memory_text, config),
         )
         await loop.run(stop)
 

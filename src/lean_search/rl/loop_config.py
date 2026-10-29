@@ -103,7 +103,8 @@ class EvaluationTarget:
     max_expansions: int
     # Per problem; an emergency cap, so that the expansions are the budget and the result does not measure load.
     max_wall_seconds: float
-    # Lean REPLs of the evaluation's own pool, next to the paused searches' (rl/README.md, "Host memory").
+    # Lean REPLs of the evaluation's own pool; the paused searches' REPL processes stop first
+    # (`paused_repl_memory_gib`), so the loop's sampling concurrency fits (rl/README.md, "Host memory").
     concurrency: int
     # Hours of loop time (sampling and training, evaluations excluded) between runs; 0: only when requested.
     every_hours: float = 0.0
@@ -148,14 +149,17 @@ class EvaluationConfig:
     # The probe set: ~500 held-out pool statements stratified by difficulty, at a small budget; one part of
     # `probe_parts` per slot, in turn (the at-start baseline runs every part).
     probe: EvaluationTarget = field(
-        default_factory=lambda: EvaluationTarget(16, 3600.0, 64, every_hours=2.0, at_start=True, baseline_runs=2)
+        default_factory=lambda: EvaluationTarget(16, 3600.0, 112, every_hours=2.0, at_start=True, baseline_runs=2)
     )
     probe_parts: int = 3
     value_arm: ValueArmConfig = field(default_factory=ValueArmConfig)
     # miniF2F-valid at the full budget, at milestones (grpo_loop.py request-evaluation) and at the start and end.
-    minif2f: EvaluationTarget = field(default_factory=lambda: EvaluationTarget(64, 7200.0, 64))
-    # Per-sample success on the held-out states (one policy request per state, no search).
-    held_out_states: EvaluationTarget = field(default_factory=lambda: EvaluationTarget(1, 600.0, 64))
+    minif2f: EvaluationTarget = field(default_factory=lambda: EvaluationTarget(64, 7200.0, 112))
+    # Per-sample success and valid Lean on the held-out states (one policy request per state, no search), with every
+    # probe slot: the hard stop's signal, against version 0's run at the start.
+    held_out_states: EvaluationTarget = field(
+        default_factory=lambda: EvaluationTarget(1, 600.0, 112, every_hours=2.0, at_start=True)
+    )
     # The value model the probe and miniF2F search with: fixed, so that they measure the policy alone. The servers
     # swap to it for the evaluations and back afterwards.
     value_model: EvaluationValueModel = EvaluationValueModel.INITIAL
