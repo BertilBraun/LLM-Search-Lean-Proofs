@@ -435,6 +435,48 @@ async def test_a_failed_benchmark_scoring_does_not_stop_the_loop(tmp_path: Path)
     assert world.phases_done() == 2
 
 
+async def test_a_failed_benchmark_trend_does_not_stop_the_loop(tmp_path: Path) -> None:
+    world = loop_world(tmp_path, scorer=FakeValueScorer(foreign_scorings=2))
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=2)
+    assert world.phases_done() == 2
+
+
+async def test_a_value_version_whose_trend_failed_is_scored_again_after_the_next_phase(tmp_path: Path) -> None:
+    world = loop_world(
+        tmp_path,
+        LOOP_TOML.replace("value_every_phases = 1\n", "value_every_phases = 0\n"),
+        scorer=FakeValueScorer(foreign_scorings=1),
+    )
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=2)
+    assert scored_versions(world.paths.value_benchmark) == [0]
+
+
+async def test_a_failed_benchmark_trend_is_counted_in_the_status(tmp_path: Path) -> None:
+    world = loop_world(tmp_path, scorer=FakeValueScorer(foreign_scorings=1))
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=1)
+    assert RunReader(world.paths.directory).series("status").columns["value_benchmark_failures"][-1] == 1
+
+
+MALFORMED = problem_name(statement(1).statement)
+
+
+async def test_a_tree_whose_summary_fails_is_left_out(tmp_path: Path) -> None:
+    world = loop_world(tmp_path, searcher=FakeSearcher(malformed=frozenset({MALFORMED})))
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=2)
+    assert MALFORMED not in {entry.problem_name for entry in TreeStore(world.paths.trees).entries}
+
+
+async def test_a_tree_whose_summary_fails_does_not_stop_the_loop(tmp_path: Path) -> None:
+    world = loop_world(tmp_path, searcher=FakeSearcher(malformed=frozenset({MALFORMED})))
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=2)
+    assert world.phases_done() == 2
+
+
 async def test_the_probe_runs_with_the_reference_value_model_once_another_is_published(tmp_path: Path) -> None:
     world = loop_world(tmp_path)
     record_version_zero(world)

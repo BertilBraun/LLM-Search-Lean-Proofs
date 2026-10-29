@@ -46,6 +46,10 @@ class LoopStatus:
     # Searches a server failed this session, and statements dropped after repeated failures.
     server_failures: int = 0
     statements_given_up: int = 0
+    # This session: value benchmark scorings that failed (retried after the next phase), and finished trees left out
+    # because their summary failed.
+    value_benchmark_failures: int = 0
+    trees_left_out: int = 0
 
 
 @dataclass(frozen=True)

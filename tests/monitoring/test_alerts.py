@@ -106,6 +106,10 @@ def failing_servers(writer: MetricsWriter) -> None:
     writer.write(loop_status(last_publish_time=NOW - 60, server_failures=12), record_time=NOW - 30)
 
 
+def failed_benchmark_scoring(writer: MetricsWriter) -> None:
+    writer.write(loop_status(last_publish_time=NOW - 60, value_benchmark_failures=1), record_time=NOW - 30)
+
+
 @pytest.mark.parametrize(
     ("scenario", "title"),
     [
@@ -125,6 +129,7 @@ def failing_servers(writer: MetricsWriter) -> None:
         (low_host_memory, "Host memory low"),
         (low_disk, "Disk almost full"),
         (failing_servers, "Server failures"),
+        (failed_benchmark_scoring, "Loop errors"),
     ],
 )
 def test_rule_fires(tmp_path: Path, scenario: Callable[[MetricsWriter], None], title: str) -> None:
@@ -157,6 +162,12 @@ def value_arm_no_worse(writer: MetricsWriter) -> None:
     write_all(writer, [value_arm(worse=True), value_arm(worse=False)])
 
 
+def worse_value_arm_of_a_replaced_value_model(writer: MetricsWriter) -> None:
+    writer.write(value_arm(worse=True), record_time=NOW - 100)
+    writer.update_context(value_version=8)
+    writer.write(loop_status(last_publish_time=NOW - 60), record_time=NOW - 10)
+
+
 def healthy_phase_after_an_alert(writer: MetricsWriter) -> None:
     write_all(writer, [phase_health(clip_alert()), phase_health()])
 
@@ -170,6 +181,7 @@ def healthy_phase_after_an_alert(writer: MetricsWriter) -> None:
         busy_gpus,
         balanced_curriculum,
         value_arm_no_worse,
+        worse_value_arm_of_a_replaced_value_model,
         healthy_phase_after_an_alert,
     ],
 )

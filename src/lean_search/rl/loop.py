@@ -602,6 +602,9 @@ class GrpoLoop:
         self.server_failures: dict[str, int] = {}
         self.session_server_failures = 0
         self.statements_given_up = 0
+        # This session's failed value benchmark scorings and trees left out because their summary failed.
+        self.value_benchmark_failures = 0
+        self.trees_left_out = 0
         # The last searches to end, True for those a server failed.
         self.recent_searches: deque[bool] = deque(maxlen=config.sampling.server_failure_window)
         # One pause of the searches at a time: a phase's, or a check of the servers.
@@ -734,19 +737,33 @@ class GrpoLoop:
             self.recent_searches.append(False)
             result = completed.result
             if completed.tree is not None:
-                # The statement searched: the renamed one when the loop renames hypotheses.
-                record = tree_record(completed.tree, completed.tree.root.state.statement, result)
-                summary = await asyncio.to_thread(
-                    tree_summary, record, self.reward_config, self.credit, self.config.sampling.max_expansions
-                )
-                async with self.store_lock:
-                    await asyncio.to_thread(
-                        self.store.add, record, self.collecting, self.served_version, fed.difficulty, summary
-                    )
+                await self.keep_tree(fed, completed)
             self.statements.record_outcome(fed.name, result.proved)
             self.server_failures.pop(fed.name, None)
             self.session_trees += 1
             self.session_proofs += result.accounting.proofs
+
+    async def keep_tree(self, fed: FedStatement, completed: CompletedSearch) -> None:
+        """The tree into the store with its summary; a tree whose summary fails is logged and left out, so that
+        neither the loop nor the training job stops on it."""
+        assert completed.tree is not None
+        # The statement searched: the renamed one when the loop renames hypotheses.
+        record = tree_record(completed.tree, completed.tree.root.state.statement, completed.result)
+        try:
+            summary = await asyncio.to_thread(
+                tree_summary, record, self.reward_config, self.credit, self.config.sampling.max_expansions
+            )
+        except Exception as error:
+            self.trees_left_out += 1
+            self.log(
+                f"{fed.name}: summarizing its tree failed ({type(error).__name__}: {error}); the tree is left out\n"
+                f"{traceback.format_exc()}"
+            )
+            return
+        async with self.store_lock:
+            await asyncio.to_thread(
+                self.store.add, record, self.collecting, self.served_version, fed.difficulty, summary
+            )
 
     def server_failed(self, fed: FedStatement, error: httpx.HTTPError) -> None:
         """A policy or value server failed the search, which says nothing about the statement: it is fed again."""
@@ -835,6 +852,8 @@ class GrpoLoop:
                 last_publish_time=published_time(current) if current.version else None,
                 server_failures=self.session_server_failures,
                 statements_given_up=self.statements_given_up,
+                value_benchmark_failures=self.value_benchmark_failures,
+                trees_left_out=self.trees_left_out,
             )
         )
 
@@ -946,30 +965,32 @@ class GrpoLoop:
             await scoring
 
     async def score_value_benchmark(self, scoring: ValueBenchmarkScoring, version: int) -> None:
+        """A trend only: any error is logged as an alert and the version is scored again after the next phase."""
         started = self.clock()
         try:
             scores = await scoring.scorer.score(scoring.benchmark)
-        except httpx.HTTPError as error:
+            trend = await asyncio.to_thread(
+                self.benchmark_trend, scoring.benchmark, version, scores, self.clock() - started
+            )
+        except Exception as error:
+            self.value_benchmark_failures += 1
             self.log(
-                f"Scoring the value benchmark with value v{version} failed ({type(error).__name__}: {error}); "
-                "it is scored again after the next phase"
+                f"Alert: scoring the value benchmark with value v{version} failed ({type(error).__name__}: {error}); "
+                f"it is scored again after the next phase\n{traceback.format_exc()}"
             )
             return
-        trend = await asyncio.to_thread(
-            self.benchmark_trend, scoring.benchmark, version, scores, self.clock() - started
-        )
         self.writer.write(trend)
         self.log(trend_text(trend))
 
     def benchmark_trend(
         self, benchmark: ValueBenchmark, version: int, scores: BenchmarkScores, seconds: float
     ) -> ValueBenchmarkTrend:
-        """Keeps the scores, then compares them with v0's and with those of the value version scored before."""
+        """Compares the scores with v0's and with those of the value version scored before, then keeps them (a version
+        without kept scores is scored again)."""
         directory = self.paths.value_benchmark
-        keep_scores(directory, version, scores)
         reference = value_adapter_version(read_versions(self.paths.models), self.config.initial.value_adapter)
         reference_scores, previous_scores = earlier_scores(directory, version, reference)
-        return benchmark_trend(
+        trend = benchmark_trend(
             benchmark,
             VersionScores(version, scores),
             reference_scores,
@@ -978,6 +999,8 @@ class GrpoLoop:
             self.config.evaluation.value_benchmark,
             seconds,
         )
+        keep_scores(directory, version, scores)
+        return trend
 
     async def release_lean_memory(self, threshold_gib: float, purpose: str) -> None:
         released = await self.searcher.release_lean_memory(int(threshold_gib * GIB))
@@ -1069,7 +1092,7 @@ class GrpoLoop:
         request = self.training_request(phase, value_share)
         # Awaited only before the phase closes: the publish need not wait for the loop's own labelling.
         self.search_metrics = asyncio.create_task(
-            asyncio.to_thread(self.write_search_metrics, phase, request.config_text)
+            asyncio.to_thread(self.write_search_metrics_or_log, phase, request.config_text)
         )
         outcome = await self.trainer.train(request)
         if outcome.value is not None:
@@ -1079,6 +1102,16 @@ class GrpoLoop:
             + ("" if outcome.value is None else f", a value model on {outcome.value.trees} trees")
         )
         return outcome
+
+    def write_search_metrics_or_log(self, phase: int, config_text: str) -> None:
+        """Metrics only: an error is logged, never stops the loop."""
+        try:
+            self.write_search_metrics(phase, config_text)
+        except Exception as error:
+            self.log(
+                f"Alert: the search metrics of phase {phase} failed ({type(error).__name__}: {error})\n"
+                f"{traceback.format_exc()}"
+            )
 
     def write_search_metrics(self, phase: int, config_text: str) -> None:
         entries = self.store.phase_entries(phase)
