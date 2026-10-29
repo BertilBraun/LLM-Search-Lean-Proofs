@@ -114,6 +114,16 @@ def test_both_states_of_every_pair_train_in_the_same_unit() -> None:
     )
 
 
+def test_two_trees_of_one_statement_keep_their_own_states() -> None:
+    builder = GraphBuilder(goal("r"), root_value=4.0)
+    builder.failure(builder.child(builder.root, goal("x"), value=3.0))
+    other_search = builder.record()
+    trees = label_phase_data([value_tree(), other_search], TrainingPhaseConfig()).trees
+    data = build_graph_value_data(trees, RankingConfig(), [], CharacterTokenizer(), value_config())
+    prompts = ["".join(map(chr, state.input_ids)) for state in data.states]
+    assert any(goal("x") in prompt for prompt in prompts)
+
+
 def test_every_graph_target_trains_once() -> None:
     data = value_data()
     graph_items = [item for item in data.pointwise if item.target is not None]

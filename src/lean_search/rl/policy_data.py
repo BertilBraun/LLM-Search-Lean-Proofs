@@ -115,6 +115,22 @@ class SamplerAgreement:
 
 
 @dataclass(frozen=True)
+class AdvantageSignRatios:
+    """Trained tokens of one advantage sign: their ratio to the phase-start policy and how often the clip binds."""
+
+    tokens: int
+    mean_ratio: float
+    clip_fraction: float
+
+
+@dataclass(frozen=True)
+class SignedRatios:
+    # An update going the right way raises the positive tokens' ratio above 1 and lowers the negative ones' below.
+    positive: AdvantageSignRatios
+    negative: AdvantageSignRatios
+
+
+@dataclass(frozen=True)
 class VersionSamplerAgreement:
     # The published policy version that sampled the tokens; None where it was not recorded.
     policy_version: int | None

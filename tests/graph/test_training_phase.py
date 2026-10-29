@@ -1,5 +1,7 @@
 import dataclasses
+import gc
 import tomllib
+import weakref
 from pathlib import Path
 
 import pytest
@@ -21,6 +23,7 @@ from lean_search.rl.training_phase import (  # noqa: E402
     PhaseInputs,
     PhaseOutcome,
     TrainingPhaseConfig,
+    TrainingStage,
     grpo_phase_record,
     label_phase_data,
     publish_phase,
@@ -128,6 +131,12 @@ def test_phase_record_keys_the_sampler_agreement_by_sampling_age(phase: tuple[Ph
     assert grpo_phase_record(policy, sampling_seconds=600.0, trained_version=3).sampler_by_age == {"1": agreement}
 
 
+def test_phase_record_keys_the_advantage_sign_ratios_by_pass_number(phase: tuple[PhaseOutcome, Path]) -> None:
+    outcome, _ = phase
+    assert outcome.policy is not None
+    assert list(grpo_phase_record(outcome.policy, sampling_seconds=600.0).ratios_by_pass) == ["1"]
+
+
 def test_the_written_outcome_reads_back_with_the_value_diagnostics(phase: tuple[PhaseOutcome, Path]) -> None:
     outcome, output = phase
     assert read_phase_outcome(output / "phase.json") == outcome
@@ -202,6 +211,39 @@ def test_the_publisher_takes_over_the_phases_merge(merged_phase: tuple[PhaseOutc
     assert outcome.policy is not None
     merge(str(model), outcome.policy.adapter, tmp_path / "published")
     assert read_premerged(tmp_path / "published") == PremergedWeights(str(model), outcome.policy.adapter)
+
+
+def test_the_phase_records_memory_after_every_stage(merged_phase: tuple[PhaseOutcome, Path]) -> None:
+    outcome, _ = merged_phase
+    stages = [TrainingStage.LABELLING, TrainingStage.POLICY, TrainingStage.MERGE]
+    assert [entry.stage for entry in outcome.memory] == stages
+
+
+@pytest.mark.parametrize("part", ["policy", "value"])
+def test_a_stage_frees_its_compiled_model(part: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    model = save_tiny_model(tmp_path / "model")
+    record = phase_tree()
+    record = dataclasses.replace(record, expansions=tuple(expansion_texts(record)))
+    optimization = dataclasses.replace(OPTIMIZATION, compile_layers=True)
+    policy = GrpoConfig(model=str(model), lora=LORA, optimization=optimization, passes_per_phase=1)
+    value = GraphValueConfig(model=str(model), lora=LORA, optimization=optimization)
+    config = TrainingPhaseConfig(policy=policy if part == "policy" else None, value=value if part == "value" else None)
+    # The compile wrappers without compiling: their reference cycle stays.
+    monkeypatch.setattr(torch._dynamo.config, "disable", True)
+    called: list[weakref.ref[torch.nn.Module]] = []
+    hook = torch.nn.modules.module.register_module_forward_hook(
+        lambda module, inputs, output: called.append(weakref.ref(module))
+    )
+    # Only the phase's own collections may free the cycles; checked before the collector runs again.
+    gc.disable()
+    try:
+        tokenizer = CharacterTokenizer()
+        run_training_phase(config, PhaseInputs(records=[record]), tokenizer, tokenizer, CPU, tmp_path / "phase")
+        alive = [module for module in called if module() is not None]
+    finally:
+        gc.enable()
+        hook.remove()
+    assert called and not alive
 
 
 def test_the_phase_reports_its_merge_time(merged_phase: tuple[PhaseOutcome, Path]) -> None:

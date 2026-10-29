@@ -1,4 +1,4 @@
-"""Advantages: the first tactic and the sample's score against the group's baseline, later tactics within the block."""
+"""Advantages: a block's anchor and the sample's score against the group's baselines, later tactics within the block."""
 
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -21,7 +21,8 @@ class CreditMode(StrEnum):
 class SampleAdvantages:
     # Score minus baseline; None without a known score.
     sequence: float | None
-    # Per executed tactic: its gain within the block, else its reward minus the baseline; None for unknown and masked.
+    # Per executed tactic: its gain within the block, else (the anchor) its reward minus the first-tactic baseline; None
+    # for unknown and masked tactics. They add up to score minus the first-tactic baseline.
     tactics: tuple[float | None, ...]
     # The closing fence and end of turn: 0 after a complete block (stopping keeps the state reached), else None.
     closing: float | None
@@ -31,6 +32,8 @@ class SampleAdvantages:
 class GroupAdvantages:
     # The multiplicity-weighted mean score of the samples with a known score.
     baseline: float | None
+    # The same mean of their anchors' rewards: a later tactic's progress is not charged to the first.
+    first_tactic_baseline: float | None
     samples: tuple[SampleAdvantages, ...]
     # Multiplicity-weighted sums of |global part| and |local part| over the tactic advantages.
     global_magnitude: float
@@ -59,9 +62,11 @@ def tactic_advantage(tactic: TacticReward, baseline: RewardParts | None) -> Rewa
     return tactic.parts - baseline
 
 
-def sample_advantages(sample: GroupSample, baseline: RewardParts | None) -> SampleAdvantages:
+def sample_advantages(
+    sample: GroupSample, baseline: RewardParts | None, first_tactic_baseline: RewardParts | None
+) -> SampleAdvantages:
     score = sample.score
-    tactics = [tactic_advantage(tactic, baseline) for tactic in sample.tactics]
+    tactics = [tactic_advantage(tactic, first_tactic_baseline) for tactic in sample.tactics]
     return SampleAdvantages(
         None if score is None or baseline is None else score - baseline.total,
         tuple(None if parts is None else parts.total for parts in tactics),
@@ -70,17 +75,22 @@ def sample_advantages(sample: GroupSample, baseline: RewardParts | None) -> Samp
 
 
 def group_advantages(group: PolicyGroup) -> GroupAdvantages:
-    scored = [(parts, sample.multiplicity) for sample in group.samples if (parts := sample.score_parts) is not None]
-    baseline = weighted_mean([parts for parts, _ in scored], [weight for _, weight in scored]) if scored else None
+    scored = [sample for sample in group.samples if sample.anchor_parts is not None]
+    weights = [sample.multiplicity for sample in scored]
+    baseline = first_tactic_baseline = None
+    if scored:
+        baseline = weighted_mean([sample.score_parts for sample in scored], weights)
+        first_tactic_baseline = weighted_mean([sample.anchor_parts for sample in scored], weights)
     advantages = [
         (parts, sample.multiplicity)
         for sample in group.samples
         for tactic in sample.tactics
-        if (parts := tactic_advantage(tactic, baseline)) is not None
+        if (parts := tactic_advantage(tactic, first_tactic_baseline)) is not None
     ]
     return GroupAdvantages(
         baseline=None if baseline is None else baseline.total,
-        samples=tuple(sample_advantages(sample, baseline) for sample in group.samples),
+        first_tactic_baseline=None if first_tactic_baseline is None else first_tactic_baseline.total,
+        samples=tuple(sample_advantages(sample, baseline, first_tactic_baseline) for sample in group.samples),
         global_magnitude=sum(abs(parts.global_part) * weight for parts, weight in advantages),
         local_magnitude=sum(abs(parts.local_part) * weight for parts, weight in advantages),
     )

@@ -1,11 +1,13 @@
 """One search-tree GRPO training phase: label the trees, train the policy and/or the value model, gate, publish."""
 
 import dataclasses
+import gc
 import json
 import random
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 
 import torch
@@ -84,7 +86,8 @@ class PhaseInputs:
     value_replay: Sequence[ValueExample] = ()
     # Without a benchmark the new value adapter is trained but not accepted.
     value_benchmark: ValueBenchmark | None = None
-    # The value model's window of recent phases' trees, this phase's included; empty: this phase's trees alone.
+    # The value model's window of recent phases' trees, this phase's included; empty: this phase's trees alone. Only
+    # the main rank's are read.
     value_records: Sequence[TreeRecord] = ()
 
 
@@ -148,6 +151,22 @@ class TrainerTimings:
     total_seconds: float = 0.0
 
 
+class TrainingStage(StrEnum):
+    LABELLING = "labelling"
+    POLICY = "policy"
+    VALUE = "value"
+    MERGE = "merge"
+
+
+@dataclass(frozen=True)
+class StageMemory:
+    """GPU memory after a stage and the release of its models, the largest over the ranks."""
+
+    stage: TrainingStage
+    allocated_gib: float
+    reserved_gib: float
+
+
 @dataclass(frozen=True)
 class PhaseOutcome:
     trees: int
@@ -155,6 +174,7 @@ class PhaseOutcome:
     policy: PolicyOutcome | None
     value: ValueOutcome | None
     timings: TrainerTimings = field(default_factory=TrainerTimings)
+    memory: tuple[StageMemory, ...] = ()
 
 
 def label_phase_data(records: Sequence[TreeRecord], config: TrainingPhaseConfig) -> LabelledPhaseData:
@@ -240,10 +260,14 @@ def train_value_phase(
     on_step: Callable[[GraphValueStepRecord], None],
     ranks: Ranks = SINGLE_PROCESS,
 ) -> ValueOutcome:
-    """Trains on the window's trees, split across the ranks; with a benchmark, the gate against the published adapter
-    and the diagnostics on the main rank alone (the other ranks' outcomes have none)."""
+    """Trains on the window's trees, split across the ranks: the main rank holds the window and builds the data, the
+    others receive it. With a benchmark, the gate against the published adapter and the diagnostics on the main rank
+    alone (the other ranks' outcomes have none)."""
     started = time.perf_counter()
-    data = build_graph_value_data(window, config.ranking, inputs.value_replay, tokenizer, value)
+    built = (
+        build_graph_value_data(window, config.ranking, inputs.value_replay, tokenizer, value) if ranks.is_main else None
+    )
+    data = broadcast_from_main(built, ranks)
     data_built = time.perf_counter()
     adapter = directory / "adapter"
     result = train_graph_value_model(value, tokenizer, pad_token_id, data, device, adapter, on_step, ranks)
@@ -252,7 +276,7 @@ def train_value_phase(
         str(adapter),
         result,
         None,
-        len(window),
+        data.trees,
         data_seconds=data_built - started,
         training_seconds=trained - data_built,
     )
@@ -276,9 +300,15 @@ def train_value_phase(
     return dataclasses.replace(outcome, gate=scored.result, diagnostics=diagnostics, gate_seconds=gate_seconds)
 
 
-def release_cached_memory(device: torch.device) -> None:
+def released_memory(stage: TrainingStage, device: torch.device, ranks: Ranks) -> StageMemory:
+    """Frees what the stage's models left: compiled layers refer to themselves, so only the cyclic collector does."""
+    gc.collect()
+    allocated = reserved = 0.0
     if device.type == "cuda":
         torch.cuda.empty_cache()
+        allocated = torch.cuda.memory_allocated(device) / 2**30
+        reserved = torch.cuda.memory_reserved(device) / 2**30
+    return StageMemory(stage, largest(allocated, device, ranks), largest(reserved, device, ranks))
 
 
 def merge_on_gpus(merges: Sequence[PremergedWeights], device: torch.device, ranks: Ranks) -> MergeSeconds:
@@ -309,6 +339,7 @@ def run_training_phase(
     started = time.perf_counter()
     labelled = label_phase_data(inputs.records, config)
     labelling_seconds = time.perf_counter() - started
+    memory = [released_memory(TrainingStage.LABELLING, device, ranks)]
     merges: list[PremergedWeights] = []
     policy = None
     if config.policy is not None:
@@ -326,12 +357,14 @@ def run_training_phase(
             ranks,
         )
         merges.append(PremergedWeights(config.policy.model, policy.adapter))
-        release_cached_memory(device)
+        memory.append(released_memory(TrainingStage.POLICY, device, ranks))
     value = None
     if config.value is not None:
         assert value_tokenizer is not None
         directory = output_directory / "value"
-        window = label_value_trees(inputs.value_records, config) if inputs.value_records else labelled.trees
+        window: Sequence[LabelledTree] = ()
+        if ranks.is_main:
+            window = label_value_trees(inputs.value_records, config) if inputs.value_records else labelled.trees
         value = train_value_phase(
             config,
             config.value,
@@ -347,10 +380,13 @@ def run_training_phase(
         )
         if broadcast_from_main(value.accepted, ranks):
             merges.append(PremergedWeights(config.value.model, value.adapter))
-        release_cached_memory(device)
-    merged = merge_on_gpus(merges, device, ranks) if merge_adapters else MergeSeconds()
+        memory.append(released_memory(TrainingStage.VALUE, device, ranks))
+    merged = MergeSeconds()
+    if merge_adapters:
+        merged = merge_on_gpus(merges, device, ranks)
+        memory.append(released_memory(TrainingStage.MERGE, device, ranks))
     timings = trainer_timings(labelling_seconds, policy, value, merged, time.perf_counter() - started)
-    outcome = PhaseOutcome(len(labelled.trees), len(labelled.groups), policy, value, timings)
+    outcome = PhaseOutcome(len(labelled.trees), len(labelled.groups), policy, value, timings, tuple(memory))
     if ranks.is_main:
         (output_directory / "phase.json").write_text(to_json(outcome), encoding="utf-8")
     return outcome
@@ -426,6 +462,7 @@ def grpo_phase_record(
         sampler_absolute_log_probability_difference=result.sampler_agreement.mean_absolute_difference,
         sampler_kl=result.sampler_agreement.kl_sampler_to_trainer,
         sampler_by_age={} if trained_version is None else sampler_agreement_by_age(result, trained_version),
+        ratios_by_pass={str(number): ratios for number, ratios in enumerate(result.ratios_by_pass, start=1)},
         forced_answers_kept=data.forced_sequences,
         retokenized_sequences=data.retokenized_sequences,
         sampling_seconds=sampling_seconds,

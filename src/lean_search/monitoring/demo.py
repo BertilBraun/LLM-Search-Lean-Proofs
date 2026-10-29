@@ -24,7 +24,7 @@ from lean_search.monitoring.families import (
     ValueBenchmarkResult,
 )
 from lean_search.monitoring.store import LoopContext, MetricsWriter
-from lean_search.rl.policy_data import SamplerAgreement
+from lean_search.rl.policy_data import AdvantageSignRatios, SamplerAgreement, SignedRatios
 from lean_search.rl.tree_statistics import BlockCounts, EdgeKindCounts, GraphStatistics, SizeHistogram
 from lean_search.search.tactic_labels import TacticLabelCounts
 from lean_search.value.benchmark import (
@@ -361,6 +361,21 @@ class DemoRun:
                         kl_sampler_to_trainer=0.0008 + 0.002 * age + abs(self.noise(0.0002)),
                     )
                     for age, share in ((0, 0.85), (1, 0.12), (2, 0.03))
+                },
+                ratios_by_pass={
+                    str(number): SignedRatios(
+                        AdvantageSignRatios(
+                            round(samples * trained_share * 70),
+                            1 + movement + abs(self.noise(0.001)),
+                            0.01 * number + abs(self.noise(0.003)),
+                        ),
+                        AdvantageSignRatios(
+                            round(samples * trained_share * 110),
+                            1 - movement - abs(self.noise(0.001)),
+                            0.01 * number + abs(self.noise(0.003)),
+                        ),
+                    )
+                    for number, movement in ((1, 0.002), (2, 0.008))
                 },
                 forced_answers_kept=round(samples * trained_share * 0.027 * (1 - 0.5 * learned)),
                 sampling_seconds=(self.schedule.phase_minutes - self.schedule.training_minutes) * 60,

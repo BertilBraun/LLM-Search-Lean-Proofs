@@ -545,7 +545,9 @@ at 50k 9 stop on heartbeats and 1 fails fast (median 8.6 s, 133 s), at 100k 5 he
   - **Progress on the proof graph** (decided 2026-10-29): a proof-graph state earns δ = 0.2 per remaining step it is
     closer to a proof than the group's node, `δ · (d(node) − d(s))` with d the exact remaining top-level tactics
     (negative for a proof-graph state farther away), added to the global part. Before, every proof-graph state was
-    worth the same 0.85 and closing the proof added only 0.015, so nothing rewarded getting closer.
+    worth the same 0.85 and closing the proof added only 0.015, so nothing rewarded getting closer. The global part
+    never falls below the best off-graph state's, (1 − λ) · μ: a valid detour 5 or more steps farther from the proof
+    scores like leaving the graph, never below it (before, R = 0.85 − 0.2k fell below a Lean error at k ≥ 6).
   - `L` (local) ∈ [−1, 1]: −1 Lean error (heartbeat timeouts included), **−1 no progress or redundant
     hypothesis** (decided 2026-10-29, a failure: a no-op wastes the sample too; at the earlier −0.5 a no-op beat a
     failing attempt, and on the old trees 19 no-progress and 7 redundant-hypothesis tactics got a positive
@@ -578,14 +580,22 @@ at 50k 9 stop on heartbeats and 1 fails fast (median 8.6 s, 133 s), at 100k 5 he
   evidence however small.
 
   **Later tactics in a block** (decided 2026-10-29): the search keeps a block's longest valid prefix, so a tactic
-  after the first decides only whether the block gets further than the state before it. The first tactic gets R − b.
-  A later tactic (i ≥ 2) reaching a state with a reward gets `R(s_i) − R(s_j)`, s_j the most recent earlier state of
-  the block with a reward: δ per step gained on the proof graph (plus its goal bonus), the whole drop when it leaves
-  the proof graph; without such an earlier state it is judged like the first. A later failing, no-progress or
-  redundant tactic gets **−c = −0.1** (local part): the prefix is kept, only its tokens are wasted. A sample's score
-  is its final state's R minus c per wasted later tactic, so a block's tactic advantages add up to score − b; a
-  sample whose first tactic fails scores that tactic's R; one with neither a state with a reward nor a first-tactic
-  failure has no score. The baseline b is the multiplicity-weighted mean score of the group's samples with a score.
+  after the first decides only whether the block gets further than the state before it. The block's anchor (its first
+  tactic reaching a state with a reward, else its first tactic when that failed or made no progress) gets R − b₁.
+  A later tactic reaching a state with a reward gets `R(s_i) − R(s_j)`, s_j the most recent earlier state of the
+  block with a reward: δ per step gained on the proof graph (plus its goal bonus), the whole drop when it leaves the
+  proof graph. Any other failing, no-progress or redundant tactic (a no-op before the anchor included) gets
+  **−c = −0.1** (local part): the prefix is kept, only its tokens are wasted. A sample's score is its final state's R
+  minus c per wasted tactic; a sample whose first tactic fails or makes no progress, with no state with a reward
+  after it, scores that tactic's R; one with neither has no score. The baseline b is the multiplicity-weighted mean
+  score of the group's samples with a score, the **first-tactic baseline b₁** (decided 2026-10-29, second round) the
+  same mean of their anchors' R. The explanation gets score − b, and a block's tactic advantages add up to
+  score − b₁: b − b₁ is the group's mean progress after the anchor, which the later tactics' gains carry. Against b
+  (before), the anchor was charged that progress: at a node 4 steps from the proof with 6 of 8 samples proving in
+  one 4-tactic block, the correct first tactic every proof shares got −0.16 (now +0.30), and the expected anchor
+  advantage was negative whenever blocks ran more than one step. Progress is not normalized per group: the anchor's
+  advantage and the later gains do not grow with d(node); only the explanation's spread grows, with the progress
+  samples make within one block (`rl/README.md`).
 
   Tokens: a tactic's span and the gap before it get the tactic's advantage (untrained when unknown or masked), the
   explanation and the opening fence score − b, the **closing fence and end of turn 0** after a complete block
@@ -595,7 +605,10 @@ at 50k 9 stop on heartbeats and 1 fails fast (median 8.6 s, 133 s), at 100k 5 he
 
   **Stop vs continue**: stopping after t_i keeps s_i, the reference point of t_{i+1}, so stopping is worth 0;
   continuing earns δ per step gained when t_{i+1} is correct and −c when it fails, so the policy should continue when
-  P(next correct) > c / (c + δ) = 1/3. Example: a next tactic correct with probability 0.8 (one step gained), else
+  P(next correct) > c / (c + δ) = 1/3, as long as the alternative to a correct tactic is a Lean error. A valid
+  tactic that leaves the proof graph for an off-graph state with evidence costs the whole drop (≈ 0.85 + progress,
+  about 10× a later error; kept, since the search then keeps the off-graph child), so with 5% such steps the
+  threshold is about 0.49. Example: a next tactic correct with probability 0.8 (one step gained), else
   unknown: continuing +0.16, stopping 0. Before, stopping won whenever the next tactic carried risk: in review D's
   example (b = 0.07, next tactic on the proof graph 0.4, failing 0.4, unknown 0.2) closing got +0.78 and continuing
   +0.22 in expectation; now 0 and 0.4 · 0.2 − 0.4 · 0.1 = +0.04. The dashboard charts block length and the continue
@@ -607,11 +620,11 @@ at 50k 9 stop on heartbeats and 1 fails fast (median 8.6 s, 133 s), at 100k 5 he
   Sequence-level credit (every token gets the sample's score − b, which still sees progress and wasted-tactic costs)
   stays as an option for the single-step comparison.
 - **Example** (root of `algebra_2varlineareq_xpeeq7_2xpeeq3_eeq11_xeqn4`): A writes the proof (`have h₂ : x = -4
-  := by linear_combination h₁ - h₀`, `have h₃ …`, `exact ⟨h₃, h₂⟩`): every tactic positive (the first against b,
+  := by linear_combination h₁ - h₀`, `have h₃ …`, `exact ⟨h₃, h₂⟩`): every tactic positive (the first against b₁,
   the later ones by the steps they gain). B writes the same first `have`, then a failing `have h₃ : e = 11 := by
   linarith`: the first tactic reaches A's state after one tactic (positive), the failing one gets −c, the rest is
   masked. C proves `e = 11` first, then fails: a new state never expanded (neutral), then −c. D writes
-  `have h₄ : x + e = 7 := h₀`: redundant, −0.15 − b, negative.
+  `have h₄ : x + e = 7 := h₀`: redundant, −0.15 − b₁, negative.
 - **Exact sampling data**: the search records every sample's sampled token ids and vLLM log-probabilities; the
   trainer trains on those tokens (no re-tokenization) and computes log-probabilities with the logits divided by the
   sampling temperature (0.8), so the PPO ratio compares like with like; the recorded log-probabilities are logged
@@ -634,8 +647,9 @@ at 50k 9 stop on heartbeats and 1 fails fast (median 8.6 s, 133 s), at 100k 5 he
   ×1.17 at T = 0.8).
 - **Optimization** (implemented defaults): PPO-style clipped objective per token, clip range [1 − 0.2, 1 + 0.28];
   old log-probabilities from the trainer's own weights before the phase's first update, logged against the recorded
-  vLLM log-probabilities; KL (k3 estimator) measured to the data-collecting policy and to the starting weights,
-  penalty coefficient 0; loss normalized as Σ token loss / (sequences in the step × 256), so there is no
+  vLLM log-probabilities; KL (k3 estimator) measured to the data-collecting policy and to the starting weights (the
+  latter on 256 sampled sequences per phase while it is only reported), penalty coefficient 0; the mean probability
+  ratio and clip fraction of the positive- and of the negative-advantage tokens logged per pass; loss normalized as Σ token loss / (sequences in the step × 256), so there is no
   per-sequence mean and no length bias; the starting adapter's rank (64), learning rate 1e-5, 64 sequences per
   step, `passes_per_phase` 2 (1 allowed); NLL replay (the rewritten Lean SFT data and math) at weight 0.1;
   data-parallel on four GPUs (one as the fallback).

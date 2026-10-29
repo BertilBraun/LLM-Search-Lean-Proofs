@@ -158,10 +158,12 @@ def test_kl_to_the_starting_adapter_is_zero_when_the_phase_continues_it(
 
 
 def reference_after_continuing(
-    tiny_model: Path, published: Path, starting: Path
-) -> tuple[list[torch.Tensor], torch.nn.Module]:
+    tiny_model: Path, published: Path, starting: Path, **changes: object
+) -> tuple[list[torch.Tensor | None], torch.nn.Module]:
     """The reference log-probabilities of a phase continuing `published`, and the module that scored them."""
-    config = grpo_config(tiny_model, passes=1, initial_adapter=str(published), reference_adapter=str(starting))
+    config = grpo_config(
+        tiny_model, passes=1, initial_adapter=str(published), reference_adapter=str(starting), **changes
+    )
     saved, causal_model = load_trainable_model(str(tiny_model), config.optimization, LORA, CPU, str(published))
     causal_model.eval()
     examples = [sequence.tokenized for sequence in sequences()]
@@ -184,6 +186,34 @@ def test_scoring_the_reference_leaves_only_the_published_adapter_trainable(
     _, saved = reference_after_continuing(tiny_model, perturbed_adapter, starting_adapter)
     trainable = {name for name, parameter in saved.named_parameters() if parameter.requires_grad}
     assert trainable and all(".default." in name for name in trainable)
+
+
+@pytest.mark.parametrize(("kl_coefficient", "scored"), [(0.0, 1), (0.1, 4)], ids=["reported only", "penalty"])
+def test_reference_scores_a_subsample_unless_the_kl_penalty_trains_on_it(
+    tiny_model: Path, perturbed_adapter: Path, starting_adapter: Path, kl_coefficient: float, scored: int
+) -> None:
+    reference, _ = reference_after_continuing(
+        tiny_model, perturbed_adapter, starting_adapter, reference_sequences=1, kl_coefficient=kl_coefficient
+    )
+    assert sum(scores is not None for scores in reference) == scored
+
+
+def test_kl_to_the_starting_weights_is_measured_on_the_subsample(
+    tiny_model: Path, perturbed_adapter: Path, tmp_path: Path
+) -> None:
+    config = grpo_config(tiny_model, passes=1, initial_adapter=str(perturbed_adapter), reference_sequences=1)
+    assert train(config, tmp_path / "adapter")[0].kl_to_reference > 1e-3
+
+
+def test_first_step_ratios_are_one_for_both_advantage_signs(tiny_model: Path, tmp_path: Path) -> None:
+    ratios = train(grpo_config(tiny_model, passes=1), tmp_path / "adapter")[0].ratios
+    assert (ratios.positive.mean_ratio, ratios.negative.mean_ratio) == (pytest.approx(1.0), pytest.approx(1.0))
+
+
+def test_second_pass_raises_positive_and_lowers_negative_advantage_tokens(tiny_model: Path, tmp_path: Path) -> None:
+    result = train_grpo(grpo_config(tiny_model, passes=2), 0, sequences(), [], CPU, tmp_path / "adapter", [].append)
+    second = result.ratios_by_pass[1]
+    assert second.positive.mean_ratio > 1.0 > second.negative.mean_ratio
 
 
 def test_replay_examples_report_their_nll(tiny_model: Path, tmp_path: Path) -> None:

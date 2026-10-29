@@ -132,6 +132,8 @@ class GraphValueData:
     replay_items: int
     dropped_replay_examples: int
     over_length_states: int
+    # The window's trees the data comes from.
+    trees: int = 0
 
 
 @dataclass(frozen=True)
@@ -211,11 +213,12 @@ class StateTable:
         self.tokenizer = tokenizer
         self.max_prompt_tokens = max_prompt_tokens
         self.states: list[ValueState] = []
-        self.index: dict[tuple[str, int], int | None] = {}
+        # By tree (its position in the window, the replay -1) and node: one statement's trees share problem names.
+        self.index: dict[tuple[int, int], int | None] = {}
         self.over_length = 0
 
-    def add(self, problem_name: str, node_id: int, goals: Sequence[str]) -> int | None:
-        key = (problem_name, node_id)
+    def add(self, tree: int, problem_name: str, node_id: int, goals: Sequence[str]) -> int | None:
+        key = (tree, node_id)
         if key not in self.index:
             input_ids = tuple(
                 self.tokenizer.encode(render_value_prompt(self.tokenizer, goals), add_special_tokens=False)
@@ -241,7 +244,7 @@ def build_graph_value_data(
     pointwise: list[PointwiseItem] = []
     pairs: list[PairItem] = []
     units: list[TrainingUnit] = []
-    for tree in trees:
+    for tree_index, tree in enumerate(trees):
         record = tree.record
         tree_pairs = capped_pairs(record.problem_name, sibling_pairs(tree.labels, ranking), config.max_pairs_per_tree)
         targets = {target.node_id: target for target in tree.targets}
@@ -253,8 +256,10 @@ def build_graph_value_data(
             state_by_node: dict[int, int] = {}
             pair_indices = []
             for pair in parent_pairs:
-                preferred = table.add(record.problem_name, pair.preferred_id, record.nodes[pair.preferred_id].goals)
-                other = table.add(record.problem_name, pair.other_id, record.nodes[pair.other_id].goals)
+                preferred = table.add(
+                    tree_index, record.problem_name, pair.preferred_id, record.nodes[pair.preferred_id].goals
+                )
+                other = table.add(tree_index, record.problem_name, pair.other_id, record.nodes[pair.other_id].goals)
                 if preferred is None or other is None:
                     continue
                 state_by_node |= {pair.preferred_id: preferred, pair.other_id: other}
@@ -271,7 +276,7 @@ def build_graph_value_data(
         for target in tree.targets:
             if target.node_id in assigned:
                 continue
-            state = table.add(record.problem_name, target.node_id, target.goals)
+            state = table.add(tree_index, record.problem_name, target.node_id, target.goals)
             if state is not None:
                 units.append(TrainingUnit((state,), (len(pointwise),), ()))
                 pointwise.append(graph_item(state, target, config))
@@ -285,7 +290,7 @@ def build_graph_value_data(
     chosen = sorted(usable, key=lambda item: stable_key(seed, item[0].identifier, item[0].depth, item[0].goals))
     replay_items = 0
     for number, (example, distribution) in enumerate(chosen[:replay_count]):
-        state = table.add("replay", number, example.goals)
+        state = table.add(-1, "replay", number, example.goals)
         if state is not None:
             units.append(TrainingUnit((state,), (len(pointwise),), ()))
             pointwise.append(PointwiseItem(state, distribution, example.weight, None))
@@ -298,6 +303,7 @@ def build_graph_value_data(
         replay_items=replay_items,
         dropped_replay_examples=len(replay) - len(usable),
         over_length_states=table.over_length,
+        trees=len(trees),
     )
 
 

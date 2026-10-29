@@ -71,6 +71,21 @@ const GRPO = {
     title: "Clip fraction", family: "grpo", unit: "share",
     thresholds: [{ key: "max_clip_fraction", label: "max" }], series: [{ label: "clip", field: "clip_fraction" }],
   },
+  ratioBySign: {
+    title: "Probability ratio by advantage sign",
+    subtitle: "to the phase-start policy, per trained token; positive should rise above 1 and negative fall below", family: "grpo", unit: "number",
+    series: [1, 2].flatMap((pass) => [
+      { label: `pass ${pass} positive`, field: `ratios_by_pass.${pass}.positive.mean_ratio` },
+      { label: `pass ${pass} negative`, field: `ratios_by_pass.${pass}.negative.mean_ratio` },
+    ]),
+  },
+  clipBySign: {
+    title: "Clip fraction by advantage sign", subtitle: "share of the trained tokens of each sign whose clip binds", family: "grpo", unit: "share",
+    series: [1, 2].flatMap((pass) => [
+      { label: `pass ${pass} positive`, field: `ratios_by_pass.${pass}.positive.clip_fraction` },
+      { label: `pass ${pass} negative`, field: `ratios_by_pass.${pass}.negative.clip_fraction` },
+    ]),
+  },
   mixed: {
     title: "Groups trained", subtitle: "share of proof-graph groups with a non-zero advantage", family: "grpo", unit: "share",
     thresholds: [{ key: "min_mixed_group_share", label: "min" }], compare: true,
@@ -206,7 +221,7 @@ export const PAGES = [
     title: "Policy / GRPO",
     families: ["grpo"],
     sections: [
-      { title: "Stability", charts: [GRPO.kl, GRPO.clip, GRPO.sampler, GRPO.samplerByAge, GRPO.currentTokens] },
+      { title: "Stability", charts: [GRPO.kl, GRPO.clip, GRPO.ratioBySign, GRPO.clipBySign, GRPO.sampler, GRPO.samplerByAge, GRPO.currentTokens] },
       {
         title: "Signal",
         charts: [
