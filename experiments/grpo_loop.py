@@ -45,6 +45,7 @@ from lean_search.rl.loop_services import (
     SubprocessTrainer,
     VllmServers,
     check_policy_server,
+    host_memory_text,
     open_tree_searcher,
     serve_commands,
 )
@@ -168,7 +169,18 @@ async def run(config: GrpoLoopConfig, paths: GrpoLoopPaths) -> None:
     async with open_tree_searcher(search_run_config(config), statements.headers(), renamings) as searcher:
         phase_template = (REPOSITORY_DIRECTORY / config.training.phase_config).read_text(encoding="utf-8")
         loop = GrpoLoop(
-            config, paths, statements, searcher, trainer, servers, merged, evaluations, writer, log, phase_template
+            config,
+            paths,
+            statements,
+            searcher,
+            trainer,
+            servers,
+            merged,
+            evaluations,
+            writer,
+            log,
+            phase_template,
+            host_memory=host_memory_text,
         )
         await loop.run(stop)
 

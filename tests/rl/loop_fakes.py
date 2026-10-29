@@ -217,6 +217,7 @@ class FakeSearcher:
 
     async def release_lean_memory(self, above_bytes: int) -> ReleasedLeanMemory:
         self.memory_releases.append(above_bytes)
+        self.events.append(f"stop repls above {above_bytes}")
         return ReleasedLeanMemory(0, 0)
 
 

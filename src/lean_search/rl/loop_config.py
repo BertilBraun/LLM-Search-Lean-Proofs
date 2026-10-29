@@ -76,6 +76,9 @@ class LoopTrainingConfig:
     value_replay: str = ""
     # Command prefix of the training job, e.g. "nice -n 5"; the job runs with CUDA_VISIBLE_DEVICES=gpus.
     command_prefix: str = ""
+    # Paused searches' REPL processes above this private memory (0: all) stop before the training job starts, to
+    # leave host memory to its ranks; they replay their proof states later. A large value keeps them.
+    paused_repl_memory_gib: float = 0.0
 
 
 @dataclass(frozen=True)

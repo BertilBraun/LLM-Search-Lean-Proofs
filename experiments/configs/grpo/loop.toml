@@ -110,6 +110,10 @@ math_replay = "reasoning/visible_student_v3_numbered/math.jsonl"
 # v0's own training data (phase3_value_data.py --name v0; node_backup generated_data: data/value/v0/), replayed as
 # 10% of the value targets.
 value_replay = "value/v0/train.jsonl"
+# Before the training job starts, the paused searches' REPL processes above this private memory stop (0: all), so the
+# four ranks' parsed trees fit next to the sleeping servers; they replay their proof states on the next request.
+# Memory budget: src/lean_search/rl/README.md, "Host memory".
+paused_repl_memory_gib = 0.0
 
 [statements]
 kind = "curriculum"

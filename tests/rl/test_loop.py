@@ -24,6 +24,7 @@ from lean_search.monitoring.families import PauseSegments, ValueAbResult
 from lean_search.monitoring.store import RunReader
 from lean_search.rl.evaluation import EvaluationKind
 from lean_search.rl.loop import (
+    GIB,
     GrpoLoop,
     GrpoLoopPaths,
     PhaseStage,
@@ -149,6 +150,7 @@ async def test_a_pause_sleeps_every_server_trains_then_wakes_them_with_the_new_v
     await run_until(world, world.loop(), phases=1)
     assert first_pause(world) == [
         "pause",
+        "stop repls above 0",
         "sleep policy-gpu0",
         "sleep policy-gpu1",
         "sleep value-gpu0",
@@ -168,6 +170,7 @@ async def test_with_one_training_gpu_the_other_servers_swap_in_place(tmp_path: P
     await run_until(world, world.loop(), phases=1)
     assert first_pause(world) == [
         "pause",
+        "stop repls above 0",
         "sleep policy-gpu0",
         "sleep value-gpu0",
         "train 1",
@@ -498,10 +501,34 @@ async def test_a_requested_probe_after_the_baseline_runs_once(tmp_path: Path) ->
 
 
 async def test_the_paused_searches_release_their_lean_memory_before_evaluating(tmp_path: Path) -> None:
-    world = loop_world(tmp_path, toml=BASELINE_TOML)
+    world = loop_world(tmp_path, toml=BASELINE_TOML + "\n[evaluation]\npaused_repl_memory_gib = 1.0\n")
     record_version_zero(world)
     await run_until(world, world.loop(), phases=1)
-    assert world.searcher.memory_releases == [0]
+    assert world.searcher.memory_releases[0] == GIB
+
+
+async def test_the_paused_searches_release_their_lean_memory_before_training(tmp_path: Path) -> None:
+    toml = LOOP_TOML.replace("value_every_phases = 1\n", "value_every_phases = 1\npaused_repl_memory_gib = 2.0\n")
+    world = loop_world(tmp_path, toml=toml)
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=1)
+    assert world.searcher.memory_releases == [2 * GIB]
+
+
+async def test_the_host_memory_is_logged_at_the_pause_stages(tmp_path: Path) -> None:
+    world = loop_world(tmp_path)
+    record_version_zero(world)
+    messages: list[str] = []
+    loop = world.loop()
+    loop.log = messages.append
+    loop.host_memory = lambda: "plenty"
+    await run_until(world, loop, phases=1)
+    assert [message for message in messages if message.startswith("Host memory")] == [
+        "Host memory at the pause: plenty",
+        "Host memory before training: plenty",
+        "Host memory after training: plenty",
+        "Host memory after publishing: plenty",
+    ]
 
 
 FAILING = problem_name(statement(0).statement)

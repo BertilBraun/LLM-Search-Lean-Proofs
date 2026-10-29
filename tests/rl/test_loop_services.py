@@ -14,6 +14,7 @@ from lean_search.expert_iteration.serving import write_json_atomically
 from lean_search.rl.loop_services import (
     JOB_MARKER_VARIABLE,
     ChildProcess,
+    host_memory_text,
     live_children,
     run_logged,
     running_start_ticks,
@@ -137,6 +138,10 @@ async def test_a_job_does_not_start_while_an_earlier_loops_job_runs(tmp_path: Pa
     write_json_atomically(tmp_path / "children" / "training.pid", earlier)
     with pytest.raises(RuntimeError):
         await run_logged([sys.executable, "-c", "pass"], tmp_path / "job.log", {}, tmp_path / "children" / "job.pid")
+
+
+def test_the_host_memory_text_reports_what_is_available() -> None:
+    assert "GiB available" in host_memory_text()
 
 
 def test_a_record_whose_process_id_was_reused_is_not_a_live_job(tmp_path: Path) -> None:

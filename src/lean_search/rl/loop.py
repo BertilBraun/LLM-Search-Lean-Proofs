@@ -6,10 +6,11 @@ enough solved trees and runs these stages, each recorded in loop_state.json so a
 crash interrupted (searches cut off by the crash are lost and their statements fed again where the source allows):
 
 pause       every policy and value request waits at the gate; searches keep their trees and REPL states in place
-training    the servers on the training GPUs sleep; the training job (grpo_phase.py, data-parallel over those GPUs)
-            labels the phase's trees, trains the policy (GRPO) and, every `value_every_phases`, the value model on the
-            window of recent phases' trees, gated on the held-out benchmark, and merges the new adapters on the GPUs;
-            meanwhile the loop labels the phase's trees for the search and curriculum metrics
+training    the paused searches' REPL processes stop to free host memory and the servers on the training GPUs sleep;
+            the training job (grpo_phase.py, data-parallel over those GPUs) labels the phase's trees, trains the
+            policy (GRPO) and, every `value_every_phases`, the value model on the window of recent phases' trees,
+            gated on the held-out benchmark, and merges the new adapters on the GPUs; meanwhile the loop labels the
+            phase's trees for the search and curriculum metrics
 publishing  version k + 1 (the new policy adapter, the new value adapter only if it passed the gate) is recorded
             with the job's merges; the sleeping servers wake with it, the others swap to it in place
 evaluating  the fixed targets that are due (by loop hours, at the start, or requested) run as separate jobs while
@@ -417,6 +418,10 @@ def published_time(version: ModelVersion) -> float:
     return datetime.datetime.fromisoformat(version.published_at).timestamp()
 
 
+def unmeasured_host_memory() -> str:
+    return "not measured"
+
+
 def earlier_value_ab_results(paths: GrpoLoopPaths, version: int, published_value_version: int) -> list[ValueAbResult]:
     """The comparisons of the other value A/Bs of this published value model, pooled with this version's."""
     own = paths.evaluation_directory(EvaluationKind.VALUE_AB, version, 0, EvaluationValueModel.PUBLISHED)
@@ -454,9 +459,12 @@ class GrpoLoop:
         log: Callable[[str], None],
         phase_template: str,
         clock: Callable[[], float] = time.monotonic,
+        host_memory: Callable[[], str] = unmeasured_host_memory,
     ) -> None:
-        """`phase_template`: the text of the training phase config (config.training.phase_config)."""
+        """`phase_template`: the text of the training phase config (config.training.phase_config); `host_memory`
+        describes the node's memory for the log at the pause's stage boundaries."""
         self.config = config
+        self.host_memory = host_memory
         self.paths = paths
         self.statements = statements
         self.searcher = searcher
@@ -709,6 +717,7 @@ class GrpoLoop:
         self.save_progress(
             stage=PhaseStage.TRAINING, sampling_seconds=sampling, pause=PauseSegments(drain_seconds=drain_seconds)
         )
+        await self.log_host_memory("at the pause")
         await self.finish_phase()
 
     async def finish_phase(self) -> None:
@@ -717,10 +726,13 @@ class GrpoLoop:
             self.loop_state = LoopState.TRAINING
             self.write_status()
             started = self.clock()
+            await self.release_lean_memory(self.config.training.paused_repl_memory_gib, "the training job")
             await self.servers.release()
             released = self.clock()
+            await self.log_host_memory("before training")
             outcome = await self.train(phase)
             finished = self.clock()
+            await self.log_host_memory("after training")
             pause = with_trainer_timings(self.progress.pause, outcome.timings, finished - released)
             self.save_progress(
                 stage=PhaseStage.PUBLISHING,
@@ -738,6 +750,7 @@ class GrpoLoop:
                 publishing_seconds=self.clock() - started,
                 loop_seconds=progress.loop_seconds + progress.sampling_seconds + progress.training_seconds,
             )
+            await self.log_host_memory("after publishing")
         started = self.clock()
         kinds = self.due_evaluations(at_start=False)
         await self.run_evaluations(kinds, phase)
@@ -748,6 +761,16 @@ class GrpoLoop:
         self.loop_state = LoopState.SEARCHING
         self.sampling_since = self.clock()
         self.write_status()
+
+    async def release_lean_memory(self, threshold_gib: float, purpose: str) -> None:
+        released = await self.searcher.release_lean_memory(int(threshold_gib * GIB))
+        self.log(
+            f"Stopped {released.stopped_processes} search REPL processes ({released.freed_bytes / GIB:.1f} GiB) "
+            f"for {purpose}"
+        )
+
+    async def log_host_memory(self, moment: str) -> None:
+        self.log(f"Host memory {moment}: {await asyncio.to_thread(self.host_memory)}")
 
     def value_window(self, phase: int) -> tuple[Path, ...]:
         """The tree directories the value model trains on when it is due this phase; none when it is not."""
@@ -926,12 +949,8 @@ class GrpoLoop:
         # Only between phases or before the workers start: the searches are paused or not running.
         self.loop_state = LoopState.EVALUATING
         self.write_status()
-        threshold = int(self.config.evaluation.paused_repl_memory_gib * GIB)
-        released = await self.searcher.release_lean_memory(threshold)
-        self.log(
-            f"Stopped {released.stopped_processes} search REPL processes ({released.freed_bytes / GIB:.1f} GiB) "
-            "for the evaluations"
-        )
+        await self.release_lean_memory(self.config.evaluation.paused_repl_memory_gib, "the evaluations")
+        await self.log_host_memory("before the evaluations")
         for kind in kinds:
             if kind == EvaluationKind.VALUE_AB:
                 await self.run_value_ab(phase)

@@ -20,6 +20,7 @@ from lean_search.expert_iteration.loop_config import ServerEndpoint, ServingConf
 from lean_search.expert_iteration.loop_search import PauseGate
 from lean_search.expert_iteration.serving import MergedPublisher, ModelVersion, write_json_atomically
 from lean_search.lean import FORBIDDEN_TOKENS, LeanReplConfig, LeanReplPool
+from lean_search.monitoring.system_sampler import CGROUP, LEAN_PROCESS_NAMES, PROC, host_memory
 from lean_search.policy.client import PolicyClient
 from lean_search.policy.config import PolicyConfig
 from lean_search.policy.expander import load_tokenizer
@@ -34,6 +35,7 @@ from lean_search.policy.server_control import (
 )
 from lean_search.rl.evaluation import EvaluationKind, EvaluationSummary, read_summary
 from lean_search.rl.loop import (
+    GIB,
     PHASE_OUTCOME_FILE,
     GrpoLoopPaths,
     ReleasedLeanMemory,
@@ -420,6 +422,16 @@ class SubprocessEvaluations:
         log_path = directory.with_name(directory.name + ".log")
         await run_logged(arguments, log_path, dict(os.environ), self.paths.children / "evaluation.pid")
         return read_summary(directory / "summary.json")
+
+
+def host_memory_text() -> str:
+    """The node's memory as the system sampler reads it (cgroup limit, available, Lean REPLs, vLLM)."""
+    memory = host_memory(CGROUP, PROC, LEAN_PROCESS_NAMES)
+    return (
+        f"{memory.available_bytes / GIB:.1f} of {memory.total_bytes / GIB:.1f} GiB available; "
+        f"{len(memory.lean_private_bytes)} Lean processes {sum(memory.lean_private_bytes) / GIB:.1f} GiB private, "
+        f"vLLM {memory.vllm_private_bytes / GIB:.1f} GiB private"
+    )
 
 
 def serve_commands(config: GrpoLoopConfig, publisher: MergedPublisher, version: ModelVersion) -> list[str]:
