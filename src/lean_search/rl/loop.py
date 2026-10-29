@@ -678,6 +678,7 @@ class GrpoLoop:
         health_stop = read_health_stop(self.paths.health_stop)
         if health_stop is not None:
             raise RuntimeError(health_stop_text(health_stop))
+        await asyncio.to_thread(self.clear_stale_handoff)
         await self.servers.check()
         current = read_current(self.paths.models)
         await self.servers.serve(current)
@@ -900,6 +901,7 @@ class GrpoLoop:
                 if not self.due_evaluations(at_start=False):
                     self.resume_searches()
                     resumed_early = True
+                    await self.log_host_memory("after the early resume, the handoff not yet on disk")
                 await durable
             self.save_progress(stage=PhaseStage.EVALUATING, publishing_seconds=publishing_seconds)
             await self.log_host_memory("after publishing")
@@ -1107,7 +1109,9 @@ class GrpoLoop:
                 current = await asyncio.to_thread(
                     publish_phase, self.paths.models, self.publisher, outcome, phase_trigger(phase)
                 )
-                await asyncio.to_thread(self.prune_adapters)
+        if handed_off is None:
+            # Also after a restart that found the version recorded but host memory not yet cleared.
+            await asyncio.to_thread(self.recorded)
         served_version = current if handed_off is None else handed_off
         published = self.clock()
         served = await self.servers.serve(served_version)
@@ -1134,12 +1138,31 @@ class GrpoLoop:
         current = await asyncio.to_thread(
             publish_phase, self.paths.models, self.publisher, outcome, phase_trigger(phase)
         )
-        await asyncio.to_thread(self.prune_adapters)
-        await asyncio.to_thread(shutil.rmtree, self.handoff_root, True)
+        await self.log_host_memory("after the durable write, before clearing the handoff")
+        await asyncio.to_thread(self.recorded)
         self.served_value_weights = current.value_weights
         seconds = self.clock() - started
         self.save_progress(pause=dataclasses.replace(self.progress.pause, durable_write_seconds=seconds))
         self.log(f"Version {current.version} written to disk and recorded in {seconds:.0f} s")
+
+    def recorded(self) -> None:
+        """After a version's record: older adapters pruned, the merges handed off in host memory cleared."""
+        self.prune_adapters()
+        shutil.rmtree(self.handoff_root, ignore_errors=True)
+
+    def clear_stale_handoff(self) -> None:
+        """At the start: merges in host memory that this restart will not serve, i.e. all of them unless the
+        interrupted phase's version awaits its record (then only partly written ones)."""
+        if not self.handoff_root.exists():
+            return
+        awaiting = self.progress.stage == PhaseStage.PUBLISHING and read_current(
+            self.paths.models
+        ).trigger != phase_trigger(self.progress.phase)
+        stale = [path for path in self.handoff_root.iterdir() if not awaiting or path.name.endswith(".tmp")]
+        for path in stale:
+            shutil.rmtree(path, ignore_errors=True)
+        if stale:
+            self.log(f"Cleared {len(stale)} stale merges from host memory ({self.handoff_root})")
 
     def prune_adapters(self) -> None:
         """Deletes the phase adapters of versions older than the retention that nothing uses any more."""

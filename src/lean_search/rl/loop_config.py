@@ -85,6 +85,13 @@ class LoopTrainingConfig:
     # The persistent job's host memory, a tmpfs, per loop under <host_directory>/<name>: one shared copy of each parked
     # base (~9.4 GB policy, ~4.5 GB value) and the merged weights handed to the servers until written to disk.
     host_directory: str = "/dev/shm/lean_search"
+    # A persistent job that does not answer a phase's `train` in time is stopped and started again (the phase trained
+    # once more; a second time fails the phase): `train_timeout_factor` times the median of the earlier phases of the
+    # same kind (value phase or not), at least `train_timeout_minimum_minutes`; a job's first phase, with its model
+    # building and compilation, `first_train_timeout_minutes`. Below the collectives' own 1-hour timeout.
+    train_timeout_factor: float = 2.0
+    train_timeout_minimum_minutes: float = 15.0
+    first_train_timeout_minutes: float = 45.0
     # Paused searches' REPL processes above this private memory (0: all) stop before the training job starts, to
     # leave host memory to its ranks; they replay their proof states later. A large value keeps them.
     paused_repl_memory_gib: float = 0.0

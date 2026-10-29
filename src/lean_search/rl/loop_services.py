@@ -7,6 +7,7 @@ import contextlib
 import json
 import os
 import shlex
+import shutil
 import signal
 import statistics
 import sys
@@ -268,9 +269,12 @@ def training_environment(paths: GrpoLoopPaths, config: LoopTrainingConfig) -> di
 
 
 def write_phase_config(paths: GrpoLoopPaths, request: TrainingRequest) -> Path:
+    """Written to a temporary file and renamed: a persistent job's rank may be reading the earlier text."""
     config_path = paths.training / f"phase_{request.phase:04d}.toml"
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(request.config_text, encoding="utf-8")
+    temporary = config_path.with_name(config_path.name + ".tmp")
+    temporary.write_text(request.config_text, encoding="utf-8")
+    os.replace(temporary, config_path)
     return config_path
 
 
@@ -326,7 +330,8 @@ class PersistentTrainer:
     searches) or `train`; its record lies in children/persistent/, apart from the evaluation jobs', which start while
     it runs. A job that dies is started again at the next command; one that dies during a `train` is started again and
     trains the phase once more, and a second death fails the phase as a failed per-phase job would. Leaving the
-    context sends `stop` and stops whatever is left; the job also stops by itself once the loop's process is gone.
+    context sends `stop`, stops whatever is left and removes the parked weights from host memory; the job also stops
+    by itself, between commands, once the loop's process is gone.
     """
 
     def __init__(
@@ -335,6 +340,7 @@ class PersistentTrainer:
         config: LoopTrainingConfig,
         arguments: Sequence[str],
         environment: dict[str, str],
+        host: HostDirectories,
         log: Callable[[str], None],
         poll_seconds: float = 0.5,
         stop_seconds: float = 60.0,
@@ -343,6 +349,7 @@ class PersistentTrainer:
         self.config = config
         self.arguments = list(arguments)
         self.environment = environment
+        self.host = host
         self.log = log
         self.poll_seconds = poll_seconds
         self.stop_seconds = stop_seconds
@@ -351,6 +358,10 @@ class PersistentTrainer:
         self.job: asyncio.Task[None] | None = None
         self.sequence = 0
         self.starts = 0
+        # Seconds of the `train`s answered so far, of value phases (True) and the others.
+        self.train_seconds: dict[bool, list[float]] = {False: [], True: []}
+        # The running job answered a `train`: its models are built and its layers compiled.
+        self.trained_in_job = False
 
     def earlier_jobs(self) -> str | None:
         running = live_children(self.paths.children) + live_children(self.record_path.parent)
@@ -363,6 +374,7 @@ class PersistentTrainer:
         self.channel.clear()
         self.sequence = 0
         self.starts += 1
+        self.trained_in_job = False
         log_path = self.paths.training / "trainer.log"
         self.job = asyncio.create_task(run_logged(self.arguments, log_path, self.environment, self.record_path))
         self.job.add_done_callback(self.job_ended)
@@ -380,8 +392,9 @@ class PersistentTrainer:
                 self.log("Persistent trainer not running; starting it again")
             self.start()
 
-    async def wait_for(self, condition: Callable[[], bool], what: str) -> None:
-        """Polls until `condition` holds; raises TrainerDiedError when the job ends first."""
+    async def wait_for(self, condition: Callable[[], bool], what: str, deadline: float) -> None:
+        """Polls until `condition` holds; raises TrainerDiedError when the job ends first, or stops the job and raises
+        it once the monotonic clock passes `deadline` (a hung job: the collectives' own timeout is an hour)."""
         assert self.job is not None
         while not condition():
             done, _ = await asyncio.wait({self.job}, timeout=self.poll_seconds)
@@ -389,6 +402,22 @@ class PersistentTrainer:
                 raise TrainerDiedError(
                     f"the persistent trainer ended while {what}; see {self.paths.training}/trainer.log"
                 )
+            if time.monotonic() > deadline and not condition():
+                await self.stop_job()
+                raise TrainerDiedError(
+                    f"the persistent trainer did not answer in time while {what}, so it was stopped; see "
+                    f"{self.paths.training}/trainer.log"
+                )
+
+    def train_timeout_seconds(self, request: TrainingRequest) -> float:
+        """A job's first phase (model building, compilation) gets `first_train_timeout_minutes`; later ones
+        `train_timeout_factor` times the median of the earlier phases of the same kind, at least
+        `train_timeout_minimum_minutes`."""
+        config = self.config
+        earlier = self.train_seconds[request.train_value]
+        if not self.trained_in_job or not earlier:
+            return config.first_train_timeout_minutes * 60
+        return max(config.train_timeout_minimum_minutes * 60, config.train_timeout_factor * statistics.median(earlier))
 
     def send(self, kind: TrainerCommandKind, request: TrainingRequest | None = None) -> int:
         self.sequence += 1
@@ -428,9 +457,15 @@ class PersistentTrainer:
 
     async def train_once(self, request: TrainingRequest) -> PhaseOutcome:
         self.ensure_running()
-        await self.wait_for(lambda: self.channel.ready() is not None, "starting")
+        timeout = self.train_timeout_seconds(request)
+        started = time.monotonic()
+        deadline = started + timeout
+        await self.wait_for(lambda: self.channel.ready() is not None, "starting", deadline)
         sequence = self.send(TrainerCommandKind.TRAIN, request)
-        await self.wait_for(lambda: self.channel.reply_to(sequence) is not None, f"training phase {request.phase}")
+        what = f"training phase {request.phase} (timeout {timeout / 60:.0f} min)"
+        await self.wait_for(lambda: self.channel.reply_to(sequence) is not None, what, deadline)
+        self.train_seconds[request.train_value].append(time.monotonic() - started)
+        self.trained_in_job = True
         return read_phase_outcome(request.output_directory / PHASE_OUTCOME_FILE)
 
     async def stop_job(self) -> None:
@@ -444,6 +479,7 @@ class PersistentTrainer:
             assert self.job is not None
             await asyncio.wait({self.job}, timeout=self.stop_seconds)
         await self.stop_job()
+        await asyncio.to_thread(shutil.rmtree, self.host.parked, True)
 
 
 def persistent_trainer_arguments(paths: GrpoLoopPaths, config: GrpoLoopConfig) -> list[str]:
@@ -473,7 +509,9 @@ async def open_trainer(
         yield SubprocessTrainer(paths, config.training)
         return
     arguments = persistent_trainer_arguments(paths, config)
-    trainer = PersistentTrainer(paths, config.training, arguments, training_environment(paths, config.training), log)
+    environment = training_environment(paths, config.training)
+    host = HostDirectories(config.host_directory())
+    trainer = PersistentTrainer(paths, config.training, arguments, environment, host, log)
     try:
         yield trainer
     finally:
