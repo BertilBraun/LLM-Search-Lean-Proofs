@@ -417,11 +417,14 @@ fixed part is paid per phase), or a trainer that stays alive between phases (not
 recompilation, ~1–3 min per phase, at ~54 GB of host RAM for four ranks).
 
 **Loop systems** (decided 2026-10-29, after reviews C and D): training and evaluation jobs run in their own process
-groups with PID records; stopping the loop stops the job, and a restarted loop refuses to start a job while a
-recorded one still runs. A search that ends on a policy or value server failure says nothing about its statement,
-which is fed again (up to 3 retries) and counted. Host memory has a budget (loop concurrency × p90 REPL memory +
-evaluation concurrency × p90 + vLLM + merge ≤ 0.85 × RAM; `rl/README.md`, "Host memory"): the paused searches' REPL
-processes stop before evaluations (they replay their states on resume), and evaluations run at concurrency 64. The
+groups with PID records and a marker in every job process's environment (torchrun's workers leave the group);
+stopping the loop stops the job and every marked process, and a restarted loop refuses to start, before waking any
+server, while a recorded job still runs. A search that ends on a policy or value server failure says nothing about
+its statement, which is fed again (up to 3 retries) and counted; when half of the last 20 searches failed on a server,
+the searches pause, dead servers are restarted, and the loop stops if one stays down. Host memory has a budget (loop
+concurrency × p90 REPL memory + evaluation concurrency × p90 + vLLM + merge + training ranks ≤ 0.85 × RAM;
+`rl/README.md`, "Host memory"): the paused searches' REPL processes stop before training and before evaluations
+(they replay their states on resume), and evaluations run at concurrency 64. The
 policy's NLL replay is the rewritten, flattened SFT data of the starting arm. Groups and texts are matched per tree
 (two searches of one statement in a phase used to swap texts and advantages).
 
