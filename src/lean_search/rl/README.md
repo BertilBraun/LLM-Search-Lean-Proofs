@@ -453,7 +453,7 @@ its threshold dashed, and its alert list shows the latest phase's alerts. Thresh
 
 | Check | Signal | Default threshold | Reference |
 |---|---|---|---|
-| `kl_to_starting_policy` | KL (k3, per token) to the starting policy, last pass (`final_kl_to_reference`) | > 0.005 | absolute (version 0's is 0; review F expects 1e-4 to 1e-3 after 5-10 phases at lr 1e-5, so 0.005 flags a policy moving several times faster than planned; 0.02 fired only on a collapse) |
+| `kl_to_starting_policy` | KL (k3, per token) to the starting policy, last pass (`final_kl_to_reference`) | > 0.5 | absolute (version 0's is 0; the single-step test at lr 3e-5 measured 0.03-0.08 after 76 steps, and the KL grows phase by phase, so 0.5 flags a policy far from its start) |
 | `clip_fraction` | clip fraction of the last pass's trained tokens | > 0.1 | absolute (PPO runs usually stay below 0.1-0.2) |
 | `distinct_samples` | distinct blocks per policy expansion (of n = 8) | < 0.75 × reference | mean of the first `reference_phases` (2) phases |
 | `explanation_length` | mean explanation tokens of the trained samples | outside 0.5-2 × reference | the first phases |

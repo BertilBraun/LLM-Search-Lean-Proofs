@@ -684,7 +684,8 @@ at 50k 9 stop on heartbeats and 1 fails fast (median 8.6 s, 133 s), at 100k 5 he
   vLLM log-probabilities; KL (k3 estimator) measured to the data-collecting policy and to the starting weights (the
   latter on 256 sampled sequences per phase while it is only reported), penalty coefficient 0; the mean probability
   ratio and clip fraction of the positive- and of the negative-advantage tokens logged per pass; loss normalized as Σ token loss / (sequences in the step × 256), so there is no
-  per-sequence mean and no length bias; the starting adapter's rank (64), learning rate 1e-5, 64 sequences per
+  per-sequence mean and no length bias; the starting adapter's rank (64), learning rate 3e-5 (single-step test
+  below), 64 sequences per
   step, `passes_per_phase` 2 (1 allowed); NLL replay (the rewritten Lean SFT data and math) at weight 0.1;
   data-parallel on four GPUs (one as the fallback).
 - **No control run** (decided 2026-10-28): a second full loop is out of budget. The credit comparison happens in
@@ -993,8 +994,13 @@ Paper names in the last three rows are from memory and still need checking befor
   rotating thirds every ~2 h, per-phase value metrics from the training searches; phases ending at 300 trainable groups
   within 45–90 min; 32 expansions per loop search with budget signals; per-phase health checks (alerts, an automatic
   rollback on a held-out valid-Lean collapse and a stop on a second one), their thresholds calibrated in the first
-  phases; a persistent trainer with in-memory weight handoff (built, not yet run on a GPU). Open: learning rate 1e-5 vs
-  3e-5 decided by the single-step test on the node.
+  phases; a persistent trainer with in-memory weight handoff (built, not yet run on a GPU).
+- **Single-step test** (2026-10-29, `grpo_single_step_v2` on the node, starting from the rebuilt visible student v2,
+  three rounds, per-sample success on the 512 trained states / 140 disjoint states, start 0.369 / 0.364):
+  per-tactic credit at lr 1e-5 0.407 / 0.379 (84 steps), sequence credit at 1e-5 0.390 / 0.390 (66 steps), per-tactic
+  at 3e-5 0.420 / 0.389 (76 steps; clip fraction 3.2–3.5%, KL to the sampling policy 0.014–0.018 per token, to the
+  start 0.03–0.08). Decided: per-tactic credit (sequence credit is not better on the disjoint states within noise)
+  at **learning rate 3e-5**; the KL alert moved to 0.5.
 - Serving precision: fp16-merged vs bf16-merged vs unmerged LoRA, decided by the node test against fp32.
 - Whether the four-GPU pause with the persistent trainer meets its ~1 min fixed part on the node (smoke cycle: pause
   segments, `compiled_graphs` 0 after the first phase, the wake's memory next to the parked ranks' CUDA contexts, the

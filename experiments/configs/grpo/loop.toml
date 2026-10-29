@@ -220,9 +220,9 @@ healthy_versions = 3
 # `reference_phases` phases or version 0's held-out evaluation).
 [health]
 reference_phases = 2
-# Review F expects 1e-4 to 1e-3 per token after 5-10 phases at lr 1e-5: 0.005 flags a policy moving several times
-# faster than planned (0.02 would fire only on a collapse).
-max_kl_to_starting_policy = 0.005
+# Measured in the single-step test at lr 3e-5 (2026-10-29): 0.03-0.08 per token after 76 steps (sampled on 256
+# sequences, noisy), and the loop's KL keeps growing phase by phase: 0.5 flags a policy far from its start.
+max_kl_to_starting_policy = 0.5
 max_clip_fraction = 0.1
 min_distinct_samples_fraction = 0.75
 min_explanation_fraction = 0.5
