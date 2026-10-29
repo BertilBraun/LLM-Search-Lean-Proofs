@@ -13,6 +13,7 @@ from tactic_trees import (
     example_tree,
 )
 
+from lean_search.rl.grpo_groups import RewardConfig
 from lean_search.search import TreeRecord
 from lean_search.search.graph_labels import NodeClass, label_graph
 from lean_search.search.tactic_labels import TacticLabel, TacticLabelCounts, TacticOutcome, policy_tactics
@@ -24,15 +25,16 @@ NO_PROGRESS = TacticLabel.NO_PROGRESS
 REDUNDANT = TacticLabel.REDUNDANT_HYPOTHESIS
 FAILING = TacticLabel.FAILING
 MASKED = TacticLabel.MASKED
+MIN_EXPANDED_NODES = RewardConfig().off_graph_min_expanded_nodes
 
 
-def outcomes(record: TreeRecord, text: str) -> tuple[TacticOutcome, ...]:
+def outcomes(record: TreeRecord, text: str, min_expanded_nodes: int = MIN_EXPANDED_NODES) -> tuple[TacticOutcome, ...]:
     (edge,) = [edge for edge in record.edges if edge.text == text]
-    return policy_tactics(record, label_graph(record))[edge.edge_id]
+    return policy_tactics(record, label_graph(record), min_expanded_nodes)[edge.edge_id]
 
 
-def labels_of(record: TreeRecord, text: str) -> tuple[TacticLabel, ...]:
-    return tuple(outcome.label for outcome in outcomes(record, text))
+def labels_of(record: TreeRecord, text: str, min_expanded_nodes: int = MIN_EXPANDED_NODES) -> tuple[TacticLabel, ...]:
+    return tuple(outcome.label for outcome in outcomes(record, text, min_expanded_nodes))
 
 
 @pytest.mark.parametrize(
@@ -56,7 +58,7 @@ def labels_of(record: TreeRecord, text: str) -> tuple[TacticLabel, ...]:
         "no-op",
         "error",
         "unparsed",
-        "off graph",
+        "dead end",
         "intermediate state",
     ],
 )
@@ -102,6 +104,30 @@ def test_old_record_block_off_any_route_knows_only_its_last_state() -> None:
     other = builder.child(builder.root, "⊢ q", text="first\nsecond", tactics=2)
     builder.failure(other)
     assert labels_of(builder.record(), "first\nsecond") == (UNKNOWN, OFF_GRAPH)
+
+
+def detour_tree(expanded_nodes: int) -> TreeRecord:
+    """A detour off the proof graph: a chain of `expanded_nodes` expanded nodes ending in a live child."""
+    builder = GraphBuilder("⊢ p")
+    node = builder.child(builder.root, "⊢ q 0", text="detour")
+    for index in range(1, expanded_nodes + 1):
+        node = builder.child(node, f"⊢ q {index}")
+    return builder.record()
+
+
+@pytest.mark.parametrize(
+    ("expanded_nodes", "label"),
+    [(1, UNKNOWN), (MIN_EXPANDED_NODES - 1, UNKNOWN), (MIN_EXPANDED_NODES, OFF_GRAPH), (8, OFF_GRAPH)],
+)
+def test_off_graph_state_needs_enough_expanded_nodes_in_its_subtree(expanded_nodes: int, label: TacticLabel) -> None:
+    assert labels_of(detour_tree(expanded_nodes), "detour") == (label,)
+
+
+def test_dead_end_expanded_once_stays_off_graph() -> None:
+    builder = GraphBuilder("⊢ p")
+    dead_end = builder.child(builder.root, "⊢ q", text="detour")
+    builder.failure(dead_end)
+    assert labels_of(builder.record(), "detour") == (OFF_GRAPH,)
 
 
 def test_unverified_proof_fails_on_its_last_tactic() -> None:

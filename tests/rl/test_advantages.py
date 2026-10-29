@@ -5,7 +5,7 @@ from lean_search.rl.advantages import CreditMode, group_advantages, local_share_
 
 PROOF_REWARD = 0.85
 OFF_GRAPH_REWARD = 0.0
-NO_PROGRESS_REWARD = -0.075
+NO_PROGRESS_REWARD = -0.15
 FAILING_REWARD = -0.15
 
 
@@ -46,6 +46,12 @@ def test_design_example_leaves_the_unknown_and_masked_tactics_untrained() -> Non
 )
 def test_sample_score_is_the_mean_of_its_known_tactics(labels: tuple, score: float) -> None:
     assert sample("s", *labels).score == pytest.approx(score)
+
+
+@pytest.mark.parametrize("no_op", [NO_PROGRESS, REDUNDANT])
+def test_a_no_op_does_not_beat_a_failure(no_op: object) -> None:
+    advantages = group_advantages(group(sample("a", FAILING, multiplicity=6), sample("b", no_op)))
+    assert advantages.samples[1].sequence == pytest.approx(0.0)
 
 
 def test_closing_a_goal_earns_the_bonus() -> None:
@@ -102,7 +108,10 @@ def test_equal_scores_with_different_tactics_carry_a_per_tactic_signal_only() ->
 
 @pytest.mark.parametrize(
     ("first", "second", "share"),
-    [(sample("a", FAILING), sample("b", NO_PROGRESS), 1.0), (sample("a", PROOF_GRAPH), sample("b", OFF_GRAPH), 0.0)],
+    [
+        (sample("a", PROOF_GRAPH, closed=1), sample("b", PROOF_GRAPH), 1.0),
+        (sample("a", PROOF_GRAPH), sample("b", OFF_GRAPH), 0.0),
+    ],
     ids=["local only", "global only"],
 )
 def test_local_share_of_advantages(first: object, second: object, share: float) -> None:

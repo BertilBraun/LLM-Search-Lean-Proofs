@@ -22,9 +22,9 @@ from lean_search.search.tree import Edge, EdgeOutcome, StepSource
 
 class TacticLabel(StrEnum):
     PROOF_GRAPH = "proof_graph"
-    # An expanded state off the proof graph.
+    # A dead end, or an expanded state off the proof graph whose subtree has enough expanded nodes to be evidence.
     OFF_GRAPH = "off_graph"
-    # A state never expanded: no evidence either way.
+    # A state never expanded, or expanded off the proof graph with live children and too few expanded nodes.
     UNKNOWN = "unknown"
     # Unchanged, or back to an earlier state of its path: the block's own states, the node and its ancestors.
     NO_PROGRESS = "no_progress"
@@ -67,9 +67,10 @@ class TacticLabelCounts:
 class TacticGraph:
     """The states of one labelled search graph by goal key, at tactic granularity."""
 
-    def __init__(self, record: TreeRecord, labels: GraphLabels) -> None:
+    def __init__(self, record: TreeRecord, labels: GraphLabels, min_expanded_nodes: int) -> None:
         self.record = record
         self.labels = labels
+        self.min_expanded_nodes = min_expanded_nodes
         self.node_by_key = nodes_by_goal_key(record)
         self.proof_graph_keys = {
             goal_key(goals)
@@ -89,6 +90,14 @@ class TacticGraph:
     def is_on_proof_graph(self, key: GoalKey, node_id: int | None) -> bool:
         on_graph_node = node_id is not None and self.labels.node_classes[node_id] == NodeClass.PROOF_GRAPH
         return on_graph_node or key in self.proof_graph_keys
+
+    def is_off_graph_evidence(self, node_id: int | None) -> bool:
+        """A dead end, or expanded with `min_expanded_nodes` expanded nodes in its subtree counting itself."""
+        if node_id is None or not self.labels.expanded[node_id]:
+            return False
+        if self.labels.node_classes[node_id] == NodeClass.DEAD_END:
+            return True
+        return 1 + len(self.labels.expanded_descendants[node_id]) >= self.min_expanded_nodes
 
     def edge_tactics(self, edge: Edge) -> tuple[TacticOutcome, ...]:
         """Every executed tactic of an executed edge, in order; a sample without tactics counts as one failing."""
@@ -149,14 +158,16 @@ class TacticGraph:
             return TacticOutcome(TacticLabel.REDUNDANT_HYPOTHESIS, node_id)
         if self.is_on_proof_graph(key, node_id):
             return TacticOutcome(TacticLabel.PROOF_GRAPH, node_id, closed)
-        if node_id is not None and self.labels.expanded[node_id]:
+        if self.is_off_graph_evidence(node_id):
             return TacticOutcome(TacticLabel.OFF_GRAPH, node_id)
         return TacticOutcome(TacticLabel.UNKNOWN, node_id)
 
 
-def policy_tactics(record: TreeRecord, labels: GraphLabels) -> dict[int, tuple[TacticOutcome, ...]]:
+def policy_tactics(
+    record: TreeRecord, labels: GraphLabels, min_expanded_nodes: int
+) -> dict[int, tuple[TacticOutcome, ...]]:
     """Per executed edge of a policy sample (repeats share it), its tactics; infrastructure failures excluded."""
-    graph = TacticGraph(record, labels)
+    graph = TacticGraph(record, labels, min_expanded_nodes)
     outcomes: dict[int, tuple[TacticOutcome, ...]] = {}
     for label in labels.edges:
         if label.source != StepSource.POLICY or label.effective_kind == EdgeKind.INFRASTRUCTURE_FAILURE:

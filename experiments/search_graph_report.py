@@ -54,7 +54,7 @@ def run_report(
         labels = label_graph(record)
         estimates = recorded_estimates(record, readout)
         targets = value_targets(record, labels, estimates, target_config)
-        tactics = policy_tactics(record, labels)
+        tactics = policy_tactics(record, labels, reward_config.off_graph_min_expanded_nodes)
         groups = policy_groups(record, labels, tactics, estimates, reward_config)
         statistics = graph_statistics(record, labels, targets, tactics, groups)
         trees.append(TreeStatistics(record.problem_name, statistics))
@@ -205,12 +205,20 @@ def render_run(run: RunReport) -> str:
             ],
         ),
         markdown_table(
-            ["GRPO groups", "Samples", "With a signal", "Global reward (1 − λ) G", "Local reward λ L"],
+            [
+                "GRPO groups",
+                "Samples",
+                "With a signal",
+                "Left out without a policy proof",
+                "Global reward (1 − λ) G",
+                "Local reward λ L",
+            ],
             [
                 [
                     total.groups,
                     total.group_samples,
                     share(total.groups_with_signal, total.groups),
+                    total.groups_without_policy_proof,
                     f"{total.global_reward:,.1f}",
                     f"{total.local_reward:,.1f}",
                 ]

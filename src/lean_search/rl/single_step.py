@@ -7,15 +7,15 @@ tree with one expansion (`search_theorem` with `start_state`), recorded like the
 Which tactics are on the proof graph: the state is provable (its traced proof proves it), and so is every state of
 that proof after it. A tactic is on the proof graph when it closes the goals or reaches the reference proof's next or
 a later state (the per-step evaluation's success criterion, by goal key); other new states are unknown and neutral.
-So every state forms a group with a known-provable anchor without a further search, and a state no sample solves
-still trains: its failing and no-progress samples go below the baseline of its unknown ones. A sample succeeds when its
-block runs completely and ends on the proof graph.
+So every state has a known-provable anchor without a further search; a state forms no group when no sample reaches
+the proof graph (`RewardConfig.require_policy_proof`). A sample succeeds when its block runs completely and ends on
+the proof graph.
 """
 
 import asyncio
 import contextlib
 import dataclasses
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,7 +23,7 @@ from lean_search.corpora.tracing import state_before
 from lean_search.data import Problem, Split
 from lean_search.lean import LeanReplConfig, LeanReplPool, ProofState
 from lean_search.reasoning.states import ReasoningState
-from lean_search.rl.grpo_groups import PolicyGroup, RewardConfig, policy_groups
+from lean_search.rl.grpo_groups import PolicyGroup, RewardConfig, TreeGroups, policy_groups
 from lean_search.rl.search_models import open_search_models
 from lean_search.rl.training_phase import LabelledPhaseData
 from lean_search.rl.tree_statistics import graph_statistics, total_statistics
@@ -108,12 +108,12 @@ def single_step_run_config(template: RunConfig) -> RunConfig:
 
 
 def reference_labels(
-    record: TreeRecord, reference_keys: frozenset[GoalKey]
+    record: TreeRecord, reference_keys: frozenset[GoalKey], min_expanded_nodes: int
 ) -> tuple[GraphLabels, dict[int, tuple[TacticOutcome, ...]]]:
     """The tree's labels with the root on the proof graph, and tactics reaching a reference state on it too."""
     labels = label_graph(record)
     labels = dataclasses.replace(labels, node_classes=(NodeClass.PROOF_GRAPH, *labels.node_classes[1:]))
-    tactics = policy_tactics(record, labels)
+    tactics = policy_tactics(record, labels, min_expanded_nodes)
     for edge_id, outcomes in tactics.items():
         edge = record.edges[edge_id]
         previous = record.nodes[edge.parent_id].goals
@@ -128,14 +128,11 @@ def reference_labels(
 
 
 def single_step_groups(
-    record: TreeRecord, reference_keys: frozenset[GoalKey], config: RewardConfig
-) -> list[PolicyGroup]:
-    labels, tactics = reference_labels(record, reference_keys)
-    return [
-        group
-        for group in policy_groups(record, labels, tactics, [None] * len(record.nodes), config)
-        if group.node_id == 0
-    ]
+    record: TreeRecord, labels: GraphLabels, tactics: Mapping[int, Sequence[TacticOutcome]], config: RewardConfig
+) -> TreeGroups:
+    """`labels` and `tactics` from `reference_labels`."""
+    tree_groups = policy_groups(record, labels, tactics, [None] * len(record.nodes), config)
+    return dataclasses.replace(tree_groups, groups=tuple(group for group in tree_groups.groups if group.node_id == 0))
 
 
 def sample_success(record: TreeRecord, reference_keys: frozenset[GoalKey]) -> SampleSuccess:
@@ -215,8 +212,8 @@ def single_step_phase_data(
     groups: list[PolicyGroup] = []
     statistics = []
     for record, state in zip(records, states, strict=True):
-        labels, tactics = reference_labels(record, state.reference_keys)
-        tree_groups = single_step_groups(record, state.reference_keys, config)
-        groups.extend(tree_groups)
+        labels, tactics = reference_labels(record, state.reference_keys, config.off_graph_min_expanded_nodes)
+        tree_groups = single_step_groups(record, labels, tactics, config)
+        groups.extend(tree_groups.groups)
         statistics.append(graph_statistics(record, labels, (), tactics, tree_groups))
     return LabelledPhaseData((), tuple(groups), total_statistics(statistics))

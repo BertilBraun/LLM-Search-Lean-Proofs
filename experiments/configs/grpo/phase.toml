@@ -10,12 +10,20 @@ local_share = 0.15
 # L of the first failing tactic (errors and timeouts) and of a sample without a usable block (e.g. a repetition loop
 # cut off at the token cap).
 failure_local = -1.0
-# L of a tactic without progress (unchanged, back to an earlier state) or adding only redundant hypotheses.
-no_progress_local = -0.5
+# L of a tactic without progress (unchanged, back to an earlier state) or adding only redundant hypotheses: as low
+# as a failure, so a no-op never beats a genuine attempt.
+no_progress_local = -1.0
 # L per goal a proof-graph tactic closes.
 goal_closed_bonus = 0.1
 # mu: expanded off-graph states earn G = mu * q; 0.15 once a value model passed the gate.
 value_share = 0.0
+# An expanded off-graph state with live children and fewer expanded nodes in its subtree (itself included: the
+# value targets' n) is unknown like a never-expanded one, so one harvesting or epsilon expansion does not push a
+# sibling down; a dead end (nothing usable from its expansion) stays off graph.
+off_graph_min_expanded_nodes = 4
+# Groups train only if a policy sample reaches the proof graph (the sweep's children do not count); the search
+# metrics count the groups left out (graph.groups_without_policy_proof).
+require_policy_proof = true
 
 [value_targets]
 # y = (1 - mu) * z + mu * q per expanded state: z the concrete label (1 with exact steps on the proof graph, 0 off

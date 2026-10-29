@@ -6,10 +6,10 @@ sibling samples, every tactic of a sample earns its own reward, and the trainer 
 
 ## Per-tactic labels (`search/tactic_labels.py`)
 
-`policy_tactics(record, labels)` labels every executed tactic of every policy sample (keyed by the executed edge;
-repeats share it, infrastructure failures are left out). A tactic's state is `Edge.tactic_goals[i]`, Lean's printing
-before the search's `rename_i`; it matches a node through the node's own goal key or the last tactic state of any
-edge reaching it (`graph_labels.nodes_by_goal_key`). The checks, in order:
+`policy_tactics(record, labels, min_expanded_nodes)` labels every executed tactic of every policy sample (keyed by
+the executed edge; repeats share it, infrastructure failures are left out). A tactic's state is `Edge.tactic_goals[i]`,
+Lean's printing before the search's `rename_i`; it matches a node through the node's own goal key or the last tactic
+state of any edge reaching it (`graph_labels.nodes_by_goal_key`). The checks, in order:
 
 | Label | When |
 |---|---|
@@ -19,8 +19,8 @@ edge reaching it (`graph_labels.nodes_by_goal_key`). The checks, in order:
 | `no_progress` | the state equals one before it on its path: the node, its ancestors, or an earlier state of the same block (the trailing no-ops skipped after a nested proof closed repeat their state, so they count too) |
 | `redundant_hypothesis` | the state adds only hypotheses whose types the context already had, or reflexive `a = a` / `a ↔ a` (`lean/hypotheses.py`, `adds_only_redundant_hypotheses`, against every earlier state of the path); a flattened `have h : A` also puts `⊢ A` first, which counts as redundant when `A` is |
 | `proof_graph` | a proof-graph node's state, or an intermediate state of a forward edge on a route to a proof |
-| `off_graph` | an expanded node off the proof graph (dead ends included) |
-| `unknown` | anything else: a node never expanded, or a state no node has |
+| `off_graph` | a dead end (its expansion produced nothing usable: real evidence however small), or an expanded node off the proof graph with at least `off_graph_min_expanded_nodes` (4) expanded nodes in its subtree, itself included: the n of the value targets' weight n / (n + 4) |
+| `unknown` | anything else: a node never expanded, an expanded off-graph node with live children and fewer expanded nodes (one harvesting or ε expansion is too little evidence to push a sibling down), or a state no node has |
 
 The proof graph is defined at tactic granularity: `label_graph` splits a forward edge at every intermediate tactic
 state that is another node's state, so that node routes to the proof too (and gets exact remaining steps). Records
@@ -30,14 +30,17 @@ a route to a proof and `unknown` otherwise; the last one is judged as above agai
 ## Groups and rewards (`grpo_groups.py`)
 
 One group per expanded proof-graph node with policy samples; no groups off the proof graph or in unsolved trees.
-Identical texts are merged (multiplicity = the samples behind them). Each tactic gets `R = (1 − λ) · G + λ · L`
-(`RewardConfig`, λ = `local_share` = 0.15, L clipped to [−1, 1]):
+With `require_policy_proof` (default) a group also needs a policy sample with a `proof_graph` tactic: where only the
+automation sweep's children reach the proof graph, the group is left out (`TreeGroups.without_policy_proof`, the
+search metrics' `graph.groups_without_policy_proof`); a policy sample repeating the sweep's tactic counts as the
+policy's. Identical texts are merged (multiplicity = the samples behind them). Each tactic gets
+`R = (1 − λ) · G + λ · L` (`RewardConfig`, λ = `local_share` = 0.15, L clipped to [−1, 1]):
 
 | Label | G | L | R |
 |---|---|---|---|
 | proof graph | 1 | `goal_closed_bonus` (0.1) per goal closed | 0.85 + 0.015 per goal |
 | off graph | μ · q (`value_share`, 0 until a value model passed the gate; q averages the state's expanded descendants, else its own estimate) | 0 | 0 before the gate |
-| no progress, redundant hypothesis | 0 | `no_progress_local` (−0.5) | −0.075 |
+| no progress, redundant hypothesis | 0 | `no_progress_local` (−1, as a failure: a no-op wastes the sample too) | −0.15 |
 | failing | 0 | `failure_local` (−1) | −0.15 |
 | unknown, masked | — | — | no reward |
 
@@ -81,8 +84,8 @@ only sizes micro-batches, and a sequence beyond `max_sequence_tokens` (the serve
 ## Metrics
 
 `tree_statistics.graph_statistics` adds per tree: tactics by label over every policy sample and over the groups,
-groups with a signal, the global and local reward parts, proofs with their tactics and blocks, harvest expansions with
-the proofs and proof-graph nodes they created, and ε-picks. `training_phase.grpo_phase_record` turns a policy outcome
+groups with a signal, groups left out without a policy proof, the global and local reward parts, proofs with their
+tactics and blocks, harvest expansions with the proofs and proof-graph nodes they created, and ε-picks. `training_phase.grpo_phase_record` turns a policy outcome
 into the dashboard's `grpo` line (trained groups, tactics by label, local share of the advantages, sampler mismatch,
 forced answers kept, training and sampling time).
 
@@ -153,9 +156,9 @@ states are traced states and are never renamed.
 - **Single-step GRPO** (`single_step.py`, `experiments/grpo_single_step.py`, `grpo/single_step.toml`): one policy
   request per held-out state, executed from the state rebuilt by replay (`search_theorem(..., start_state=...)`).
   Proof graph: the state's traced proof proves it and every later state of it, so a tactic that closes the goals or
-  reaches one of those states (by goal key) is on the proof graph and the root always forms a group; other new states
-  are unknown (neutral). No extra search per state. Success per sample = the block runs completely and ends there
-  (the per-step evaluation's criterion). Each arm (per-tactic, sequence credit) runs 3 rounds of sample, measure
+  reaches one of those states (by goal key) is on the proof graph; other new states are unknown (neutral). The root
+  forms a group when a sample reaches the proof graph (states no sample solves train nothing). No extra search per
+  state. Success per sample = the block runs completely and ends there (the per-step evaluation's criterion). Each arm (per-tactic, sequence credit) runs 3 rounds of sample, measure
   (training and 512 disjoint states), train (one phase, two passes), then a last measurement; `report` writes both
   curves. States whose goals had inaccessible names are renamed by the search, so their reference keys may not match.
 - **Overfit on 300 statements** (`grpo/loop_overfit.toml`): the loop on a fixed list (`grpo_fixed_sets.py

@@ -369,6 +369,7 @@ class DemoRun:
             groups=groups,
             group_samples=groups * 8,
             groups_with_signal=round(groups * (0.77 - 0.1 * learned)),
+            groups_without_policy_proof=round(groups * 0.08),
             global_reward=groups * 8 * (0.3 + 0.15 * learned),
             local_reward=groups * 8 * (-0.1 + 0.03 * learned),
             proofs=proofs,
