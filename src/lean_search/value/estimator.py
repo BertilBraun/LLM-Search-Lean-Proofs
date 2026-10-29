@@ -25,12 +25,6 @@ TOO_LONG_DISTRIBUTION = tuple(float(index == DEAD_BIN) for index in range(BIN_CO
 
 
 @dataclass(frozen=True)
-class BinnedValueEstimates(ValueEstimates):
-    # Per node, the probabilities of the bins 1..7, 8+, dead.
-    distributions: tuple[tuple[float, ...], ...] = ()
-
-
-@dataclass(frozen=True)
 class StateScore:
     probabilities: tuple[float, ...]
     prompt_tokens: int
@@ -76,9 +70,9 @@ class ValueModelEstimator:
         self.statistics = ValueStatistics()
         self._clients = itertools.cycle(clients)
 
-    async def estimate(self, nodes: Sequence[Node]) -> BinnedValueEstimates:
+    async def estimate(self, nodes: Sequence[Node]) -> ValueEstimates:
         scored = await self.score_states([node.goals for node in nodes])
-        return BinnedValueEstimates(
+        return ValueEstimates(
             remaining_steps=tuple(
                 self.config.readout.remaining_steps(probabilities) for probabilities in scored.states
             ),

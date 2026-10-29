@@ -12,6 +12,7 @@ pytest.importorskip("peft")
 
 from lean_search.expert_iteration.serving import LoopPaths, ModelVersion, record_published  # noqa: E402
 from lean_search.rl.advantages import CreditMode  # noqa: E402
+from lean_search.rl.loop import read_phase_outcome  # noqa: E402
 from lean_search.rl.policy_data import VersionSamplerAgreement  # noqa: E402
 from lean_search.rl.policy_trainer import GrpoConfig  # noqa: E402
 from lean_search.rl.training_phase import (  # noqa: E402
@@ -86,7 +87,8 @@ def phase(tmp_path_factory: pytest.TempPathFactory) -> tuple[PhaseOutcome, Path]
     )
     provenance = TreeProvenance("benchmark", SearchGuidance.VALUE_FREE, None, "")
     benchmark = build_benchmark([TreeSource(provenance, label_phase_data([record], config).trees)], BenchmarkConfig())
-    inputs = PhaseInputs(records=[record], value_benchmark=benchmark)
+    # The value model's window: the same tree twice, the policy's phase once.
+    inputs = PhaseInputs(records=[record], value_benchmark=benchmark, value_records=[record, record])
     output = tmp_path_factory.mktemp("phase")
     tokenizer = CharacterTokenizer()
     return run_training_phase(config, inputs, tokenizer, tokenizer, CPU, output), output
@@ -124,6 +126,22 @@ def test_phase_record_keys_the_sampler_agreement_by_sampling_age(phase: tuple[Ph
     assert grpo_phase_record(policy, sampling_seconds=600.0, trained_version=3).sampler_by_age == {"1": agreement}
 
 
+def test_the_written_outcome_reads_back_with_the_value_diagnostics(phase: tuple[PhaseOutcome, Path]) -> None:
+    outcome, output = phase
+    assert read_phase_outcome(output / "phase.json") == outcome
+
+
+def test_value_trains_on_its_window_of_trees(phase: tuple[PhaseOutcome, Path]) -> None:
+    outcome, _ = phase
+    assert outcome.value is not None and outcome.value.trees == 2
+
+
+def test_value_outcome_counts_the_window_labels(phase: tuple[PhaseOutcome, Path]) -> None:
+    outcome, _ = phase
+    assert outcome.value is not None and outcome.value.diagnostics is not None
+    assert outcome.value.diagnostics.labels.proof_graph.targets == 2 * 2
+
+
 class RecordingPublisher:
     """Serves adapters as they are (the loop's MergedPublisher merges them first)."""
 
@@ -135,6 +153,9 @@ class RecordingPublisher:
 
     def prune(self, current: ModelVersion) -> None:
         pass
+
+    def kept_value_weights(self, adapter: str) -> str:
+        return adapter
 
 
 def test_published_value_adapter_changes_only_after_a_passed_gate(

@@ -5,6 +5,7 @@ import {
   formatAge,
   formatTime,
   formatValue,
+  groupedBarChart,
   htmlElement,
   lineChart,
   sparkline,
@@ -209,13 +210,16 @@ function renderChart(parent, chart) {
       return barChart(parent, { ...chart, band, bars: latestBands(chart) });
     case "reliability":
       return lineChart(parent, reliabilitySpec(chart));
+    case "histogram":
+      return groupedBarChart(parent, histogramSpec(chart));
     default: {
       const built = chartSeries(chart);
-      const references = (chart.thresholds || []).map((threshold) => ({
+      const references = [...(chart.references || [])];
+      references.push(...(chart.thresholds || []).map((threshold) => ({
         value: thresholdValue(threshold.key),
         label: `${threshold.label} ${formatValue(thresholdValue(threshold.key), chart.unit)}`,
         kind: "threshold",
-      }));
+      })));
       const first = built[0] && built[0].points.find((point) => point.y !== null);
       if (chart.baseline && first) {
         references.push({ value: first.y, label: `baseline ${formatValue(first.y, chart.unit)}`, kind: "baseline" });
@@ -241,11 +245,23 @@ function latestBands(chart) {
   }));
 }
 
+// A dotted path into a latest record's fields; undefined where any part is missing.
+function lookup(fields, path) {
+  return path.split(".").reduce((value, key) => (value === null || value === undefined ? undefined : value[key]), fields);
+}
+
+const ANCHOR_CALIBRATION = [{ label: "observed", path: "benchmark.calibration.anchor_bins" }];
+
+// chart.curves: [{label, path}], each path to a list of reliability bins in the family's latest record.
 function reliabilitySpec(chart) {
-  const fields = latestFields("value");
-  const bins = fields && fields.benchmark.calibration ? fields.benchmark.calibration.anchor_bins : [];
-  const known = bins.filter((bin) => bin.mean_predicted !== null && bin.mean_target !== null);
+  const fields = latestFields(chart.family || "value");
+  const curves = chart.curves || ANCHOR_CALIBRATION;
   const subtitle = fields ? `candidate v${fields.candidate_version}; ${chart.subtitle}` : chart.subtitle;
+  const series = curves.map((curve, slot) => {
+    const bins = (fields && lookup(fields, curve.path)) || [];
+    const known = bins.filter((bin) => bin.mean_predicted !== null && bin.mean_target !== null);
+    return { label: curve.label, slot, markers: true, points: known.map((bin) => ({ x: bin.mean_predicted, y: bin.mean_target })) };
+  });
   return {
     ...chart,
     subtitle,
@@ -255,9 +271,29 @@ function reliabilitySpec(chart) {
     yMin: 0,
     yMax: 1,
     diagonal: true,
-    noLegend: true,
-    series: [{ label: "observed", slot: 0, markers: true, points: known.map((bin) => ({ x: bin.mean_predicted, y: bin.mean_target })) }],
+    noLegend: curves.length < 2,
+    series,
   };
+}
+
+// chart.series: [{label, path, normalize, detail: {count, weight}}], each path to a list of numbers (one per category)
+// in the family's latest record; `normalize` divides by their sum, `detail` names fields shown in the legend.
+function histogramSpec(chart) {
+  const fields = latestFields(chart.family);
+  const subtitle = fields ? `candidate v${fields.candidate_version}; ${chart.subtitle}` : chart.subtitle;
+  const series = chart.series.map((spec, slot) => {
+    const values = (fields && lookup(fields, spec.path)) || [];
+    const total = values.reduce((sum, value) => sum + (value || 0), 0);
+    const parent = fields && spec.detail ? lookup(fields, spec.path.split(".").slice(0, -1).join(".")) : null;
+    const detail = parent ? Object.entries(spec.detail).map(([name, key]) => `${formatValue(parent[key], "number")} ${name}`).join(", ") : null;
+    return {
+      label: spec.label,
+      slot,
+      detail,
+      values: values.map((value) => (spec.normalize ? (total ? value / total : null) : value)),
+    };
+  });
+  return { ...chart, subtitle, unit: chart.unit || "share", series };
 }
 
 function lastValue(values) {

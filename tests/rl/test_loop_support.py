@@ -7,7 +7,7 @@ from loop_fakes import solved_tree
 from lean_search.data import Problem, Split
 from lean_search.data_rewrite.naming import NameChange, NameSource, renamed_text
 from lean_search.data_rewrite.statement_renaming import StatementRenaming
-from lean_search.monitoring.families import BandOutcome
+from lean_search.monitoring.families import BandOutcome, ValueAbResult
 from lean_search.rl.evaluation import (
     EvaluationKind,
     EvaluationProblem,
@@ -16,8 +16,10 @@ from lean_search.rl.evaluation import (
     compare_repeats,
     fixed_targets_record,
     search_summary,
+    value_ab_result,
 )
-from lean_search.rl.loop_config import EvaluationTarget
+from lean_search.rl.fixed_targets import value_ab_problems
+from lean_search.rl.loop_config import EvaluationTarget, ValueAbConfig
 from lean_search.rl.renaming import (
     RenamedStatement,
     StatementRenamings,
@@ -167,3 +169,50 @@ def test_a_repeat_comparison_reports_the_solved_difference() -> None:
 def test_the_repeated_probe_line_reports_the_difference() -> None:
     comparison = compare_repeats(FIRST_RUN, SECOND_RUN)
     assert fixed_targets_record(zero_summary(EvaluationKind.PROBE), comparison).probe_repeat_difference == 0
+
+
+def solved_runs(solved: list[bool]) -> list[SearchResult]:
+    return [
+        result(f"test.p{number}", StopReason.PROVED if proved else StopReason.EXPANSION_BUDGET)
+        for number, proved in enumerate(solved)
+    ]
+
+
+def value_ab(reference: list[bool], published: list[bool], config: ValueAbConfig | None = None) -> ValueAbResult:
+    return value_ab_result(solved_runs(reference), solved_runs(published), config or ValueAbConfig(), (0, 3))
+
+
+def test_the_value_ab_counts_problems_only_the_published_model_solved() -> None:
+    assert value_ab([True, False, False], [True, True, True]).only_published == 2
+
+
+def test_the_value_ab_passes_when_the_published_model_solves_more() -> None:
+    assert value_ab([True, False, False], [True, True, False]).passed
+
+
+def test_the_value_ab_fails_on_a_tie() -> None:
+    assert not value_ab([True, False], [False, True]).passed
+
+
+def test_the_value_ab_fails_when_the_published_model_is_significantly_worse() -> None:
+    config = ValueAbConfig(min_solved_difference=-10)
+    assert not value_ab([True] * 8, [False] * 8, config).passed
+
+
+@pytest.mark.parametrize(
+    ("only_reference", "only_published", "worse_p_value"),
+    [(0, 0, 1.0), (3, 0, 0.125), (0, 3, 1.0), (2, 1, 0.5)],
+)
+def test_the_one_sided_mcnemar_p_value(only_reference: int, only_published: int, worse_p_value: float) -> None:
+    reference = [True] * only_reference + [False] * only_published
+    published = [False] * only_reference + [True] * only_published
+    assert value_ab(reference, published).worse_p_value == pytest.approx(worse_p_value)
+
+
+def test_the_two_sided_mcnemar_p_value_is_twice_the_smaller_tail() -> None:
+    assert value_ab([True] * 3, [False] * 3).p_value == pytest.approx(0.25)
+
+
+def test_value_ab_problems_take_the_strata_in_turn() -> None:
+    problems = [EvaluationProblem(PROBLEM, stratum) for stratum in ("easy", "easy", "medium", "hard", "hard")]
+    assert [problem.stratum for problem in value_ab_problems(problems, 4)] == ["easy", "medium", "hard", "easy"]

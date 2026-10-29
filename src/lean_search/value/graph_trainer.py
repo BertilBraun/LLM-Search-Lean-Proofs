@@ -1,10 +1,11 @@
-"""Value LoRA training on search-graph targets: soft bin targets plus a sibling ranking loss, and the publish gate."""
+"""Value LoRA training on search-graph targets: soft bin targets plus a sibling ranking loss, and the gate's fresh
+scores of the candidate and the published model."""
 
 import hashlib
 import random
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
@@ -23,18 +24,13 @@ from lean_search.training.sft import (
 )
 from lean_search.value.benchmark import (
     BenchmarkConfig,
-    BenchmarkMetrics,
     BenchmarkScores,
-    GuidedTrees,
     LabelledTree,
     ValueBenchmark,
     benchmark_fingerprint,
-    conflict_message,
-    fresh_estimates,
-    guidance_conflicts,
 )
-from lean_search.value.benchmark import benchmark_metrics as compute_benchmark_metrics
 from lean_search.value.bins import BIN_COUNT, DEAD_BIN, STEP_BIN_COUNT, Readout
+from lean_search.value.gate_statistics import GateConfig, GateResult, value_gate
 from lean_search.value.graph_targets import (
     SourceShares,
     ValueTarget,
@@ -56,22 +52,13 @@ class RankingScore(StrEnum):
 
 
 @dataclass(frozen=True)
-class GateConfig:
-    # The new model must beat the current one's sibling pairwise accuracy by this much...
-    min_ranking_gain: float = 0.01
-    # ...without losing more than this in proof-graph-over-dead-end AUC or gaining more in the anchors' Brier score.
-    max_separation_drop: float = 0.02
-    max_brier_increase: float = 0.01
-    # Benchmark trees from an A* search on a value model: the current model (or its ancestor) chose their labels.
-    guided_trees: GuidedTrees = GuidedTrees.REFUSE
-
-
-@dataclass(frozen=True)
 class GraphValueConfig:
     model: str
-    # The current value adapter, continued unless retrain_from_base; empty starts a fresh adapter.
+    # The adapter training continues (the last trained one) unless retrain_from_base; empty starts a fresh adapter.
     initial_adapter: str = ""
     retrain_from_base: bool = False
+    # The served value adapter the gate compares the candidate with; empty scores the base model.
+    published_adapter: str = ""
     lora: LoraSettings = field(default_factory=LoraSettings)
     # micro_batch_tokens: padded prompt tokens (real ones when packing), filled with whole sibling units.
     optimization: OptimizationConfig = field(
@@ -91,7 +78,7 @@ class GraphValueConfig:
     source_shares: SourceShares = field(default_factory=SourceShares)
     # 0: no cap; the heaviest pairs are kept.
     max_pairs_per_tree: int = 64
-    # v0 examples (exact and dead labels) as this share of all pointwise items.
+    # v0 examples (exact and dead labels) as this share of all pointwise items, drawn by the optimization seed.
     replay_share: float = 0.1
     readout: Readout = field(default_factory=Readout)
     benchmark: BenchmarkConfig = field(default_factory=BenchmarkConfig)
@@ -193,15 +180,6 @@ class GraphValueTrainingResult:
     final_pair_accuracy: float
 
 
-@dataclass(frozen=True)
-class GateResult:
-    passed: bool
-    reasons: tuple[str, ...]
-    new: BenchmarkMetrics
-    current: BenchmarkMetrics
-    warnings: tuple[str, ...] = ()
-
-
 def stable_key(*parts: object) -> str:
     return hashlib.sha256("/".join(str(part) for part in parts).encode()).hexdigest()
 
@@ -301,7 +279,8 @@ def build_graph_value_data(
         for example in replay
         if (distribution := replay_distribution(example, config.smoothing_sigma)) is not None
     ]
-    chosen = sorted(usable, key=lambda item: stable_key(item[0].identifier, item[0].depth, item[0].goals))
+    seed = config.optimization.seed
+    chosen = sorted(usable, key=lambda item: stable_key(seed, item[0].identifier, item[0].depth, item[0].goals))
     replay_items = 0
     for number, (example, distribution) in enumerate(chosen[:replay_count]):
         state = table.add("replay", number, example.goals)
@@ -606,25 +585,11 @@ def benchmark_scores(
     return BenchmarkScores(name, benchmark_fingerprint(benchmark), tuple(distributions))
 
 
-def gate_decision(new: BenchmarkMetrics, current: BenchmarkMetrics, config: GateConfig) -> GateResult:
-    """Pass when the new model ranks siblings better by min_ranking_gain without regressing beyond the tolerances."""
-    reasons = []
-    new_ranking, current_ranking = new.ranking.pairwise_accuracy, current.ranking.pairwise_accuracy
-    if new_ranking is None:
-        reasons.append("no sibling pairs scored")
-    elif current_ranking is not None and new_ranking < current_ranking + config.min_ranking_gain:
-        reasons.append(f"pairwise accuracy {new_ranking:.3f} < {current_ranking:.3f} + {config.min_ranking_gain:g}")
-    assert new.separation is not None and current.separation is not None
-    new_auc = new.separation.proof_graph_over_dead_end_auc
-    current_auc = current.separation.proof_graph_over_dead_end_auc
-    if current_auc is not None and (new_auc is None or new_auc < current_auc - config.max_separation_drop):
-        reasons.append(f"proof-graph over dead-end AUC {new_auc} < {current_auc:.3f} - {config.max_separation_drop:g}")
-    assert new.calibration is not None and current.calibration is not None
-    new_brier = new.calibration.anchor_brier_score
-    current_brier = current.calibration.anchor_brier_score
-    if current_brier is not None and (new_brier is None or new_brier > current_brier + config.max_brier_increase):
-        reasons.append(f"anchor Brier {new_brier} > {current_brier:.4f} + {config.max_brier_increase:g}")
-    return GateResult(not reasons, tuple(reasons), new, current)
+@dataclass(frozen=True)
+class ScoredGate:
+    result: GateResult
+    new_scores: BenchmarkScores
+    current_scores: BenchmarkScores
 
 
 def run_value_gate(
@@ -635,20 +600,15 @@ def run_value_gate(
     new_adapter: str,
     current_adapter: str,
     device: torch.device,
-) -> GateResult:
+) -> ScoredGate:
     """Fresh scores of the new and the current adapter on the benchmark, one loaded at a time, and the decision."""
-    metrics = []
+    scores = []
     for adapter in (new_adapter, current_adapter):
         model = load_scoring_model(config.model, adapter, device)
-        scores = benchmark_scores(model, adapter or config.model, tokenizer, pad_token_id, benchmark, config, device)
-        estimates = fresh_estimates(benchmark, scores, config.readout)
-        metrics.append(compute_benchmark_metrics(benchmark, estimates, config.benchmark))
+        scores.append(
+            benchmark_scores(model, adapter or config.model, tokenizer, pad_token_id, benchmark, config, device)
+        )
         del model
-    result = gate_decision(metrics[0], metrics[1], config.gate)
-    # The current adapter (or its ancestor) usually guided any value-model search, so every such tree conflicts.
-    conflicts = tuple(conflict_message(source) for source in guidance_conflicts(benchmark.provenance, None))
-    match config.gate.guided_trees:
-        case GuidedTrees.REFUSE if conflicts:
-            return replace(result, passed=False, reasons=result.reasons + conflicts)
-        case _:
-            return replace(result, warnings=conflicts)
+    new_scores, current_scores = scores
+    result = value_gate(benchmark, new_scores, current_scores, config.readout, config.benchmark, config.gate)
+    return ScoredGate(result, new_scores, current_scores)

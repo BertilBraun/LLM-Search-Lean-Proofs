@@ -77,6 +77,7 @@ class GraphBuilder:
         parent: Node,
         *goals: str,
         value: float | None = None,
+        distribution: tuple[float, ...] | None = None,
         text: str | None = None,
         source: StepSource = StepSource.POLICY,
         failure_after: int | None = None,
@@ -100,6 +101,7 @@ class GraphBuilder:
         )
         child = self.tree.add_child(parent, edge.edge_id, step, source, -1.0, proof_state(*goals), 0.0, 0.0)
         child.value_estimate = value
+        child.value_distribution = distribution
         return child
 
     def duplicate(

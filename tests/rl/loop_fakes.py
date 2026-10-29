@@ -17,11 +17,12 @@ from lean_search.corpora.records import StatementRecord
 from lean_search.data import Problem
 from lean_search.expert_iteration.serving import MergedPublisher, ModelVersion, record_published
 from lean_search.lean import ProofState
+from lean_search.monitoring.families import ValueAbResult
 from lean_search.monitoring.store import MetricsWriter
 from lean_search.rl.evaluation import EvaluationKind, EvaluationSummary
 from lean_search.rl.fixed_sets import HeldOutStatement, Stratum
 from lean_search.rl.loop import PHASE_OUTCOME_FILE, GrpoLoop, GrpoLoopPaths, ReleasedLeanMemory, TrainingRequest
-from lean_search.rl.loop_config import GrpoLoopConfig, parse_loop_config
+from lean_search.rl.loop_config import EvaluationValueModel, GrpoLoopConfig, parse_loop_config
 from lean_search.rl.statement_sources import FixedStatements
 from lean_search.rl.training_phase import PhaseOutcome, PolicyOutcome, ValueOutcome
 from lean_search.search import (
@@ -36,7 +37,7 @@ from lean_search.search import (
     StopReason,
 )
 from lean_search.search.records import to_json
-from lean_search.value.graph_trainer import GateResult
+from lean_search.value.gate_statistics import GateResult
 
 REPOSITORY_DIRECTORY = Path(__file__).resolve().parents[2]
 PHASE_TEMPLATE = (REPOSITORY_DIRECTORY / "experiments/configs/grpo/phase.toml").read_text(encoding="utf-8")
@@ -75,6 +76,7 @@ max_sampling_minutes = 2.0
 min_solved_trees = 2
 check_seconds = 0.01
 value_benchmark = "gate/benchmark.json.gz"
+value_every_phases = 1
 
 [evaluation.probe]
 max_expansions = 16
@@ -228,6 +230,8 @@ class FakeTrainer:
 class FakeServers:
     served: list[int] = field(default_factory=list)
     releases: int = 0
+    # Merged value weights served in place of the version's, in order.
+    value_weights: list[str] = field(default_factory=list)
 
     async def check(self) -> None:
         pass
@@ -238,16 +242,30 @@ class FakeServers:
     async def serve(self, version: ModelVersion) -> None:
         self.served.append(version.version)
 
+    async def serve_value(self, weights: str) -> None:
+        self.value_weights.append(weights)
+
 
 @dataclass
 class FakeEvaluations:
     # First runs of a version; repeated runs in `repeats`.
     runs: list[tuple[EvaluationKind, int]] = field(default_factory=list)
     repeats: list[tuple[EvaluationKind, int]] = field(default_factory=list)
+    value_models: list[tuple[EvaluationKind, EvaluationValueModel]] = field(default_factory=list)
+    # The value A/B's published arm passes.
+    value_ab_passes: bool = False
 
-    async def evaluate(self, kind: EvaluationKind, phase: int, repeat: int) -> EvaluationSummary:
+    async def evaluate(
+        self, kind: EvaluationKind, phase: int, repeat: int, value_model: EvaluationValueModel
+    ) -> EvaluationSummary:
         (self.repeats if repeat else self.runs).append((kind, repeat if repeat else phase))
-        return dataclasses.replace(zero(EvaluationSummary), kind=kind, problems=10, solved=4 + repeat)
+        self.value_models.append((kind, value_model))
+        summary = dataclasses.replace(zero(EvaluationSummary), kind=kind, problems=10, solved=4 + repeat)
+        if kind == EvaluationKind.VALUE_AB and value_model == EvaluationValueModel.PUBLISHED:
+            return dataclasses.replace(
+                summary, value_ab=dataclasses.replace(zero(ValueAbResult), passed=self.value_ab_passes)
+            )
+        return summary
 
 
 def merge_by_writing(base_model: str, adapter: str, output: Path) -> None:
@@ -295,12 +313,21 @@ class LoopWorld:
 
 
 def loop_world(
-    root: Path, toml: str = LOOP_TOML, trainer: FakeTrainer | None = None, searcher: FakeSearcher | None = None
+    root: Path,
+    toml: str = LOOP_TOML,
+    trainer: FakeTrainer | None = None,
+    searcher: FakeSearcher | None = None,
+    evaluations: FakeEvaluations | None = None,
 ) -> LoopWorld:
     config = parse_loop_config(toml)
     paths = GrpoLoopPaths(root / "runs", root / "data", root / "checkpoints", config.name)
     return LoopWorld(
-        config, paths, searcher or FakeSearcher(), trainer or FakeTrainer(), FakeServers(), FakeEvaluations()
+        config,
+        paths,
+        searcher or FakeSearcher(),
+        trainer or FakeTrainer(),
+        FakeServers(),
+        evaluations or FakeEvaluations(),
     )
 
 

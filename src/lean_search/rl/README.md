@@ -121,9 +121,9 @@ sampling produced `min_solved_trees` solved trees (or after `max_sampling_minute
 | Stage | What happens |
 |---|---|
 | pause | every policy and value request waits at the pause gate; searches keep their trees and REPL states in place, and trees finishing now belong to the next phase |
-| training | servers on the training GPU sleep; `grpo_phase.py` runs on that GPU (`SubprocessTrainer`, log in `training/phase_<k>.log`): labels the phase's trees, trains the policy (two passes) and, every `value_every_phases` with a gate benchmark, the value model plus its gate; the loop labels the same trees meanwhile for the `search` and `curriculum` metrics |
-| publishing | `training_phase.publish_phase`: version k + 1 with the new policy adapter and the new value adapter only if it passed the gate, merged on the CPU into `serving.policy_base_model` and `value_base_model` (`MergedPublisher`); every server swaps to it in place (`publish_weights`), sleeping ones wake with it (`restore_gpu`), and the searches' pause gate records the version for the samples to come; the first accepted value model turns μ on (`value_share_after_gate`) for later phases |
-| evaluating | the paused searches' REPL processes stop (`evaluation.paused_repl_memory_gib`, "Host memory" below); due fixed targets run as their own jobs (`grpo_evaluate.py`) while the searches stay paused: by loop hours (`every_hours`), once before the first phase (`at_start`; `baseline_runs` independent runs), or when requested (`grpo_loop.py request-evaluation`) |
+| training | servers on the training GPU sleep; `grpo_phase.py` runs on that GPU (`SubprocessTrainer`, log in `training/phase_<k>.log`): labels the phase's trees, trains the policy (two passes) and, every `value_every_phases` (4) with a gate benchmark, the value model plus its gate ("The value model in the loop" below); the loop labels the same trees meanwhile for the `search` and `curriculum` metrics |
+| publishing | `training_phase.publish_phase`: version k + 1 with the new policy adapter and the new value adapter only if it passed the gate, merged on the CPU into `serving.policy_base_model` and `value_base_model` (`MergedPublisher`); every server swaps to it in place (`publish_weights`), sleeping ones wake with it (`restore_gpu`), and the searches' pause gate records the version for the samples to come |
+| evaluating | the paused searches' REPL processes stop (`evaluation.paused_repl_memory_gib`, "Host memory" below); due fixed targets run as their own jobs (`grpo_evaluate.py`) while the searches stay paused: by loop hours (`every_hours`), once before the first phase (`at_start`; `baseline_runs` independent runs), or when requested (`grpo_loop.py request-evaluation`); the value servers serve the evaluations' fixed value model meanwhile and the published one again afterwards; the value A/B search runs both its arms here |
 | resume | the searches continue with the new weights |
 
 GPU assignment: `training.gpu` trains; servers on it are released for the phase (none in `loop.toml`: GPU 0 trains,
@@ -131,7 +131,7 @@ GPUs 1–3 each serve the merged policy and the merged value model). Policy serv
 processed_logprobs` (`grpo_loop.py serve-commands` prints every start command).
 
 Restart: `loop_state.json` holds the phase, its stage, sampling and training time, whether a value model passed the
-gate and the evaluation clock; `models/current.json` and `versions.jsonl` the published versions; the tree index the
+gate, the last value adapter trained, whether μ is on and the evaluation clock; `models/current.json` and `versions.jsonl` the published versions; the tree index the
 searched statements and per-phase trees. `grpo_loop.py run` after a crash first swaps every server to the current
 version, finishes the interrupted stage (training again, publishing only if `current.json` lacks the phase's
 version, the remaining evaluations), then resumes sampling. Searches cut off by the crash are lost (the curriculum
@@ -151,14 +151,46 @@ dropped; the worker waits `server_failure_pause_seconds` after each failure. `st
 
 Metrics per phase (`MetricsWriter`, `<run>/metrics/`): `status` every `status_seconds`, `curriculum` and `search`
 (`phase_metrics.search_phase_record`: graph statistics, failure tiers, forced answers and repetition loops, Lean time
-per expansion, block length), `grpo` (from the trainer's `phase.json`), `value` when a value model met the gate,
-`timing` (sampling, training, publishing and evaluation seconds), `fixed_targets` from the evaluations; `system`
+per expansion, block length), `grpo` (from the trainer's `phase.json`), `value` per value retrain with a benchmark
+(the gate statistic, both models' benchmark metrics, `ValueDiagnostics`), `timing` (sampling, training, publishing and
+evaluation seconds), `fixed_targets` from the evaluations, `value_ab` from the value A/B search; `system`
 from `dashboard.py record-system`, including host memory (the limit, what is available, the Lean REPLs' private
 memory in total and at p90, the vLLM processes' private memory). Failure tiers are a message-based approximation
 (`phase_metrics.py`).
 
 The boundaries are protocols (`TreeSearcher`, `PhaseTrainer`, `ModelServers`, `Evaluations`); the tests run the loop
 with fakes for them (`tests/rl/loop_fakes.py`) and real Lean for the start-state and renamed searches.
+
+### The value model in the loop
+
+- **Cadence and data**: every `training.value_every_phases` (4) phases the training job trains the value model on the
+  trees of the last `value_window_phases` (8) phases (`TrainingRequest.value_trees`, `grpo_phase.py --value-trees`;
+  the other phases' records are read without their texts), continuing the last value adapter trained, accepted or not
+  (`LoopProgress.value_adapter`; the published one before the first), with 10% v0 replay
+  (`training.value_replay = "value/v0/train.jsonl"`: v0's own training data, `phase3_value_data.py --name v0`, the
+  exact remaining steps of traced train-split proofs; on the node under `$LEAN_SEARCH_DATA`, restored from the
+  backup's `generated_data` archive, `data/value/v0/`). The targets' q comes from the recorded bins
+  (`value/README.md`).
+- **Gate (a)**: the candidate against the published adapter on the held-out benchmark, by a paired cluster bootstrap
+  of the gain in sibling pairs ordered by h (`value/README.md`, "The gate"). Passed: published with the next version.
+- **A/B search (b)**: `evaluation.value_ab` (every 12 hours of loop time, or `request-evaluation --target value_ab`;
+  only while the published value model is not the reference) searches the first `value_ab_test.problems` (250)
+  problems of the probe set (the strata in turn) at the probe's budget with the current policy twice: with the
+  reference (`EvaluationValueModel.INITIAL`, value v0) and with the published value model, into
+  `evaluations/value_ab_v<version>_{initial,published}/`. The published arm's job pairs the two per problem
+  (`evaluation.value_ab_result`: solved counts, the problems one arm solved, an exact McNemar test, two-sided and
+  one-sided against "published worse") into `comparison.json`, the summary and the `value_ab` line. Compared with v0,
+  not with the previously published model: v0 is the fixed reference of the evaluations, and successive small steps
+  would each be below the A/B's noise while their sum may not be. The reference arm is not reused from a probe of the
+  same version because it covers a different set of problems and would tie the A/B to the probe's schedule.
+- **μ**: `value_share_after_gate` (0.15) turns on, and stays on, once a value model passed the gate (it is published)
+  and the latest A/B found the published model ahead of v0 by `value_ab_test.min_solved_difference` (1) and not worse
+  at `significance` (0.05, one-sided); before that every phase trains with μ = 0.
+- **Evaluations with a fixed value model**: the probe and miniF2F search with `evaluation.value_model` (default
+  `initial`, value v0), so they measure the policy alone; before them the value servers swap to its merged weights
+  (`Publisher.kept_value_weights`, merged once under `weights/kept_value/`, which pruning leaves alone; no swap while
+  the published value model is v0) and back to the published version's afterwards. Before this, the evaluations used
+  whatever value model was published. The held-out states use no value model.
 
 ## Host memory
 
@@ -185,9 +217,10 @@ lower `sampling.concurrency` or an evaluation's `concurrency` if a condition fai
   verified pool v3 statements the automation does not close, easy (difficulty < 2), medium (< 4) or hard by the
   curriculum's difficulty estimate (the known proof's tactic count until roots are scored), disjoint, in seeded hash
   orders. The loop's curriculum never feeds either (`statements.held_out`).
-- `probe`: 16 expansions, no harvesting, no ε, with the loop's value model; every 6 hours of loop time and before the
-  first phase, inside the loop's pause (GPUs free, the evaluation's own pool of `concurrency` REPLs, 64, next to the
-  paused searches, "Host memory" above). The per-problem wall cap (1 hour) is an emergency stop only, so that the
+- `probe`: 16 expansions, no harvesting, no ε, with the fixed `evaluation.value_model` (v0); every 6 hours of loop
+  time and before the first phase, inside the loop's pause (GPUs free, the evaluation's own pool of `concurrency`
+  REPLs, 64, next to the paused searches, "Host memory" above). The per-problem wall cap (1 hour) is an emergency stop
+  only, so that the
   expansions are the budget and the probe does not measure load; the searches it stopped are counted
   (`EvaluationSummary.wall_clock_stops`, `fixed_targets.probe_wall_clock_stops`, likewise for miniF2F) and should be
   zero. Version 0's probe runs twice (`baseline_runs = 2`; the second into `probe_v0000_repeat1/`, the policy samples

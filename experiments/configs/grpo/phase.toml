@@ -89,9 +89,12 @@ seed = 0
 lean_examples = 256
 math_examples = 128
 
+# The loop fills in initial_adapter (the last value adapter trained, else the published one), published_adapter (the
+# one the gate compares with) and the seed (per phase: unit order and the v0 replay draw).
 [value]
 model = "Qwen/Qwen3.5-2B"
 initial_adapter = "/workspace/checkpoints/phase3_value_v0/adapter"
+published_adapter = "/workspace/checkpoints/phase3_value_v0/adapter"
 retrain_from_base = false
 smoothing_sigma = 0.5
 bin_mass_weight = 1.0
@@ -119,9 +122,14 @@ seed = 0
 proof_graph = 0.4
 off_graph = 0.6
 
+# The gate: on the benchmark's labelled sibling pairs (a proof-graph child against a dead end or an explored off-graph
+# sibling), the share whose proof-graph child gets the lower h, candidate minus published, resampled by problem; the
+# candidate is published when the interval's lower bound lies above min_lower_bound. AUC, Brier, pair accuracy by
+# p_dead and Spearman are recorded as diagnostics only.
 [value.gate]
-min_ranking_gain = 0.01
-max_separation_drop = 0.02
-max_brier_increase = 0.01
+bootstrap_resamples = 5000
+confidence = 0.95
+seed = 0
+min_lower_bound = 0.0
 # A benchmark built from value-model-guided trees fails the gate ("warn" only reports it).
 guided_trees = "refuse"

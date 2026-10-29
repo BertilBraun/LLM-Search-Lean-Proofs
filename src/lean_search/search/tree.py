@@ -86,6 +86,8 @@ class Node:
     status: NodeStatus = NodeStatus.OPEN
     priority: float | None = None
     value_estimate: float | None = None
+    # The value model's bin probabilities behind value_estimate, when the value model has bins.
+    value_distribution: tuple[float, ...] | None = None
     child_ids: list[int] = field(default_factory=list)
     expansion_index: int | None = None
     expanded_seconds: float | None = None

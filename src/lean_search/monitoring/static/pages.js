@@ -3,9 +3,12 @@
 //
 // series: {label, field} | {label, fields: [...]} (summed) | {label, mean: "prefix."} | {label, sum: "prefix.", suffix}
 //         | {expand: "prefix.", label} (one series per column), optionally {over: "field" | "prefix."} (a ratio)
-// chart:  {title, family, kind: "line" | "stacked" | "bands" | "reliability", x: "time" | "policy_version" | ...,
-//          unit, series, compare (overlay the other runs), baseline (first value as a reference), allTime,
-//          thresholds: [{key, label}] (from the config), band: {low, high} (keys), yMin, yMax, wide}
+// chart:  {title, family, kind: "line" | "stacked" | "bands" | "reliability" | "histogram", x: "time" | "policy_version"
+//          | ..., unit, series, compare (overlay the other runs), baseline (first value as a reference), allTime,
+//          thresholds: [{key, label}] (from the config), references: [{value, label, kind}], band: {low, high} (keys),
+//          yMin, yMax, wide}
+// histogram (the family's latest record): categories, series: [{label, path, normalize, detail: {name: key}}]
+// reliability (the family's latest record): curves: [{label, path}] to lists of reliability bins
 
 const SAMPLES = "graph.policy_samples.";
 const EDGE_GROUPS = (prefix) => [
@@ -120,7 +123,35 @@ const SEARCH = {
   },
 };
 
+const VALUE_BINS = ["1", "2", "3", "4", "5", "6", "7", "8+", "dead"];
+const DEAD_TENTHS = Array.from({ length: 10 }, (_, index) => `${index / 10}–${(index + 1) / 10}`);
+const ALIVE_STEPS = Array.from({ length: 11 }, (_, index) => `${index + 1}–${index + 2}`);
+const PREDICTIONS = [
+  { label: "candidate, benchmark", prefix: "diagnostics.benchmark_candidate" },
+  { label: "published, benchmark", prefix: "diagnostics.benchmark_published" },
+  { label: "served, expanded", prefix: "diagnostics.phase_expanded" },
+  { label: "served, frontier", prefix: "diagnostics.phase_frontier" },
+];
+const predictionSeries = (field, normalize) =>
+  PREDICTIONS.map(({ label, prefix }) => ({ label, path: `${prefix}.${field}`, normalize, detail: { states: "states" } }));
+
 const VALUE = {
+  gate: {
+    title: "Gate: gain in sibling pairs ordered by h",
+    subtitle: "candidate minus published, share of pairs whose proof-graph child gets the lower h; 95% interval over problems, passes above 0",
+    family: "value", x: "phase", unit: "number", allTime: true,
+    references: [{ value: 0, label: "0", kind: "threshold" }],
+    series: [
+      { label: "lower bound", field: "gate.lower" },
+      { label: "difference", field: "gate.difference" },
+      { label: "upper bound", field: "gate.upper" },
+    ],
+  },
+  abSolved: {
+    title: "Value A/B search", subtitle: "probe problems solved, policy fixed: published value model vs v0",
+    family: "value_ab", x: "policy_version", unit: "count", allTime: true,
+    series: [{ label: "published", field: "published_solved" }, { label: "v0", field: "reference_solved" }],
+  },
   ranking: {
     title: "Value benchmark: ranking and separation", family: "value", unit: "share",
     series: [
@@ -149,7 +180,7 @@ export const PAGES = [
       { title: "Status", tiles: "overview" },
       { title: "Fixed targets", charts: [FIXED.probe, FIXED.minif2f, FIXED.heldOut, FIXED.math] },
       { title: "RL health", charts: [GRPO.kl, GRPO.clip, GRPO.mixed, GRPO.rewards] },
-      { title: "Value health", charts: [VALUE.ranking, VALUE.calibration] },
+      { title: "Value health", charts: [VALUE.gate, VALUE.abSolved] },
       { title: "Search behaviour", charts: [SEARCH.samples, SEARCH.noProgress, SEARCH.loops] },
     ],
   },
@@ -196,10 +227,65 @@ export const PAGES = [
   {
     id: "value",
     title: "Value",
-    families: ["value"],
+    families: ["value", "value_ab"],
     sections: [
       {
-        title: "Benchmark",
+        title: "Gate and A/B search",
+        charts: [
+          VALUE.gate,
+          {
+            title: "Pairs behind the gate", subtitle: "labelled sibling pairs, their problems, and the independent pairs they are worth",
+            family: "value", x: "phase", unit: "count", allTime: true,
+            series: [
+              { label: "pairs", field: "gate.pairs" },
+              { label: "effective pairs", field: "gate.effective_pairs" },
+              { label: "problems", field: "gate.problems" },
+              { label: "pairs ordered differently", field: "gate.discordant_pairs" },
+            ],
+          },
+          {
+            title: "Pairs ordered by h", subtitle: "share whose proof-graph child gets the lower h", family: "value", x: "phase", unit: "share", allTime: true,
+            series: [{ label: "candidate", field: "gate.candidate_accuracy" }, { label: "published", field: "gate.current_accuracy" }],
+          },
+          { title: "Gate passed", subtitle: "1 = published", family: "value", x: "phase", unit: "number", dots: true, yMin: 0, yMax: 1, allTime: true, series: [{ label: "passed", field: "gate_passed" }] },
+          VALUE.abSolved,
+          {
+            title: "A/B: problems solved by one arm only", subtitle: "the paired test's evidence", family: "value_ab", x: "policy_version", unit: "count", allTime: true,
+            series: [{ label: "published only", field: "only_published" }, { label: "v0 only", field: "only_reference" }],
+          },
+          {
+            title: "A/B: exact McNemar test", subtitle: "two-sided, and one-sided against the published model being worse", family: "value_ab", x: "policy_version", unit: "number", allTime: true, yMin: 0, yMax: 1,
+            references: [{ value: 0.05, label: "0.05", kind: "threshold" }],
+            series: [{ label: "p", field: "p_value" }, { label: "p (worse)", field: "worse_p_value" }],
+          },
+        ],
+      },
+      {
+        title: "Labels and predictions of the latest retrain",
+        charts: [
+          {
+            title: "Label distribution", subtitle: "weighted mean target per bin, by source", kind: "histogram", family: "value", categories: VALUE_BINS,
+            series: [
+              { label: "proof graph", path: "diagnostics.labels.proof_graph.bins", detail: { targets: "targets", weight: "weight" } },
+              { label: "off graph, solved trees", path: "diagnostics.labels.off_graph_solved_trees.bins", detail: { targets: "targets", weight: "weight" } },
+              { label: "off graph, unsolved trees", path: "diagnostics.labels.off_graph_unsolved_trees.bins", detail: { targets: "targets", weight: "weight" } },
+              { label: "v0 replay", path: "diagnostics.labels.replay.bins", detail: { targets: "targets", weight: "weight" } },
+            ],
+          },
+          { title: "Predicted bins", subtitle: "mean probability per bin", kind: "histogram", family: "value", categories: VALUE_BINS, series: predictionSeries("mean_bins", false) },
+          { title: "Predicted p_dead", subtitle: "share of states per tenth", kind: "histogram", family: "value", categories: DEAD_TENTHS, series: predictionSeries("dead_histogram", true) },
+          { title: "Expected steps given alive", subtitle: "share of states per step", kind: "histogram", family: "value", categories: ALIVE_STEPS, series: predictionSeries("alive_steps_histogram", true) },
+          {
+            title: "Calibration on expanded states", subtitle: "predicted proof probability against z (1 on the proof graph); diagonal = calibrated", kind: "reliability", family: "value",
+            curves: [
+              { label: "candidate, benchmark", path: "diagnostics.benchmark_candidate_calibration.bins" },
+              { label: "served, phase", path: "diagnostics.phase_calibration.bins" },
+            ],
+          },
+        ],
+      },
+      {
+        title: "Benchmark diagnostics (not pass criteria)",
         charts: [
           {
             title: "Sibling pairs ranked correctly", subtitle: "both siblings labelled; never-expanded ones excluded",
@@ -228,11 +314,6 @@ export const PAGES = [
             title: "Remaining-steps ranking", subtitle: "Spearman on proof-graph states", family: "value", unit: "number",
             series: [{ label: "Spearman", field: "benchmark.steps.spearman" }],
           },
-          {
-            title: "A/B search, value swapped", subtitle: "miniF2F-valid solved, policy fixed", family: "value", unit: "count",
-            series: [{ label: "candidate", field: "ab_solved_candidate" }, { label: "current", field: "ab_solved_current" }],
-          },
-          { title: "Gate passed", subtitle: "1 = published", family: "value", unit: "number", dots: true, yMin: 0, yMax: 1, series: [{ label: "passed", field: "gate_passed" }] },
           { title: "Value training loss", family: "value", unit: "number", series: [{ label: "loss", field: "training_loss" }] },
         ],
       },

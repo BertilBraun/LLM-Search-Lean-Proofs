@@ -31,7 +31,7 @@ from lean_search.rl.loop import (
     TrainingRequest,
     read_phase_outcome,
 )
-from lean_search.rl.loop_config import GrpoLoopConfig, LoopTrainingConfig
+from lean_search.rl.loop_config import EvaluationValueModel, GrpoLoopConfig, LoopTrainingConfig
 from lean_search.rl.renaming import StatementRenamings, search_problem
 from lean_search.rl.search_models import SearchModels, open_search_models
 from lean_search.rl.training_phase import PhaseOutcome
@@ -202,6 +202,7 @@ class SubprocessTrainer:
                 arguments += [option, str(self.paths.data_root / relative)]
         if request.train_value:
             arguments += ["--value-benchmark", str(self.paths.runs_root / self.config.value_benchmark)]
+            arguments += ["--value-trees", *(str(directory) for directory in request.value_trees)]
         return arguments
 
     async def train(self, request: TrainingRequest) -> PhaseOutcome:
@@ -237,14 +238,18 @@ class VllmServers:
         await asyncio.gather(*(release_gpu(server.url) for server in self.released))
 
     async def serve(self, version: ModelVersion) -> None:
-        await asyncio.gather(*(self.serve_one(server, version) for server in self.serving.servers))
+        await asyncio.gather(
+            *(self.serve_weights(server, self.publisher.weights(version, server)) for server in self.serving.servers)
+        )
 
-    async def serve_one(self, server: ServerEndpoint, version: ModelVersion) -> None:
-        weights = Path(self.publisher.weights(version, server))
+    async def serve_value(self, weights: str) -> None:
+        await asyncio.gather(*(self.serve_weights(server, weights) for server in self.serving.value_servers))
+
+    async def serve_weights(self, server: ServerEndpoint, weights: str) -> None:
         if await is_sleeping(server.url):
-            await restore_gpu(server.url, weights)
+            await restore_gpu(server.url, Path(weights))
         else:
-            await publish_weights(server.url, weights)
+            await publish_weights(server.url, Path(weights))
 
 
 class SubprocessEvaluations:
@@ -255,9 +260,12 @@ class SubprocessEvaluations:
         self.command_prefix = command_prefix
         self.current_version = current_version
 
-    async def evaluate(self, kind: EvaluationKind, phase: int, repeat: int) -> EvaluationSummary:
+    async def evaluate(
+        self, kind: EvaluationKind, phase: int, repeat: int, value_model: EvaluationValueModel
+    ) -> EvaluationSummary:
         version = self.current_version()
-        directory = self.paths.evaluation_directory(kind, version, repeat)
+        arm = value_model if kind == EvaluationKind.VALUE_AB else None
+        directory = self.paths.evaluation_directory(kind, version, repeat, arm)
         arguments = [
             *shlex.split(self.command_prefix),
             sys.executable,
@@ -270,6 +278,8 @@ class SubprocessEvaluations:
             str(phase),
             "--repeat",
             str(repeat),
+            "--value-model",
+            value_model.value,
         ]
         log_path = directory.with_name(directory.name + ".log")
         await run_logged(arguments, log_path, dict(os.environ), self.paths.children / "evaluation.pid")

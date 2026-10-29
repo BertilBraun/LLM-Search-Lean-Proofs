@@ -483,6 +483,67 @@ export function barChart(parent, spec) {
   return card;
 }
 
+// Bars per category, one per series side by side (histograms of the latest record).
+// spec: {title, unit, categories: [label], series: [{label, slot, values: [number | null], detail}]}
+export function groupedBarChart(parent, spec) {
+  const card = chartCard(parent, spec);
+  const series = spec.series.filter((item) => item.values.some((value) => value !== null && value !== undefined));
+  if (!series.length) return emptyNote(card), card;
+  const legend = htmlElement("div", "legend", null, card);
+  for (const item of series) {
+    const entry = htmlElement("span", "item", null, legend);
+    boxKey(item.slot, entry);
+    htmlElement("span", "", item.detail ? `${item.label} (${item.detail})` : item.label, entry);
+  }
+  const values = series.flatMap((item) => item.values.filter((value) => value !== null && value !== undefined));
+  const totalWidth = Math.max(240, card.clientWidth - 24);
+  const height = plotHeight(spec);
+  const domain = niceDomain(0, spec.yMax ?? Math.max(...values, 1e-9), 4);
+  const left = yLabelWidth(domain.ticks, spec.unit);
+  const frame = { left, right: 8, top: 8, bottom: 22, totalWidth, totalHeight: height };
+  frame.width = totalWidth - left - frame.right;
+  frame.height = height - frame.top - frame.bottom;
+  frame.yScale = (y) => frame.top + frame.height - ((y - domain.low) / (domain.high - domain.low)) * frame.height;
+  const slot = frame.width / spec.categories.length;
+  frame.xScale = (index) => left + slot * (index + 0.5);
+  const svg = svgElement("svg", { class: "plot", viewBox: `0 0 ${totalWidth} ${height}`, role: "img" }, card);
+  svg.setAttribute("aria-label", spec.title);
+  drawFrame(svg, frame, domain.ticks, spec.categories.map((label, index) => ({ value: index, label })), spec.unit);
+  const barWidth = Math.min(14, (slot * 0.8) / series.length);
+  const tooltip = htmlElement("div", "tooltip", null, card);
+  tooltip.hidden = true;
+  spec.categories.forEach((category, index) => {
+    const start = frame.xScale(index) - (barWidth * series.length) / 2;
+    series.forEach((item, position) => {
+      const value = item.values[index];
+      if (value === null || value === undefined) return;
+      const top = frame.yScale(value);
+      const bar = svgElement("rect", { class: "bar", x: start + position * barWidth, y: top, width: barWidth * 0.9, height: frame.yScale(0) - top }, svg);
+      bar.style.fill = seriesColor(item.slot);
+    });
+    const hit = svgElement("rect", { x: frame.xScale(index) - slot / 2, y: frame.top, width: slot, height: frame.height, fill: "transparent" }, svg);
+    const show = () => {
+      tooltip.replaceChildren();
+      htmlElement("div", "when", category, tooltip);
+      for (const item of series) {
+        const row = htmlElement("div", "row", null, tooltip);
+        boxKey(item.slot, row);
+        htmlElement("b", "", formatValue(item.values[index], spec.unit), row);
+        htmlElement("span", "", item.label, row);
+      }
+      tooltip.hidden = false;
+      const scale = svg.getBoundingClientRect().width / totalWidth;
+      const center = frame.xScale(index) * scale;
+      tooltip.style.left = `${Math.max(4, Math.min(center - tooltip.offsetWidth / 2, card.clientWidth - tooltip.offsetWidth - 4))}px`;
+      tooltip.style.top = `${svg.offsetTop + 4}px`;
+    };
+    hit.addEventListener("pointerenter", show);
+    hit.addEventListener("pointerdown", show);
+    hit.addEventListener("pointerleave", () => (tooltip.hidden = true));
+  });
+  return card;
+}
+
 export function sparkline(parent, values, className = "spark") {
   const known = values.filter((value) => value !== null && value !== undefined);
   const svg = svgElement("svg", { class: className, viewBox: "0 0 100 28", preserveAspectRatio: "none" }, parent);

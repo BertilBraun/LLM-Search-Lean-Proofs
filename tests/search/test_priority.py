@@ -1,3 +1,5 @@
+from collections.abc import Sequence
+
 import pytest
 from search_trees import add_child, new_tree
 
@@ -8,9 +10,13 @@ from lean_search.search import (
     GoalCountEstimator,
     PriorityConfig,
     PriorityKind,
+    Scores,
     StepSource,
+    ValueEstimates,
     build_priority_function,
 )
+from lean_search.search.search import node_scores
+from lean_search.search.tree import Node
 
 
 async def test_depth_plus_goals_adds_depth_and_open_goals() -> None:
@@ -90,3 +96,24 @@ async def test_the_configured_a_star_keeps_the_old_priority_by_default() -> None
     child = add_child(tree, tree.root, ("⊢ q",), step="a", source=StepSource.POLICY, log_probability=-2.0)
     function = build_priority_function(PriorityConfig(kind=PriorityKind.A_STAR, value_weight=0.5))
     assert (await function.score([child], tree)).priorities == (1.5,)
+
+
+class BinnedEstimator:
+    async def estimate(self, nodes: Sequence[Node]) -> ValueEstimates:
+        return ValueEstimates(tuple(1.0 for _ in nodes), distributions=tuple((1.0,) + (0.0,) * 8 for _ in nodes))
+
+
+async def test_a_star_reports_the_value_distributions() -> None:
+    tree = new_tree("⊢ p")
+    child = add_child(tree, tree.root, ("⊢ q",))
+    scores = await AStar(BinnedEstimator(), value_weight=1.0).score([child], tree)
+    assert scores.value_distributions == ((1.0,) + (0.0,) * 8,)
+
+
+def test_each_node_gets_its_value_distribution() -> None:
+    scores = Scores((3.0, 4.0), (1.0, 2.0), 0, ((1.0,) + (0.0,) * 8, (0.0,) * 8 + (1.0,)))
+    assert [score.value_distribution for score in node_scores(scores)] == list(scores.value_distributions)
+
+
+def test_nodes_scored_without_bins_get_no_value_distribution() -> None:
+    assert [score.value_distribution for score in node_scores(Scores((3.0,), (1.0,)))] == [None]

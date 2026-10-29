@@ -29,6 +29,8 @@ from lean_search.search.tactic_labels import policy_tactics
 from lean_search.training.math_data import MathSolution, tokenize_math_solution
 from lean_search.training.sft_data import TokenizedExample
 from lean_search.value.benchmark import LabelledTree, ValueBenchmark
+from lean_search.value.diagnostics import ValueDiagnostics, value_diagnostics
+from lean_search.value.gate_statistics import GateResult
 from lean_search.value.graph_targets import (
     RemainingStepsReadout,
     ValueTargetConfig,
@@ -36,7 +38,6 @@ from lean_search.value.graph_targets import (
     value_targets,
 )
 from lean_search.value.graph_trainer import (
-    GateResult,
     GraphValueConfig,
     GraphValueStepRecord,
     GraphValueTrainingResult,
@@ -80,6 +81,8 @@ class PhaseInputs:
     value_replay: Sequence[ValueExample] = ()
     # Without a benchmark the new value adapter is trained but not accepted.
     value_benchmark: ValueBenchmark | None = None
+    # The value model's window of recent phases' trees, this phase's included; empty: this phase's trees alone.
+    value_records: Sequence[TreeRecord] = ()
 
 
 @dataclass(frozen=True)
@@ -107,6 +110,10 @@ class ValueOutcome:
     adapter: str
     result: GraphValueTrainingResult
     gate: GateResult | None
+    # The window's trees the value model trained on.
+    trees: int = 0
+    # Present when the gate ran.
+    diagnostics: ValueDiagnostics | None = None
 
     @property
     def accepted(self) -> bool:
@@ -136,6 +143,15 @@ def label_phase_data(records: Sequence[TreeRecord], config: TrainingPhaseConfig)
         policy_trees.append(PolicyTree(tree_groups.groups, record.expansions))
         statistics.append(graph_statistics(record, labels, targets, tactics, tree_groups))
     return LabelledPhaseData(tuple(trees), tuple(policy_trees), total_statistics(statistics))
+
+
+def label_value_trees(records: Sequence[TreeRecord], config: TrainingPhaseConfig) -> tuple[LabelledTree, ...]:
+    trees = []
+    for record in records:
+        labels = label_graph(record)
+        targets = value_targets(record, labels, recorded_estimates(record, config.readout), config.value_targets)
+        trees.append(LabelledTree(record, labels, targets))
+    return tuple(trees)
 
 
 def chosen[T](items: Sequence[T], count: int, seed: str) -> list[T]:
@@ -182,6 +198,7 @@ def train_policy_phase(
 def train_value_phase(
     config: TrainingPhaseConfig,
     value: GraphValueConfig,
+    window: Sequence[LabelledTree],
     labelled: LabelledPhaseData,
     inputs: PhaseInputs,
     tokenizer: ValueTokenizer,
@@ -190,15 +207,27 @@ def train_value_phase(
     directory: Path,
     on_step: Callable[[GraphValueStepRecord], None],
 ) -> ValueOutcome:
-    data = build_graph_value_data(labelled.trees, config.ranking, inputs.value_replay, tokenizer, value)
+    """Trains on the window's trees; with a benchmark, the gate against the published adapter and the diagnostics."""
+    data = build_graph_value_data(window, config.ranking, inputs.value_replay, tokenizer, value)
     adapter = directory / "adapter"
     result = train_graph_value_model(value, tokenizer, pad_token_id, data, device, adapter, on_step)
-    gate = None
-    if inputs.value_benchmark is not None:
-        gate = run_value_gate(
-            value, tokenizer, pad_token_id, inputs.value_benchmark, str(adapter), value.initial_adapter, device
-        )
-    return ValueOutcome(str(adapter), result, gate)
+    if inputs.value_benchmark is None:
+        return ValueOutcome(str(adapter), result, None, len(window))
+    scored = run_value_gate(
+        value, tokenizer, pad_token_id, inputs.value_benchmark, str(adapter), value.published_adapter, device
+    )
+    replay = [(item.distribution, item.weight) for item in data.pointwise if item.target is None]
+    diagnostics = value_diagnostics(
+        window,
+        replay,
+        labelled.trees,
+        inputs.value_benchmark,
+        scored.new_scores,
+        scored.current_scores,
+        value.readout,
+        value.smoothing_sigma,
+    )
+    return ValueOutcome(str(adapter), result, scored.result, len(window), diagnostics)
 
 
 def run_training_phase(
@@ -231,9 +260,11 @@ def run_training_phase(
     if config.value is not None:
         assert value_tokenizer is not None
         directory = output_directory / "value"
+        window = label_value_trees(inputs.value_records, config) if inputs.value_records else labelled.trees
         value = train_value_phase(
             config,
             config.value,
+            window,
             labelled,
             inputs,
             value_tokenizer,
