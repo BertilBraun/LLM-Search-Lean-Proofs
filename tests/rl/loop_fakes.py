@@ -7,7 +7,7 @@ import itertools
 import json
 import types
 import typing
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -185,11 +185,15 @@ class FakeSearcher:
         self.memory_releases: list[int] = []
         # Shared with the trainer and the servers: the order of the pause's stages.
         self.events: list[str] = []
+        # Shared with the servers: while one is down, every search fails.
+        self.servers_down: set[str] = set()
 
     async def search(self, problem: Problem) -> CompletedSearch:
         await self.open.wait()
         await asyncio.sleep(0.001)
         self.searched.append(problem.name)
+        if self.servers_down:
+            raise httpx.ConnectError(f"{sorted(self.servers_down)} down")
         if self.server_failures.get(problem.name, 0) > 0:
             self.server_failures[problem.name] -= 1
             raise httpx.ConnectError("policy server down")
@@ -268,9 +272,22 @@ class FakeServers:
     value_weights: list[str] = field(default_factory=list)
     asleep: set[str] = field(default_factory=set)
     events: list[str] = field(default_factory=list)
+    # Servers not answering (shared with the searcher); a restart brings them back unless `restarts_fail`.
+    down: set[str] = field(default_factory=set)
+    restarts_fail: bool = False
+    restarted: list[str] = field(default_factory=list)
 
     async def check(self) -> None:
         pass
+
+    async def unhealthy(self) -> list[str]:
+        return sorted(self.down)
+
+    async def restart(self, names: Sequence[str], version: ModelVersion) -> None:
+        self.restarted += names
+        self.events += [f"restart {name} v{version.version}" for name in names]
+        if not self.restarts_fail:
+            self.down.difference_update(names)
 
     async def release(self) -> PhaseSeconds:
         self.releases += 1
@@ -371,6 +388,7 @@ def loop_world(
         tuple(server.name for server in config.released_servers()),
     )
     trainer.events = servers.events = searcher.events
+    servers.down = searcher.servers_down
     return LoopWorld(config, paths, searcher, trainer, servers, evaluations or FakeEvaluations())
 
 

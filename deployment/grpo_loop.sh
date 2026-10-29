@@ -3,7 +3,8 @@
 #
 #   deployment/grpo_loop.sh sets                 # once: probe, value gate and overfit statement sets (CPU)
 #   deployment/grpo_loop.sh init                 # once: version 0 (merges the policy and value [initial] adapters)
-#   deployment/grpo_loop.sh servers              # start every vLLM server on the current version (~2-5 min each)
+#   deployment/grpo_loop.sh servers              # start the vLLM servers not answering on the current version
+#                                                # (a GPU's two one after another, the GPUs in parallel)
 #   deployment/grpo_loop.sh check                # one live request per policy server: what the search parses
 #   deployment/grpo_loop.sh gate                 # once, ~1-2 h: the value gate's benchmark (no value model)
 #   deployment/grpo_loop.sh dashboard            # system sampler and dashboard on port ${DASHBOARD_PORT:-8600}
@@ -36,10 +37,7 @@ case "$1" in
         python experiments/grpo_loop.py --config "${config}" init
         ;;
     servers)
-        python experiments/grpo_loop.py --config "${config}" serve-commands | while read -r command; do
-            echo "+ ${command}"
-            bash -c "${command}"
-        done
+        python experiments/grpo_loop.py --config "${config}" start-servers
         ;;
     check)
         python experiments/grpo_loop.py --config "${config}" check-servers

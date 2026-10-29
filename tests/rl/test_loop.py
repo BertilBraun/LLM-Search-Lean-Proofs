@@ -547,6 +547,60 @@ async def test_a_statement_is_not_given_up_within_its_retries(tmp_path: Path) ->
     assert last_status(world, "statements_given_up") == 0
 
 
+def dead_server_world(root: Path, settings: str = "") -> LoopWorld:
+    toml = LOOP_TOML.replace(
+        "status_seconds = 0.01\n",
+        f"status_seconds = 0.01\nserver_failure_pause_seconds = 0.0\nserver_failure_window = 4\n{settings}",
+    )
+    world = loop_world(root, toml=toml)
+    world.servers.down.add("policy-gpu1")
+    return world
+
+
+def events_from_the_first_pause(world: LoopWorld) -> list[str]:
+    events = world.searcher.events
+    return events[events.index("pause") :]
+
+
+async def test_a_dead_server_is_restarted(tmp_path: Path) -> None:
+    world = dead_server_world(tmp_path)
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=1)
+    assert world.servers.restarted == ["policy-gpu1"]
+
+
+async def test_the_searches_pause_while_a_dead_server_restarts(tmp_path: Path) -> None:
+    world = dead_server_world(tmp_path)
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=1)
+    assert events_from_the_first_pause(world)[:3] == ["pause", "restart policy-gpu1 v0", "resume"]
+
+
+async def test_a_server_that_stays_down_stops_the_loop(tmp_path: Path) -> None:
+    world = dead_server_world(tmp_path)
+    world.servers.restarts_fail = True
+    record_version_zero(world)
+    with pytest.raises(RuntimeError):
+        await run_until(world, world.loop(), phases=1)
+
+
+async def test_without_restarts_a_dead_server_stops_the_loop(tmp_path: Path) -> None:
+    world = dead_server_world(tmp_path, "restart_dead_servers = false\n")
+    record_version_zero(world)
+    with pytest.raises(RuntimeError):
+        await run_until(world, world.loop(), phases=1)
+    assert world.servers.restarted == []
+
+
+async def test_servers_that_answer_again_are_checked_but_not_restarted(tmp_path: Path) -> None:
+    world = dead_server_world(tmp_path)
+    world.servers.down.clear()
+    world.searcher.server_failures = {problem_name(statement(number).statement): 2 for number in range(6)}
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=1)
+    assert events_from_the_first_pause(world)[:2] == ["pause", "resume"]
+
+
 OVERFULL_GPU = LOOP_TOML.replace(
     'url = "http://127.0.0.1:8100/v1"\n', 'url = "http://127.0.0.1:8100/v1"\nmemory_share = 0.7\n'
 ).replace('url = "http://127.0.0.1:8200/v1"\n', 'url = "http://127.0.0.1:8200/v1"\nmemory_share = 0.4\n')

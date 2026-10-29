@@ -30,7 +30,8 @@ import json
 import time
 import tomllib
 import traceback
-from collections.abc import Callable, Coroutine
+from collections import deque
+from collections.abc import Callable, Coroutine, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -192,6 +193,14 @@ class ModelServers(Protocol):
 
     async def serve_value(self, weights: str) -> None:
         """Every value server serves these merged value weights; the policy servers keep theirs."""
+        ...
+
+    async def unhealthy(self) -> list[str]:
+        """The names of the servers that do not answer their health check."""
+        ...
+
+    async def restart(self, names: Sequence[str], version: ModelVersion) -> None:
+        """Stops what is left of these servers and starts them on the version; raises when one does not come up."""
         ...
 
 
@@ -472,6 +481,10 @@ class GrpoLoop:
         self.server_failures: dict[str, int] = {}
         self.session_server_failures = 0
         self.statements_given_up = 0
+        # The last searches to end, True for those a server failed.
+        self.recent_searches: deque[bool] = deque(maxlen=config.sampling.server_failure_window)
+        # One pause of the searches at a time: a phase's, or a check of the servers.
+        self.pause_lock = asyncio.Lock()
         self.failure: BaseException | None = None
         # The merged value weights the value servers serve: the published version's, or an evaluation's fixed ones.
         self.served_value_weights = ""
@@ -561,13 +574,18 @@ class GrpoLoop:
                 completed = await self.searcher.search(pool_problem(fed.statement))
             except httpx.HTTPError as error:
                 self.server_failed(fed, error)
-                await asyncio.sleep(self.config.sampling.server_failure_pause_seconds)
+                self.recent_searches.append(True)
+                if self.servers_failing():
+                    await self.recover_servers()
+                else:
+                    await asyncio.sleep(self.config.sampling.server_failure_pause_seconds)
                 continue
             except BaseException:
                 self.statements.abandon(fed.name)
                 raise
             finally:
                 self.searches_running -= 1
+            self.recent_searches.append(False)
             result = completed.result
             if completed.tree is not None:
                 # The statement searched: the renamed one when the loop renames hypotheses.
@@ -594,13 +612,54 @@ class GrpoLoop:
         self.statements.abandon(fed.name)
         self.log(f"{fed.name}: {type(error).__name__}: {error}; given up after {failures} failures")
 
+    def servers_failing(self) -> bool:
+        sampling = self.config.sampling
+        failed = sum(self.recent_searches)
+        return len(self.recent_searches) == sampling.server_failure_window and (
+            failed >= sampling.server_failure_share * sampling.server_failure_window
+        )
+
+    async def recover_servers(self) -> None:
+        """Pauses the searches and checks the servers: restarts the dead ones, and stops the loop if any stays down
+        (stopped is better than idle GPUs until someone looks)."""
+        async with self.pause_lock:
+            if not self.servers_failing():
+                return
+            self.log(
+                f"{sum(self.recent_searches)} of the last {len(self.recent_searches)} searches failed on a server: "
+                "pausing the searches to check the servers"
+            )
+            self.loop_state = LoopState.PAUSED
+            self.write_status()
+            await self.searcher.pause()
+            down = await self.servers.unhealthy()
+            if down and not self.config.sampling.restart_dead_servers:
+                raise RuntimeError(f"Servers not answering: {down}; start them (grpo_loop.sh servers), then the loop.")
+            if down:
+                self.log(f"Servers not answering: {down}; restarting them")
+                await self.servers.restart(down, read_current(self.paths.models))
+                still_down = await self.servers.unhealthy()
+                if still_down:
+                    raise RuntimeError(
+                        f"Servers {still_down} do not answer after a restart (logs: $LEAN_SEARCH_RUNS/servers/); "
+                        "start them (grpo_loop.sh servers), then the loop."
+                    )
+                self.log(f"Restarted {down}; the searches resume")
+            else:
+                self.log("Every server answers; the searches resume")
+            self.recent_searches.clear()
+            self.searcher.resume()
+            self.loop_state = LoopState.SEARCHING
+            self.write_status()
+
     async def watch(self, stop: asyncio.Event) -> None:
         while not stop.is_set():
             await asyncio.sleep(self.config.training.check_seconds)
             for message in self.statements.refresh():
                 self.log(message)
             if not stop.is_set() and self.phase_due():
-                await self.run_phase()
+                async with self.pause_lock:
+                    await self.run_phase()
             elif self.sampling_since is not None:
                 self.save_progress(sampling_seconds=self.sampling_seconds())
                 self.sampling_since = self.clock()

@@ -38,6 +38,12 @@ class SamplingConfig:
     # A search a server failed feeds its statement again up to this many times, each after the pause.
     server_failure_retries: int = 3
     server_failure_pause_seconds: float = 5.0
+    # Once at least this share of the last `server_failure_window` searches ended on a server failure, the searches
+    # pause and the servers are checked: dead ones are restarted (if `restart_dead_servers`), and the loop stops with
+    # an error when any stays down.
+    server_failure_window: int = 20
+    server_failure_share: float = 0.5
+    restart_dead_servers: bool = True
 
 
 @dataclass(frozen=True)
@@ -159,6 +165,9 @@ def parse_loop_config(text: str) -> GrpoLoopConfig:
         shares[server.gpu] = shares.get(server.gpu, 0.0) + server.memory_share
     if any(share > 1.0 for share in shares.values()):
         raise ValueError(f"The servers' memory shares exceed a GPU's memory: {shares}.")
+    sampling = config.sampling
+    if sampling.server_failure_window < 1 or not 0 < sampling.server_failure_share <= 1:
+        raise ValueError("sampling needs server_failure_window >= 1 and 0 < server_failure_share <= 1.")
     if config.statements.kind == StatementSourceKind.FIXED and not config.statements.fixed:
         raise ValueError('statements.kind = "fixed" needs statements.fixed.')
     training = config.training

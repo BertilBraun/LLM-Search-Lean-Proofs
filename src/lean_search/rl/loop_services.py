@@ -300,6 +300,46 @@ def slowest(seconds: Sequence[PhaseSeconds]) -> PhaseSeconds:
     )
 
 
+@dataclass(frozen=True)
+class ServerStart:
+    server: ServerEndpoint
+    command: str
+
+
+def serve_command(
+    serving: ServingConfig, publisher: MergedPublisher, version: ModelVersion, server: ServerEndpoint
+) -> str:
+    """The server's start command for the version; policy servers report the tempered log-probabilities."""
+    command = publisher.serve_command(version, server)
+    return f"{command} {POLICY_SERVER_ARGUMENTS}" if server in serving.policy_servers else command
+
+
+async def start_server(start: ServerStart) -> None:
+    """Stops what is left of the server, then starts it; serve_model.sh returns once it answers."""
+    name = start.server.name
+    for command in (f"deployment/stop_model.sh {name}", start.command):
+        process = await asyncio.create_subprocess_exec("bash", "-c", command, cwd=REPOSITORY_DIRECTORY)
+        if await process.wait():
+            raise RuntimeError(f"Starting {name} failed ({command}); see $LEAN_SEARCH_RUNS/servers/{name}.log")
+
+
+async def start_servers(starts: Sequence[ServerStart]) -> None:
+    """The servers of one GPU one after another (each sizes itself by the memory the others left), the GPUs in
+    parallel."""
+    by_gpu: dict[int, list[ServerStart]] = {}
+    for start in starts:
+        by_gpu.setdefault(start.server.gpu, []).append(start)
+
+    async def start_in_turn(group: Sequence[ServerStart]) -> None:
+        for start in group:
+            await start_server(start)
+
+    outcomes = await asyncio.gather(*(start_in_turn(group) for group in by_gpu.values()), return_exceptions=True)
+    failures = [str(outcome) for outcome in outcomes if isinstance(outcome, BaseException)]
+    if failures:
+        raise RuntimeError("; ".join(failures))
+
+
 class VllmServers:
     """The merged policy and value servers: in-place weight swaps, sleep on the training GPUs."""
 
@@ -309,10 +349,22 @@ class VllmServers:
         self.publisher = publisher
 
     async def check(self) -> None:
-        healthy = await asyncio.gather(*(is_healthy(server.url) for server in self.serving.servers))
-        down = [server.name for server, up in zip(self.serving.servers, healthy, strict=True) if not up]
+        down = await self.unhealthy()
         if down:
-            raise RuntimeError(f"Servers not answering: {down}; start them (grpo_loop.py serve-commands).")
+            raise RuntimeError(f"Servers not answering: {down}; start them (grpo_loop.py start-servers).")
+
+    async def unhealthy(self) -> list[str]:
+        healthy = await asyncio.gather(*(is_healthy(server.url) for server in self.serving.servers))
+        return [server.name for server, up in zip(self.serving.servers, healthy, strict=True) if not up]
+
+    async def restart(self, names: Sequence[str], version: ModelVersion) -> None:
+        await start_servers(
+            [
+                ServerStart(server, serve_command(self.serving, self.publisher, version, server))
+                for server in self.serving.servers
+                if server.name in names
+            ]
+        )
 
     async def release(self) -> PhaseSeconds:
         return slowest(await asyncio.gather(*(release_gpu(server.url) for server in self.released)))
@@ -371,12 +423,7 @@ class SubprocessEvaluations:
 
 
 def serve_commands(config: GrpoLoopConfig, publisher: MergedPublisher, version: ModelVersion) -> list[str]:
-    """Each server's start command for the version; policy servers report the tempered log-probabilities."""
-    return [
-        publisher.serve_command(version, server)
-        + (f" {POLICY_SERVER_ARGUMENTS}" if server in config.serving.policy_servers else "")
-        for server in config.serving.servers
-    ]
+    return [serve_command(config.serving, publisher, version, server) for server in config.serving.servers]
 
 
 @dataclass(frozen=True)

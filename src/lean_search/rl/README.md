@@ -201,7 +201,14 @@ with its marker still runs (the error lists their process ids: `kill -TERM` each
 Server failures: a search that ends on an HTTP error of a policy or value server says nothing about its statement, so
 the statement is fed again (the curriculum's before new ones) up to `sampling.server_failure_retries` times, then
 dropped; the worker waits `server_failure_pause_seconds` after each failure. `status` counts the failures
-(`server_failures`) and the dropped statements (`statements_given_up`) of the session.
+(`server_failures`) and the dropped statements (`statements_given_up`) of the session. The policy client cycles
+over every server, so one dead server fails nearly every search: once at least `server_failure_share` (0.5) of the last
+`server_failure_window` (20) searches ended on a server failure, the searches pause (one pause at a time, a phase's
+included), the servers' health checks run, the ones not answering are stopped and started again on the current
+version (`restart_dead_servers`; `loop_services.start_servers`: a GPU's servers one after another, the GPUs in
+parallel), and the searches resume. A server still not answering, or a failed start, stops the loop with an error
+naming the servers: a stopped loop costs less than GPUs idle until someone looks. If every server answers, the
+searches resume without a restart.
 
 Metrics per phase (`MetricsWriter`, `<run>/metrics/`): `status` every `status_seconds`, `curriculum` and `search`
 (`phase_metrics.search_phase_record`: graph statistics, failure tiers, forced answers and repetition loops, Lean time
