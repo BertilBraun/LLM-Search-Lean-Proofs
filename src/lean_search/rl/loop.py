@@ -171,6 +171,10 @@ class PhaseTrainer(Protocol):
         """Trains on the phase's trees; the outcome is also in output_directory/phase.json."""
         ...
 
+    def earlier_jobs(self) -> str | None:
+        """What still runs of the training and evaluation jobs of a loop that died without stopping them, if any."""
+        ...
+
 
 class ModelServers(Protocol):
     async def check(self) -> None:
@@ -517,6 +521,10 @@ class GrpoLoop:
             raise RuntimeError("The loop stopped on a failure; a restart resumes it") from self.failure
 
     async def session(self, stop: asyncio.Event) -> None:
+        # Waking the servers into the GPU memory of an orphaned training job would fail the wake or the next training.
+        earlier = self.trainer.earlier_jobs()
+        if earlier is not None:
+            raise RuntimeError(earlier)
         await self.servers.check()
         current = read_current(self.paths.models)
         await self.servers.serve(current)

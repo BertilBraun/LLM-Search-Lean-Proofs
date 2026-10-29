@@ -294,9 +294,11 @@ the new weights in place. No server changes are needed to switch.
 
 The loop process holds one Lean REPL per concurrent search (`[sampling] concurrency`, 112) and runs the training and
 evaluation jobs as child processes, each in its own process group and recorded in `$LEAN_SEARCH_RUNS/<loop>/children/`
-while it runs; stopping the loop stops the job too (torchrun and its ranks share the group). A loop that refuses to
-start because "Jobs of an earlier loop still run" died without stopping one: check it with `ps -o pid,cmd -g <process
-id>`, stop it with `kill -TERM -<process id>`, then start the loop again.
+while it runs; stopping the loop stops the job too: its group and every process carrying the job's marker
+(`LEAN_SEARCH_LOOP_JOB` in the environment; torchrun starts its ranks in sessions of their own, outside the group). A
+loop that refuses to start because "Jobs of an earlier loop still run" died without stopping one; it refuses before
+waking any server. The message lists the job's process ids (`process_ids`, the ranks included): check them with
+`ps -o pid,cmd -p <ids>`, stop them with `kill -TERM <ids>`, then start the loop again.
 
 Bring-up on a fresh node, after the rebuild (`setup_remote.sh`, pool v3 verified statements under
 `$LEAN_SEARCH_DATA/expert_iteration/pool_v3/`, the value v0 adapter at `phase3_value_v0/adapter` from `node_backup/`,

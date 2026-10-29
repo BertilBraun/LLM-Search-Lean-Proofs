@@ -189,10 +189,14 @@ feeds each statement once; the fixed list feeds it again). The node's disk is no
 `metrics/`, `phases.jsonl`, `evaluations*/summary.json` and `report.md`; trees and adapters stay on the node.
 
 Jobs: the training and evaluation jobs run in their own process groups, each recorded in `children/<job>.pid` (process
-id and start time) while it runs. Stopping the loop (SIGTERM from `grpo_loop.sh stop`, or a failure) cancels the stage
-in flight, which sends SIGTERM to the job's group, SIGKILL after 30 s, and waits for it; the stage reruns after a
-restart. A loop that died without stopping its job (SIGKILL, OOM) leaves the record behind: the restarted loop refuses
-to start any job while a recorded one still runs (`kill -TERM -<process id>`, then restart).
+id, start time and a marker) while it runs. Every process of a job carries the marker in its environment
+(`LEAN_SEARCH_LOOP_JOB`), which finds the processes outside the group: torchrun starts each worker in a session of its
+own. Stopping the loop (SIGTERM from `grpo_loop.sh stop`, or a failure) cancels the stage in flight, which sends
+SIGTERM to the job's group and to every process with its marker, SIGKILL to what is left after 30 s, and waits; the
+stage reruns after a restart. A job that ends by itself (torchrun killed by the OOM killer, say) gets the same
+treatment for whatever it left running. A loop that died without stopping its job (SIGKILL, OOM) leaves the record
+behind: the restarted loop refuses to start, before it wakes or swaps any server, while a recorded job or any process
+with its marker still runs (the error lists their process ids: `kill -TERM` each, then restart).
 
 Server failures: a search that ends on an HTTP error of a policy or value server says nothing about its statement, so
 the statement is fed again (the curriculum's before new ones) up to `sampling.server_failure_retries` times, then

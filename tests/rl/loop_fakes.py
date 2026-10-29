@@ -225,6 +225,11 @@ class FakeTrainer:
     requests: list[TrainingRequest] = field(default_factory=list)
     timings: TrainerTimings = field(default_factory=TrainerTimings)
     events: list[str] = field(default_factory=list)
+    # A job of an earlier loop still running.
+    earlier_job: str | None = None
+
+    def earlier_jobs(self) -> str | None:
+        return self.earlier_job
 
     async def train(self, request: TrainingRequest) -> PhaseOutcome:
         self.requests.append(request)
