@@ -910,7 +910,8 @@ foundation of everything above, so it comes first.
    replay test, the loop's smoke cycle (one hour, every stage and evaluation at a tiny size), baselines with the new
    settings (student v2, value v0). First-hour checks (`deployment/README.md`, "GRPO loop"): `grpo_loop.sh check` (recorded tokens and
    log-probabilities, usable blocks); **serving precision**: fp16-merged, bf16-merged and unmerged LoRA serving
-   against an fp32 reference (log-probabilities on a few hundred samples, plus throughput); the probe's wall time,
+   against an fp32 reference (log-probabilities on a few hundred samples, plus throughput and whether small updates
+   survive; `experiments/serving_precision.py`, deployment/README.md "Serving precision"); the probe's wall time,
    its wall-clock stops (should be zero) and the two version-0 runs for the noise; host memory while sampling, while
    training and during a probe, against the budget; the first phase's pause segment by segment (four GPUs vs
    `gpus = [0]` if the fixed segments dominate), training vs sampling time (one or two passes) and the ranks' peak
