@@ -12,7 +12,6 @@ from lean_search.value.graph_targets import RemainingStepsReadout, recorded_esti
 
 READOUT = RemainingStepsReadout()
 CONFIG = RewardConfig()
-# The example's off-graph state is expanded once.
 SINGLE_EXPANSION_EVIDENCE = dataclasses.replace(CONFIG, off_graph_min_expanded_nodes=1)
 
 
@@ -60,11 +59,17 @@ def test_redundant_hypothesis_scores_as_a_failure() -> None:
 
 
 def test_expanded_off_graph_state_is_neutral_before_the_gate() -> None:
-    assert tactic_rewards(CONSTRUCTOR, SINGLE_EXPANSION_EVIDENCE) == pytest.approx([0.0])
+    assert tactic_rewards(CONSTRUCTOR) == pytest.approx([0.0])
 
 
-def test_off_graph_state_with_too_few_expanded_nodes_earns_nothing() -> None:
-    assert tactic_rewards(CONSTRUCTOR) == [None]
+def test_off_graph_state_with_live_children_and_too_few_expanded_nodes_earns_nothing() -> None:
+    builder = GraphBuilder("⊢ p")
+    off_graph = builder.child(builder.root, "⊢ q", text="detour")
+    builder.child(off_graph, "⊢ r")
+    proof = builder.child(builder.root, text="close")
+    (root,) = groups(builder.record(proof))
+    (detour,) = [sample for sample in root.samples if sample.text == "detour"]
+    assert detour.tactics[0].parts is None
 
 
 def test_expanded_off_graph_state_earns_its_value_part_after_the_gate() -> None:

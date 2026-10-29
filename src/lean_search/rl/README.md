@@ -19,8 +19,8 @@ state of any edge reaching it (`graph_labels.nodes_by_goal_key`). The checks, in
 | `no_progress` | the state equals one before it on its path: the node, its ancestors, or an earlier state of the same block (the trailing no-ops skipped after a nested proof closed repeat their state, so they count too) |
 | `redundant_hypothesis` | the state adds only hypotheses whose types the context already had, or reflexive `a = a` / `a ↔ a` (`lean/hypotheses.py`, `adds_only_redundant_hypotheses`, against every earlier state of the path); a flattened `have h : A` also puts `⊢ A` first, which counts as redundant when `A` is |
 | `proof_graph` | a proof-graph node's state, or an intermediate state of a forward edge on a route to a proof |
-| `off_graph` | an expanded node off the proof graph (dead ends included) with at least `off_graph_min_expanded_nodes` (4) expanded nodes in its subtree, itself included: the n of the value targets' weight n / (n + 4) |
-| `unknown` | anything else: a node never expanded, an expanded off-graph node with fewer expanded nodes (one harvesting or ε expansion is too little evidence to push a sibling down), or a state no node has |
+| `off_graph` | a dead end (its expansion produced nothing usable: real evidence however small), or an expanded node off the proof graph with at least `off_graph_min_expanded_nodes` (4) expanded nodes in its subtree, itself included: the n of the value targets' weight n / (n + 4) |
+| `unknown` | anything else: a node never expanded, an expanded off-graph node with live children and fewer expanded nodes (one harvesting or ε expansion is too little evidence to push a sibling down), or a state no node has |
 
 The proof graph is defined at tactic granularity: `label_graph` splits a forward edge at every intermediate tactic
 state that is another node's state, so that node routes to the proof too (and gets exact remaining steps). Records

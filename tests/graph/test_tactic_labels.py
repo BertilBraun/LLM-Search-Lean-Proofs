@@ -47,7 +47,7 @@ def labels_of(record: TreeRecord, text: str, min_expanded_nodes: int = MIN_EXPAN
         (NO_OP, (NO_PROGRESS,)),
         (ERROR, (FAILING,)),
         ("", (FAILING,)),
-        (CONSTRUCTOR, (UNKNOWN,)),
+        (CONSTRUCTOR, (OFF_GRAPH,)),
         (THROUGH_SECOND_HAVE, (PROOF_GRAPH, PROOF_GRAPH, UNKNOWN)),
     ],
     ids=[
@@ -58,7 +58,7 @@ def labels_of(record: TreeRecord, text: str, min_expanded_nodes: int = MIN_EXPAN
         "no-op",
         "error",
         "unparsed",
-        "off graph expanded once",
+        "dead end",
         "intermediate state",
     ],
 )
@@ -103,16 +103,15 @@ def test_old_record_block_off_any_route_knows_only_its_last_state() -> None:
     builder = GraphBuilder("⊢ p")
     other = builder.child(builder.root, "⊢ q", text="first\nsecond", tactics=2)
     builder.failure(other)
-    assert labels_of(builder.record(), "first\nsecond", min_expanded_nodes=1) == (UNKNOWN, OFF_GRAPH)
+    assert labels_of(builder.record(), "first\nsecond") == (UNKNOWN, OFF_GRAPH)
 
 
 def detour_tree(expanded_nodes: int) -> TreeRecord:
-    """A detour off the proof graph whose subtree is a chain of `expanded_nodes` expanded nodes, itself first."""
+    """A detour off the proof graph: a chain of `expanded_nodes` expanded nodes ending in a live child."""
     builder = GraphBuilder("⊢ p")
     node = builder.child(builder.root, "⊢ q 0", text="detour")
-    for index in range(1, expanded_nodes):
+    for index in range(1, expanded_nodes + 1):
         node = builder.child(node, f"⊢ q {index}")
-    builder.failure(node)
     return builder.record()
 
 
@@ -122,6 +121,13 @@ def detour_tree(expanded_nodes: int) -> TreeRecord:
 )
 def test_off_graph_state_needs_enough_expanded_nodes_in_its_subtree(expanded_nodes: int, label: TacticLabel) -> None:
     assert labels_of(detour_tree(expanded_nodes), "detour") == (label,)
+
+
+def test_dead_end_expanded_once_stays_off_graph() -> None:
+    builder = GraphBuilder("⊢ p")
+    dead_end = builder.child(builder.root, "⊢ q", text="detour")
+    builder.failure(dead_end)
+    assert labels_of(builder.record(), "detour") == (OFF_GRAPH,)
 
 
 def test_unverified_proof_fails_on_its_last_tactic() -> None:

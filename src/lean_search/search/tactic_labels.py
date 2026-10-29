@@ -22,9 +22,9 @@ from lean_search.search.tree import Edge, EdgeOutcome, StepSource
 
 class TacticLabel(StrEnum):
     PROOF_GRAPH = "proof_graph"
-    # An expanded state off the proof graph whose subtree has enough expanded nodes to count as evidence.
+    # A dead end, or an expanded state off the proof graph whose subtree has enough expanded nodes to be evidence.
     OFF_GRAPH = "off_graph"
-    # A state never expanded, or expanded off the proof graph with too few expanded nodes: no evidence either way.
+    # A state never expanded, or expanded off the proof graph with live children and too few expanded nodes.
     UNKNOWN = "unknown"
     # Unchanged, or back to an earlier state of its path: the block's own states, the node and its ancestors.
     NO_PROGRESS = "no_progress"
@@ -92,9 +92,11 @@ class TacticGraph:
         return on_graph_node or key in self.proof_graph_keys
 
     def is_off_graph_evidence(self, node_id: int | None) -> bool:
-        """Expanded, with `min_expanded_nodes` expanded nodes in its subtree, itself included (the value targets' n)."""
+        """A dead end, or expanded with `min_expanded_nodes` expanded nodes in its subtree counting itself."""
         if node_id is None or not self.labels.expanded[node_id]:
             return False
+        if self.labels.node_classes[node_id] == NodeClass.DEAD_END:
+            return True
         return 1 + len(self.labels.expanded_descendants[node_id]) >= self.min_expanded_nodes
 
     def edge_tactics(self, edge: Edge) -> tuple[TacticOutcome, ...]:

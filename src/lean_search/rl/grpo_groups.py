@@ -22,7 +22,7 @@ class RewardConfig:
     goal_closed_bonus: float = 0.1
     # μ: an expanded off-graph state earns G = μ · q, q its value part; 0 until a value model passed the gate.
     value_share: float = 0.0
-    # An expanded off-graph state with fewer expanded nodes in its subtree (itself included) is unknown, not off graph.
+    # An off-graph state with live children and fewer expanded nodes in its subtree (itself included) is unknown.
     off_graph_min_expanded_nodes: int = 4
     # Only groups with a policy sample reaching the proof graph; the automation sweep's children do not count.
     require_policy_proof: bool = True
