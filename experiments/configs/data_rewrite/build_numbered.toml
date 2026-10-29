@@ -1,0 +1,34 @@
+# Naming A/B, numbered arm: the rewritten data with the corpora's hypothesis names (h₀, h₁, …).
+#   python experiments/data_rewrite.py build --config experiments/configs/data_rewrite/build_numbered.toml \
+#       --name visible_student_v3_numbered
+# The named arm (build_named.toml) uses the same items and chunks; only the names differ.
+rewrite_run = "data_rewrite_v1"
+variant = "numbered"
+# One train chunk example per train reasoning example (v2 replayed 0.21 one-tactic steps per reasoning example).
+chunk_examples_per_reasoning_example = 1.0
+validation_chunk_examples = 500
+max_prompt_tokens = 2048
+max_completion_tokens = 512
+tokenizer = "Qwen/Qwen3.5-4B"
+seed = "data-rewrite-v1"
+
+# k ∈ {1, 3, 5, 7, rest of the proof}, drawn once per start state (0 = the rest).
+[[chunk_lengths]]
+tactics = 1
+weight = 1.0
+
+[[chunk_lengths]]
+tactics = 3
+weight = 1.0
+
+[[chunk_lengths]]
+tactics = 5
+weight = 1.0
+
+[[chunk_lengths]]
+tactics = 7
+weight = 1.0
+
+[[chunk_lengths]]
+tactics = 0
+weight = 1.0
