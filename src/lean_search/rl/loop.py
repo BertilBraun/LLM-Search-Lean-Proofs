@@ -319,6 +319,7 @@ def phase_config_text(
     policy["initial_adapter"] = current.policy_adapter
     policy["reference_adapter"] = starting_policy_adapter
     policy.setdefault("optimization", {})["seed"] = phase
+    table.setdefault("policy_replay", {})["seed"] = f"grpo-replay/{phase}"
     if value_adapter is None:
         table.pop("value", None)
     else:

@@ -83,6 +83,10 @@ def test_phase_config_seeds_each_phase_differently() -> None:
     assert phase_table()["policy"]["optimization"]["seed"] == 4
 
 
+def test_phase_config_draws_the_replay_per_phase() -> None:
+    assert phase_table()["policy_replay"]["seed"] == "grpo-replay/4"
+
+
 @pytest.mark.parametrize(
     ("target", "last", "loop_seconds", "at_start", "due"),
     [

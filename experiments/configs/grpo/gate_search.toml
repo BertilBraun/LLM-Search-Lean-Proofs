@@ -65,7 +65,7 @@ automation_log_probability = -2.8
 [policy]
 model = "policy-merged"
 tokenizer = "Qwen/Qwen3.5-4B"
-server_urls = ["http://127.0.0.1:8101/v1", "http://127.0.0.1:8102/v1", "http://127.0.0.1:8103/v1"]
+server_urls = ["http://127.0.0.1:8100/v1", "http://127.0.0.1:8101/v1", "http://127.0.0.1:8102/v1", "http://127.0.0.1:8103/v1"]
 sample_count = 8
 temperature = 0.8
 top_p = 1.0

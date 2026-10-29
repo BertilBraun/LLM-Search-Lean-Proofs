@@ -94,6 +94,7 @@ packing = true
 compile_layers = true
 seed = 0
 
+# The loop sets the seed per phase, so each phase replays different examples.
 [policy_replay]
 lean_examples = 256
 math_examples = 128
