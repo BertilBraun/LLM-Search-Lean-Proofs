@@ -113,11 +113,15 @@ def train_round(
     phase_text = (REPOSITORY_DIRECTORY / arm.phase_config).read_text(encoding="utf-8")
     phase = from_json_object(TrainingPhaseConfig, tomllib.loads(phase_text))
     assert phase.policy is not None, arm.phase_config
+    optimization = phase.policy.optimization
+    if arm.learning_rate is not None:
+        optimization = dataclasses.replace(optimization, learning_rate=arm.learning_rate)
     grpo = dataclasses.replace(
         phase.policy,
         model=config.policy_base_model,
         initial_adapter=initial_adapter,
         reference_adapter=config.policy_adapter,
+        optimization=optimization,
     )
     labelled = single_step_phase_data(records, states, phase.reward)
     inputs = PhaseInputs(records=records)

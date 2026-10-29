@@ -28,3 +28,10 @@ phase_config = "experiments/configs/grpo/phase.toml"
 [[arms]]
 name = "sequence"
 phase_config = "experiments/configs/grpo/phase_sequence_credit.toml"
+
+# The learning rate (DESIGN.md "Policy update"): per-tactic credit at 3e-5 against per_tactic's 1e-5. Take 3e-5 if
+# its success on the disjoint states is at least per_tactic's and its KL to the start and clip fraction stay modest.
+[[arms]]
+name = "per_tactic_learning_rate_3e-5"
+phase_config = "experiments/configs/grpo/phase.toml"
+learning_rate = 3e-5

@@ -41,6 +41,8 @@ class SingleStepArm:
     # Its run directory under the experiment's, and the training phase config (credit mode) it trains with.
     name: str
     phase_config: str
+    # Overrides the phase config's policy learning rate; None keeps it.
+    learning_rate: float | None = None
 
 
 @dataclass(frozen=True)

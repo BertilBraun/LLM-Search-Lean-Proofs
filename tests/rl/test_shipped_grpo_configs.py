@@ -76,7 +76,13 @@ def test_single_step_arms_load_their_phase_configs() -> None:
         ]
         for arm in config.arms
     ]
-    assert credits == ["per_tactic", "sequence"]
+    assert credits == ["per_tactic", "sequence", "per_tactic"]
+
+
+def test_single_step_compares_the_learning_rates() -> None:
+    text = (CONFIGS / "grpo/single_step.toml").read_text(encoding="utf-8")
+    config = from_json_object(SingleStepConfig, tomllib.loads(text))
+    assert [arm.learning_rate for arm in config.arms] == [None, None, 3e-5]
 
 
 @pytest.mark.parametrize("name", LOOPS)
