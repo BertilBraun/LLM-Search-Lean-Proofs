@@ -27,6 +27,11 @@ state that is another node's state, so that node routes to the proof too (and ge
 written before `tactic_goals` was kept know only the final state of each edge: its earlier tactics are `proof_graph` on
 a route to a proof and `unknown` otherwise; the last one is judged as above against the parent (redundancy included).
 
+A `proof_graph` tactic also carries its state's remaining steps (`TacticOutcome.remaining_steps`, top-level tactics
+to a verified proof, 0 once proved): its node's `GraphLabels.remaining_steps`, or for an intermediate state the
+target's plus the tactics left in the edge; a state with several (several nodes or routes with its goal key) takes the
+shortest.
+
 ## Groups and rewards (`grpo_groups.py`)
 
 One group per expanded proof-graph node with policy samples; no groups off the proof graph or in unsolved trees.
@@ -34,11 +39,13 @@ With `require_policy_proof` (default) a group also needs a policy sample with a 
 automation sweep's children reach the proof graph, the group is left out (`TreeGroups.without_policy_proof`, the
 search metrics' `graph.groups_without_policy_proof`); a policy sample repeating the sweep's tactic counts as the
 policy's. Identical texts are merged (multiplicity = the samples behind them). Each tactic gets
-`R = (1 − λ) · G + λ · L` (`RewardConfig`, λ = `local_share` = 0.15, L clipped to [−1, 1]):
+`R = (1 − λ) · G + λ · L` (`RewardConfig`, λ = `local_share` = 0.15, L clipped to [−1, 1]), and a proof-graph state
+δ (`progress_per_step` = 0.2) per remaining step it is closer to a proof than the group's node, `δ · (d(node) − d(s))`
+(part of the global part; negative for a proof-graph state farther away):
 
 | Label | G | L | R |
 |---|---|---|---|
-| proof graph | 1 | `goal_closed_bonus` (0.1) per goal closed | 0.85 + 0.015 per goal |
+| proof graph | 1 | `goal_closed_bonus` (0.1) per goal closed | 0.85 + 0.2 per step of progress + 0.015 per goal |
 | off graph | μ · q (`value_share`, 0 until a value model passed the gate; q averages the state's expanded descendants, else its own estimate) | 0 | 0 before the gate |
 | no progress, redundant hypothesis | 0 | `no_progress_local` (−1, as a failure: a no-op wastes the sample too) | −0.15 |
 | failing | 0 | `failure_local` (−1) | −0.15 |
@@ -46,19 +53,41 @@ policy's. Identical texts are merged (multiplicity = the samples behind them). E
 
 ## Advantages (`advantages.py`) and tokens (`token_credit.py`, `policy_data.py`)
 
-A sample's score is the mean R of its tactics with a reward; the baseline b is the multiplicity-weighted mean score of
-the group's samples with a score (all-unknown samples stay out). No division by a standard deviation. Groups whose
-advantages are all zero are dropped (`GroupAdvantages.has_signal`).
+A block t1..tk is credited the way the search uses it: the longest valid prefix becomes the child, so a tactic after
+the first decides only whether the block gets further than the state before it (`grpo_groups.judged_in_block`,
+`TacticReward.gain`):
+
+| Tactic | Advantage |
+|---|---|
+| the first (its failure or no-op included) | R − b |
+| a later one reaching a state with a reward (proof graph, off graph) | R(s_i) − R(s_j), s_j the most recent earlier state of the block with a reward: δ per step gained on the proof graph (plus its goal bonus), the whole drop when it leaves the proof graph |
+| a later one with no earlier state with a reward | R − b, as the first |
+| a later failing, no-progress or redundant one | −c (`wasted_tactic_cost` = 0.1, a local part in the local share): the prefix is kept, only its tokens are wasted |
+| unknown, masked | untrained |
+
+A sample's score is its final state's R minus c per wasted later tactic (`GroupSample.score_parts`: the last tactic
+judged against b plus every gain, so the advantages of a block's tactics add up to score − b); a sample whose first
+tactic fails scores that tactic's R, one without a state with a reward or a first-tactic failure has no score. The
+baseline b is the multiplicity-weighted mean score of the group's samples with a score. No division by a standard
+deviation. Groups whose advantages are all zero are dropped (`GroupAdvantages.has_signal`).
+
+Stopping after t_i keeps s_i, the reference point of t_{i+1}, so the closing tokens get 0; continuing gets
+δ · steps gained when t_{i+1} is correct and −c when it fails, and pays when P(correct) > c / (c + δ) = 1/3. The
+closing tokens are trained with advantage 0 rather than masked: the loss divides by a fixed sequences × 256 tokens,
+so a zero-advantage token adds no gradient and changes no other token's weight; it only keeps the stop decision
+under the KL term (`kl_coefficient`, 0 by default) and in the per-token metrics, as a decision with a known neutral
+value. After a failure the closing follows masked tactics and stays untrained.
 
 | Tokens | `per_tactic` credit (default) | `sequence` credit |
 |---|---|---|
 | explanation and opening fence (before the first tactic's span) | score − b | score − b |
-| a tactic's span, and the gap before it (newlines, comments) | R − b; untrained when unknown or masked | score − b |
-| after the last tactic (closing fence, end of turn) | the last tactic's R − b after a complete block; untrained after a failure | score − b |
+| a tactic's span, and the gap before it (newlines, comments) | the tactic's advantage above; untrained when unknown or masked | score − b |
+| after the last tactic (closing fence, end of turn) | 0 after a complete block; untrained after a failure | score − b |
 | inserted by the harness (`SampledTokens.inserted`) | untrained | untrained |
 
 Unknown scores train nothing. A sample without a span per executed tactic (no usable block, spans not recorded) gets
 score − b on every sampled token, so an unparsed sample scores like a failing tactic over its whole completion.
+Sequence credit sees the progress and the wasted-tactic costs through the score.
 
 Tokens are the recorded ones (`SampledCompletion.tokens.token_ids`, no re-tokenization; the prompt is the recorded
 prompt encoded without special tokens, as vLLM does). Their characters come from decoding them one by one with the
@@ -105,7 +134,11 @@ else scored with it loaded next to the trained adapter, which alone trains again
 
 `tree_statistics.graph_statistics` adds per tree: tactics by label over every policy sample and over the groups,
 groups with a signal, groups left out without a policy proof, the global and local reward parts, proofs with their
-tactics and blocks, harvest expansions with the proofs and proof-graph nodes they created, and ε-picks.
+tactics and blocks, harvest expansions with the proofs and proof-graph nodes they created, ε-picks, and the policy
+samples' blocks (`BlockCounts`: tactics and valid tactics per sample, valid tactics another tactic follows, and the
+tactics after the first that failed or made no progress). The dashboard's search family charts block length and the
+continue rate after a valid tactic next to the later tactics' failure rate; a steady fall in either length means the
+stop credit pushes blocks short.
 `training_phase.grpo_phase_record` turns a policy outcome into the dashboard's `grpo` line (trained groups, tactics
 by label, local share of the advantages, sampler mismatch overall and by sampling age, i.e. the version trained from
 minus the version that sampled, forced answers kept, training and sampling time).
@@ -121,14 +154,31 @@ sampling produced `min_solved_trees` solved trees (or after `max_sampling_minute
 | Stage | What happens |
 |---|---|
 | pause | every policy and value request waits at the pause gate; searches keep their trees and REPL states in place, and trees finishing now belong to the next phase |
-| training | servers on the training GPU sleep; `grpo_phase.py` runs on that GPU (`SubprocessTrainer`, log in `training/phase_<k>.log`): labels the phase's trees, trains the policy (two passes) and, every `value_every_phases` (4) with a gate benchmark, the value model plus its gate ("The value model in the loop" below); the loop labels the same trees meanwhile for the `search` and `curriculum` metrics |
-| publishing | `training_phase.publish_phase`: version k + 1 with the new policy adapter and the new value adapter only if it passed the gate, merged on the CPU into `serving.policy_base_model` and `value_base_model` (`MergedPublisher`); every server swaps to it in place (`publish_weights`), sleeping ones wake with it (`restore_gpu`), and the searches' pause gate records the version for the samples to come |
+| training | the servers on the training GPUs drain and sleep (level 2: weights and KV cache freed, `release_gpu`); `grpo_phase.py --merge-adapters` runs on those GPUs (`SubprocessTrainer`; several GPUs: `torchrun --standalone`, one rank each; log in `training/phase_<k>.log`): labels the phase's trees, trains the policy (two passes) and, every `value_every_phases` (4) with a gate benchmark, the value model on the window of recent phases' trees plus its gate (main rank; "The value model in the loop" below), then merges the new policy adapter and an accepted value adapter into their bases on the GPUs (`<adapter>/../merged`, one rank per adapter); the loop labels the same trees meanwhile for the `search` and `curriculum` metrics |
+| publishing | `training_phase.publish_phase`: version k + 1 with the new policy adapter and the new value adapter only if it passed the gate, its weights the job's GPU merges moved into `weights/v<k+1>/` (`merging.merge`; without them, e.g. after a crash, merged on the CPU into `serving.policy_base_model` and `value_base_model`, `MergedPublisher`); sleeping servers wake with it (`restore_gpu`: memory back, `reload_weights` of the new directory, KV cache back), servers off the training GPUs swap in place (`publish_weights`), and the searches' pause gate records the version for the samples to come |
 | evaluating | the paused searches' REPL processes stop (`evaluation.paused_repl_memory_gib`, "Host memory" below); due fixed targets run as their own jobs (`grpo_evaluate.py`) while the searches stay paused: by loop hours (`every_hours`), once before the first phase (`at_start`; `baseline_runs` independent runs), or when requested (`grpo_loop.py request-evaluation`); the value servers serve the evaluations' fixed value model meanwhile and the published one again afterwards; the value A/B search runs both its arms here |
 | resume | the searches continue with the new weights |
 
-GPU assignment: `training.gpu` trains; servers on it are released for the phase (none in `loop.toml`: GPU 0 trains,
-GPUs 1–3 each serve the merged policy and the merged value model). Policy servers run with `--logprobs-mode
-processed_logprobs` (`grpo_loop.py serve-commands` prints every start command).
+GPU layout (`loop.toml`): while sampling, each of the four GPUs serves the merged policy (62% of its memory) and the
+merged value model (28%), so nothing is left for training; during a phase's pause all four sleep and train
+(`training.gpus = [0, 1, 2, 3]`). The fallback, if the data-parallel pause costs more than it saves, is `gpus = [0]`:
+GPU 0's servers sleep and one process trains there, the other GPUs' servers stay loaded and idle (every search is
+paused either way) and swap to the new weights in place. Policy servers run with `--logprobs-mode processed_logprobs`
+(`grpo_loop.py serve-commands` prints every start command); all servers with `SLEEP_MODE=1`.
+
+Data parallelism (`training/data_parallel.py`): every rank plans the same steps (same seeds and data order); a step's
+64 sequences are split across the ranks by tokens (`balanced_shards`, costliest first to the least loaded rank) and
+each rank plans its own micro-batches; the loss keeps the global normalization, Σ weight · token loss / (sequences in
+the step × 256), so the ranks' gradients sum to the single-GPU gradient; the LoRA gradients are summed with one
+all-reduce per 256 MiB bucket (`sum_gradients`; no DDP wrapper, a rank without micro-batches adds zeros) before the
+clipping, so every rank takes the same optimizer step. The old and reference log-probabilities are scored on each
+rank's share of the sequences and gathered on every rank; replay examples are split the same way under the global
+token mean. The fp32 output layer per chunk is per rank as before. Metrics are summed over the ranks (peak memory:
+the largest); only the main rank writes step records, adapters, merged weights and `phase.json`. The value trainer
+splits each step's units (sibling groups with their pairs) the same way, under the step's global weights. The value
+gate scores on the main rank while the others wait. With one rank everything is the single-GPU path. A step on two
+ranks equals the one-process step (`tests/graph/test_data_parallel_trainers.py`, gloo on the CPU). The LoRA
+gradients are fp32 (~0.5 GB for the policy adapter), so each policy step all-reduces about that much over PCIe.
 
 Restart: `loop_state.json` holds the phase, its stage, sampling and training time, whether a value model passed the
 gate, the last value adapter trained, whether μ is on and the evaluation clock; `models/current.json` and `versions.jsonl` the published versions; the tree index the
@@ -153,7 +203,8 @@ Metrics per phase (`MetricsWriter`, `<run>/metrics/`): `status` every `status_se
 (`phase_metrics.search_phase_record`: graph statistics, failure tiers, forced answers and repetition loops, Lean time
 per expansion, block length), `grpo` (from the trainer's `phase.json`), `value` per value retrain with a benchmark
 (the gate statistic, both models' benchmark metrics, `ValueDiagnostics`), `timing` (sampling, training, publishing and
-evaluation seconds), `fixed_targets` from the evaluations, `value_ab` from the value A/B search; `system`
+evaluation seconds, and the pause's segments, below), `fixed_targets` from the evaluations, `value_ab` from the value
+A/B search; `system`
 from `dashboard.py record-system`, including host memory (the limit, what is available, the Lean REPLs' private
 memory in total and at p90, the vLLM processes' private memory). Failure tiers are a message-based approximation
 (`phase_metrics.py`).
@@ -189,8 +240,49 @@ with fakes for them (`tests/rl/loop_fakes.py`) and real Lean for the start-state
 - **Evaluations with a fixed value model**: the probe and miniF2F search with `evaluation.value_model` (default
   `initial`, value v0), so they measure the policy alone; before them the value servers swap to its merged weights
   (`Publisher.kept_value_weights`, merged once under `weights/kept_value/`, which pruning leaves alone; no swap while
-  the published value model is v0) and back to the published version's afterwards. Before this, the evaluations used
-  whatever value model was published. The held-out states use no value model.
+  the published value model is v0) and back to the published version's afterwards: every value server, on all GPUs,
+  awake again after the phase's publish (a sleeping one would wake with the weights). Before this, the evaluations
+  used whatever value model was published. The held-out states use no value model.
+
+## Timing
+
+Each phase's pause is recorded segment by segment (`PauseSegments`: the `timing` line's `pause.*`, `phases.jsonl`, a
+`Phase <k> pause:` line in `loop.log`, and the System page's "Pause segments" chart). The loop measures its own
+segments; the training job's come from its `phase.json` (`TrainerTimings`, the main rank's clock):
+
+| Segment | Measured by | What |
+|---|---|---|
+| `drain` | loop | the searches' requests in flight finishing at the pause gate |
+| `server_sleep` | loop | the training GPUs' servers draining and sleeping |
+| `trainer_start` | loop | the job's wall time minus its own total: process and rank start, imports, NCCL setup, reading the trees, loading tokenizers, exit |
+| `preparation` | job | labelling the trees, building the policy sequences, replay and value data |
+| `policy_load` | job | loading the 4B base with the adapter (and torch.compile's wrappers) |
+| `compile` | job | one scoring and one training micro-batch on the shortest sequence before scoring, which compile the compiled layers (`compile_warm_up`; 0 without `compile_layers`) |
+| `scoring` | job | the old (and, when it differs, reference) log-probabilities, sharded |
+| `policy_training` | job | the policy steps (both passes, replay included) |
+| `value_training` | job | the value model's load, compilation, steps and adapter save |
+| `gate` | job | the gate's two benchmark scorings (main rank) |
+| `merge` | job | loading each base and merging the new adapters on the GPUs (the slowest rank) |
+| `write` | job | writing the policy adapter and the merged weights |
+| `publish` | loop | recording the version: moving the job's merges into place (else merging on the CPU) |
+| `wake` | loop | the slowest server waking with the new weights (or swapping them in place) |
+| `resume` | loop | the slowest server resuming |
+
+The evaluations that follow some phases are timed separately (`evaluation_seconds`). Estimate before the first node
+hour: 10-15 minutes per pause on one GPU, of which training compute 4-8 minutes; on four GPUs the compute shrinks
+about fourfold while `trainer_start`, the loads, `compile`, `gate`, the merges and the wake do not.
+
+If the pause still costs too much, two levers:
+
+- Longer sampling phases (`min_sampling_minutes`, `min_solved_trees`): the fixed part of the pause (start, loads,
+  compile, gate, merges, wake) is paid per phase, so its share falls with the sampling time, at the price of fewer and
+  staler updates per hour.
+- A trainer that stays alive between phases (not implemented): the ranks would keep their processes, NCCL group and
+  compiled graphs and move the weights to host memory while the servers run, saving `trainer_start`, most of the loads
+  and the recompilation (an estimated 1-3 minutes per phase). Its cost is host memory: per rank the 4B policy and 2B
+  value bases in bf16, about 9 + 4.5 GB, so about 54 GB for four ranks (or about 14 GB with one shared copy), next to
+  the 112 REPLs and eight vLLM processes of "Host memory", plus a CUDA context (~0.5 GB) left on each GPU that the
+  servers' memory shares must leave free.
 
 ## Host memory
 
@@ -198,7 +290,9 @@ The node has about 128 GB of RAM (check the cgroup limit, `system.memory_total_g
 search (`sampling.concurrency`, 112) whose private memory grows from ~0.25 GiB after the import by ~0.25 MiB per proof
 state, restarted at 1 GiB when released and at 2 GiB in any case (`lean/repl.py`; the Mathlib .olean mappings are
 shared and not counted); an evaluation job's own pool (`evaluation.<target>.concurrency`, 64) next to the paused
-searches; the six vLLM processes; and the loop process, which merges a published version on the CPU. The budget:
+searches; the eight vLLM processes; the training job's ranks (each reads and labels the phase's trees; the weights load
+straight to the GPUs); and the loop process, which merges a published version on the CPU only when the job did not
+merge it on the GPUs. The budget:
 
     loop concurrency × p90 REPL memory + evaluation concurrency × p90 REPL memory + vLLM private memory + merge
         ≤ 0.85 × RAM
@@ -252,7 +346,8 @@ trees.
 - **Single-step GRPO** (`single_step.py`, `experiments/grpo_single_step.py`, `grpo/single_step.toml`): one policy
   request per held-out state, executed from the state rebuilt by replay (`search_theorem(..., start_state=...)`).
   Proof graph: the state's traced proof proves it and every later state of it, so a tactic that closes the goals or
-  reaches one of those states (by goal key) is on the proof graph; other new states are unknown (neutral). The root
+  reaches one of those states (by goal key) is on the proof graph, at the traced proof's remaining steps (the root's
+  are the traced proof's, or a found proof's if fewer); other new states are unknown (neutral). The root
   forms a group when a sample reaches the proof graph (states no sample solves train nothing). No extra search per
   state. Success per sample = the block runs completely and ends there (the per-step evaluation's criterion). Each arm (per-tactic, sequence credit) runs 3 rounds of sample, measure
   (training and 512 disjoint states), train (one phase, two passes), then a last measurement; `report` writes both

@@ -27,7 +27,7 @@ the record. With `tensorboard=True` every numeric field is also logged as the sc
 | `value_ab` | `ValueAbResult` | per value A/B search (`grpo_evaluate.py`, published arm) | problems, solved with v0 and with the published value model, problems solved by one arm only, exact McNemar p-values (two-sided, one-sided worse), passed, both value versions |
 | `search` | `SearchPhase` | per phase | `GraphStatistics` summed over the phase's trees (edge kinds of all / policy / automation edges and policy samples, proof graph, dead ends, value targets by source, tactics by credit label, groups, rewards, proofs with their tactics and blocks, harvest yield, ε-picks), failure tiers, Lean seconds per expansion, forced answers, repetition loops, block length |
 | `curriculum` | `CurriculumPhase` | per phase | difficulty band, pool and verified statements, attempts and solved by difficulty band and by stage |
-| `timing` | `PhaseTiming` | per phase | sampling, training (the whole job), publishing and evaluation seconds; trees trained on; searches paused |
+| `timing` | `PhaseTiming` | per phase | sampling, training (the whole job), publishing and evaluation seconds; trees trained on; searches paused; the pause segment by segment (`pause.*`: drain, server sleep, trainer start, preparation, policy load, compile, scoring, policy and value training, gate, merge, write, publish, wake, resume; `rl/README.md`, "Timing") |
 
 The reader flattens nested dataclasses and dicts to dotted column names (`graph.policy_samples.no_progress`,
 `by_difficulty.2-3.solved`) and lists of numbers to `name.0`, `name.1`; strings and lists of objects are kept only

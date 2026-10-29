@@ -219,11 +219,11 @@ listening on 127.0.0.1 only; `lean_search.policy.server_control`):
 | Bring it back with new weights | `publish_weights.py restore --weights M --server-url URL ...` | 2.0 |
 | Restart instead (warm compile caches) | `stop_model.sh`, `serve_model.sh` | 56–61 (cold: 155–206) |
 
-So a publish costs about 20 s (merge plus reload), and the train-on-both-GPUs loop is: `release` all servers, train
-with DDP, merge, `restore` with the new directory, and the searches' queued requests continue (a request sent during
-a 35 s release completed right after the restore). Search clients must allow requests that long
-(`request_timeout_seconds`), and searches in flight keep their wall-clock budgets running while paused. A weight
-reload drops the workers' LoRA adapters: re-register them (`publish_weights.py difference ... --name value-v0`
+So a publish costs about 20 s (merge plus reload), and the train-on-every-GPU loop (the GRPO loop's layout, below)
+is: `release` all servers, train with DDP, merge, `restore` with the new directory, and the searches' queued requests
+continue (a request sent during a 35 s release completed right after the restore). Search clients must allow requests
+that long (`request_timeout_seconds`), and searches in flight keep their wall-clock budgets running while paused. A
+weight reload drops the workers' LoRA adapters: re-register them (`publish_weights.py difference ... --name value-v0`
 re-creates and reloads a difference adapter).
 
 Re-scoring a frontier after a new value version: all 14,879 open states of the 244 row-4 trees take 105 s on both
@@ -284,16 +284,19 @@ forward or a tunnel that authenticates (Vast's Instance Portal; Cloudflare Acces
 
 The search-tree GRPO loop (`src/lean_search/rl/README.md`, "The loop") on 4x RTX 3090 with ~96 CPU threads:
 
-| GPU | Role |
-|---|---|
-| 0 | training: the policy GRPO phase, then the value model and its gate (`[training] gpu`) |
-| 1-3 | serving: the merged policy (port 810x, 62% of memory, `--logprobs-mode processed_logprobs`) and the merged value model (port 820x, 28%, `MAX_NUM_SEQS=96`) |
+| GPUs | While sampling | During a phase's pause (every search paused) |
+|---|---|---|
+| 0-3 | each serves the merged policy (port 810x, `GPU_MEMORY_UTILIZATION=0.62`, `--logprobs-mode processed_logprobs`) and the merged value model (port 820x, 0.28, `MAX_NUM_SEQS=96`), all with `SLEEP_MODE=1` | the servers drain and sleep (level 2, ~0.8 GiB each left in use); `grpo_phase.py` trains on all four with `torchrun` (`[training] gpus`): policy GRPO, the value model, its gate (rank 0), the merges; then the servers wake with the new weights |
+
+Fallback if the data-parallel pause costs too much (`src/lean_search/rl/README.md`, "Timing"): `gpus = [0]` in
+`[training]`; GPU 0's two servers sleep and one process trains there, the other six stay loaded and idle and swap to
+the new weights in place. No server changes are needed to switch.
 
 The loop process holds one Lean REPL per concurrent search (`[sampling] concurrency`, 112) and runs the training and
 evaluation jobs as child processes, each in its own process group and recorded in `$LEAN_SEARCH_RUNS/<loop>/children/`
-while it runs; stopping the loop stops the job too. A loop that refuses to start because "Jobs of an earlier loop
-still run" died without stopping one: check it with `ps -o pid,cmd -g <process id>`, stop it with `kill -TERM
--<process id>`, then start the loop again. Servers on the training GPU (none by default) would sleep during each phase.
+while it runs; stopping the loop stops the job too (torchrun and its ranks share the group). A loop that refuses to
+start because "Jobs of an earlier loop still run" died without stopping one: check it with `ps -o pid,cmd -g <process
+id>`, stop it with `kill -TERM -<process id>`, then start the loop again.
 
 Bring-up on a fresh node, after the rebuild (`setup_remote.sh`, pool v3 verified statements under
 `$LEAN_SEARCH_DATA/expert_iteration/pool_v3/`, the value v0 adapter at `phase3_value_v0/adapter` from `node_backup/`,
@@ -317,7 +320,7 @@ and `single_step.toml`'s defaults likewise, though the loop fills in its own).
 ```bash
 deployment/grpo_loop.sh sets         # probe (501), gate (402) and overfit (300) sets under $LEAN_SEARCH_DATA/grpo/
 deployment/grpo_loop.sh init         # version 0: the starting policy's and the value v0 adapter merged into their bases
-deployment/grpo_loop.sh servers      # six vLLM servers on GPUs 1-3 (each waits until healthy)
+deployment/grpo_loop.sh servers      # eight vLLM servers, two per GPU (each waits until healthy)
 deployment/grpo_loop.sh check        # one live request per policy server (below)
 python experiments/heartbeat_replay.py ...   # the heartbeat caps (DESIGN.md "Lean execution and harness")
 deployment/grpo_loop.sh gate         # the value gate's benchmark, ~1-2 h, before value phases can publish
@@ -348,20 +351,36 @@ First-hour checks:
 - Timings: the two version-0 probe runs and the held-out-states run before the first phase give the probe's wall time
   (`fixed_targets.evaluation_seconds`; target 40-60 min per run at concurrency 64, else lower `probe_per_stratum` to
   100 and re-select before the loop starts); the first phase's `timing` line gives sampling vs training (two passes if
-  training stays well below sampling, else `passes_per_phase = 1` in `phase.toml`) and publishing (~20 s merge plus
-  swaps).
+  training stays well below sampling, else `passes_per_phase = 1` in `phase.toml`) and publishing.
+- The pause, segment by segment (`loop.log`'s `Phase <k> pause:` line, the `timing` family's `pause.*`, the System
+  page's "Pause segments"; `src/lean_search/rl/README.md`, "Timing"). Expected on four GPUs: `drain` and
+  `server_sleep` seconds; `trainer_start` under a minute (torchrun, imports, NCCL, reading the trees); `policy_load`
+  and `compile` 1-2 minutes together; `scoring` plus `policy_training` about a quarter of the one-GPU 4-8 minutes;
+  `value_training` and `gate` (rank 0 alone, ~2-3 minutes) next; `merge` and `write` well under a minute (policy and
+  value merge on different GPUs in parallel); `publish` seconds (the merges are moved, not redone: a `publish` of a
+  minute or more means the CPU merge ran, see `training/phase_<k>.log`); `wake` a few seconds per server. If the
+  fixed segments dominate, compare one phase with `gpus = [0]` before deciding.
+- Training on the GPUs the servers left: `nvidia-smi --query-gpu=index,memory.used,memory.total --format=csv -l 5`
+  during the first training stage. Each GPU holds the two sleeping servers' remainder (~1.6 GiB) plus one rank; the
+  ranks' `peak_memory_gib` (largest over ranks) is in `phase.json`. An out-of-memory rank fails the job (the loop
+  stops; the stage reruns after a restart): lower `[policy.optimization] micro_batch_tokens` (each rank keeps the
+  one-GPU micro-batch size) or `scoring_micro_batch_tokens`. `training/phase_<k>.log` interleaves the ranks' output;
+  a hang in the first all-reduce on a PCIe node without peer-to-peer access is fixed with `NCCL_P2P_DISABLE=1` in the
+  loop's environment.
 - Probe validity: `fixed_targets.probe_wall_clock_stops` must be ~0 (the 1-hour cap is an emergency stop; if it binds,
   the probe measures load). The second version-0 run gives the noise: `probe_repeat_difference` and
   `probe_repeat_discordant` (also `evaluations/probe_v0000_repeat1/comparison.json` and `loop.log`); later probe
   differences smaller than about twice the discordant count's square root are noise.
 - Memory (System page, budget in `src/lean_search/rl/README.md`, "Host memory"): `memory_total_gib`,
   `memory_available_gib`, `lean_private_memory_gib` and its p90, `vllm_private_memory_gib`, once while sampling, once
-  while publishing (the merge) and once during the probe. `loop.log` reports the paused REPL processes stopped before
+  while training (four ranks, each with the phase's trees, next to the paused searches' REPLs) and once during the
+  probe. `loop.log` reports the paused REPL processes stopped before
   each evaluation. Lower `[evaluation.probe] concurrency` or `[sampling] concurrency` if available memory falls below
   ~15% of the limit. Lean cores near the thread count and GPU utilization above ~80% mean the concurrency fits.
 - Server failures: `status.server_failures` stays at 0 on a healthy run; failed searches feed their statement again
   (`[sampling] server_failure_retries`), `statements_given_up` counts the dropped ones.
-- Training memory: `peak_memory_gib` in `$LEAN_SEARCH_CHECKPOINTS/grpo_loop_v1_phase_0001/phase.json`.
+- Training memory: `peak_memory_gib` in `$LEAN_SEARCH_CHECKPOINTS/grpo_loop_v1_phase_0001/phase.json`, against
+  24 GiB minus the sleeping servers' remainder.
 
 Cheap tests (DESIGN.md "Order of work", step 3), with the same servers:
 

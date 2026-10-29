@@ -12,6 +12,13 @@ failure_local = -1.0
 no_progress_local = -1.0
 # L per goal a proof-graph tactic closes.
 goal_closed_bonus = 0.1
+# delta: a proof-graph state earns this per remaining proof-graph step it is closer to a proof than the group's node,
+# so a correct further step raises the reward (and the sample's score, its final state's reward) by delta.
+progress_per_step = 0.2
+# c: the advantage of a failing, no-progress or redundant tactic after the first; the search keeps the block's valid
+# prefix, so only its tokens are wasted. Tactics after the first are judged against the state before them, so
+# continuing pays when P(next tactic correct) > c / (c + delta) = 1/3; keep delta clearly above c.
+wasted_tactic_cost = 0.1
 # mu: expanded off-graph states earn G = mu * q; 0.15 once a value model passed the gate.
 value_share = 0.0
 # An expanded off-graph state with live children and fewer expanded nodes in its subtree (itself included: the
@@ -58,7 +65,8 @@ replay_sequences_per_step = 8
 max_sequence_tokens = 8192
 
 [policy.data]
-# "sequence": every sampled token gets the sample's score minus the baseline (phase_sequence_credit.toml).
+# "sequence": every sampled token gets the sample's score minus the baseline (phase_sequence_credit.toml); the score
+# carries the progress and the wasted-tactic costs of [reward].
 credit = "sequence"
 # For records written before the sampling temperature was kept.
 default_temperature = 0.8

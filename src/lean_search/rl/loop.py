@@ -6,12 +6,12 @@ enough solved trees and runs these stages, each recorded in loop_state.json so a
 crash interrupted (searches cut off by the crash are lost and their statements fed again where the source allows):
 
 pause       every policy and value request waits at the gate; searches keep their trees and REPL states in place
-training    the servers on the training GPU sleep; the training job (grpo_phase.py) labels the phase's trees and
-            trains the policy (GRPO) and, every `value_every_phases`, the value model on the window of recent phases'
-            trees, gated on the held-out benchmark; meanwhile the loop labels the phase's trees for the search and
-            curriculum metrics
-publishing  version k + 1 (the new policy adapter, the new value adapter only if it passed the gate) is merged and
-            recorded; every server swaps to it in place, the sleeping ones wake with it
+training    the servers on the training GPUs sleep; the training job (grpo_phase.py, data-parallel over those GPUs)
+            labels the phase's trees, trains the policy (GRPO) and, every `value_every_phases`, the value model on the
+            window of recent phases' trees, gated on the held-out benchmark, and merges the new adapters on the GPUs;
+            meanwhile the loop labels the phase's trees for the search and curriculum metrics
+publishing  version k + 1 (the new policy adapter, the new value adapter only if it passed the gate) is recorded
+            with the job's merges; the sleeping servers wake with it, the others swap to it in place
 evaluating  the fixed targets that are due (by loop hours, at the start, or requested) run as separate jobs while
             the searches stay paused, after the paused searches' REPL processes stopped to free host memory; the value
             servers serve the evaluations' fixed value model meanwhile; the value A/B search (both arms) turns μ on
@@ -30,7 +30,7 @@ import time
 import tomllib
 import traceback
 from collections.abc import Callable, Coroutine
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
@@ -48,8 +48,9 @@ from lean_search.expert_iteration.serving import (
     write_json_atomically,
 )
 from lean_search.expert_iteration.toml_text import toml_text
-from lean_search.monitoring.families import LoopState, LoopStatus, PhaseTiming, ValueBenchmarkResult
+from lean_search.monitoring.families import LoopState, LoopStatus, PauseSegments, PhaseTiming, ValueBenchmarkResult
 from lean_search.monitoring.store import MetricsWriter
+from lean_search.policy.server_control import PhaseSeconds
 from lean_search.rl.evaluation import EvaluationKind, EvaluationSummary
 from lean_search.rl.fixed_targets import target_config
 from lean_search.rl.loop_config import EvaluationTarget, EvaluationValueModel, GrpoLoopConfig
@@ -57,6 +58,7 @@ from lean_search.rl.phase_metrics import search_phase_record
 from lean_search.rl.statement_sources import FedStatement, StatementSource
 from lean_search.rl.training_phase import (
     PhaseOutcome,
+    TrainerTimings,
     TrainingPhaseConfig,
     grpo_phase_record,
     label_phase_data,
@@ -92,6 +94,8 @@ class LoopProgress:
     value_adapter: str = ""
     # μ is on: a value model passed the gate and a value A/B search found the published one ahead of the reference.
     value_share_on: bool = False
+    # The pause of `phase` so far, segment by segment.
+    pause: PauseSegments = field(default_factory=PauseSegments)
     # Sampling and training of all finished phases: the clock of the evaluation schedule.
     loop_seconds: float = 0.0
     # Loop seconds when each fixed target last ran; None: never.
@@ -114,6 +118,7 @@ class PhaseRecord:
     value_accepted: bool
     evaluations: tuple[EvaluationKind, ...]
     finished_at: str
+    pause: PauseSegments = field(default_factory=PauseSegments)
 
 
 @dataclass(frozen=True)
@@ -163,12 +168,13 @@ class ModelServers(Protocol):
         """Raises when a server does not answer."""
         ...
 
-    async def release(self) -> None:
-        """Frees the training GPU: its servers sleep."""
+    async def release(self) -> PhaseSeconds:
+        """Frees the training GPUs: their servers drain and sleep; the slowest server's seconds per part."""
         ...
 
-    async def serve(self, version: ModelVersion) -> None:
-        """Every server serves the version: sleeping ones wake with it, running ones swap in place."""
+    async def serve(self, version: ModelVersion) -> PhaseSeconds:
+        """Every server serves the version: sleeping ones wake with it, running ones swap in place; the slowest
+        server's seconds per part."""
         ...
 
     async def serve_value(self, weights: str) -> None:
@@ -358,6 +364,30 @@ def request_evaluation(paths: GrpoLoopPaths, kind: EvaluationKind) -> None:
     """The running loop evaluates `kind` at its next phase pause (a milestone)."""
     paths.requests.mkdir(parents=True, exist_ok=True)
     (paths.requests / kind.value).write_text(now(), encoding="utf-8")
+
+
+def with_trainer_timings(pause: PauseSegments, timings: TrainerTimings, job_seconds: float) -> PauseSegments:
+    """The training job's parts; what its own clock did not see is the job's start (and exit)."""
+    return dataclasses.replace(
+        pause,
+        trainer_start_seconds=max(0.0, job_seconds - timings.total_seconds),
+        preparation_seconds=timings.preparation_seconds,
+        policy_load_seconds=timings.policy_load_seconds,
+        compile_seconds=timings.compile_seconds,
+        scoring_seconds=timings.scoring_seconds,
+        policy_training_seconds=timings.policy_training_seconds,
+        value_training_seconds=timings.value_training_seconds,
+        gate_seconds=timings.gate_seconds,
+        merge_seconds=timings.merge_seconds,
+        write_seconds=timings.write_seconds,
+    )
+
+
+def pause_text(pause: PauseSegments) -> str:
+    return ", ".join(
+        f"{name.removesuffix('_seconds').replace('_', ' ')} {seconds:.0f} s"
+        for name, seconds in dataclasses.asdict(pause).items()
+    )
 
 
 def published_time(version: ModelVersion) -> float:
@@ -566,7 +596,9 @@ class GrpoLoop:
         self.sampling_since = None
         self.loop_state = LoopState.PAUSED
         self.write_status()
+        pause_started = self.clock()
         await self.searcher.pause()
+        drain_seconds = self.clock() - pause_started
         self.paused = True
         async with self.store_lock:
             # A tree being written when the phase began still lands in this phase's directory.
@@ -575,7 +607,9 @@ class GrpoLoop:
             f"Phase {phase}: {len(entries)} trees ({sum(entry.proved for entry in entries)} solved) after "
             f"{sampling / 60:.1f} min of sampling; {self.searches_running} searches paused"
         )
-        self.save_progress(stage=PhaseStage.TRAINING, sampling_seconds=sampling)
+        self.save_progress(
+            stage=PhaseStage.TRAINING, sampling_seconds=sampling, pause=PauseSegments(drain_seconds=drain_seconds)
+        )
         await self.finish_phase()
 
     async def finish_phase(self) -> None:
@@ -585,8 +619,15 @@ class GrpoLoop:
             self.write_status()
             started = self.clock()
             await self.servers.release()
-            await self.train(phase)
-            self.save_progress(stage=PhaseStage.PUBLISHING, training_seconds=self.clock() - started)
+            released = self.clock()
+            outcome = await self.train(phase)
+            finished = self.clock()
+            pause = with_trainer_timings(self.progress.pause, outcome.timings, finished - released)
+            self.save_progress(
+                stage=PhaseStage.PUBLISHING,
+                training_seconds=finished - started,
+                pause=dataclasses.replace(pause, server_sleep_seconds=released - started),
+            )
         if self.progress.stage == PhaseStage.PUBLISHING:
             self.loop_state = LoopState.PUBLISHING
             self.write_status()
@@ -617,7 +658,7 @@ class GrpoLoop:
         first = max(1, phase - training.value_window_phases + 1)
         return tuple(self.store.phase_directory(number) for number in range(first, phase + 1))
 
-    async def train(self, phase: int) -> None:
+    async def train(self, phase: int) -> PhaseOutcome:
         current = read_current(self.paths.models)
         training = self.config.training
         value_trees = self.value_window(phase)
@@ -649,6 +690,7 @@ class GrpoLoop:
             f"Phase {phase} trained: {outcome.trees} trees, {outcome.groups} groups"
             + ("" if outcome.value is None else f", value {'accepted' if outcome.value.accepted else 'rejected'}")
         )
+        return outcome
 
     def write_search_metrics(self, phase: int, config_text: str) -> None:
         entries = self.store.phase_entries(phase)
@@ -663,12 +705,22 @@ class GrpoLoop:
     async def publish(self, phase: int) -> None:
         outcome = read_phase_outcome(self.paths.phase_checkpoints(phase) / PHASE_OUTCOME_FILE)
         current = read_current(self.paths.models)
+        started = self.clock()
         if current.trigger != phase_trigger(phase):
             self.write_training_metrics(outcome, current.version + 1)
             current = await asyncio.to_thread(
                 publish_phase, self.paths.models, self.publisher, outcome, phase_trigger(phase)
             )
-        await self.servers.serve(current)
+        published = self.clock()
+        served = await self.servers.serve(current)
+        self.save_progress(
+            pause=dataclasses.replace(
+                self.progress.pause,
+                publish_seconds=published - started,
+                wake_seconds=served.pause + served.weights,
+                resume_seconds=served.resume,
+            )
+        )
         self.served_value_weights = current.value_weights
         self.searcher.serving(current.version)
         if outcome.value is not None and outcome.value.accepted:
@@ -803,8 +855,10 @@ class GrpoLoop:
                 evaluation_seconds=evaluation_seconds,
                 trees=len(entries),
                 searches_paused=self.searches_running,
+                pause=progress.pause,
             )
         )
+        self.log(f"Phase {phase} pause: {pause_text(progress.pause)}")
         record = PhaseRecord(
             phase=phase,
             trees=len(entries),
@@ -817,6 +871,7 @@ class GrpoLoop:
             value_accepted=value_published_by(versions, phase),
             evaluations=tuple(kinds),
             finished_at=now(),
+            pause=progress.pause,
         )
         with self.paths.phases.open("a", encoding="utf-8") as handle:
             handle.write(to_json(record) + "\n")
@@ -826,6 +881,7 @@ class GrpoLoop:
             sampling_seconds=0.0,
             training_seconds=0.0,
             publishing_seconds=0.0,
+            pause=PauseSegments(),
         )
         self.collecting = phase + 1
         self.update_context()

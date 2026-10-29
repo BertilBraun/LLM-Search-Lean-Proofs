@@ -30,9 +30,19 @@ def test_loop_phase_template_loads(name: str) -> None:
 
 
 @pytest.mark.parametrize("name", LOOPS)
-def test_loop_trains_on_a_gpu_without_policy_servers(name: str) -> None:
+def test_loop_serves_on_every_gpu(name: str) -> None:
+    assert {server.gpu for server in loop(name).serving.policy_servers} == {0, 1, 2, 3}
+
+
+@pytest.mark.parametrize("name", LOOPS)
+def test_loop_trains_on_every_gpu(name: str) -> None:
+    assert loop(name).training.gpus == (0, 1, 2, 3)
+
+
+@pytest.mark.parametrize("name", LOOPS)
+def test_every_server_sleeps_while_the_loop_trains(name: str) -> None:
     config = loop(name)
-    assert all(server.gpu != config.training.gpu for server in config.serving.servers)
+    assert config.released_servers() == config.serving.servers
 
 
 def test_overfit_loop_searches_a_fixed_list() -> None:
@@ -89,6 +99,22 @@ def test_phase_config_starts_where_the_loop_starts(phase: str) -> None:
     starting = loop("grpo/loop.toml")
     expected = (starting.serving.policy_base_model, starting.initial.policy_adapter, starting.initial.policy_adapter)
     assert (policy["model"], policy["initial_adapter"], policy["reference_adapter"]) == expected
+
+
+def test_sequence_credit_phase_differs_from_the_phase_only_in_its_credit() -> None:
+    phase, sequence = (
+        tomllib.loads((CONFIGS / name).read_text(encoding="utf-8"))
+        for name in ("grpo/phase.toml", "grpo/phase_sequence_credit.toml")
+    )
+    sequence["policy"]["data"]["credit"] = phase["policy"]["data"]["credit"]
+    assert sequence == phase
+
+
+def test_progress_per_step_outweighs_the_wasted_tactic_cost() -> None:
+    reward = from_json_object(
+        TrainingPhaseConfig, tomllib.loads((CONFIGS / "grpo/phase.toml").read_text(encoding="utf-8"))
+    ).reward
+    assert reward.progress_per_step > reward.wasted_tactic_cost
 
 
 def test_single_step_starts_where_the_loop_starts() -> None:

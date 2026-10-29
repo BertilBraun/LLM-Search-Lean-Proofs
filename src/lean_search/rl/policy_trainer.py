@@ -12,6 +12,17 @@ import torch.utils.checkpoint
 import transformers
 
 from lean_search.rl.policy_data import PolicyDataConfig, PolicySequence, SamplerAgreement, VersionSamplerAgreement
+from lean_search.training.data_parallel import (
+    SINGLE_PROCESS,
+    Ranks,
+    balanced_shards,
+    barrier,
+    gathered,
+    largest,
+    local_shard,
+    sum_gradients,
+    summed,
+)
 from lean_search.training.dpo import packed_item_micro_batches, token_micro_batches
 from lean_search.training.packing import packed_hidden_states
 from lean_search.training.sft import (
@@ -86,7 +97,8 @@ class TokenLosses:
 @dataclass(frozen=True)
 class GrpoStep:
     sequences: tuple[int, ...]
-    micro_batches: tuple[tuple[int, ...], ...]
+    # Per rank, the micro-batches of its share of the step's sequences (shares balanced by tokens).
+    rank_micro_batches: tuple[tuple[tuple[int, ...], ...], ...]
     pass_index: int
 
 
@@ -129,6 +141,11 @@ class GrpoTrainingResult:
     sampler_agreement: SamplerAgreement
     # The same per sampling version: trees spanning phases hold samples of earlier versions.
     sampler_agreement_by_version: tuple[VersionSamplerAgreement, ...] = ()
+    load_seconds: float = 0.0
+    # One scoring and one training micro-batch before scoring, which compile the compiled layers.
+    compile_seconds: float = 0.0
+    save_seconds: float = 0.0
+    ranks: int = 1
 
 
 def clipped_policy_losses(
@@ -245,7 +262,31 @@ def completion_log_probabilities(
     return results
 
 
-def plan_grpo_steps(sequences: Sequence[PolicySequence], config: GrpoConfig) -> list[GrpoStep]:
+def sharded_log_probabilities(
+    scorer: CompletionTokenScores,
+    examples: Sequence[TokenizedExample],
+    temperatures: Sequence[float],
+    micro_batch_tokens: int,
+    packing: bool,
+    pad_token_id: int,
+    device: torch.device,
+    ranks: Ranks,
+) -> list[torch.Tensor]:
+    """`completion_log_probabilities` of the rank's share of the examples (by tokens), gathered on every rank."""
+    shard = local_shard(range(len(examples)), [example.token_count for example in examples], ranks)
+    scores = completion_log_probabilities(
+        scorer,
+        [examples[index] for index in shard],
+        [temperatures[index] for index in shard],
+        micro_batch_tokens,
+        packing,
+        pad_token_id,
+        device,
+    )
+    return gathered(list(zip(shard, scores, strict=True)), len(examples), ranks)
+
+
+def plan_grpo_steps(sequences: Sequence[PolicySequence], config: GrpoConfig, world_size: int = 1) -> list[GrpoStep]:
     """Shuffled steps of `sequences_per_step` sequences per pass; a pass's last step may be smaller."""
     generator = random.Random(config.optimization.seed)
     lengths = [sequence.token_count for sequence in sequences]
@@ -256,8 +297,11 @@ def plan_grpo_steps(sequences: Sequence[PolicySequence], config: GrpoConfig) -> 
         generator.shuffle(order)
         for start in range(0, len(order), config.sequences_per_step):
             indices = order[start : start + config.sequences_per_step]
-            micro_batches = plan_micro_batches(indices, lengths, optimization.micro_batch_tokens, optimization.packing)
-            steps.append(GrpoStep(tuple(indices), tuple(micro_batches), pass_index))
+            rank_micro_batches = tuple(
+                tuple(plan_micro_batches(shard, lengths, optimization.micro_batch_tokens, optimization.packing))
+                for shard in balanced_shards(indices, lengths, world_size)
+            )
+            steps.append(GrpoStep(tuple(indices), rank_micro_batches, pass_index))
     return steps[: optimization.max_steps] if optimization.max_steps else steps
 
 
@@ -312,12 +356,13 @@ def reference_log_probabilities(
     old: list[torch.Tensor],
     pad_token_id: int,
     device: torch.device,
+    ranks: Ranks = SINGLE_PROCESS,
 ) -> list[torch.Tensor]:
     if config.reference == ReferencePolicy.PHASE_START or config.initial_adapter == config.reference_adapter:
         return old
 
     def scored() -> list[torch.Tensor]:
-        return completion_log_probabilities(
+        return sharded_log_probabilities(
             scorer,
             examples,
             temperatures,
@@ -325,6 +370,7 @@ def reference_log_probabilities(
             config.optimization.packing,
             pad_token_id,
             device,
+            ranks,
         )
 
     if not config.reference_adapter:
@@ -362,6 +408,32 @@ def mean(values: Sequence[float]) -> float:
     return sum(values) / len(values) if values else 0.0
 
 
+def compile_warm_up(
+    saved_module: torch.nn.Module,
+    scorer: CompletionTokenScores,
+    example: TokenizedExample,
+    temperature: float,
+    packing: bool,
+    pad_token_id: int,
+    device: torch.device,
+) -> float:
+    """Compiles the compiled layers' scoring and training graphs on one example, so the timed passes exclude it."""
+    started = time.perf_counter()
+    batch = micro_batch([example], packing, pad_token_id, device)
+    temperatures = completion_temperatures([example], [temperature], device)
+    scorer.causal_model.eval()
+    with torch.no_grad(), torch.autocast(device.type, dtype=torch.bfloat16):
+        scorer(batch, temperatures)
+    scorer.causal_model.train()
+    with torch.autocast(device.type, dtype=torch.bfloat16):
+        log_probabilities, _ = scorer(batch, temperatures)
+    log_probabilities.float().sum().backward()
+    saved_module.zero_grad(set_to_none=True)
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+    return time.perf_counter() - started
+
+
 def train_grpo(
     config: GrpoConfig,
     pad_token_id: int,
@@ -370,26 +442,43 @@ def train_grpo(
     device: torch.device,
     output_directory: Path,
     on_step: Callable[[GrpoStepRecord], None],
+    ranks: Ranks = SINGLE_PROCESS,
 ) -> GrpoTrainingResult:
+    """On every rank with the same arguments; only the main rank reports steps and saves the adapter."""
     optimization = config.optimization
     assert optimization.method == FineTuningMethod.LORA, optimization.method
     longest = max((sequence.token_count for sequence in sequences), default=0)
     assert longest <= config.max_sequence_tokens, f"a recorded sample of {longest} tokens"
+    load_started = time.perf_counter()
     saved_module, causal_model = load_trainable_model(
         config.model, optimization, config.lora, device, config.initial_adapter
     )
     scorer = CompletionTokenScores(causal_model)
+    load_seconds = time.perf_counter() - load_started
     examples = [sequence.tokenized for sequence in sequences]
     temperatures = [sequence.temperature for sequence in sequences]
+    compile_seconds = 0.0
+    if optimization.compile_layers and sequences:
+        shortest = min(range(len(sequences)), key=lambda index: examples[index].token_count)
+        compile_seconds = compile_warm_up(
+            saved_module, scorer, examples[shortest], temperatures[shortest], optimization.packing, pad_token_id, device
+        )
     scoring_started = time.perf_counter()
     causal_model.eval()
-    old = completion_log_probabilities(
-        scorer, examples, temperatures, config.scoring_micro_batch_tokens, optimization.packing, pad_token_id, device
+    old = sharded_log_probabilities(
+        scorer,
+        examples,
+        temperatures,
+        config.scoring_micro_batch_tokens,
+        optimization.packing,
+        pad_token_id,
+        device,
+        ranks,
     )
     agreement = sampler_agreement(sequences, old)
     agreement_by_version = sampler_agreement_by_version(sequences, old)
     reference = reference_log_probabilities(
-        config, saved_module, scorer, examples, temperatures, old, pad_token_id, device
+        config, saved_module, scorer, examples, temperatures, old, pad_token_id, device, ranks
     )
     causal_model.train()
     scoring_seconds = time.perf_counter() - scoring_started
@@ -397,7 +486,7 @@ def train_grpo(
     optimizer = torch.optim.AdamW(
         parameters, lr=optimization.learning_rate, weight_decay=optimization.weight_decay, fused=device.type == "cuda"
     )
-    steps = plan_grpo_steps(sequences, config)
+    steps = plan_grpo_steps(sequences, config, ranks.world_size)
     warmup_steps = config.warmup_steps or max(1, round(optimization.warmup_fraction * len(steps)))
     scheduler = torch.optim.lr_scheduler.LambdaLR(
         optimizer,
@@ -410,10 +499,10 @@ def train_grpo(
     training_seconds = 0.0
     for step_index, step in enumerate(steps):
         step_started = time.perf_counter()
-        totals = torch.zeros(8, dtype=torch.float64, device=device)
+        totals = torch.zeros(9, dtype=torch.float64, device=device)
+        # The whole step's sequences on every rank, so that the ranks' gradients sum to the single-process gradient.
         normalizer = len(step.sequences) * config.normalization_tokens
-        tokens = 0
-        for indices in step.micro_batches:
+        for indices in step.rank_micro_batches[ranks.rank]:
             batch_sequences = [sequences[index] for index in indices]
             batch = micro_batch(
                 [sequence.tokenized for sequence in batch_sequences], optimization.packing, pad_token_id, device
@@ -439,7 +528,7 @@ def train_grpo(
             trained = weights > 0
             with torch.no_grad():
                 difference = log_probabilities - old_log_probabilities
-                totals += torch.stack(
+                totals[:8] += torch.stack(
                     [
                         loss.detach().double(),
                         policy_loss.detach().double(),
@@ -451,20 +540,22 @@ def train_grpo(
                         trained.sum().double(),
                     ]
                 )
-            tokens += batch.input_ids.numel()
+            totals[8] += batch.input_ids.numel()
         replay_nll = 0.0
         if config.replay_sequences_per_step and config.replay_weight:
             replay_nll = replay_backward(
-                scorer, replay_cycle.draw(config.replay_sequences_per_step), config, pad_token_id, device
+                scorer, replay_cycle.draw(config.replay_sequences_per_step), config, pad_token_id, device, ranks
             )
+        sum_gradients(parameters, ranks)
         gradient_norm = torch.nn.utils.clip_grad_norm_(parameters, optimization.max_gradient_norm).item()
         optimizer.step()
         scheduler.step()
         optimizer.zero_grad(set_to_none=True)
+        summed(totals, ranks)
         if device.type == "cuda":
             torch.cuda.synchronize(device)
         training_seconds += time.perf_counter() - step_started
-        loss, policy_loss, kl_old, kl_reference, clipped, entropy, ratio, trained_tokens = totals.tolist()
+        loss, policy_loss, kl_old, kl_reference, clipped, entropy, ratio, trained_tokens, tokens = totals.tolist()
         per_token = max(1.0, trained_tokens)
         record = GrpoStepRecord(
             step=step_index + 1,
@@ -481,12 +572,18 @@ def train_grpo(
             gradient_norm=gradient_norm,
             sequences=len(step.sequences),
             trained_tokens=int(trained_tokens),
-            tokens=tokens,
+            tokens=int(tokens),
             training_seconds=training_seconds,
         )
         records.append(record)
-        on_step(record)
-    saved_module.save_pretrained(output_directory)
+        if ranks.is_main:
+            on_step(record)
+    save_started = time.perf_counter()
+    if ranks.is_main:
+        saved_module.save_pretrained(output_directory)
+    barrier(ranks)
+    save_seconds = time.perf_counter() - save_started
+    peak_memory = torch.cuda.max_memory_allocated(device) / 2**30 if device.type == "cuda" else 0.0
     last_pass = [record for record in records if record.pass_index == records[-1].pass_index] if records else []
     return GrpoTrainingResult(
         steps=len(steps),
@@ -494,7 +591,7 @@ def train_grpo(
         trained_tokens=sum(record.trained_tokens for record in records),
         scoring_seconds=scoring_seconds,
         training_seconds=training_seconds,
-        peak_memory_gib=torch.cuda.max_memory_allocated(device) / 2**30 if device.type == "cuda" else 0.0,
+        peak_memory_gib=largest(peak_memory, device, ranks),
         trainable_parameters=sum(parameter.numel() for parameter in parameters),
         final_kl_to_data_policy=mean([record.kl_to_data_policy for record in last_pass]),
         final_kl_to_reference=mean([record.kl_to_reference for record in last_pass]),
@@ -503,6 +600,10 @@ def train_grpo(
         final_policy_loss=mean([record.policy_loss for record in last_pass]),
         sampler_agreement=agreement,
         sampler_agreement_by_version=agreement_by_version,
+        load_seconds=load_seconds,
+        compile_seconds=compile_seconds,
+        save_seconds=save_seconds,
+        ranks=ranks.world_size,
     )
 
 
@@ -512,15 +613,18 @@ def replay_backward(
     config: GrpoConfig,
     pad_token_id: int,
     device: torch.device,
+    ranks: Ranks = SINGLE_PROCESS,
 ) -> float:
-    """Back-propagates replay_weight times the mean token NLL of the examples; returns that mean NLL."""
+    """Back-propagates replay_weight times the mean token NLL of the examples, each rank its share by tokens;
+    returns that mean NLL."""
     if not examples:
         return 0.0
     completion_tokens = sum(example.completion_token_count for example in examples)
     lengths = [example.token_count for example in examples]
     packing = config.optimization.packing
-    nll_sum = 0.0
-    for indices in plan_micro_batches(range(len(examples)), lengths, config.optimization.micro_batch_tokens, packing):
+    nll_sum = torch.zeros((), dtype=torch.float64, device=device)
+    local = local_shard(range(len(examples)), lengths, ranks)
+    for indices in plan_micro_batches(local, lengths, config.optimization.micro_batch_tokens, packing):
         batch_examples = [examples[index] for index in indices]
         batch = micro_batch(batch_examples, packing, pad_token_id, device)
         temperatures = completion_temperatures(batch_examples, [1.0] * len(batch_examples), device)
@@ -528,5 +632,5 @@ def replay_backward(
             log_probabilities, _ = scorer(batch, temperatures)
         nll = -log_probabilities.float().sum()
         (config.replay_weight * nll / completion_tokens).backward()
-        nll_sum += nll.item()
-    return nll_sum / completion_tokens
+        nll_sum += nll.detach().double()
+    return summed(nll_sum, ranks).item() / completion_tokens

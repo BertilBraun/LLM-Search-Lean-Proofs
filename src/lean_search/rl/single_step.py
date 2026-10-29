@@ -8,8 +8,9 @@ Which tactics are on the proof graph: the state is provable (its traced proof pr
 that proof after it. A tactic is on the proof graph when it closes the goals or reaches the reference proof's next or
 a later state (the per-step evaluation's success criterion, by goal key); other new states are unknown and neutral.
 So every state has a known-provable anchor without a further search; a state forms no group when no sample reaches
-the proof graph (`RewardConfig.require_policy_proof`). A sample succeeds when its block runs completely and ends on
-the proof graph.
+the proof graph (`RewardConfig.require_policy_proof`). Remaining steps are the reference proof's (or a found proof's
+tactics, if fewer), so reaching a later reference state earns more progress. A sample succeeds when its block runs
+completely and ends on the proof graph.
 """
 
 import asyncio
@@ -68,8 +69,13 @@ class SingleStepConfig:
 class StateProblem:
     problem: Problem
     start: ProofState
-    # The reference proof's next state and every later one (the last is empty: proved).
-    reference_keys: frozenset[GoalKey]
+    # The reference proof's next state and every later one (the last is empty: proved), with the reference's
+    # remaining steps from each.
+    reference_steps: Mapping[GoalKey, int]
+
+    @property
+    def reference_keys(self) -> frozenset[GoalKey]:
+        return frozenset(self.reference_steps)
 
 
 @dataclass(frozen=True)
@@ -90,8 +96,12 @@ def state_problem_name(state: ReasoningState) -> str:
 def state_problem(state: ReasoningState) -> StateProblem:
     step = state.step
     problem = Problem(state_problem_name(state), Split.VALID, step.header, step.formal_statement, "", "")
-    keys = frozenset(goal_key(goals) for goals in (step.goals_after, *state.later_goals))
-    return StateProblem(problem, state_before(step), keys)
+    return StateProblem(problem, state_before(step), reference_steps(state.reference_goal_keys))
+
+
+def reference_steps(keys: Sequence[GoalKey]) -> dict[GoalKey, int]:
+    """Each reference state's fewest remaining steps; `keys` in the reference proof's order, the proof last."""
+    return {key: len(keys) - 1 - index for index, key in enumerate(keys)}
 
 
 def single_step_run_config(template: RunConfig) -> RunConfig:
@@ -112,20 +122,29 @@ def single_step_run_config(template: RunConfig) -> RunConfig:
 
 
 def reference_labels(
-    record: TreeRecord, reference_keys: frozenset[GoalKey], min_expanded_nodes: int
+    record: TreeRecord, reference_steps: Mapping[GoalKey, int], min_expanded_nodes: int
 ) -> tuple[GraphLabels, dict[int, tuple[TacticOutcome, ...]]]:
     """The tree's labels with the root on the proof graph, and tactics reaching a reference state on it too."""
     labels = label_graph(record)
-    labels = dataclasses.replace(labels, node_classes=(NodeClass.PROOF_GRAPH, *labels.node_classes[1:]))
+    found_steps = labels.remaining_steps[0]
+    reference_root_steps = 1 + max(reference_steps.values(), default=0)
+    root_steps = reference_root_steps if found_steps is None else min(found_steps, reference_root_steps)
+    labels = dataclasses.replace(
+        labels,
+        node_classes=(NodeClass.PROOF_GRAPH, *labels.node_classes[1:]),
+        remaining_steps=(root_steps, *labels.remaining_steps[1:]),
+    )
     tactics = policy_tactics(record, labels, min_expanded_nodes)
     for edge_id, outcomes in tactics.items():
         edge = record.edges[edge_id]
         previous = record.nodes[edge.parent_id].goals
         relabelled = list(outcomes)
         for index, goals in enumerate(edge.tactic_goals):
-            if relabelled[index].label == TacticLabel.UNKNOWN and goal_key(goals) in reference_keys:
+            key = goal_key(goals)
+            if relabelled[index].label == TacticLabel.UNKNOWN and key in reference_steps:
                 closed = max(0, len(previous) - len(goals))
-                relabelled[index] = TacticOutcome(TacticLabel.PROOF_GRAPH, relabelled[index].node_id, closed)
+                node_id = relabelled[index].node_id
+                relabelled[index] = TacticOutcome(TacticLabel.PROOF_GRAPH, node_id, closed, reference_steps[key])
             previous = goals
         tactics[edge_id] = tuple(relabelled)
     return labels, tactics
@@ -216,7 +235,7 @@ def single_step_phase_data(
     policy_trees = []
     statistics = []
     for record, state in zip(records, states, strict=True):
-        labels, tactics = reference_labels(record, state.reference_keys, config.off_graph_min_expanded_nodes)
+        labels, tactics = reference_labels(record, state.reference_steps, config.off_graph_min_expanded_nodes)
         tree_groups = single_step_groups(record, labels, tactics, config)
         policy_trees.append(PolicyTree(tree_groups.groups, record.expansions))
         statistics.append(graph_statistics(record, labels, (), tactics, tree_groups))

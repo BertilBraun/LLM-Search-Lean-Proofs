@@ -94,6 +94,33 @@ def test_policy_tactic_counts_of_the_example(field: str, count: int) -> None:
     assert getattr(statistics_of(example_tree()).policy_tactics, field) == count
 
 
+@pytest.mark.parametrize(
+    ("field", "count"),
+    [
+        ("samples", 10),
+        ("tactics", 18),
+        ("valid_tactics", 11),
+        ("continued_tactics", 6),
+        ("later_failing", 2),
+        ("later_no_progress", 0),
+    ],
+)
+def test_block_counts_of_the_example(field: str, count: int) -> None:
+    assert getattr(statistics_of(example_tree()).blocks, field) == count
+
+
+def test_block_counts_count_a_later_no_op() -> None:
+    builder = GraphBuilder("⊢ p")
+    builder.duplicate(
+        builder.root, builder.root, text="intro\nrevert", tactics=2, tactic_goals=(("h : q\n⊢ r",), ("⊢ p",))
+    )
+    assert statistics_of(builder.record()).blocks.later_no_progress == 1
+
+
+def test_run_total_adds_block_counts() -> None:
+    assert total_statistics([statistics(), statistics()]).blocks.tactics == 2 * statistics().blocks.tactics
+
+
 def test_group_tactics_count_only_the_groups() -> None:
     example = statistics_of(example_tree())
     assert example.policy_tactics.failing - example.group_tactics.failing == 1

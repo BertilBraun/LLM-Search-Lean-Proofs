@@ -19,12 +19,13 @@ from lean_search.expert_iteration.serving import MergedPublisher, ModelVersion, 
 from lean_search.lean import ProofState
 from lean_search.monitoring.families import ValueAbResult
 from lean_search.monitoring.store import MetricsWriter
+from lean_search.policy.server_control import PhaseSeconds
 from lean_search.rl.evaluation import EvaluationKind, EvaluationSummary
 from lean_search.rl.fixed_sets import HeldOutStatement, Stratum
 from lean_search.rl.loop import PHASE_OUTCOME_FILE, GrpoLoop, GrpoLoopPaths, ReleasedLeanMemory, TrainingRequest
 from lean_search.rl.loop_config import EvaluationValueModel, GrpoLoopConfig, parse_loop_config
 from lean_search.rl.statement_sources import FixedStatements
-from lean_search.rl.training_phase import PhaseOutcome, PolicyOutcome, ValueOutcome
+from lean_search.rl.training_phase import PhaseOutcome, PolicyOutcome, TrainerTimings, ValueOutcome
 from lean_search.search import (
     Accounting,
     CompletedSearch,
@@ -54,6 +55,11 @@ policy_base_model = "start-policy"
 value_base_model = "value-base"
 
 [[serving.policy_servers]]
+name = "policy-gpu0"
+gpu = 0
+url = "http://127.0.0.1:8100/v1"
+
+[[serving.policy_servers]]
 name = "policy-gpu1"
 gpu = 1
 url = "http://127.0.0.1:8101/v1"
@@ -63,6 +69,11 @@ name = "value-gpu0"
 gpu = 0
 url = "http://127.0.0.1:8200/v1"
 
+[[serving.value_servers]]
+name = "value-gpu1"
+gpu = 1
+url = "http://127.0.0.1:8201/v1"
+
 [sampling]
 search_config = "unused.toml"
 concurrency = 2
@@ -70,7 +81,7 @@ status_seconds = 0.01
 
 [training]
 phase_config = "unused.toml"
-gpu = 0
+gpus = [0, 1]
 min_sampling_minutes = 1.0
 max_sampling_minutes = 2.0
 min_solved_trees = 2
@@ -172,6 +183,8 @@ class FakeSearcher:
         self.policy_versions: list[int] = []
         self.server_failures = dict(server_failures or {})
         self.memory_releases: list[int] = []
+        # Shared with the trainer and the servers: the order of the pause's stages.
+        self.events: list[str] = []
 
     async def search(self, problem: Problem) -> CompletedSearch:
         await self.open.wait()
@@ -189,9 +202,11 @@ class FakeSearcher:
     async def pause(self) -> None:
         self.pauses += 1
         self.open.clear()
+        self.events.append("pause")
 
     def resume(self) -> None:
         self.open.set()
+        self.events.append("resume")
 
     def serving(self, policy_version: int) -> None:
         self.policy_versions.append(policy_version)
@@ -208,9 +223,12 @@ class FakeTrainer:
     value_passes: bool = False
     fail_phases: set[int] = field(default_factory=set)
     requests: list[TrainingRequest] = field(default_factory=list)
+    timings: TrainerTimings = field(default_factory=TrainerTimings)
+    events: list[str] = field(default_factory=list)
 
     async def train(self, request: TrainingRequest) -> PhaseOutcome:
         self.requests.append(request)
+        self.events.append(f"train {request.phase}")
         if request.phase in self.fail_phases:
             raise RuntimeError(f"training of phase {request.phase} failed")
         policy = dataclasses.replace(zero(PolicyOutcome), adapter=str(request.output_directory / "policy/adapter"))
@@ -220,30 +238,50 @@ class FakeTrainer:
             value = dataclasses.replace(
                 zero(ValueOutcome), adapter=str(request.output_directory / "value/adapter"), gate=gate
             )
-        outcome = PhaseOutcome(trees=len(list(request.trees.glob("*.json.gz"))), groups=1, policy=policy, value=value)
+        trees = len(list(request.trees.glob("*.json.gz")))
+        outcome = PhaseOutcome(trees=trees, groups=1, policy=policy, value=value, timings=self.timings)
         request.output_directory.mkdir(parents=True, exist_ok=True)
         (request.output_directory / PHASE_OUTCOME_FILE).write_text(to_json(outcome), encoding="utf-8")
         return outcome
 
 
+# What every fake release and wake reports as the slowest server's seconds.
+RELEASE_SECONDS = PhaseSeconds(pause=1.0, weights=2.0, resume=0.0)
+SERVE_SECONDS = PhaseSeconds(pause=0.0, weights=3.0, resume=0.5)
+
+
 @dataclass
 class FakeServers:
+    """The servers by name as `VllmServers` treats them: the released ones sleep, sleeping ones wake with a version,
+    the others swap to it in place."""
+
+    names: tuple[str, ...] = ()
+    released: tuple[str, ...] = ()
     served: list[int] = field(default_factory=list)
     releases: int = 0
     # Merged value weights served in place of the version's, in order.
     value_weights: list[str] = field(default_factory=list)
+    asleep: set[str] = field(default_factory=set)
+    events: list[str] = field(default_factory=list)
 
     async def check(self) -> None:
         pass
 
-    async def release(self) -> None:
+    async def release(self) -> PhaseSeconds:
         self.releases += 1
+        self.asleep |= set(self.released)
+        self.events += [f"sleep {name}" for name in self.released]
+        return RELEASE_SECONDS
 
-    async def serve(self, version: ModelVersion) -> None:
+    async def serve(self, version: ModelVersion) -> PhaseSeconds:
         self.served.append(version.version)
+        self.events += [f"{'wake' if name in self.asleep else 'swap'} {name} v{version.version}" for name in self.names]
+        self.asleep.clear()
+        return SERVE_SECONDS
 
     async def serve_value(self, weights: str) -> None:
         self.value_weights.append(weights)
+        self.events.append(f"value {Path(weights).name}")
 
 
 @dataclass
@@ -321,14 +359,14 @@ def loop_world(
 ) -> LoopWorld:
     config = parse_loop_config(toml)
     paths = GrpoLoopPaths(root / "runs", root / "data", root / "checkpoints", config.name)
-    return LoopWorld(
-        config,
-        paths,
-        searcher or FakeSearcher(),
-        trainer or FakeTrainer(),
-        FakeServers(),
-        evaluations or FakeEvaluations(),
+    searcher = searcher or FakeSearcher()
+    trainer = trainer or FakeTrainer()
+    servers = FakeServers(
+        tuple(server.name for server in config.serving.servers),
+        tuple(server.name for server in config.released_servers()),
     )
+    trainer.events = servers.events = searcher.events
+    return LoopWorld(config, paths, searcher, trainer, servers, evaluations or FakeEvaluations())
 
 
 def record_version_zero(world: LoopWorld) -> None:

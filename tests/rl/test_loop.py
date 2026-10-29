@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from loop_fakes import (
     LOOP_TOML,
+    SERVE_SECONDS,
     FakeEvaluations,
     FakeSearcher,
     FakeTrainer,
@@ -17,18 +18,22 @@ from loop_fakes import (
 
 from lean_search.expert_iteration.pool import problem_name
 from lean_search.expert_iteration.serving import ModelVersion, read_current, read_versions
+from lean_search.monitoring.families import PauseSegments
 from lean_search.monitoring.store import RunReader
 from lean_search.rl.evaluation import EvaluationKind
 from lean_search.rl.loop import (
     GrpoLoop,
     PhaseStage,
+    TrainingRequest,
     evaluation_due,
     phase_config_text,
     read_progress,
     request_evaluation,
     value_published_by,
 )
-from lean_search.rl.loop_config import EvaluationTarget, EvaluationValueModel
+from lean_search.rl.loop_config import EvaluationTarget, EvaluationValueModel, parse_loop_config
+from lean_search.rl.loop_services import SubprocessTrainer
+from lean_search.rl.training_phase import TrainerTimings
 from lean_search.rl.tree_store import TreeStore
 
 TEMPLATE = (Path(__file__).resolve().parents[2] / "experiments/configs/grpo/phase.toml").read_text(encoding="utf-8")
@@ -124,6 +129,72 @@ async def test_the_training_gpu_is_released_for_each_phase(tmp_path: Path) -> No
     assert world.servers.releases == 2
 
 
+def first_pause(world: LoopWorld) -> list[str]:
+    events = world.searcher.events
+    start = events.index("pause")
+    return events[start : events.index("resume", start) + 1]
+
+
+async def test_a_pause_sleeps_every_server_trains_then_wakes_them_with_the_new_version(tmp_path: Path) -> None:
+    world = loop_world(tmp_path)
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=1)
+    assert first_pause(world) == [
+        "pause",
+        "sleep policy-gpu0",
+        "sleep policy-gpu1",
+        "sleep value-gpu0",
+        "sleep value-gpu1",
+        "train 1",
+        "wake policy-gpu0 v1",
+        "wake policy-gpu1 v1",
+        "wake value-gpu0 v1",
+        "wake value-gpu1 v1",
+        "resume",
+    ]
+
+
+async def test_with_one_training_gpu_the_other_servers_swap_in_place(tmp_path: Path) -> None:
+    world = loop_world(tmp_path, toml=LOOP_TOML.replace("gpus = [0, 1]", "gpus = [0]"))
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=1)
+    assert first_pause(world) == [
+        "pause",
+        "sleep policy-gpu0",
+        "sleep value-gpu0",
+        "train 1",
+        "wake policy-gpu0 v1",
+        "swap policy-gpu1 v1",
+        "wake value-gpu0 v1",
+        "swap value-gpu1 v1",
+        "resume",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("column", "seconds"),
+    [
+        ("pause.gate_seconds", 7.0),
+        ("pause.merge_seconds", 11.0),
+        ("pause.wake_seconds", SERVE_SECONDS.weights),
+        ("pause.resume_seconds", SERVE_SECONDS.resume),
+    ],
+)
+async def test_the_timing_line_records_the_pause_segments(tmp_path: Path, column: str, seconds: float) -> None:
+    trainer = FakeTrainer(timings=TrainerTimings(gate_seconds=7.0, merge_seconds=11.0))
+    world = loop_world(tmp_path, trainer=trainer)
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=1)
+    assert RunReader(world.paths.directory).series("timing").columns[column][-1] == seconds
+
+
+async def test_the_pause_segments_start_afresh_each_phase(tmp_path: Path) -> None:
+    world = loop_world(tmp_path)
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=1)
+    assert read_progress(world.paths.progress).pause == PauseSegments()
+
+
 async def test_servers_serve_each_published_version(tmp_path: Path) -> None:
     world = loop_world(tmp_path)
     record_version_zero(world)
@@ -215,6 +286,18 @@ async def test_the_value_servers_return_to_the_published_value_model_after_evalu
         world, world.loop(), phases=2, on_sampling=lambda: request_evaluation(world.paths, EvaluationKind.PROBE)
     )
     assert world.servers.value_weights[-1] == read_versions(world.paths.models)[1].value_weights
+
+
+async def test_the_value_servers_swap_only_after_every_server_woke(tmp_path: Path) -> None:
+    world = loop_world(tmp_path, trainer=FakeTrainer(value_passes=True))
+    record_version_zero(world)
+    await run_until(
+        world, world.loop(), phases=1, on_sampling=lambda: request_evaluation(world.paths, EvaluationKind.PROBE)
+    )
+    events = world.servers.events
+    first_swap = next(index for index, event in enumerate(events) if event.startswith("value "))
+    last_wake = max(index for index, event in enumerate(events) if event.startswith("wake "))
+    assert last_wake < first_swap
 
 
 async def test_evaluations_need_no_value_swap_while_the_reference_is_published(tmp_path: Path) -> None:
@@ -396,3 +479,49 @@ async def test_a_statement_is_not_given_up_within_its_retries(tmp_path: Path) ->
     record_version_zero(world)
     await run_until_searched(world, world.loop(), times=3)
     assert last_status(world, "statements_given_up") == 0
+
+
+OVERFULL_GPU = LOOP_TOML.replace(
+    'url = "http://127.0.0.1:8100/v1"\n', 'url = "http://127.0.0.1:8100/v1"\nmemory_share = 0.7\n'
+).replace('url = "http://127.0.0.1:8200/v1"\n', 'url = "http://127.0.0.1:8200/v1"\nmemory_share = 0.4\n')
+
+
+@pytest.mark.parametrize(
+    "toml",
+    [
+        LOOP_TOML.replace("gpus = [0, 1]", "gpus = []"),
+        LOOP_TOML.replace("gpus = [0, 1]", "gpus = [0, 0]"),
+        OVERFULL_GPU,
+    ],
+    ids=["no gpu", "a gpu twice", "memory shares above one"],
+)
+def test_an_impossible_gpu_layout_is_refused(toml: str) -> None:
+    with pytest.raises(ValueError):
+        parse_loop_config(toml)
+
+
+def training_arguments(root: Path, toml: str) -> list[str]:
+    world = loop_world(root, toml=toml)
+    request = TrainingRequest(1, "", root / "trees", "run", root / "checkpoints", False)
+    return SubprocessTrainer(world.paths, world.config.training).arguments(request, root / "phase.toml")
+
+
+def test_several_training_gpus_start_a_torchrun_rank_each(tmp_path: Path) -> None:
+    arguments = training_arguments(tmp_path, LOOP_TOML)
+    assert arguments[1:6] == [
+        "-m",
+        "torch.distributed.run",
+        "--standalone",
+        "--nproc-per-node=2",
+        "experiments/grpo_phase.py",
+    ]
+
+
+def test_one_training_gpu_starts_a_single_process(tmp_path: Path) -> None:
+    assert (
+        training_arguments(tmp_path, LOOP_TOML.replace("gpus = [0, 1]", "gpus = [0]"))[1] == "experiments/grpo_phase.py"
+    )
+
+
+def test_the_training_job_merges_the_new_adapters(tmp_path: Path) -> None:
+    assert "--merge-adapters" in training_arguments(tmp_path, LOOP_TOML)

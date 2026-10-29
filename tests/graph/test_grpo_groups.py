@@ -46,12 +46,22 @@ def test_unsolved_tree_has_no_groups() -> None:
     assert groups(builder.record()) == []
 
 
-def test_proof_tactics_earn_the_proof_graph_reward_and_the_closing_bonus() -> None:
-    assert tactic_rewards(PROOF) == pytest.approx([0.85, 0.85, 0.85 + 0.15 * 0.1])
+def test_proof_tactics_earn_their_progress_and_the_closing_bonus() -> None:
+    assert tactic_rewards(PROOF) == pytest.approx([0.85 + 0.2, 0.85 + 0.4, 0.85 + 0.6 + 0.15 * 0.1])
 
 
 def test_failing_tactic_after_a_proof_graph_tactic() -> None:
-    assert tactic_rewards(FIRST_THEN_FAILING) == pytest.approx([0.85, -0.15, None])
+    assert tactic_rewards(FIRST_THEN_FAILING) == pytest.approx([0.85 + 0.2, -0.15, None])
+
+
+def test_tactics_after_the_first_are_judged_within_the_block() -> None:
+    gains = [None if tactic.gain is None else tactic.gain.total for tactic in root_sample(PROOF).tactics]
+    assert gains == pytest.approx([None, 0.2, 0.2 + 0.15 * 0.1])
+
+
+def test_failing_tactic_after_the_first_costs_its_tokens() -> None:
+    gains = [None if tactic.gain is None else tactic.gain.total for tactic in root_sample(FIRST_THEN_FAILING).tactics]
+    assert gains == pytest.approx([None, -0.1, None])
 
 
 def test_redundant_hypothesis_scores_as_a_failure() -> None:

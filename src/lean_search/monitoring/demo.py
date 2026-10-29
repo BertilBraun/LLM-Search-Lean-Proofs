@@ -16,6 +16,7 @@ from lean_search.monitoring.families import (
     GrpoPhase,
     LoopState,
     LoopStatus,
+    PauseSegments,
     PhaseTiming,
     SearchPhase,
     SystemUsage,
@@ -24,7 +25,7 @@ from lean_search.monitoring.families import (
 )
 from lean_search.monitoring.store import LoopContext, MetricsWriter
 from lean_search.rl.policy_data import SamplerAgreement
-from lean_search.rl.tree_statistics import EdgeKindCounts, GraphStatistics, SizeHistogram
+from lean_search.rl.tree_statistics import BlockCounts, EdgeKindCounts, GraphStatistics, SizeHistogram
 from lean_search.search.tactic_labels import TacticLabelCounts
 from lean_search.value.benchmark import (
     BenchmarkMetrics,
@@ -258,14 +259,33 @@ class DemoRun:
 
     def write_timing(self, moment: float) -> None:
         schedule = self.schedule
+        training_seconds = schedule.training_minutes * 60 * (1 + self.noise(0.05))
+        pause = PauseSegments(
+            drain_seconds=2 + abs(self.noise(1)),
+            server_sleep_seconds=3.0,
+            trainer_start_seconds=40 + abs(self.noise(5)),
+            preparation_seconds=0.05 * training_seconds,
+            policy_load_seconds=45.0,
+            compile_seconds=70 + abs(self.noise(10)),
+            scoring_seconds=0.08 * training_seconds,
+            policy_training_seconds=0.3 * training_seconds,
+            value_training_seconds=0.2 * training_seconds,
+            gate_seconds=0.1 * training_seconds,
+            merge_seconds=15.0,
+            write_seconds=25.0,
+            publish_seconds=2.0,
+            wake_seconds=6 + abs(self.noise(1)),
+            resume_seconds=0.5,
+        )
         self.writer.write(
             PhaseTiming(
                 sampling_seconds=(schedule.phase_minutes - schedule.training_minutes) * 60,
-                training_seconds=schedule.training_minutes * 60 * (1 + self.noise(0.05)),
+                training_seconds=training_seconds,
                 publishing_seconds=22 + abs(self.noise(3)),
                 evaluation_seconds=0.0,
                 trees=round(62 + self.noise(5)),
                 searches_paused=round(100 + self.noise(6)),
+                pause=pause,
             ),
             record_time=moment,
         )
@@ -442,6 +462,7 @@ class DemoRun:
             harvest_proofs=proofs - solved,
             harvest_proof_graph_nodes=round(harvest * (0.6 + 0.2 * learned)),
             exploration_expansions=round(expanded * 0.1 + self.noise(2)),
+            blocks=self.block_counts(samples, learned),
         )
         policy_total = policy_samples.total
         forced = round(policy_total * 0.004)
@@ -462,6 +483,18 @@ class DemoRun:
                 mean_block_tactics=2.1 + 0.5 * learned + self.noise(0.05),
             ),
             record_time=moment,
+        )
+
+    def block_counts(self, samples: int, learned: float) -> BlockCounts:
+        valid = round(samples * (0.47 + 0.05 * learned))
+        continued = round(valid * (0.49 + 0.08 * learned + self.noise(0.01)))
+        return BlockCounts(
+            samples=samples,
+            tactics=round(samples * (1.7 + 0.3 * learned + self.noise(0.03))),
+            valid_tactics=valid,
+            continued_tactics=continued,
+            later_failing=round(continued * (0.37 - 0.05 * learned + self.noise(0.01))),
+            later_no_progress=round(continued * 0.04),
         )
 
     def write_curriculum(self, moment: float) -> None:

@@ -1,3 +1,7 @@
+from collections.abc import Mapping
+
+import pytest
+
 from lean_search.corpora.records import DataSplit, TracedStep
 from lean_search.lean import ProofState
 from lean_search.reasoning.states import ReasoningState
@@ -21,7 +25,8 @@ from lean_search.search.tactic_labels import TacticLabel
 STATEMENT = "theorem t (a b : ℕ) (h₀ : a = b) : a + 0 = b := by"
 ROOT = "a b : ℕ\nh₀ : a = b\n⊢ a + 0 = b"
 REFERENCE_NEXT = "a b : ℕ\nh₀ : a = b\n⊢ a = b"
-REFERENCE_KEYS = frozenset({goal_key((REFERENCE_NEXT,)), ()})
+REFERENCE_STEPS = {goal_key((REFERENCE_NEXT,)): 1, (): 0}
+REFERENCE_KEYS = frozenset(REFERENCE_STEPS)
 REWARDS = RewardConfig()
 
 
@@ -85,7 +90,7 @@ def single_step_tree(closing: bool) -> TreeRecord:
 
 
 def labels_of(record: TreeRecord) -> list[TacticLabel]:
-    _, tactics = reference_labels(record, REFERENCE_KEYS, REWARDS.off_graph_min_expanded_nodes)
+    _, tactics = reference_labels(record, REFERENCE_STEPS, REWARDS.off_graph_min_expanded_nodes)
     return [tactics[edge_id][0].label for edge_id in sorted(tactics)]
 
 
@@ -97,17 +102,29 @@ def test_a_sample_reaching_another_new_state_is_unknown() -> None:
     assert labels_of(single_step_tree(closing=False))[1] == TacticLabel.UNKNOWN
 
 
-def root_groups(record: TreeRecord, reference_keys: frozenset[GoalKey]) -> list[PolicyGroup]:
-    labels, tactics = reference_labels(record, reference_keys, REWARDS.off_graph_min_expanded_nodes)
+def root_groups(record: TreeRecord, reference_steps: Mapping[GoalKey, int]) -> list[PolicyGroup]:
+    labels, tactics = reference_labels(record, reference_steps, REWARDS.off_graph_min_expanded_nodes)
     return list(single_step_groups(record, labels, tactics, REWARDS).groups)
 
 
 def test_a_state_no_sample_closes_still_forms_a_group() -> None:
-    assert len(root_groups(single_step_tree(closing=False), REFERENCE_KEYS)) == 1
+    assert len(root_groups(single_step_tree(closing=False), REFERENCE_STEPS)) == 1
 
 
 def test_a_state_no_sample_reaches_the_proof_graph_forms_no_group() -> None:
-    assert root_groups(single_step_tree(closing=False), frozenset()) == []
+    assert root_groups(single_step_tree(closing=False), {}) == []
+
+
+def test_reaching_the_reference_proof_earns_one_step_of_progress() -> None:
+    (root,) = root_groups(single_step_tree(closing=False), REFERENCE_STEPS)
+    reward = root.samples[0].tactics[0].parts
+    assert reward is not None and reward.total == pytest.approx(0.85 + 0.2)
+
+
+def test_a_found_proof_shorter_than_the_reference_sets_the_state_s_remaining_steps() -> None:
+    (root,) = root_groups(single_step_tree(closing=True), REFERENCE_STEPS)
+    reward = root.samples[0].tactics[0].parts
+    assert reward is not None and reward.total == pytest.approx(0.85)
 
 
 def test_success_counts_closing_and_reference_samples() -> None:
@@ -156,4 +173,4 @@ def test_a_traced_state_knows_the_later_states_of_its_proof() -> None:
         0,
     )
     problem = state_problem(ReasoningState("s/1#1", step, ((),), False))
-    assert problem.reference_keys == REFERENCE_KEYS
+    assert problem.reference_steps == REFERENCE_STEPS

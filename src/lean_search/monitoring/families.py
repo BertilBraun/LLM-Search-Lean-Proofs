@@ -106,7 +106,7 @@ class GrpoPhase:
     group_samples: int
     # Groups with a non-zero advantage (the trained ones), as a share of all groups.
     mixed_reward_group_share: float
-    # Means of λ · L and (1 − λ) · G over the known tactics.
+    # Means of λ · L and (1 − λ) · G plus the progress over the known tactics.
     mean_local_reward: float
     mean_global_reward: float
     kl_to_behaviour_policy: float
@@ -211,6 +211,36 @@ class CurriculumPhase:
 
 
 @dataclass(frozen=True)
+class PauseSegments:
+    """A phase's pause before its evaluations, segment by segment, in wall seconds (rl/README.md, "Timing")."""
+
+    # The searches' requests in flight finishing at the pause gate.
+    drain_seconds: float = 0.0
+    # The servers on the training GPUs draining and sleeping (freeing their memory).
+    server_sleep_seconds: float = 0.0
+    # The training job outside its own parts: process and rank start, imports, reading the trees, exit.
+    trainer_start_seconds: float = 0.0
+    # Labelling the trees and building the policy and value data.
+    preparation_seconds: float = 0.0
+    policy_load_seconds: float = 0.0
+    compile_seconds: float = 0.0
+    # Old and reference log-probabilities.
+    scoring_seconds: float = 0.0
+    policy_training_seconds: float = 0.0
+    # Loading, compiling, training and saving the value model.
+    value_training_seconds: float = 0.0
+    gate_seconds: float = 0.0
+    # Merging the new adapters into their bases on the GPUs, and writing them (and the policy adapter).
+    merge_seconds: float = 0.0
+    write_seconds: float = 0.0
+    # Recording the version (taking over the GPU merges, else merging on the CPU).
+    publish_seconds: float = 0.0
+    # The slowest server waking (or swapping in place) with the new weights, then resuming.
+    wake_seconds: float = 0.0
+    resume_seconds: float = 0.0
+
+
+@dataclass(frozen=True)
 class PhaseTiming:
     """Where a phase's wall time went: sampling between pauses, then the pause's training, publish and evaluations."""
 
@@ -223,6 +253,7 @@ class PhaseTiming:
     # Trees the phase trained on and the searches still paused in place.
     trees: int
     searches_paused: int
+    pause: PauseSegments = field(default_factory=PauseSegments)
 
 
 FAMILIES = (

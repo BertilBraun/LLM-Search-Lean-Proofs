@@ -1,5 +1,8 @@
+import dataclasses
 import json
 import shutil
+import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import peft
@@ -28,6 +31,21 @@ ADAPTER_CONFIG_FILE = "adapter_config.json"
 ADAPTER_WEIGHTS_FILE = "adapter_model.safetensors"
 LORA_A_SUFFIX = ".lora_A.weight"
 LORA_B_SUFFIX = ".lora_B.weight"
+PREMERGED_DIRECTORY = "merged"
+PREMERGED_MARKER = "premerged.json"
+
+
+@dataclass(frozen=True)
+class PremergedWeights:
+    base_model: str
+    adapter: str
+
+
+@dataclass(frozen=True)
+class MergeSeconds:
+    # Loading the base and merging the adapter, then writing the merged weights.
+    merge: float = 0.0
+    write: float = 0.0
 
 
 def load_base_model(model: str, device: str = "cpu") -> transformers.PreTrainedModel:
@@ -89,8 +107,38 @@ def lora_delta(adapter_directory: Path, module_key: str) -> torch.Tensor:
 
 
 def copy_tokenizer_and_processor_files(model: str, output_directory: Path) -> None:
-    for source in Path(snapshot_download(model)).iterdir():
+    """From a local model directory or the model's Hugging Face snapshot."""
+    model_directory = Path(model) if Path(model).is_dir() else Path(snapshot_download(model))
+    for source in model_directory.iterdir():
         is_weight_file = source.suffix == ".safetensors" or source.name.endswith(".safetensors.index.json")
         destination = output_directory / source.name
         if not is_weight_file and not destination.exists():
             shutil.copyfile(source, destination)
+
+
+def premerged_directory(adapter_directory: Path) -> Path:
+    """Where a training job leaves the adapter merged on its GPU, for the loop's publisher to take over."""
+    return adapter_directory.parent / PREMERGED_DIRECTORY
+
+
+def read_premerged(directory: Path) -> PremergedWeights | None:
+    marker = directory / PREMERGED_MARKER
+    if not marker.exists():
+        return None
+    return PremergedWeights(**json.loads(marker.read_text(encoding="utf-8")))
+
+
+def premerge_adapter(model: str, adapter_directory: Path, device: torch.device) -> MergeSeconds:
+    """`merge_adapter` on the device into `premerged_directory`; the marker, written last, names base and adapter."""
+    started = time.perf_counter()
+    merged = peft.PeftModel.from_pretrained(load_base_model(model, str(device)), adapter_directory).merge_and_unload()
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+    merged_at = time.perf_counter()
+    directory = premerged_directory(adapter_directory)
+    shutil.rmtree(directory, ignore_errors=True)
+    merged.save_pretrained(directory)
+    copy_tokenizer_and_processor_files(model, directory)
+    marker = PremergedWeights(model, str(adapter_directory))
+    (directory / PREMERGED_MARKER).write_text(json.dumps(dataclasses.asdict(marker)), encoding="utf-8")
+    return MergeSeconds(merged_at - started, time.perf_counter() - merged_at)

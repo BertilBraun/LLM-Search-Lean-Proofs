@@ -22,7 +22,14 @@ from lean_search.policy.client import PolicyClient
 from lean_search.policy.config import PolicyConfig
 from lean_search.policy.expander import load_tokenizer
 from lean_search.policy.prompts import parse_samples, render_prompt, stop_sequences
-from lean_search.policy.server_control import is_healthy, is_sleeping, publish_weights, release_gpu, restore_gpu
+from lean_search.policy.server_control import (
+    PhaseSeconds,
+    is_healthy,
+    is_sleeping,
+    publish_weights,
+    release_gpu,
+    restore_gpu,
+)
 from lean_search.rl.evaluation import EvaluationKind, EvaluationSummary, read_summary
 from lean_search.rl.loop import (
     PHASE_OUTCOME_FILE,
@@ -175,16 +182,27 @@ async def run_logged(arguments: Sequence[str], log_path: Path, environment: dict
 
 
 class SubprocessTrainer:
-    """experiments/grpo_phase.py on the training GPU, one process per phase."""
+    """experiments/grpo_phase.py on the training GPUs, one job per phase: one process, or a torchrun rank per GPU."""
 
     def __init__(self, paths: GrpoLoopPaths, config: LoopTrainingConfig) -> None:
         self.paths = paths
         self.config = config
 
+    def launcher(self) -> list[str]:
+        if len(self.config.gpus) == 1:
+            return [sys.executable]
+        return [
+            sys.executable,
+            "-m",
+            "torch.distributed.run",
+            "--standalone",
+            f"--nproc-per-node={len(self.config.gpus)}",
+        ]
+
     def arguments(self, request: TrainingRequest, config_path: Path) -> list[str]:
         arguments = [
             *shlex.split(self.config.command_prefix),
-            sys.executable,
+            *self.launcher(),
             "experiments/grpo_phase.py",
             "--config",
             str(config_path),
@@ -192,6 +210,7 @@ class SubprocessTrainer:
             str(request.trees),
             "--run-name",
             request.run_name,
+            "--merge-adapters",
         ]
         for option, relative in (
             ("--lean-replay", self.config.lean_replay),
@@ -210,7 +229,7 @@ class SubprocessTrainer:
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config_path.write_text(request.config_text, encoding="utf-8")
         environment = os.environ | {
-            "CUDA_VISIBLE_DEVICES": str(self.config.gpu),
+            "CUDA_VISIBLE_DEVICES": ",".join(str(gpu) for gpu in self.config.gpus),
             "LEAN_SEARCH_CHECKPOINTS": str(self.paths.checkpoints_root),
             "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
         }
@@ -220,8 +239,17 @@ class SubprocessTrainer:
         return read_phase_outcome(request.output_directory / PHASE_OUTCOME_FILE)
 
 
+def slowest(seconds: Sequence[PhaseSeconds]) -> PhaseSeconds:
+    """Per part, the longest of the servers handled at once."""
+    return PhaseSeconds(
+        max((part.pause for part in seconds), default=0.0),
+        max((part.weights for part in seconds), default=0.0),
+        max((part.resume for part in seconds), default=0.0),
+    )
+
+
 class VllmServers:
-    """The merged policy and value servers: in-place weight swaps, sleep on the training GPU."""
+    """The merged policy and value servers: in-place weight swaps, sleep on the training GPUs."""
 
     def __init__(self, serving: ServingConfig, released: Sequence[ServerEndpoint], publisher: MergedPublisher) -> None:
         self.serving = serving
@@ -234,22 +262,26 @@ class VllmServers:
         if down:
             raise RuntimeError(f"Servers not answering: {down}; start them (grpo_loop.py serve-commands).")
 
-    async def release(self) -> None:
-        await asyncio.gather(*(release_gpu(server.url) for server in self.released))
+    async def release(self) -> PhaseSeconds:
+        return slowest(await asyncio.gather(*(release_gpu(server.url) for server in self.released)))
 
-    async def serve(self, version: ModelVersion) -> None:
-        await asyncio.gather(
-            *(self.serve_weights(server, self.publisher.weights(version, server)) for server in self.serving.servers)
+    async def serve(self, version: ModelVersion) -> PhaseSeconds:
+        return slowest(
+            await asyncio.gather(
+                *(
+                    self.serve_weights(server, self.publisher.weights(version, server))
+                    for server in self.serving.servers
+                )
+            )
         )
 
     async def serve_value(self, weights: str) -> None:
         await asyncio.gather(*(self.serve_weights(server, weights) for server in self.serving.value_servers))
 
-    async def serve_weights(self, server: ServerEndpoint, weights: str) -> None:
+    async def serve_weights(self, server: ServerEndpoint, weights: str) -> PhaseSeconds:
         if await is_sleeping(server.url):
-            await restore_gpu(server.url, Path(weights))
-        else:
-            await publish_weights(server.url, Path(weights))
+            return await restore_gpu(server.url, Path(weights))
+        return await publish_weights(server.url, Path(weights))
 
 
 class SubprocessEvaluations:
