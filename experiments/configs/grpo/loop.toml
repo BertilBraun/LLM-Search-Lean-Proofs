@@ -123,6 +123,7 @@ proof_steps_weight = 0.5
 root_value_weight = 0.5
 band_width = 1.0
 band_step = 0.5
+# Each band is judged on the first 50 statements fed at it, once all 50 finished (not the first 50 to finish).
 window = 50
 raise_solve_rate = 0.5
 fast_raise_solve_rate = 0.8

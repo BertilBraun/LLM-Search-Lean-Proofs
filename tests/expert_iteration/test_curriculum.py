@@ -84,11 +84,59 @@ def test_a_low_solve_rate_lowers_the_band() -> None:
 
 def test_outcomes_from_before_a_band_move_do_not_count() -> None:
     curriculum = curriculum_with([1] * 8 + [2] * 8)
-    early = curriculum.next_statement()
-    assert early is not None
-    outcomes(curriculum, [True] * 5)
-    curriculum.record_outcome(problem_name(early), True)
+    cohort = fed_names(curriculum, 5)
+    late = fed_names(curriculum, 1)
+    record(curriculum, cohort, True)
+    record(curriculum, late, True)
     assert curriculum.counts().outcomes == 0
+
+
+def fed_names(curriculum: Curriculum, count: int) -> list[str]:
+    statements = [curriculum.next_statement() for _ in range(count)]
+    return [problem_name(statement) for statement in statements if statement]
+
+
+def record(curriculum: Curriculum, names: list[str], solved: bool) -> None:
+    for name in names:
+        curriculum.record_outcome(name, solved)
+
+
+def test_the_band_is_judged_by_the_statements_fed_first_not_the_first_to_finish() -> None:
+    curriculum = curriculum_with([1] * 4 + [3] * 20)
+    curriculum.restore(CurriculumState(3.0, 1, ()))
+    cohort = fed_names(curriculum, 5)
+    record(curriculum, fed_names(curriculum, 5), True)
+    record(curriculum, cohort, False)
+    assert curriculum.band_low == 2.0
+
+
+def test_the_band_waits_for_every_statement_of_its_cohort() -> None:
+    curriculum = curriculum_with([1] * 4 + [2] * 8)
+    cohort = fed_names(curriculum, 5)
+    record(curriculum, [*cohort[:4], *fed_names(curriculum, 1)], True)
+    assert curriculum.band_low == 1.0
+
+
+def test_an_abandoned_cohort_statement_makes_room_for_the_next_one_fed() -> None:
+    curriculum = curriculum_with([1] * 6 + [2] * 8)
+    cohort = fed_names(curriculum, 5)
+    curriculum.abandon(cohort[0])
+    record(curriculum, [*cohort[1:], *fed_names(curriculum, 1)], True)
+    assert curriculum.band_low == 2.0
+
+
+def test_a_band_that_stays_judges_a_new_cohort() -> None:
+    curriculum = curriculum_with([1] * 12 + [2] * 8)
+    outcomes(curriculum, [True, True, False, False, False])
+    record(curriculum, fed_names(curriculum, 5), True)
+    assert curriculum.band_low == 2.0
+
+
+def test_a_restart_with_cohort_statements_running_starts_a_new_cohort() -> None:
+    curriculum = curriculum_with([1] * 8)
+    cohort = fed_names(curriculum, 5)
+    record(curriculum, cohort[:3], True)
+    assert curriculum.state().outcomes == ()
 
 
 def test_root_values_shift_the_difficulty() -> None:
@@ -119,6 +167,17 @@ def test_the_scheduler_feeds_the_curriculum_and_reports_outcomes() -> None:
         job = scheduler.next_job()
         assert job is not None
         scheduler.record(attempt(job.name, proved=True, decision=Decision.SOLVED))
+    assert curriculum.band_low == 2.0
+
+
+def test_a_load_failure_leaves_room_in_the_curriculum_cohort() -> None:
+    curriculum = curriculum_with([1] * 6 + [2] * 4)
+    scheduler = Scheduler(SchedulerConfig(), curriculum)
+    for number in range(6):
+        job = scheduler.next_job()
+        assert job is not None
+        decision = Decision.RETIRED_LOAD_FAILURE if number == 0 else Decision.SOLVED
+        scheduler.record(attempt(job.name, proved=number > 0, decision=decision))
     assert curriculum.band_low == 2.0
 
 

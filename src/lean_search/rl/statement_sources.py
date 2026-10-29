@@ -126,7 +126,7 @@ class CurriculumStatements:
 
     def abandon(self, name: str) -> None:
         # The curriculum feeds each statement once per loop; a restart offers the ones without a tree again.
-        pass
+        self.curriculum.abandon(name)
 
     def refresh(self) -> list[str]:
         added = self.read_verified()
