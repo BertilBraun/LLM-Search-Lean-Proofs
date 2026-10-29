@@ -9,18 +9,27 @@ from loop_fakes import (
     FakeTrainer,
     FakeValueScorer,
     LoopWorld,
+    hand_off,
     loop_world,
     record_version_zero,
     run_until,
     taking_over_handoff,
 )
 
-from lean_search.expert_iteration.serving import MERGED_MARKER, read_current, write_json_atomically
+from lean_search.expert_iteration.serving import MERGED_MARKER, MergedPublisher, read_current, write_json_atomically
 from lean_search.monitoring.families import PauseSegments
 from lean_search.monitoring.store import RunReader
+from lean_search.policy.adapters import PremergedWeights
 from lean_search.rl.evaluation import EvaluationKind
-from lean_search.rl.loop import LoopProgress, PhaseStage, request_evaluation, with_trainer_timings
-from lean_search.rl.training_phase import TrainerTimings
+from lean_search.rl.loop import (
+    PHASE_OUTCOME_FILE,
+    LoopProgress,
+    PhaseStage,
+    read_phase_outcome,
+    request_evaluation,
+    with_trainer_timings,
+)
+from lean_search.rl.training_phase import TrainerTimings, publish_phase
 from lean_search.rl.value_trends import scored_versions
 from lean_search.training.resident import HostDirectories
 
@@ -117,6 +126,35 @@ async def test_a_restart_before_the_record_records_the_version(tmp_path: Path) -
     await interrupted_after_the_wake(world)
     await run_until(world, world.loop(), phases=1)
     assert read_current(world.paths.models).trigger == "phase 1"
+
+
+async def test_a_restart_after_the_record_clears_host_memory(tmp_path: Path) -> None:
+    """The version recorded on disk, the loop gone before it cleared host memory (or stopped while the record's
+    thread ran)."""
+    world = handoff_world(tmp_path)
+    await interrupted_after_the_wake(world)
+    outcome = read_phase_outcome(world.paths.phase_checkpoints(1) / PHASE_OUTCOME_FILE)
+    publish_phase(
+        world.paths.models, MergedPublisher(world.config.serving, world.paths.weights, world.merge), outcome, "phase 1"
+    )
+    await run_until(world, world.loop(), phases=1)
+    assert not handoff_root(world).exists()
+
+
+def test_a_start_clears_merges_left_in_host_memory_by_a_recorded_phase(tmp_path: Path) -> None:
+    world = handoff_world(tmp_path)
+    hand_off(handoff_root(world), PremergedWeights("start-policy", "an adapter of an earlier phase"))
+    world.loop().clear_stale_handoff()
+    assert not any(handoff_root(world).iterdir())
+
+
+async def test_a_restart_before_the_record_clears_a_partly_written_merge(tmp_path: Path) -> None:
+    world = handoff_world(tmp_path)
+    await interrupted_after_the_wake(world)
+    partial = handoff_root(world) / "0123456789abcdef.tmp"
+    partial.mkdir()
+    world.loop().clear_stale_handoff()
+    assert not partial.exists()
 
 
 async def test_each_phase_is_prepared_as_its_sampling_starts(tmp_path: Path) -> None:

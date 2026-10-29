@@ -1,4 +1,5 @@
 import asyncio
+import dataclasses
 import os
 import signal
 import sys
@@ -14,6 +15,7 @@ from lean_search.expert_iteration.serving import write_json_atomically
 from lean_search.rl.loop import GrpoLoopPaths, TrainingRequest
 from lean_search.rl.loop_config import parse_loop_config
 from lean_search.rl.loop_services import ChildProcess, PersistentTrainer, run_logged, running_start_ticks
+from lean_search.training.resident import HostDirectories
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="process groups and /proc are POSIX")
 
@@ -40,16 +42,28 @@ class TrainerWorld:
 
 
 @asynccontextmanager
-async def persistent_trainer(root: Path, deaths: int = 0) -> AsyncIterator[TrainerWorld]:
+async def persistent_trainer(
+    root: Path, deaths: int = 0, hangs: int = 0, first_train_timeout_minutes: float = 45.0
+) -> AsyncIterator[TrainerWorld]:
     paths = GrpoLoopPaths(root / "runs", root / "data", root / "checkpoints", "loop")
     behaviour = root / "behaviour"
     behaviour.mkdir()
     (behaviour / "deaths").write_text(str(deaths))
+    (behaviour / "hangs").write_text(str(hangs))
     arguments = [sys.executable, str(FAKE_JOB), str(paths.training / "trainer"), str(behaviour)]
     log: list[str] = []
-    config = parse_loop_config(LOOP_TOML).training
+    config = dataclasses.replace(
+        parse_loop_config(LOOP_TOML).training, first_train_timeout_minutes=first_train_timeout_minutes
+    )
     trainer = PersistentTrainer(
-        paths, config, arguments, dict(os.environ), log.append, poll_seconds=0.01, stop_seconds=5.0
+        paths,
+        config,
+        arguments,
+        dict(os.environ),
+        HostDirectories(root / "host"),
+        log.append,
+        poll_seconds=0.01,
+        stop_seconds=5.0,
     )
     try:
         yield TrainerWorld(root, trainer, log)
@@ -87,6 +101,38 @@ async def test_a_job_that_dies_twice_fails_the_phase(tmp_path: Path) -> None:
     async with persistent_trainer(tmp_path, deaths=2) as world:
         with pytest.raises(RuntimeError, match="failed twice"):
             await world.trainer.train(world.request(2))
+
+
+async def test_a_job_that_hangs_while_training_is_stopped_and_trains_the_phase_again(tmp_path: Path) -> None:
+    async with persistent_trainer(tmp_path, hangs=1, first_train_timeout_minutes=0.05) as world:
+        outcome = await world.trainer.train(world.request(2))
+    assert outcome.trees == 2
+
+
+async def test_a_job_that_hangs_twice_fails_the_phase(tmp_path: Path) -> None:
+    async with persistent_trainer(tmp_path, hangs=2, first_train_timeout_minutes=0.05) as world:
+        with pytest.raises(RuntimeError, match="failed twice"):
+            await world.trainer.train(world.request(2))
+
+
+@pytest.mark.parametrize(
+    ("value_phase", "minutes"), [(False, 15.0), (True, 30.0)], ids=["at least the minimum", "twice the median"]
+)
+async def test_a_later_phase_waits_the_timeout_of_its_kind(tmp_path: Path, value_phase: bool, minutes: float) -> None:
+    async with persistent_trainer(tmp_path) as world:
+        await world.trainer.train(world.request(1))
+        world.trainer.train_seconds = {False: [60.0], True: [600.0, 900.0, 1200.0]}
+        request = dataclasses.replace(world.request(2), train_value=value_phase)
+        assert world.trainer.train_timeout_seconds(request) == minutes * 60
+
+
+async def test_closing_removes_the_parked_weights(tmp_path: Path) -> None:
+    async with persistent_trainer(tmp_path) as world:
+        await world.trainer.train(world.request(1))
+        parked = world.trainer.host.parked
+        parked.mkdir(parents=True)
+        (parked / "policy.bin").write_bytes(b"weights")
+    assert not parked.exists()
 
 
 async def test_a_job_that_died_between_phases_is_started_again_for_the_next(tmp_path: Path) -> None:
@@ -127,5 +173,7 @@ def test_a_persistent_job_left_by_an_earlier_loop_is_reported(tmp_path: Path) ->
     start_ticks = running_start_ticks(os.getpid())
     assert start_ticks is not None
     write_json_atomically(paths.children / "persistent" / "training.pid", ChildProcess(os.getpid(), start_ticks, "x"))
-    trainer = PersistentTrainer(paths, parse_loop_config(LOOP_TOML).training, [], {}, print)
+    trainer = PersistentTrainer(
+        paths, parse_loop_config(LOOP_TOML).training, [], {}, HostDirectories(tmp_path / "host"), print
+    )
     assert trainer.earlier_jobs() is not None

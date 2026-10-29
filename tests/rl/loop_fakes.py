@@ -188,15 +188,17 @@ def solved_tree(problem: Problem) -> SearchTree:
 
 
 class FakeSearcher:
-    """Every search proves its statement at once (after its `server_failures`); requests wait while paused."""
+    """Every search proves its statement at once (after its `server_failures`); requests wait while paused. The trees of
+    `malformed` statements hold a failed edge without its failure, which labelling refuses."""
 
-    def __init__(self, server_failures: dict[str, int] | None = None) -> None:
+    def __init__(self, server_failures: dict[str, int] | None = None, malformed: frozenset[str] = frozenset()) -> None:
         self.open = asyncio.Event()
         self.open.set()
         self.searched: list[str] = []
         self.pauses = 0
         self.policy_versions: list[int] = []
         self.server_failures = dict(server_failures or {})
+        self.malformed = malformed
         self.memory_releases: list[int] = []
         # Shared with the trainer and the servers: the order of the pause's stages.
         self.events: list[str] = []
@@ -216,7 +218,18 @@ class FakeSearcher:
         result = SearchResult(
             problem.name, True, StopReason.PROVED, "trivial", ("trivial",), (), accounting, None, 0, 1
         )
-        return CompletedSearch(result, solved_tree(problem))
+        tree = solved_tree(problem)
+        if problem.name in self.malformed:
+            tree.add_edge(
+                tree.root,
+                text="simp",
+                source=StepSource.POLICY,
+                log_probability=-1.0,
+                prompt_tokens=0,
+                generated_tokens=0,
+                outcome=EdgeOutcome.FAILED,
+            )
+        return CompletedSearch(result, tree)
 
     async def pause(self) -> None:
         self.pauses += 1
@@ -394,10 +407,12 @@ def scored_benchmark() -> ValueBenchmark:
 
 @dataclass
 class FakeValueScorer:
-    """Scores the empty benchmark, failing on a server while `failing`; records its start and end in `events`."""
+    """Scores the empty benchmark, failing on a server while `failing`; the first `foreign_scorings` scorings return
+    scores of another benchmark, which the trend refuses. Records its start and end in `events`."""
 
     events: list[str] = field(default_factory=list)
     failing: bool = False
+    foreign_scorings: int = 0
 
     async def score(self, benchmark: ValueBenchmark) -> BenchmarkScores:
         self.events.append("score")
@@ -405,6 +420,9 @@ class FakeValueScorer:
         if self.failing:
             raise httpx.ConnectError("value server down")
         self.events.append("scored")
+        if self.foreign_scorings:
+            self.foreign_scorings -= 1
+            return BenchmarkScores("value-merged", "another benchmark", ())
         return BenchmarkScores("value-merged", benchmark_fingerprint(benchmark), ())
 
 

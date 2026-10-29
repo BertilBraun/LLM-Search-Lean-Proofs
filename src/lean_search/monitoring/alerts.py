@@ -204,11 +204,15 @@ def solve_rate_off_target(reader: RunReader, thresholds: AlertThresholds, now: f
 
 
 def worse_value_model(reader: RunReader, thresholds: AlertThresholds, now: float) -> Alert | None:
-    """The value arms of the published value model, pooled, find it worse than v0 (the loop's own significance)."""
+    """The value arms of the published value model, pooled, find it worse than v0 (the loop's own significance); gone
+    once the loop's status reports a newer value version."""
     arms = reader.series("value_arm")
     if not latest(arms.columns.get("worse", [])):
         return None
     version = latest(arms.columns.get("published_value_version", [])) or 0.0
+    published = latest(reader.series("status").value_versions)
+    if published is not None and published != version:
+        return None
     p_value = latest(arms.columns.get("same_value_version.worse_p_value", [])) or 0.0
     detail = (
         f"Value v{version:.0f} solves fewer probe problems than v0 in its value arms (pooled one-sided p = "
@@ -249,6 +253,37 @@ def server_failures(reader: RunReader, thresholds: AlertThresholds, now: float) 
     return Alert(Severity.WARNING, "Server failures", detail, "system")
 
 
+def rolled_back(reader: RunReader, thresholds: AlertThresholds, now: float) -> Alert | None:
+    """The loop rolled back after a held-out collapse (rl/health_checks.py): shown for the rest of the run."""
+    health = reader.series("health")
+    if "rolled_back_to" not in health.columns:
+        return None
+    pairs = zip(health.columns["phase"], health.columns["rolled_back_to"], strict=True)
+    rollbacks = [(phase, target) for phase, target in pairs if target is not None]
+    if not rollbacks:
+        return None
+    phase, target = rollbacks[-1]
+    detail = (
+        f"{len(rollbacks)} rollbacks after a held-out valid-Lean collapse, the last after phase {phase:.0f} to version "
+        f"{target:.0f}'s policy; the searches continued. Check the learning rate (loop.log, Training page)."
+    )
+    return Alert(Severity.WARNING, "Policy rolled back", detail, "training")
+
+
+def loop_errors(reader: RunReader, thresholds: AlertThresholds, now: float) -> Alert | None:
+    """Errors the loop logs and survives: a failed value benchmark scoring, a tree whose summary failed."""
+    status = reader.series("status")
+    scorings = latest(status.columns.get("value_benchmark_failures", [])) or 0.0
+    trees = latest(status.columns.get("trees_left_out", [])) or 0.0
+    if not scorings and not trees:
+        return None
+    detail = (
+        f"This session {scorings:.0f} value benchmark scorings failed (retried after the next phase) and "
+        f"{trees:.0f} trees were left out because their summary failed; tracebacks in loop.log."
+    )
+    return Alert(Severity.WARNING, "Loop errors", detail, "system")
+
+
 RULES = (
     loop_silence,
     stale_publish,
@@ -263,6 +298,8 @@ RULES = (
     low_host_memory,
     low_disk,
     server_failures,
+    loop_errors,
+    rolled_back,
 )
 
 SEVERITY_ORDER = {Severity.CRITICAL: 0, Severity.WARNING: 1, Severity.INFO: 2}

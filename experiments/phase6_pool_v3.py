@@ -375,7 +375,9 @@ async def verify(config: KnownProofPoolConfig, limit: int | None, sample: int | 
     if sample:
         candidates = iter(sample_candidates(path, sample))
     elif settings.stratified_last_bucket:
-        candidates = stratified_candidates(path, settings.min_proof_tactics, settings.stratified_last_bucket)
+        candidates = stratified_candidates(
+            path, settings.min_proof_tactics, settings.stratified_last_bucket, settings.bucket_shuffle_seed
+        )
     else:
         candidates = read_candidates(path)
     automation = load_run_config(REPOSITORY_DIRECTORY / settings.automation_config).automation.tactics

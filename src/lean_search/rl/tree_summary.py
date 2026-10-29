@@ -10,7 +10,7 @@ from lean_search.rl.phase_metrics import is_forced, repeats_itself
 from lean_search.search.graph_labels import label_graph
 from lean_search.search.records import TreeRecord
 from lean_search.search.tactic_labels import policy_tactics
-from lean_search.search.tree import StepSource
+from lean_search.search.tree import Edge, EdgeOutcome, FailureKind, StepSource
 
 
 @dataclass(frozen=True)
@@ -32,6 +32,25 @@ class TreeSummary:
     # Samples cut off at the token cap (their answer forced), and those of them repeating their own text.
     cut_off_samples: int = 0
     repetition_loops: int = 0
+    # Distinct policy blocks Lean judged (infrastructure failures left out), and those of them that ran completely:
+    # the held-out states' valid-Lean criterion.
+    judged_blocks: int = 0
+    valid_blocks: int = 0
+
+
+def executed_edge(record: TreeRecord, edge: Edge) -> Edge:
+    """The edge that ran: a repeated block's first run."""
+    while edge.repeat_of is not None:
+        edge = record.edges[edge.repeat_of]
+    return edge
+
+
+def ran_completely(edge: Edge) -> bool:
+    return edge.failure is None and edge.outcome != EdgeOutcome.REJECTED and edge.target_id is not None
+
+
+def judged_by_lean(edge: Edge) -> bool:
+    return edge.failure is None or edge.failure.kind != FailureKind.REPL_FAILURE
 
 
 def trainable_groups(record: TreeRecord, reward: RewardConfig, credit: CreditMode) -> tuple[int, int | None]:
@@ -46,10 +65,13 @@ def trainable_groups(record: TreeRecord, reward: RewardConfig, credit: CreditMod
 def tree_summary(record: TreeRecord, reward: RewardConfig, credit: CreditMode, expansion_budget: int) -> TreeSummary:
     blocks_by_expansion: defaultdict[int, int] = defaultdict(int)
     samples = 0
+    executed = []
     for edge in record.edges:
         if edge.source == StepSource.POLICY:
             blocks_by_expansion[edge.expansion_index] += 1
             samples += edge.sample_count
+            executed.append(executed_edge(record, edge))
+    judged = [edge for edge in executed if judged_by_lean(edge)]
     completions = [completion for expansion in record.expansions for completion in expansion.completions]
     cut_off = [completion for completion in completions if is_forced(completion)]
     groups, proof_steps = trainable_groups(record, reward, credit) if record.result.proved else (0, None)
@@ -67,4 +89,6 @@ def tree_summary(record: TreeRecord, reward: RewardConfig, credit: CreditMode, e
         ),
         cut_off_samples=len(cut_off),
         repetition_loops=sum(repeats_itself(completion.text) for completion in cut_off),
+        judged_blocks=len(judged),
+        valid_blocks=sum(ran_completely(edge) for edge in judged),
     )

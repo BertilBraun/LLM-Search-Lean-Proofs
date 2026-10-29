@@ -116,14 +116,14 @@ probe_parts = 3
 [evaluation.probe]
 max_expansions = 16
 max_wall_seconds = 3600.0
-concurrency = 64
+concurrency = 112
 every_hours = 0.01
 at_start = true
 baseline_runs = 2
 problems = 12
 
 [evaluation.value_arm]
-every_slots = 1
+enabled = true
 confidence = 0.95
 significance = 0.05
 
@@ -134,7 +134,7 @@ path = "grpo_smoke_gate/benchmark.json.gz"
 [evaluation.minif2f]
 max_expansions = 64
 max_wall_seconds = 7200.0
-concurrency = 64
+concurrency = 112
 every_hours = 0.0
 at_start = true
 problems = 8
@@ -142,8 +142,8 @@ problems = 8
 [evaluation.held_out_states]
 max_expansions = 1
 max_wall_seconds = 600.0
-concurrency = 64
-every_hours = 0.0
+concurrency = 112
+every_hours = 0.01
 at_start = true
 problems = 32
 

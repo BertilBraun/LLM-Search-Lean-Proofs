@@ -171,8 +171,9 @@ def test_the_loop_probes_a_third_every_two_hours() -> None:
     assert (evaluation.probe_parts, evaluation.probe.every_hours) == (3, 2.0)
 
 
-def test_the_loop_runs_a_value_arm_every_other_probe_slot() -> None:
-    assert loop("grpo/loop.toml").evaluation.value_arm.every_slots == 2
+@pytest.mark.parametrize("name", ["grpo/loop.toml", "grpo/loop_smoke.toml"])
+def test_the_loop_runs_a_value_arm_per_published_value_model(name: str) -> None:
+    assert loop(name).evaluation.value_arm.enabled
 
 
 def test_the_overfit_loop_probes_the_whole_set_when_requested() -> None:
@@ -222,3 +223,17 @@ def test_the_loop_stops_below_70_percent_of_version_zeros_valid_lean_rate() -> N
 
 def test_the_loop_measures_the_minif2f_baseline_before_its_first_phase() -> None:
     assert loop("grpo/loop.toml").evaluation.minif2f.at_start
+
+
+def test_the_loop_runs_the_held_out_states_with_every_probe_slot() -> None:
+    evaluation = loop("grpo/loop.toml").evaluation
+    assert evaluation.held_out_states.every_hours == evaluation.probe.every_hours
+
+
+def test_the_loop_rolls_back_on_a_first_collapse() -> None:
+    assert loop("grpo/loop.toml").health.rollback_window_phases > 0
+
+
+def test_the_smoke_loop_runs_the_held_out_states_after_every_phase() -> None:
+    evaluation = loop("grpo/loop_smoke.toml").evaluation
+    assert evaluation.held_out_states.every_hours == evaluation.probe.every_hours

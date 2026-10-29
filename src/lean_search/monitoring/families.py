@@ -46,6 +46,10 @@ class LoopStatus:
     # Searches a server failed this session, and statements dropped after repeated failures.
     server_failures: int = 0
     statements_given_up: int = 0
+    # This session: value benchmark scorings that failed (retried after the next phase), and finished trees left out
+    # because their summary failed.
+    value_benchmark_failures: int = 0
+    trees_left_out: int = 0
 
 
 @dataclass(frozen=True)
@@ -110,6 +114,10 @@ class FixedTargets:
     probe_rolling_solved: int | None = None
     probe_rolling_problems: int | None = None
     probe_rolling_by_difficulty: dict[str, BandOutcome] = field(default_factory=dict)
+    # The slot's solve rate minus the mean of version 0's runs of the same part, so the parts' difficulty cancels
+    # (no sawtooth across the parts), and that difference averaged over the last `probe_parts` slots.
+    probe_baseline_difference: float | None = None
+    probe_rolling_baseline_difference: float | None = None
     # A repeated run against the first run of the version: solved, difference, problems solved by one only.
     probe_repeat_solved: int | None = None
     probe_repeat_difference: int | None = None
@@ -385,6 +393,9 @@ class HealthMeasurements:
     # succeed.
     held_out_valid_rate: float | None = None
     held_out_success: float | None = None
+    # Of the phase's distinct policy blocks Lean judged (infrastructure failures left out), those that ran completely:
+    # the held-out states' valid-Lean criterion on the training trees, free every phase.
+    valid_block_rate: float | None = None
 
 
 @dataclass(frozen=True)
@@ -399,9 +410,10 @@ class HealthThresholds:
     max_explanation_tokens: float | None = None
     max_cut_off_share: float | None = None
     min_held_out_valid_rate: float | None = None
-    # Below this the loop stops after the phase.
+    # Below this the held-out valid Lean collapsed: a rollback, or the loop stops.
     stop_held_out_valid_rate: float | None = None
     min_held_out_success: float | None = None
+    min_valid_block_rate: float | None = None
 
 
 class HealthCheck(StrEnum):
@@ -413,10 +425,11 @@ class HealthCheck(StrEnum):
     HELD_OUT_VALID_LEAN = "held_out_valid_lean"
     HELD_OUT_SUCCESS = "held_out_success"
     SEARCH_BUDGET = "search_budget"
+    VALID_BLOCKS = "valid_blocks"
 
 
 class HealthSeverity(StrEnum):
-    # The loop stopped after the phase.
+    # The held-out valid Lean collapsed: the loop rolled back or stopped after the phase.
     STOP = "stop"
     WARNING = "warning"
     # A suggestion, e.g. a larger search budget.
@@ -442,10 +455,13 @@ class PhaseHealth:
     measured: HealthMeasurements
     thresholds: HealthThresholds
     alerts: tuple[HealthAlert, ...] = ()
-    # The held-out valid-Lean rate fell below its stop threshold: the loop stopped after this phase.
+    # The held-out valid Lean collapsed within `rollback_window_phases` of a rollback (or with rollbacks off): the loop
+    # stopped after this phase.
     hard_stop: bool = False
-    # The newest version whose held-out evaluation stayed above the stop threshold (0 before any): the rollback target.
+    # The newest version whose held-out evaluation raised no held-out alert (0 before any): the rollback target.
     last_good_version: int = 0
+    # The held-out valid Lean collapsed: this version's policy was published again and the searches continued.
+    rolled_back_to: int | None = None
 
 
 FAMILIES = (

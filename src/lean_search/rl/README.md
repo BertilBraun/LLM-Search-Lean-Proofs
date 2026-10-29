@@ -187,10 +187,10 @@ finished tree), or after `max_sampling_minutes` (90) with at least one, and runs
 | Stage | What happens |
 |---|---|
 | pause | every policy and value request waits at the pause gate; searches keep their trees and REPL states in place, and trees finishing now belong to the next phase |
-| training | the paused searches' REPL processes stop (`training.paused_repl_memory_gib`, "Host memory" below); the servers on the training GPUs drain and sleep (level 2: weights and KV cache freed, `release_gpu`); the training job trains on those GPUs: with `training.persistent` the loop's persistent job (`PersistentTrainer`, "Persistent trainer" below; log in `training/trainer.log`), else `grpo_phase.py --merge-adapters` for this phase alone (`SubprocessTrainer`; several GPUs: `torchrun --standalone`, one rank each; log in `training/phase_<k>.log`). It labels the phase's trees (the persistent job: what was not labelled while sampling), trains the policy (two passes, with the μ of `value_share.json`) and, every `value_every_phases` (4), the value model on the window of recent phases' trees ("The value model in the loop" below), then merges the new adapters into their bases on the GPUs (one rank per adapter): to `<adapter>/../merged` on disk, or the persistent job's into host memory; the loop labels the same trees meanwhile for the `search`, `curriculum` and `value_phase` metrics (awaited only before the phase closes) |
-| publishing | version k + 1 with the new policy adapter and, in a value phase, the new value adapter (no gate). With the persistent job's merges in host memory (`loop.handed_off_version`): sleeping servers wake with them (`restore_gpu`: memory back, `reload_weights` of the directory, KV cache back), servers off the training GPUs swap in place (`publish_weights`), the searches resume unless evaluations are due, and only then `training_phase.publish_phase` copies the merges to `weights/v<k+1>/` (a temporary directory renamed once complete, `MergedPublisher`) and records the version, prunes, and clears host memory (`GrpoLoop.record_durably`). Otherwise `publish_phase` first, the job's GPU merges moved into `weights/v<k+1>/` (`merging.merge`; without them, e.g. after a crash, merged on the CPU into `serving.policy_base_model` and `value_base_model`), then the servers wake or swap with it. Either way the searches' pause gate records the served version for the samples to come |
-| evaluating | the paused searches' REPL processes stop (`evaluation.paused_repl_memory_gib`, "Host memory" below); due fixed targets run as their own jobs (`grpo_evaluate.py`) while the searches stay paused: by loop hours (`every_hours`), once before the first phase (`at_start`; `baseline_runs` independent runs), or when requested (`grpo_loop.py request-evaluation`); the value servers serve the evaluations' fixed value model meanwhile and the published one again afterwards; the probe runs its next slot (one part of the set) and, every other slot, the slot's value arm with the published value model ("Fixed targets" below) |
-| health | the phase's budget and health lines and alerts ("Health checks and budget signals"), after the version is recorded (with the persistent job the searches may already run); the hard stop ends the loop here |
+| training | the paused searches' REPL processes stop (`training.paused_repl_memory_gib`, "Host memory" below); the servers on the training GPUs drain and sleep (level 2: weights and KV cache freed, `release_gpu`); the training job trains on those GPUs: with `training.persistent` the loop's persistent job (`PersistentTrainer`, "Persistent trainer" below; log in `training/trainer.log`), else `grpo_phase.py --merge-adapters` for this phase alone (`SubprocessTrainer`; several GPUs: `torchrun --standalone`, one rank each; log in `training/phase_<k>.log`). It labels the phase's trees (the persistent job: what was not labelled while sampling), trains the policy (two passes, with the μ of `value_share.json`) and, every `value_every_phases` (2), the value model on the window of recent phases' trees ("The value model in the loop" below), then merges the new adapters into their bases on the main rank's GPU, one after the other (transformers writes checkpoint weights only on distributed rank 0; a merge without a weights file is an assertion): to `<adapter>/../merged` on disk, or the persistent job's into host memory; the loop labels the same trees meanwhile for the `search`, `curriculum` and `value_phase` metrics (awaited only before the phase closes) |
+| publishing | version k + 1 with the new policy adapter and, in a value phase, the new value adapter (no gate). With the persistent job's merges in host memory (`loop.handed_off_version`): sleeping servers wake with them (`restore_gpu`: memory back, `reload_weights` of the directory, KV cache back), servers off the training GPUs swap in place (`publish_weights`), the searches resume unless evaluations are due, and only then `training_phase.publish_phase` copies the merges to `weights/v<k+1>/` (a temporary directory renamed once complete, `MergedPublisher`) and records the version, prunes, and clears host memory (`GrpoLoop.record_durably`). Otherwise `publish_phase` first (and host memory cleared once recorded, also by a restart that finds the version already recorded), the job's GPU merges moved into `weights/v<k+1>/` (`merging.merge`; without them, e.g. after a crash, merged on the CPU into `serving.policy_base_model` and `value_base_model`), then the servers wake or swap with it. Either way the searches' pause gate records the served version for the samples to come |
+| evaluating | the paused searches' REPL processes stop (`evaluation.paused_repl_memory_gib`, "Host memory" below); due fixed targets run as their own jobs (`grpo_evaluate.py`) while the searches stay paused: by loop hours (`every_hours`), once before the first phase (`at_start`; `baseline_runs` independent runs), or when requested (`grpo_loop.py request-evaluation`); the value servers serve the evaluations' fixed value model meanwhile and the published one again afterwards; the probe runs its next slot (one part of the set), the held-out states with it, and, at the first slot after a new value model was published, that slot's value arm with it ("Fixed targets" below) |
+| health | the phase's budget and health lines and alerts ("Health checks and budget signals"), after the version is recorded (with the persistent job the searches may already run); a held-out collapse publishes the last good version's policy again and continues, a second one within 4 phases stops the loop here |
 | resume | the searches continue with the new weights; a value model served for the first time scores the value benchmark through the value servers meanwhile ("The value model in the loop"), which the next pause waits for; it starts once the version is recorded |
 
 GPU layout (`loop.toml`): while sampling, each of the four GPUs serves the merged policy (62% of its memory) and the
@@ -216,33 +216,35 @@ splits each step's units (sibling groups with their pairs) the same way, under t
 rank everything is the single-GPU path. A step on two ranks equals the one-process step
 (`tests/graph/test_data_parallel_trainers.py`, gloo on the CPU). The LoRA gradients are fp32 (~0.5 GB for the policy adapter), so each policy step all-reduces about that much over PCIe.
 
-Restart: `loop_state.json` holds the phase, its stage, sampling and training time, the last value adapter trained,
-the μ of the last phase that trained, the evaluation clock and the next probe slot; `models/current.json` and `versions.jsonl` the published versions; the tree index the
-searched statements and per-phase trees. `grpo_loop.py run` after a crash first swaps every server to the current
-version, finishes the interrupted stage (training again, publishing only if `current.json` lacks the phase's
-version, the remaining evaluations), then resumes sampling. A crash after the servers loaded the persistent job's
-merges from host memory but before the version was recorded leaves `current.json` at version k and the stage at
-publishing: the restart serves version k from disk (pruning only follows a record, so its weights exist), then serves
-version k + 1 from host memory again and records it once on disk, or, when host memory is gone (a reboot), merges it on
-the CPU first. Searches cut off by the crash are lost (the curriculum
-feeds each statement once; the fixed list feeds it again). The node's disk is not persistent: back up the run's
-`metrics/`, `phases.jsonl`, `evaluations*/summary.json` and `report.md`; trees and the retained adapters ("Disk")
-stay on the node.
+Restart: `loop_state.json` holds the phase, its stage, sampling and training time, the last value adapter trained, the μ
+of the last phase that trained, the evaluation clock and the next probe slot; `models/current.json` and `versions.jsonl`
+the published versions; the tree index the searched statements and per-phase trees. `grpo_loop.py run` after a crash
+first swaps every server to the current version, finishes the interrupted stage (training again, publishing only if
+`current.json` lacks the phase's version, the remaining evaluations), then resumes sampling. A crash after the servers
+loaded the persistent job's merges from host memory but before the version was recorded leaves `current.json` at version
+k and the stage at publishing: the restart serves version k from disk (pruning only follows a record, so its weights
+exist), then serves version k + 1 from host memory again and records it once on disk, or, when host memory is gone (a
+reboot), merges it on the CPU first. At every start the loop clears merges in host memory that no restart will serve
+(all of them unless the interrupted phase's version awaits its record; then only partly written ones). Searches cut off
+by the crash are lost (the curriculum feeds each statement once; the fixed list feeds it again). The node's disk is not
+persistent: back up the run's `metrics/`, `phases.jsonl`, `evaluations*/summary.json` and `report.md`; trees and the
+retained adapters ("Disk") stay on the node.
 
 Jobs: the training and evaluation jobs run in their own process groups, each recorded in `children/<job>.pid` (process
 id, start time and a marker) while it runs. Every process of a job carries the marker in its environment
 (`LEAN_SEARCH_LOOP_JOB`), which finds the processes outside the group: torchrun starts each worker in a session of its
-own. Stopping the loop (SIGTERM from `grpo_loop.sh stop`, or a failure) cancels the stage in flight, which sends
-SIGTERM to the job's group and to every process with its marker, SIGKILL to what is left after 30 s, and waits; the
-stage reruns after a restart. A job that ends by itself (torchrun killed by the OOM killer, say) gets the same
-treatment for whatever it left running. A loop that died without stopping its job (SIGKILL, OOM) leaves the record
-behind: the restarted loop refuses to start, before it wakes or swaps any server, while a recorded job or any process
-with its marker still runs (the error lists their process ids: `kill -TERM` each, then restart). The persistent
-training job is such a job, recorded in `children/persistent/` so that evaluation jobs start beside it; its ranks also
-stop by themselves within a second once the loop's process is gone (its id and start time are their arguments), so a
-SIGKILLed loop leaves nothing for long. A persistent job that ends by itself is started again at the loop's next
-command; during a phase the loop logs it, starts it again and trains the phase once more, and a second death fails the
-phase like a failed per-phase job.
+own. Stopping the loop (SIGTERM from `grpo_loop.sh stop`, or a failure) cancels the stage in flight, which sends SIGTERM
+to the job's group and to every process with its marker, SIGKILL to what is left after 30 s, and waits; the stage reruns
+after a restart. A job that ends by itself (torchrun killed by the OOM killer, say) gets the same treatment for whatever
+it left running. A loop that died without stopping its job (SIGKILL, OOM) leaves the record behind: the restarted loop
+refuses to start, before it wakes or swaps any server, while a recorded job or any process with its marker still runs
+(the error lists their process ids: `kill -TERM` each, then restart). The persistent training job is such a job,
+recorded in `children/persistent/` so that evaluation jobs start beside it; between commands its ranks also stop by
+themselves within a second once the loop's process is gone (its id and start time are their arguments); during a command
+(a `train`, minutes, or a first `prepare`'s model building) they finish it first, so a loop SIGKILLed then leaves them
+holding the GPUs until it ends, and the restarted loop refuses to start until they are gone. A persistent job that ends
+by itself is started again at the loop's next command; during a phase the loop logs it, starts it again and trains the
+phase once more, and a second death fails the phase like a failed per-phase job.
 
 Server failures: a search that ends on an HTTP error of a policy or value server says nothing about its statement, so
 the statement is fed again (the curriculum's before new ones) up to `sampling.server_failure_retries` times, then
@@ -275,15 +277,16 @@ with fakes for them (`tests/rl/loop_fakes.py`) and real Lean for the start-state
 
 ### The value model in the loop
 
-- **Cadence and data**: every `training.value_every_phases` (4) phases the training job trains the value model on the
-  trees of the last `value_window_phases` (8) phases (`TrainingRequest.value_trees`, `grpo_phase.py --value-trees`;
-  only the main rank reads them, the other phases' records without their texts, `read_tree(texts=False)`, and sends
-  the tokenized value data to the other ranks), continuing the last value adapter trained, which is the published one
-  (`LoopProgress.value_adapter`; v0's before the first), with 10% v0 replay
-  (`training.value_replay = "value/v0/train.jsonl"`: v0's own training data, `phase3_value_data.py --name v0`, the
-  exact remaining steps of traced train-split proofs; on the node under `$LEAN_SEARCH_DATA`, restored from the
-  backup's `generated_data` archive, `data/value/v0/`). The targets' q comes from the recorded bins
-  (`value/README.md`).
+- **Cadence and data**: every `training.value_every_phases` (2) phases the training job trains the value model on the
+  trees of the last `value_window_phases` (4) phases (with 45-90-minute phases: a retrain every 1.5-3 h on 3-6 h of
+  trees, decided 2026-10-29 after review G; the old 4 and 8 were chosen for 15-30-minute phases)
+  (`TrainingRequest.value_trees`, `grpo_phase.py --value-trees`; only the main rank reads them, the other phases'
+  records without their texts, `read_tree(texts=False)`, and sends the tokenized value data to the other ranks),
+  continuing the last value adapter trained, which is the published one (`LoopProgress.value_adapter`; v0's before the
+  first), with 10% v0 replay (`training.value_replay = "value/v0/train.jsonl"`: v0's own training data,
+  `phase3_value_data.py --name v0`, the exact remaining steps of traced train-split proofs; on the node under
+  `$LEAN_SEARCH_DATA`, restored from the backup's `generated_data` archive, `data/value/v0/`). The targets' q comes from
+  the recorded bins (`value/README.md`).
 - **No gate** (owner decision 2026-10-29): every value model trained is published with the next version and the
   searches use it; nothing in the loop decides on value statistics. The two former gates are trends instead:
 - **Benchmark trend** (`value_trends.py`, `evaluation.value_benchmark`): when the value servers serve a value version
@@ -293,19 +296,22 @@ with fakes for them (`tests/rl/loop_fakes.py`) and real Lean for the start-state
   `value_benchmark/scores_v<value version>.json.gz` and writes a `value_benchmark` line: the share of labelled sibling
   pairs ordered by h (`value/pair_statistics.py`), its difference to v0's and to the previous scored value version's
   with a paired cluster bootstrap over problems, the benchmark metrics (AUC, Brier, pair accuracy by kind, Spearman and
-  MAE of the steps), the predicted distributions and the calibration on expanded states. The next phase's pause and
-  any evaluation wait for a scoring in flight (they change what the value servers serve); a scoring that fails on a
-  server is logged and retried after the next phase. A few thousand prefill-only states: well under a minute of value
-  server time per retrain, outside the training pause (the old gate scored both models in the job).
-- **Value arm** (`evaluation.value_arm`, `evaluation.value_arm_result`): every `every_slots` (2) probe slot, while the
-  published value model is not v0 (and the evaluations' fixed model is v0), the slot's part is searched again with the
-  published value model and the same policy version (`--value-arm`, `probe_slot<k>_v<version>_value_arm/`) and paired
-  per problem with the slot's run: the paired solve-rate difference with McNemar's exact interval (Clopper-Pearson on
-  the problems one arm solved, conditional on their number; `confidence` 0.95), and one-sided exact McNemar p-values,
-  for the slot and pooled over the earlier value arms of the same published value model and of every one
-  (`loop.earlier_value_arm_results`). When the published model is worse than v0 at `significance` (0.05), pooled over
-  its own value arms, `loop.log` gets an `Alert:` line and the dashboard a warning; nothing else happens. Compared with
-  v0, not with the previous model: v0 is the fixed reference of the evaluations.
+  MAE of the steps), the predicted distributions and the calibration on expanded states. The next phase's pause and any
+  evaluation wait for a scoring in flight (they change what the value servers serve). It is a trend only: any error of
+  the scoring or of the trend is logged as an `Alert:` with its traceback (the `status` line counts them, the dashboard
+  warns), never stops the loop, and the version is scored again after the next phase; the scores are kept only once the
+  trend exists. A few thousand prefill-only states: well under a minute of value server time per retrain, outside the
+  training pause (the old gate scored both models in the job).
+- **Value arm** (`evaluation.value_arm`, `evaluation.value_arm_result`): exactly once per published value model other
+  than v0 (`enabled`; the evaluations' fixed model is v0), at the first probe slot after it was published
+  (`LoopProgress.value_arm_version`), the slot's part is searched again with the published value model and the same
+  policy version (`--value-arm`, `probe_slot<k>_v<version>_value_arm/`) and paired per problem with the slot's run: the
+  paired solve-rate difference with McNemar's exact interval (Clopper-Pearson on the problems one arm solved,
+  conditional on their number; `confidence` 0.95), and one-sided exact McNemar p-values, for the slot and pooled over
+  the earlier value arms of the same published value model and of every one (`loop.earlier_value_arm_results`). When the
+  published model is worse than v0 at `significance` (0.05), pooled over its own value arms, `loop.log` gets an `Alert:`
+  line and the dashboard a warning until a newer value model is published; nothing else happens. Compared with v0, not
+  with the previous model: v0 is the fixed reference of the evaluations.
 - **μ** is a manual switch starting at 0: `grpo_loop.py set-value-share 0.15` (`deployment/grpo_loop.sh value-share`)
   writes `value_share.json` in the run directory (`loop.set_value_share`, 0 ≤ μ ≤ 1), and the loop reads it each time
   a phase starts training (`loop.read_value_share`), so it applies from the next phase to train; 0 turns it off. The
@@ -335,17 +341,17 @@ segments; the training job's come from its `phase.json` (`TrainerTimings`, the m
 | `drain` | loop | the searches' requests in flight finishing at the pause gate |
 | `server_sleep` | loop | the paused searches' REPL processes stopping ("Host memory"), the training GPUs' servers draining and sleeping |
 | `trainer_start` | loop | the job's wall time minus its own total: process and rank start, imports, NCCL setup, reading the trees, loading tokenizers, exit. The persistent job: waiting for it to start and its model building within this phase, both once per job (0 in later phases; a job started at the first `prepare` builds its models while the searches run) |
-| `preparation` | job | labelling the trees, building the policy sequences, replay and value data. The persistent job: the trees its main rank had not prepared while sampling, the sequences sent to the other ranks, and in a value phase the window read and labelled |
+| `preparation` | job | labelling the trees, building the policy sequences, replay and value data. The persistent job: the trees its main rank had not prepared while sampling, the sequences sent to the other ranks, and in a value phase the window's trees not yet labelled |
 | `policy_load` | job | loading the 4B base with the adapter (and torch.compile's wrappers). The persistent job: unparking the policy and loading the adapter to continue |
 | `compile` | job | one scoring and one training micro-batch on the shortest sequence before scoring, which compile the compiled layers (`compile_warm_up`; 0 without `compile_layers`). The persistent job compiles in its first phase only; `phase.json`'s `compiled_graphs` counts the graphs compiled per phase, 0 after the first |
 | `unpark` | job | the persistent job moving its models from host memory onto the GPUs, every time (the slowest rank; also part of `policy_load`, `value_training` and `merge`) |
 | `scoring` | job | the old (and, when it differs, the reference's on `reference_sequences`) log-probabilities, sharded |
 | `policy_training` | job | the policy steps (both passes, replay included) |
 | `value_training` | job | the value model's load (the persistent job: unpark), compilation, steps and adapter save |
-| `merge` | job | loading each base (the persistent job: unparking it) and merging the new adapters on the GPUs (the slowest rank) |
+| `merge` | job | loading each base (the persistent job: unparking it) and merging the new adapters on the main rank's GPU |
 | `write` | job | writing the policy adapter and, per-phase job, the merged weights |
 | `park` | job | the persistent job dropping its models' GPU copies and moving the LoRA weights to the CPU (the slowest rank) |
-| `handoff` | job | the persistent job writing the merged weights to host memory for the servers (the slowest rank) |
+| `handoff` | job | the persistent job writing the merged weights to host memory for the servers (the main rank) |
 | `publish` | loop | recording the version: moving the job's merges into place (else merging on the CPU); about 0 with merges in host memory, recorded later |
 | `wake` | loop | the slowest server waking with the new weights (or swapping them in place) |
 | `resume` | loop | the slowest server resuming |
@@ -383,19 +389,23 @@ number once `phase.json` is written). Between commands no collective waits, so t
   every 30 s, one tree at a time into its policy sequences (`training_phase.prepare_policy_tree`; the record itself is
   not kept). The thread runs on the last `BACKGROUND_CPUS` (32) logical CPUs at nice 19, as `deployment/background.sh`
   pins CPU-heavy work, so with the Lean REPLs it never takes more than one of their cores. At the pause `train` finishes
-  what is left and sends the sequences to the other ranks (`broadcast_from_main`); they no longer read the trees. The
-  value model's window (8 phases' trees without texts) is still read and labelled at the pause, on the main rank, in
-  value phases: holding it while sampling would put its memory next to the 112 REPLs.
+  what is left and sends the sequences to the other ranks (`broadcast_from_main`); they no longer read the trees. In a
+  value phase a second thread labels the value model's window the same way (`WindowPreparation`: the finished phases'
+  trees at once, the collecting phase's as they arrive, read without texts, `label_value_trees`), so the pause only
+  labels the last trees: an estimated 2-5 GiB on the main rank while that phase samples (4 phases of 300-900 trees at
+  ~1.4 MiB), which the ~240 GiB node holds beside the 112 REPLs.
 - **Training**: as the per-phase job, through the same trainers with the resident model as their loader (`train_grpo`,
   `train_graph_value_model`, `load=`); each model is parked after its stage. A phase with resident models trains
   bit-identical adapters to a fresh per-phase job on the CPU (`test_resident_trainer.py`, policy over two phases and a
   value phase).
-- **Handoff**: the new policy adapter (rank 0) and, in a value phase, the new value adapter (rank 1) are merged in the unparked copy
-  (`peft` `merge_adapter`, the same arithmetic as `merge_and_unload`; equal tensors on the CPU) and written as a servable
-  checkpoint to `handoff/<hash of the adapter path>/` in host memory (a temporary directory renamed with its marker
-  inside, `adapters.write_premerged`), then the models are parked. The servers load that directory with the existing
-  in-place path (`reload_weights` from a directory: on the old node ~20 s from disk, now from the page cache); vLLM
-  needs no extension. CUDA IPC or an NCCL broadcast into the vLLM workers would save the tmpfs write and the file
+- **Handoff**: the new policy adapter and, in a value phase, the new value adapter are merged on the main rank, one
+  after the other (transformers' `save_pretrained` writes checkpoint weights only on distributed rank 0; a value merge
+  on rank 1 left a directory with its marker and no weights, `tests/graph/test_merges_on_ranks.py`), in the unparked
+  copy (`peft` `merge_adapter`, the same arithmetic as `merge_and_unload`; equal tensors on the CPU) and written as a
+  servable checkpoint to `handoff/<hash of the adapter path>/` in host memory (a temporary directory renamed with its
+  marker inside, `adapters.write_premerged`), then the models are parked. The servers load that directory with the
+  existing in-place path (`reload_weights` from a directory: on the old node ~20 s from disk, now from the page cache);
+  vLLM needs no extension. CUDA IPC or an NCCL broadcast into the vLLM workers would save the tmpfs write and the file
   parsing but needs a vLLM worker extension that cannot be tested off the node.
 - **Durability**: the loop serves version k + 1 from host memory, resumes the searches (unless evaluations are due:
   they need the version recorded and wait for it), then copies the merges to `weights/v<k+1>/` through the
@@ -403,19 +413,24 @@ number once `phase.json` is written). Between commands no collective waits, so t
   weights and adapters, and clears host memory. A version is never recorded before its files exist; the previous
   version's weights are pruned only after the record. Trees found meanwhile record the served version
   (`GrpoLoop.served_version`). A crash in between is the restart case of "The loop" above.
-- **Failure**: the job's ranks stop on the loop's `stop`, or by themselves once the loop's process is gone. A job that
-  died is started again at the next command (`loop.log`: "Persistent trainer ended ...", "starting it again"); one that
-  dies during `train` is started again and the phase trained once more, a second death fails the phase. `persistent =
-  false` (and `gpus = [0]`) keep the per-phase job; the publish then records first and serves from disk as before.
+- **Failure**: the job's ranks stop on the loop's `stop`, or by themselves between commands once the loop's process is
+  gone. A `train` that gets no answer in time (`training.first_train_timeout_minutes`, 45, for a job's first phase with
+  its model building and compilation; later `train_timeout_factor` (2) times the median of the earlier phases of the
+  same kind, value phase or not, at least `train_timeout_minimum_minutes`, 15; all below the collectives' 1-hour
+  timeout) stops the job, which then counts as died. Closing the loop removes the parked weights from host memory. A job
+  that died is started again at the next command (`loop.log`: "Persistent trainer ended ...", "starting it again"); one
+  that dies during `train` is started again and the phase trained once more, a second death fails the phase. `persistent
+  = false` (and `gpus = [0]`) keep the per-phase job; the publish then records first and serves from disk as before.
 
 Expected fixed part per non-value phase on 4x RTX 3090 (estimates; measure on the smoke cycle): `drain` and
 `server_sleep` a few seconds each; `trainer_start` 0; `preparation` 5-20 s (the last 30 s of trees and the broadcast);
 `policy_load` 3-6 s (unpark 9.4 GB, adapter); `compile` 1-3 s (the warm-up with cached graphs); `park` ~1 s per model;
 `merge` ~5 s (unpark on rank 0, merge); `handoff` 5-15 s (9.4 GB to tmpfs); `write` 1-2 s; `publish` ~0; `wake` 5-10 s
 (reload from the page cache); `resume` <1 s: about 1 minute, against 5-8 minutes with the per-phase job. Value phases
-add the window (1-2 minutes on the main rank) and the value unpark. Once per job: the start and model
-building (~1-2 minutes, overlapping sampling when it starts at a `prepare`) and the first `compile` (1-2 minutes).
-After the pause, `durable_write` copies ~9.4 GB (14 GB in a value phase) to disk in the background (~0.5-1.5 minutes).
+add the window's last trees (labelled during sampling), the value unpark and the value merge after the policy's on the
+main rank (~10 s). Once per job: the start and model building (~1-2 minutes, overlapping sampling when it starts at a
+`prepare`) and the first `compile` (1-2 minutes). After the pause, `durable_write` copies ~9.4 GB (14 GB in a value
+phase) to disk in the background (~0.5-1.5 minutes).
 
 If the pause still costs too much: longer sampling phases (`min_sampling_minutes`, `min_trainable_groups`), whose fixed
 part is paid per phase, at the price of fewer and staler updates per hour.
@@ -438,23 +453,32 @@ its threshold dashed, and its alert list shows the latest phase's alerts. Thresh
 
 | Check | Signal | Default threshold | Reference |
 |---|---|---|---|
-| `kl_to_starting_policy` | KL (k3, per token) to the starting policy, last pass (`final_kl_to_reference`) | > 0.02 | absolute (version 0's is 0; review F expects 1e-4 to 1e-3 after 5-10 phases at lr 1e-5) |
+| `kl_to_starting_policy` | KL (k3, per token) to the starting policy, last pass (`final_kl_to_reference`) | > 0.005 | absolute (version 0's is 0; review F expects 1e-4 to 1e-3 after 5-10 phases at lr 1e-5, so 0.005 flags a policy moving several times faster than planned; 0.02 fired only on a collapse) |
 | `clip_fraction` | clip fraction of the last pass's trained tokens | > 0.1 | absolute (PPO runs usually stay below 0.1-0.2) |
 | `distinct_samples` | distinct blocks per policy expansion (of n = 8) | < 0.75 × reference | mean of the first `reference_phases` (2) phases |
 | `explanation_length` | mean explanation tokens of the trained samples | outside 0.5-2 × reference | the first phases |
 | `cut_off_samples` | share of policy samples cut off at the token cap (repetition loops shown with it) | > max(2 × reference, reference + 0.01) | the first phases |
-| `held_out_valid_lean` | share of held-out samples whose block runs completely in Lean | < 0.9 × version 0's (warning); **< 0.7 × version 0's: hard stop** | version 0's held-out evaluation |
+| `valid_blocks` | share of the phase's distinct policy blocks Lean judged that ran completely (`TreeSummary.valid_blocks`, free) | < 0.85 × reference: the held-out states run at the next pause | the first phases |
+| `held_out_valid_lean` | share of held-out samples whose block runs completely in Lean | < 0.9 × version 0's (warning); **< 0.7 × version 0's: a collapse** (rollback, below) | version 0's held-out evaluation |
 | `held_out_success` | held-out per-sample success | < 0.9 × version 0's | version 0's held-out evaluation |
 | `search_budget` | share of solves in the budget's last quarter, pooled over the last 3 phases | > 0.10 (a note) | absolute |
 
-The held-out checks run only after phases whose held-out evaluation ran (every 6 hours of loop time, with every third
-probe slot). Relative thresholds stay unset (no alert) until their reference exists.
+The held-out checks run after phases whose held-out evaluation ran: with every probe slot (every 2 hours of loop time),
+and at the next pause after a `valid_blocks` warning. They judge the version the phase published, so a restart judges
+the phase alike. Relative thresholds stay unset (no alert) until their reference exists; with the held-out states on a
+schedule and the hard stop on, the loop refuses to start without version 0's held-out evaluation (or with one without
+valid samples), since the stop could never fire.
 
-**Hard stop and rollback.** When the held-out valid-Lean rate falls below `stop_held_out_valid_fraction` (0.7; 0
-never stops) of version 0's, the loop closes the phase, writes `<run>/health_stop.json` (the phase, the version that
-collapsed, the last good version, the reason) and stops cleanly; it refuses to start while that file exists. The last
-good version is the newest one whose held-out evaluation stayed above the stop threshold (version 0 before any); its
-policy adapter is never pruned by the retention ("Disk"). With the loop stopped:
+**Rollback and hard stop** (decided 2026-10-29 after review G). When the held-out valid-Lean rate falls below
+`stop_held_out_valid_fraction` (0.7; 0 never acts) of version 0's, the loop publishes the last good version's policy
+adapter again as a new version (`health_checks.publish_rollback`, trigger `rollback to v<N> after phase <k>`, merged on
+the CPU, the current value model kept), serves it and keeps sampling; the next phase trains on from it. `loop.log` gets
+an `Alert:` line, the health line `rolled_back_to`, and the dashboard warns for the rest of the run. A second collapse
+within `rollback_window_phases` (4) phases of that rollback (or any collapse with 0) closes the phase, writes
+`<run>/health_stop.json` (the phase, the version that collapsed, the last good version, the reason) and stops the loop
+cleanly; it refuses to start while that file exists. The last good version is the newest one whose held-out evaluation
+raised no held-out alert, neither warning nor collapse (version 0 before any); the policy adapters of the last
+`retention.healthy_versions` (3) such versions are never pruned ("Disk"). With the loop stopped:
 
 - `python experiments/grpo_loop.py --config <loop.toml> rollback` publishes the last good version's policy adapter
   (`--version N` for another) with the current value adapter as a new version (merged on the CPU, trigger
@@ -476,18 +500,19 @@ records its own budget, so the signals stay comparable). In the visible run, exp
 
 ## Host memory
 
-The node has about 128 GB of RAM (check the cgroup limit, `system.memory_total_gib`). Its users: one Lean REPL per
+The node has about 240 GiB of RAM (check the cgroup limit, `system.memory_total_gib`). Its users: one Lean REPL per
 search (`sampling.concurrency`, 112) whose private memory grows from ~0.25 GiB after the import by ~0.25 MiB per proof
-state, restarted at 1 GiB when released and at 2 GiB in any case (`lean/repl.py`; the Mathlib .olean mappings are
-shared and not counted); an evaluation job's own pool (`evaluation.<target>.concurrency`, 64) next to the paused
-searches; the eight vLLM processes; the training job's ranks (per-phase job: each reads and labels the phase's trees,
-about 13 MiB per tree with its texts in a synthetic unsolved-tree test; persistent job: only the main rank, one tree
-at a time while sampling, keeping the policy sequences, which every rank then holds during training; in a value phase
-the main rank alone also reads the window of 8 phases, about 1.4 MiB per tree without texts, and the others only
-receive its value data; the per-phase job's weights load straight to the GPUs); the persistent job's host directory
-(a tmpfs: the parked bases, one shared copy of ~14 GB for all ranks, and the merges handed to the servers, up to
-~14 GB from the handoff until written to disk); and the loop process, which labels the phase's trees for its metrics
-while the job trains and merges a published version on the CPU only when the job did not merge it. The budget:
+state, restarted at 1 GiB when released and at 2 GiB in any case (`lean/repl.py`; the Mathlib .olean mappings are shared
+and not counted); an evaluation job's own pool (`evaluation.<target>.concurrency`, 112) once the paused searches' REPLs
+stopped; the eight vLLM processes; the training job's ranks (per-phase job: each reads and labels the phase's trees,
+about 13 MiB per tree with its texts in a synthetic unsolved-tree test; persistent job: only the main rank, one tree at
+a time while sampling, keeping the policy sequences, which every rank then holds during training; in a value phase the
+main rank alone also holds the labelled window of 4 phases while that phase samples, about 1.4 MiB per tree without
+texts, and the others only receive its value data; the per-phase job's weights load straight to the GPUs); the
+persistent job's host directory (a tmpfs: the parked bases, one shared copy of ~14 GB for all ranks, and the merges
+handed to the servers, up to ~14 GB from the handoff until written to disk); and the loop process, which labels the
+phase's trees for its metrics while the job trains and merges a published version on the CPU only when the job did not
+merge it. The budget:
 
     loop concurrency × p90 REPL memory + evaluation concurrency × p90 REPL memory + vLLM private memory + merge
         + training ranks × rank memory + loop labelling + parked + handoff ≤ 0.85 × RAM
@@ -504,38 +529,42 @@ and replays the proof states it needs, `LeanRepl.stop`), so with the defaults ti
     evaluating: evaluation concurrency × p90 + vLLM + parked ≤ 0.85 × RAM
 
 The sampling condition carries the handoff because the searches resume while the merges are written to disk (about a
-minute; their REPLs restart one by one, so the REPL term is low then). With 112 REPLs at a p90 of 0.5 GiB and ~25 GiB
-of vLLM: 56 + 25 + 14 + 14 = 109 GiB at the limit of a 128 GiB node at the moment of the handoff, 95 GiB otherwise; one
-copy per rank (54 GB) would not have fit. The loop process itself (not a budget term so far) now also holds the value
+minute; their REPLs restart one by one, so the REPL term is low then). With 112 REPLs at a p90 of 0.5 GiB and ~25 GiB of
+vLLM: 56 + 25 + 14 + 14 = 109 GiB at the moment of the handoff, 95 GiB otherwise, against 0.85 × 240 = 204 GiB; an
+evaluation at 112 REPLs needs 56 + 25 + 14 = 95 GiB (at a p90 of 1 GiB, 151 GiB); one copy of the parked weights per
+rank (54 GB) is no longer needed either. The loop process itself (not a budget term so far) now also holds the value
 benchmark it scores through the value servers and the tree summaries; its scoring starts only once the version is
-recorded and host memory cleared, so it never overlaps the handoff. Measure the loop's resident memory once
-(`ps -o rss -p <loop pid>`) and count it in the sampling condition if it is more than a few GiB. The terms come from
-the `system` family (`lean_private_memory_p90_gib`,
-`vllm_private_memory_gib`; the merge is the rise of `memory_used_gib` while publishing, the training term its rise while
-training) and from `loop.log`, which reports the host memory at each stage boundary of a pause (`Host memory at the
-pause`, `before training`, `after training`, `after publishing`, `before the evaluations`: available of the limit, the
-Lean processes' and vLLM's private memory, the persistent job's parked and handed-off GiB, and the four conditions on
-these measurements, `OVER` where one fails; the rank and merge terms count 0 there). The rank memory is not measured
-yet: take it from the rise during phase 1 and, since a value phase reads 8 phases of trees on the main rank, again
-during phase 4 (`ps -o rss -p <rank pids>` during the stage). Measure in the first hour with a probe running and lower
-`sampling.concurrency` or an evaluation's `concurrency` if a condition fails; if training does not fit, the ranks' tree
-loading is what to shrink. Stopping the REPLs before training costs each paused search a REPL restart and a replay of
-its proof states after the pause (a large `training.paused_repl_memory_gib` keeps them).
+recorded and host memory cleared, so it never overlaps the handoff. Measure the loop's resident memory once (`ps -o rss
+-p <loop pid>`) and count it in the sampling condition if it is more than a few GiB. The terms come from the `system`
+family (`lean_private_memory_p90_gib`, `vllm_private_memory_gib`; the merge is the rise of `memory_used_gib` while
+publishing, the training term its rise while training) and from `loop.log`, which reports the host memory at each stage
+boundary of a pause (`Host memory at the pause`, `before training`, `after training`, `after publishing`, `before the
+evaluations`, and at the sampling condition's peak: `after the early resume, the handoff not yet on disk` and `after the
+durable write, before clearing the handoff`: available of the limit, the Lean processes' and vLLM's private memory, the
+persistent job's parked and handed-off GiB, and the four conditions on these measurements, `OVER` where one fails; the
+rank and merge terms count 0 there). Before every wake it also logs each training GPU's free memory beside its servers'
+shares (`GPU memory before the wake`: a parked rank's CUDA context and NCCL buffers, or a stray process, show as the
+difference). The rank memory is not measured yet: take it from the rise during phase 1 and, since a value phase holds 4
+phases of labelled trees on the main rank, again during phase 2 (`ps -o rss -p <rank pids>` during the stage). Measure
+in the first hour with a probe running and lower `sampling.concurrency` or an evaluation's `concurrency` if a condition
+fails; if training does not fit, the ranks' tree loading is what to shrink. Stopping the REPLs before training costs
+each paused search a REPL restart and a replay of its proof states after the pause (a large
+`training.paused_repl_memory_gib` keeps them).
 
 ## Disk
 
 What grows per phase: the phase's gzipped trees (estimated 150-250 MB; kept, the value window and the analysis read
-them), the policy adapter (~0.5 GB in fp32) and every fourth phase a value adapter (~0.26 GB). After each publish the
+them), the policy adapter (~0.5 GB in fp32) and every second phase a value adapter (~0.26 GB). After each publish the
 loop deletes the phase adapters (and any GPU merge left beside them) of versions older than the last
-`retention.adapter_versions` (5) unless still used: the current version's and the value adapter the next value
-training continues, and the health check's last good version's policy adapter, the rollback target
-(`retention.py`; 0 keeps every adapter). The starting adapters live outside the loop's
-checkpoints and are never touched. Merged weights (`MergedPublisher.prune`): the current version's and version 0's
-(the baselines' weights, `weights/v0000/`), the evaluations' fixed value model under `weights/kept_value/`, and while
-publishing the next version's beside them. The persistent job's merges wait in host memory (`handoff/`) until copied
-there, and the version's record clears them. The system sampler records the fullest filesystem of the run and the
-checkpoints (`system.disk_total_gib`, `disk_free_gib`, `record-system --disk-path`); the dashboard warns below
-`min_free_disk_gib` (50) free.
+`retention.adapter_versions` (5) unless still used: the current version's and the value adapter the next value training
+continues, and the policy adapters of the last good version and of the last `healthy_versions` (3) versions whose
+held-out evaluation raised no alert, the rollback targets (`retention.py`; 0 keeps every adapter). The starting adapters
+live outside the loop's checkpoints and are never touched. Merged weights (`MergedPublisher.prune`): the current
+version's and version 0's (the baselines' weights, `weights/v0000/`), the evaluations' fixed value model under
+`weights/kept_value/`, and while publishing the next version's beside them. The persistent job's merges wait in host
+memory (`handoff/`) until copied there, and the version's record clears them. The system sampler records the fullest
+filesystem of the run and the checkpoints (`system.disk_total_gib`, `disk_free_gib`, `record-system --disk-path`); the
+dashboard warns below `min_free_disk_gib` (50) free.
 
 ## Fixed targets (`fixed_sets.py`, `fixed_targets.py`, `evaluation.py`)
 
@@ -544,25 +573,29 @@ checkpoints (`system.disk_total_gib`, `disk_free_gib`, `record-system --disk-pat
   verified pool v3 statements the automation does not close, easy (difficulty < 2), medium (< 4) or hard by the
   curriculum's difficulty estimate (the known proof's tactic count until roots are scored), disjoint, in seeded hash
   orders. The loop's curriculum never feeds either (`statements.held_out`).
-- `probe`: 16 expansions, no harvesting, no ε, with the fixed `evaluation.value_model` (v0), in slots: slot k
-  searches part k % `probe_parts` (3) of the set (`fixed_targets.probe_part`: every third problem of each stratum, so
-  each part is stratified like the set; `EvaluationRun.slot`, `probe_slot<k>_v<version>/`), every 2 hours of loop
-  time (`every_hours`), inside the loop's pause (GPUs free, the evaluation's own pool of `concurrency` REPLs, 64, next
-  to the paused searches, "Host memory" above), so the whole set every ~6 hours at the old cost. The slot's
-  `fixed_targets` line carries its part's solve rate per stratum and, once the last `probe_parts` slots exist, their
-  sum (`probe_rolling_*`, `evaluation.rolling_probe`: the whole set, each problem once, across their policy
-  versions). `LoopProgress.probe_slots` numbers the slots across restarts; a requested probe runs the next slot, and
+- `probe`: 16 expansions, no harvesting, no ε, with the fixed `evaluation.value_model` (v0), in slots: slot k searches
+  part k % `probe_parts` (3) of the set (`fixed_targets.probe_part`: every third problem of each stratum, so each part
+  is stratified like the set; `EvaluationRun.slot`, `probe_slot<k>_v<version>/`), every 2 hours of loop time
+  (`every_hours`), inside the loop's pause (GPUs free, the evaluation's own pool of `concurrency` REPLs, 112, once the
+  paused searches' REPLs stopped, "Host memory" above), so the whole set every ~6 hours. The slot's `fixed_targets` line
+  carries its part's solve rate per stratum and, once the last `probe_parts` slots exist, their sum (`probe_rolling_*`,
+  `evaluation.rolling_probe`: the whole set, each problem once, across their policy versions). The parts differ in
+  difficulty by about the run-to-run noise (review G simulated an offset SD of 2.3 points against 2.0 of noise), so the
+  trend is the slot's solve rate minus the mean of version 0's two runs of the same part (`probe_baseline_difference`,
+  `loop.probe_baseline_differences`) and that difference averaged over the last `probe_parts` slots
+  (`probe_rolling_baseline_difference`); the Evaluations page charts both above the raw rates.
+  `LoopProgress.probe_slots` numbers the slots across restarts; a requested probe runs the next slot, and
   `grpo_evaluate.py --target probe` without `--slot` the whole set. The per-problem wall cap (1 hour) is an emergency
   stop only, so that the expansions are the budget and the probe does not measure load; the searches it stopped are
   counted (`EvaluationSummary.wall_clock_stops`, `fixed_targets.probe_wall_clock_stops`, likewise for miniF2F) and
-  should be zero. Version 0's probe runs every part twice before the first phase (`baseline_runs = 2`; the second
-  into `..._repeat1/`, the policy samples unseeded and ε off, so the runs are independent): `comparison.json` there and
-  the repeat's `fixed_targets` line (`probe_repeat_difference`, `probe_repeat_discordant`, per part, kept out of the
-  slot series) give the run-to-run noise later versions are judged against; `loop.log` sums the parts.
+  should be zero. Version 0's probe runs every part twice before the first phase (`baseline_runs = 2`; the second into
+  `..._repeat1/`, the policy samples unseeded and ε off, so the runs are independent): `comparison.json` there and the
+  repeat's `fixed_targets` line (`probe_repeat_difference`, `probe_repeat_discordant`, per part, kept out of the slot
+  series) give the run-to-run noise later versions are judged against; `loop.log` sums the parts.
 - `minif2f`: miniF2F-valid at 64 expansions, before the first phase (version 0's baseline) and at milestones.
-  `held_out_states`: per-sample success on the 512 per-step evaluation states (`single_step.py`), every 6 hours (with
-  every third probe slot). Each writes `evaluations/<target>_v<version>/` (resumable), a `fixed_targets` line and
-  `evaluations.jsonl`.
+  `held_out_states`: per-sample success and valid Lean on the 512 per-step evaluation states (`single_step.py`), with
+  every probe slot (every 2 hours, a few minutes at 112 REPLs): the hard stop's signal. Each writes
+  `evaluations/<target>_v<version>/` (resumable), a `fixed_targets` line and `evaluations.jsonl`.
 - `grpo_fixed_sets.py gate-benchmark` searches the gate set once with the starting policy and no value model
   (`grpo/gate_search.toml`, log-probability best-first) and builds the value benchmark from those trees
   (`value/benchmark.py`), the loop's `evaluation.value_benchmark.path`.
@@ -585,8 +618,9 @@ trees.
 
 - **Smoke cycle** (`grpo/loop_smoke.toml`, `phase_smoke.toml`; `deployment/README.md`, "GRPO loop" step 3): the loop on
   the overfit statements with short phases, a value phase every phase (published, then scoring the tiny benchmark),
-  every evaluation at a tiny size and a value arm every slot (`EvaluationTarget.problems`; `grpo_fixed_sets.py gate-benchmark --problems` for a tiny
-  benchmark), so every stage, merge, swap and evaluation runs within the first hour on the node.
+  every evaluation at a tiny size (`EvaluationTarget.problems`; `grpo_fixed_sets.py gate-benchmark --problems` for a
+  tiny benchmark), the held-out states after every phase, and a value arm per published value model, so at every slot,
+  so every stage, merge, swap and evaluation runs within the first hour on the node.
 - **Single-step GRPO** (`single_step.py`, `experiments/grpo_single_step.py`, `grpo/single_step.toml`): one policy
   request per held-out state, executed from the state rebuilt by replay (`search_theorem(..., start_state=...)`).
   Proof graph: the state's traced proof proves it and every later state of it, so a tactic that closes the goals or

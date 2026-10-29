@@ -51,6 +51,9 @@ lead = 10000
 min_proof_tactics = 2
 # Round-robin over proof lengths 2..12 and 13+, so that verified statements span every difficulty.
 stratified_last_bucket = 12
+# Within a proof length, a seeded random order keeps the corpora's mix (easiest first by characters gave 93%
+# leanabell_sft).
+bucket_shuffle_seed = "pool-v3-buckets"
 check_seconds = 300.0
 command_timeout_seconds = 60.0
 automation_config = "experiments/configs/expert_iteration/loop_search.toml"
