@@ -1,6 +1,8 @@
 # The search-tree GRPO loop (experiments/grpo_loop.py, DESIGN.md "Next phase: search-tree GRPO"), on 4x RTX 3090:
-# GPU 0 trains (policy GRPO, then the value model and its gate); GPUs 1-3 each serve the merged policy and the merged
-# value model. Bring-up on a fresh node: deployment/README.md, "GRPO loop".
+# while sampling, every GPU serves the merged policy and the merged value model; at a phase's pause every search waits,
+# the servers sleep (freeing their GPUs) and all four GPUs train data-parallel (policy GRPO, then the value model and
+# its gate, then the merges), and the servers wake with the new weights. Bring-up on a fresh node:
+# deployment/README.md, "GRPO loop"; the timing of each pause segment: src/lean_search/rl/README.md, "Timing".
 #   python experiments/grpo_loop.py --config experiments/configs/grpo/loop.toml init
 #   python experiments/grpo_loop.py --config experiments/configs/grpo/loop.toml run
 name = "grpo_loop_v1"
@@ -14,11 +16,18 @@ policy_adapter = "/workspace/checkpoints/data_rewrite_sft_numbered/adapter"
 value_adapter = "/workspace/checkpoints/phase3_value_v0/adapter"
 
 [serving]
+# Per GPU 0.62 + 0.28 of its memory: the servers leave nothing for training, which runs while they sleep.
 # The weights the starting policy's adapter was trained on (the SFT stage continues visible student v2 on the base).
 policy_base_model = "Qwen/Qwen3.5-4B"
 value_base_model = "Qwen/Qwen3.5-2B"
 policy_model = "policy-merged"
 value_model = "value-merged"
+
+[[serving.policy_servers]]
+name = "policy-gpu0"
+gpu = 0
+url = "http://127.0.0.1:8100/v1"
+memory_share = 0.62
 
 [[serving.policy_servers]]
 name = "policy-gpu1"
@@ -37,6 +46,13 @@ name = "policy-gpu3"
 gpu = 3
 url = "http://127.0.0.1:8103/v1"
 memory_share = 0.62
+
+[[serving.value_servers]]
+name = "value-gpu0"
+gpu = 0
+url = "http://127.0.0.1:8200/v1"
+memory_share = 0.28
+max_num_seqs = 96
 
 [[serving.value_servers]]
 name = "value-gpu1"
@@ -72,7 +88,9 @@ server_failure_pause_seconds = 5.0
 
 [training]
 phase_config = "experiments/configs/grpo/phase.toml"
-gpu = 0
+# One torchrun rank per GPU; each optimizer step equals the one-GPU step. Fallback if the pause costs too much: [0]
+# (GPU 0 trains alone, its servers sleep, the other GPUs' servers stay loaded and idle).
+gpus = [0, 1, 2, 3]
 # Phase cadence ~15-30 min: at least 15 min of sampling and 100 solved trees, at most 30 min.
 min_sampling_minutes = 15.0
 max_sampling_minutes = 30.0

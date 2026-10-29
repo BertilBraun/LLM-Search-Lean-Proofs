@@ -10,7 +10,9 @@ torch = pytest.importorskip("torch")
 pytest.importorskip("transformers")
 pytest.importorskip("peft")
 
+from lean_search.expert_iteration.merging import merge  # noqa: E402
 from lean_search.expert_iteration.serving import LoopPaths, ModelVersion, record_published  # noqa: E402
+from lean_search.policy.adapters import PremergedWeights, premerged_directory, read_premerged  # noqa: E402
 from lean_search.rl.advantages import CreditMode  # noqa: E402
 from lean_search.rl.policy_data import VersionSamplerAgreement  # noqa: E402
 from lean_search.rl.policy_trainer import GrpoConfig  # noqa: E402
@@ -147,3 +149,40 @@ def test_published_value_adapter_changes_only_after_a_passed_gate(
     assert outcome.value is not None
     expected = outcome.value.adapter if outcome.value.accepted else "value-v0"
     assert (published.policy_adapter, published.value_adapter) == (outcome.policy.adapter, expected)
+
+
+@pytest.fixture
+def merged_phase(tmp_path: Path) -> tuple[PhaseOutcome, Path]:
+    """A policy-only phase that merges its new adapter on the device, as the loop's training job does."""
+    model = save_tiny_model(tmp_path / "model")
+    record = phase_tree()
+    record = dataclasses.replace(record, expansions=tuple(expansion_texts(record)))
+    config = TrainingPhaseConfig(
+        policy=GrpoConfig(
+            model=str(model), lora=LORA, optimization=OPTIMIZATION, passes_per_phase=1, scoring_micro_batch_tokens=65536
+        )
+    )
+    inputs = PhaseInputs(records=[record])
+    outcome = run_training_phase(
+        config, inputs, CharacterTokenizer(), None, CPU, tmp_path / "phase", merge_adapters=True
+    )
+    return outcome, model
+
+
+def test_the_phase_merges_its_new_policy_adapter_next_to_it(merged_phase: tuple[PhaseOutcome, Path]) -> None:
+    outcome, model = merged_phase
+    assert outcome.policy is not None
+    adapter = outcome.policy.adapter
+    assert read_premerged(premerged_directory(Path(adapter))) == PremergedWeights(str(model), adapter)
+
+
+def test_the_publisher_takes_over_the_phases_merge(merged_phase: tuple[PhaseOutcome, Path], tmp_path: Path) -> None:
+    outcome, model = merged_phase
+    assert outcome.policy is not None
+    merge(str(model), outcome.policy.adapter, tmp_path / "published")
+    assert read_premerged(tmp_path / "published") == PremergedWeights(str(model), outcome.policy.adapter)
+
+
+def test_the_phase_reports_its_merge_time(merged_phase: tuple[PhaseOutcome, Path]) -> None:
+    outcome, _ = merged_phase
+    assert outcome.timings.merge_seconds > 0

@@ -13,6 +13,7 @@ import torch
 import torch.nn.functional as functional
 
 from lean_search.policy.adapters import load_base_model
+from lean_search.training.data_parallel import SINGLE_PROCESS, Ranks, barrier, local_shard, sum_gradients, summed
 from lean_search.training.packing import packed_positions, sequence_starts
 from lean_search.training.sft import (
     LoraSettings,
@@ -151,6 +152,7 @@ class ValueMicroBatch:
     states: tuple[int, ...]
     pointwise: tuple[int, ...]
     pairs: tuple[int, ...]
+    units: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -334,7 +336,7 @@ def plan_unit_micro_batches(
     units: Sequence[TrainingUnit], states: Sequence[ValueState], max_tokens: int, packing: bool, order: Sequence[int]
 ) -> list[ValueMicroBatch]:
     micro_batches: list[ValueMicroBatch] = []
-    current: list[TrainingUnit] = []
+    current: list[int] = []
     real_tokens = longest = state_count = 0
     for index in order:
         unit = units[index]
@@ -342,24 +344,41 @@ def plan_unit_micro_batches(
         new_longest = max(longest, unit_longest)
         new_cost = real_tokens + tokens if packing else new_longest * (state_count + len(unit.states))
         if current and new_cost > max_tokens:
-            micro_batches.append(merged_micro_batch(current))
+            micro_batches.append(merged_micro_batch(units, current))
             current, real_tokens, longest, state_count = [], 0, 0, 0
             new_longest = unit_longest
-        current.append(unit)
+        current.append(index)
         real_tokens += tokens
         longest = new_longest
         state_count += len(unit.states)
     if current:
-        micro_batches.append(merged_micro_batch(current))
+        micro_batches.append(merged_micro_batch(units, current))
     return micro_batches
 
 
-def merged_micro_batch(units: Sequence[TrainingUnit]) -> ValueMicroBatch:
-    states = dict.fromkeys(state for unit in units for state in unit.states)
+def merged_micro_batch(units: Sequence[TrainingUnit], indices: Sequence[int]) -> ValueMicroBatch:
+    chosen = [units[index] for index in indices]
+    states = dict.fromkeys(state for unit in chosen for state in unit.states)
     return ValueMicroBatch(
         tuple(states),
-        tuple(index for unit in units for index in unit.pointwise),
-        tuple(index for unit in units for index in unit.pairs),
+        tuple(index for unit in chosen for index in unit.pointwise),
+        tuple(index for unit in chosen for index in unit.pairs),
+        tuple(indices),
+    )
+
+
+def rank_micro_batches(
+    step: GraphValueStep,
+    data: GraphValueData,
+    unit_tokens: Sequence[int],
+    optimization: OptimizationConfig,
+    ranks: Ranks,
+) -> list[ValueMicroBatch]:
+    """The rank's share of the step's units (balanced by tokens) in micro-batches; one rank gets the step's own."""
+    units = [unit for micro in step.micro_batches for unit in micro.units]
+    shard = local_shard(units, unit_tokens, ranks)
+    return plan_unit_micro_batches(
+        data.units, data.states, optimization.micro_batch_tokens, optimization.packing, shard
     )
 
 
@@ -445,7 +464,9 @@ def train_graph_value_model(
     device: torch.device,
     output_directory: Path,
     on_step: Callable[[GraphValueStepRecord], None],
+    ranks: Ranks = SINGLE_PROCESS,
 ) -> GraphValueTrainingResult:
+    """On every rank with the same arguments; only the main rank reports steps and saves the adapter."""
     optimization = config.optimization
     initial_adapter = "" if config.retrain_from_base else config.initial_adapter
     saved_module, causal_model = load_trainable_model(config.model, optimization, config.lora, device, initial_adapter)
@@ -461,14 +482,14 @@ def train_graph_value_model(
         optimizer,
         lambda step: learning_rate_factor(step, warmup_steps, len(steps), optimization.minimum_learning_rate_ratio),
     )
+    unit_tokens = [unit_cost(unit, data.states)[0] for unit in data.units]
     records: list[GraphValueStepRecord] = []
     training_seconds = 0.0
     for step_index, step in enumerate(steps):
         started = time.perf_counter()
         weights = dict(step.pointwise_weights)
-        totals = torch.zeros(4, dtype=torch.float64, device=device)
-        states = pointwise_items = pairs = 0
-        for micro in step.micro_batches:
+        totals = torch.zeros(7, dtype=torch.float64, device=device)
+        for micro in rank_micro_batches(step, data, unit_tokens, optimization, ranks):
             row = {state: position for position, state in enumerate(micro.states)}
             batch = state_batch(
                 [data.states[state] for state in micro.states], optimization.packing, pad_token_id, device
@@ -501,17 +522,17 @@ def train_graph_value_model(
                 totals[2] += (pair_weights * losses).detach().sum()
                 totals[3] += (preferred > other).detach().sum()
             loss.backward()
-            states += len(micro.states)
-            pointwise_items += len(micro.pointwise)
-            pairs += len(micro.pairs)
+            totals[4:] += torch.tensor([len(micro.states), len(micro.pointwise), len(micro.pairs)], device=device)
+        sum_gradients(parameters, ranks)
         gradient_norm = torch.nn.utils.clip_grad_norm_(parameters, optimization.max_gradient_norm).item()
         optimizer.step()
         scheduler.step()
         optimizer.zero_grad(set_to_none=True)
+        summed(totals, ranks)
         if device.type == "cuda":
             torch.cuda.synchronize(device)
         training_seconds += time.perf_counter() - started
-        pointwise_loss, mass_loss, ranking_loss, correct_pairs = totals.tolist()
+        pointwise_loss, mass_loss, ranking_loss, correct_pairs, states, pointwise_items, pairs = totals.tolist()
         record = GraphValueStepRecord(
             step=step_index + 1,
             learning_rate=scheduler.get_last_lr()[0],
@@ -520,14 +541,17 @@ def train_graph_value_model(
             ranking_loss=ranking_loss / step.pair_weight if step.pair_weight else 0.0,
             pair_accuracy=correct_pairs / pairs if pairs else 0.0,
             gradient_norm=gradient_norm,
-            states=states,
-            pointwise_items=pointwise_items,
-            pairs=pairs,
+            states=int(states),
+            pointwise_items=int(pointwise_items),
+            pairs=int(pairs),
             training_seconds=training_seconds,
         )
         records.append(record)
-        on_step(record)
-    saved_module.save_pretrained(output_directory)
+        if ranks.is_main:
+            on_step(record)
+    if ranks.is_main:
+        saved_module.save_pretrained(output_directory)
+    barrier(ranks)
     last = records[-max(1, len(records) // 10) :]
     return GraphValueTrainingResult(
         steps=len(steps),

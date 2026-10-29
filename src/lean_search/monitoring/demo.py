@@ -16,6 +16,7 @@ from lean_search.monitoring.families import (
     GrpoPhase,
     LoopState,
     LoopStatus,
+    PauseSegments,
     PhaseTiming,
     SearchPhase,
     SystemUsage,
@@ -205,14 +206,33 @@ class DemoRun:
 
     def write_timing(self, moment: float) -> None:
         schedule = self.schedule
+        training_seconds = schedule.training_minutes * 60 * (1 + self.noise(0.05))
+        pause = PauseSegments(
+            drain_seconds=2 + abs(self.noise(1)),
+            server_sleep_seconds=3.0,
+            trainer_start_seconds=40 + abs(self.noise(5)),
+            preparation_seconds=0.05 * training_seconds,
+            policy_load_seconds=45.0,
+            compile_seconds=70 + abs(self.noise(10)),
+            scoring_seconds=0.08 * training_seconds,
+            policy_training_seconds=0.3 * training_seconds,
+            value_training_seconds=0.2 * training_seconds,
+            gate_seconds=0.1 * training_seconds,
+            merge_seconds=15.0,
+            write_seconds=25.0,
+            publish_seconds=2.0,
+            wake_seconds=6 + abs(self.noise(1)),
+            resume_seconds=0.5,
+        )
         self.writer.write(
             PhaseTiming(
                 sampling_seconds=(schedule.phase_minutes - schedule.training_minutes) * 60,
-                training_seconds=schedule.training_minutes * 60 * (1 + self.noise(0.05)),
+                training_seconds=training_seconds,
                 publishing_seconds=22 + abs(self.noise(3)),
                 evaluation_seconds=0.0,
                 trees=round(62 + self.noise(5)),
                 searches_paused=round(100 + self.noise(6)),
+                pause=pause,
             ),
             record_time=moment,
         )
