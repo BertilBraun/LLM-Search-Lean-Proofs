@@ -581,11 +581,11 @@ async def test_value_training_sees_the_window_of_recent_phases(tmp_path: Path) -
     assert world.trainer.requests[2].value_trees == (store.phase_directory(2), store.phase_directory(3))
 
 
-async def test_the_value_model_trains_every_fourth_phase_by_default(tmp_path: Path) -> None:
+async def test_the_value_model_trains_every_second_phase_by_default(tmp_path: Path) -> None:
     world = loop_world(tmp_path, LOOP_TOML.replace("value_every_phases = 1\n", ""))
     record_version_zero(world)
     await run_until(world, world.loop(), phases=4)
-    assert [request.train_value for request in world.trainer.requests] == [False, False, False, True]
+    assert [request.train_value for request in world.trainer.requests] == [False, True, False, True]
 
 
 @pytest.mark.parametrize(

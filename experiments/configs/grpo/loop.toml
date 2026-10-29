@@ -103,11 +103,12 @@ min_sampling_minutes = 45.0
 max_sampling_minutes = 90.0
 min_trainable_groups = 300
 check_seconds = 30.0
-# The value model every 4 phases on the last 8 phases' trees, continuing the last value adapter trained; every one is
-# published and searched with (no gate; the value benchmark and the value arms are trends on the dashboard). μ is 0
-# until set by hand: deployment/grpo_loop.sh value-share 0.15 (read when each phase starts training).
-value_every_phases = 4
-value_window_phases = 8
+# The value model every 2 phases on the last 4 phases' trees (with 45-90-minute phases a retrain every 1.5-3 h on 3-6 h
+# of trees), continuing the last value adapter trained; every one is published and searched with (no gate; the value
+# benchmark and the value arms are trends on the dashboard). The persistent trainer labels the window while the value
+# phase samples. μ is 0 until set by hand: deployment/grpo_loop.sh value-share 0.15 (read when each phase starts training).
+value_every_phases = 2
+value_window_phases = 4
 # Under $LEAN_SEARCH_DATA: the starting policy's SFT data, flat proofs without nested `have ... := by` (data_rewrite.py
 # build, data_rewrite README step 3, of the same arm as [initial]) and its math solutions (phase.toml [policy_replay]).
 lean_replay = "reasoning/visible_student_v3_numbered/train.jsonl"

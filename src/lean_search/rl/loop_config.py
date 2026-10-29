@@ -68,9 +68,10 @@ class LoopTrainingConfig:
     min_trainable_groups: int = 300
     check_seconds: float = 30.0
     # The value model trains every this many phases (0 never) on the trees of the last `value_window_phases` phases,
-    # continuing the last value adapter trained; every one is published with the next version.
-    value_every_phases: int = 4
-    value_window_phases: int = 8
+    # continuing the last value adapter trained; every one is published with the next version. With 45-90-minute
+    # phases: a retrain every 1.5-3 hours on 3-6 hours of trees.
+    value_every_phases: int = 2
+    value_window_phases: int = 4
     # Replay files under $LEAN_SEARCH_DATA (grpo_phase.py --lean-replay, --math-replay, --value-replay); empty: none.
     # The value replay is v0's own training data (phase3_value_data.py --name v0: value/v0/train.jsonl).
     lean_replay: str = ""

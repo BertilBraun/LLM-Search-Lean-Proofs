@@ -10,6 +10,7 @@ load. Between commands the ranks only poll, so no collective waits; between comm
 is gone (a command in progress finishes first).
 """
 
+import abc
 import dataclasses
 import os
 import threading
@@ -111,25 +112,28 @@ def run_in_background() -> None:
     os.setpriority(os.PRIO_PROCESS, thread, BACKGROUND_NICENESS)
 
 
-class PhasePreparation:
-    """The phase's trees turned into policy sequences one by one while the searches run, by a thread of its own; the
-    records themselves are not kept."""
+class TreePreparation[Prepared](abc.ABC):
+    """The trees of some directories prepared one by one as they arrive while the searches run, by a thread of its own
+    on the background CPUs; subclasses say what a tree becomes and call `start`."""
 
-    def __init__(self, directory: Path, config_text: str, tokenizer: PolicyTokenizer) -> None:
-        self.directory = directory
+    def __init__(self, directories: tuple[Path, ...], config_text: str) -> None:
+        self.directories = directories
         self.config_text = config_text
         self.config = parse_phase_config(config_text)
-        assert self.config.policy is not None
-        self.tokenizer = tokenizer
-        self.parts: dict[Path, PolicyDataParts] = {}
+        self.prepared: dict[Path, Prepared] = {}
         self.finishing = threading.Event()
         self.cancelled = threading.Event()
         self.error: BaseException | None = None
-        self.thread = threading.Thread(target=self.run, name="phase-preparation", daemon=True)
+        self.thread = threading.Thread(target=self.run, name=type(self).__name__, daemon=True)
+
+    def start(self) -> None:
         self.thread.start()
 
-    def matches(self, directory: Path, config_text: str) -> bool:
-        return (directory, config_text) == (self.directory, self.config_text)
+    @abc.abstractmethod
+    def prepare(self, path: Path) -> Prepared: ...
+
+    def matches(self, directories: tuple[Path, ...], config_text: str) -> bool:
+        return (directories, config_text) == (self.directories, self.config_text)
 
     def run(self) -> None:
         try:
@@ -144,26 +148,56 @@ class PhasePreparation:
             self.error = error
 
     def prepare_new(self) -> None:
-        assert self.config.policy is not None
-        for path in sorted(self.directory.glob(TREE_PATTERN)):
-            if self.cancelled.is_set():
-                return
-            if path not in self.parts:
-                record = read_tree(path)
-                self.parts[path] = prepare_policy_tree(record, self.config, self.tokenizer, self.config.policy.data)
+        for directory in self.directories:
+            for path in sorted(directory.glob(TREE_PATTERN)):
+                if self.cancelled.is_set():
+                    return
+                if path not in self.prepared:
+                    self.prepared[path] = self.prepare(path)
 
-    def finish(self) -> list[PolicyDataParts]:
-        """Every tree of the directory now, in file order (the order the per-phase job reads them in)."""
+    def finish(self) -> list[Prepared]:
+        """Every tree of the directories now, directory by directory in file order (the order the per-phase job reads
+        them in)."""
         self.finishing.set()
         self.thread.join()
         if self.error is not None:
             raise self.error
-        return [self.parts[path] for path in sorted(self.parts)]
+        return [
+            self.prepared[path]
+            for directory in self.directories
+            for path in sorted(path for path in self.prepared if path.parent == directory)
+        ]
 
     def cancel(self) -> None:
         self.cancelled.set()
         self.finishing.set()
         self.thread.join()
+
+
+class PhasePreparation(TreePreparation[PolicyDataParts]):
+    """The phase's trees turned into policy sequences; the records themselves are not kept."""
+
+    def __init__(self, directory: Path, config_text: str, tokenizer: PolicyTokenizer) -> None:
+        super().__init__((directory,), config_text)
+        assert self.config.policy is not None
+        self.data = self.config.policy.data
+        self.tokenizer = tokenizer
+        self.start()
+
+    def prepare(self, path: Path) -> PolicyDataParts:
+        return prepare_policy_tree(read_tree(path), self.config, self.tokenizer, self.data)
+
+
+class WindowPreparation(TreePreparation[LabelledTree]):
+    """The value model's window labelled as the value training does: the finished phases' trees at once, the
+    collecting phase's as they arrive, read without their texts (about 1.4 MiB per labelled tree on the main rank)."""
+
+    def __init__(self, directories: tuple[Path, ...], config_text: str) -> None:
+        super().__init__(directories, config_text)
+        self.start()
+
+    def prepare(self, path: Path) -> LabelledTree:
+        return label_value_trees([read_tree(path, texts=False)], self.config)[0]
 
 
 class TrainerRank:
@@ -189,6 +223,7 @@ class TrainerRank:
         self.models: dict[ModelKind, ResidentModel] = {}
         self.tokenizers: dict[ModelKind, transformers.PreTrainedTokenizerBase] = {}
         self.preparation: PhasePreparation | None = None
+        self.window_preparation: WindowPreparation | None = None
 
     def serve(self) -> None:
         handled = 0
@@ -211,8 +246,9 @@ class TrainerRank:
                         self.log("Stopping on the loop's request")
                         return
         finally:
-            if self.preparation is not None:
-                self.preparation.cancel()
+            for preparation in (self.preparation, self.window_preparation):
+                if preparation is not None:
+                    preparation.cancel()
 
     def ensure_models(self, config: TrainingPhaseConfig) -> None:
         """Builds the resident models the phase needs that this job has not built yet (every rank together)."""
@@ -248,27 +284,32 @@ class TrainerRank:
 
     def start_preparation(self, trees: Path, config_text: str) -> PhasePreparation:
         """The phase's preparation, kept if it is this phase's with this config, else started afresh."""
-        if self.preparation is not None and self.preparation.matches(trees, config_text):
+        if self.preparation is not None and self.preparation.matches((trees,), config_text):
             return self.preparation
         if self.preparation is not None:
             self.preparation.cancel()
         self.preparation = PhasePreparation(trees, config_text, self.tokenizers[ModelKind.POLICY])
         return self.preparation
 
+    def start_window_preparation(self, command: TrainerCommand, config_text: str) -> WindowPreparation:
+        """The value window's labelling, kept if it is this window's with this config, else started afresh."""
+        directories = tuple(Path(directory) for directory in command.value_trees or (command.trees,))
+        if self.window_preparation is not None and self.window_preparation.matches(directories, config_text):
+            return self.window_preparation
+        if self.window_preparation is not None:
+            self.window_preparation.cancel()
+        self.window_preparation = WindowPreparation(directories, config_text)
+        return self.window_preparation
+
     def prepare(self, command: TrainerCommand) -> None:
         config_text = Path(command.config).read_text(encoding="utf-8")
-        self.ensure_models(parse_phase_config(config_text))
+        config = parse_phase_config(config_text)
+        self.ensure_models(config)
         if self.ranks.is_main:
             self.start_preparation(Path(command.trees), config_text)
+            if config.value is not None:
+                self.start_window_preparation(command, config_text)
             self.log(f"Preparing phase {command.phase} from {command.trees}")
-
-    def value_window(self, command: TrainerCommand, config: TrainingPhaseConfig) -> list[LabelledTree]:
-        """The window's trees labelled, read without their texts."""
-        window: list[LabelledTree] = []
-        for directory in command.value_trees or (command.trees,):
-            records = [read_tree(path, texts=False) for path in sorted(Path(directory).glob(TREE_PATTERN))]
-            window += label_value_trees(records, config)
-        return window
 
     def merge(self, merges: Sequence[Merge]) -> tuple[float, float]:
         """Each new adapter merged on the main rank's GPU, one after another, into host memory (transformers'
@@ -329,7 +370,7 @@ class TrainerRank:
         merges = [Merge(ModelKind.POLICY, PremergedWeights(config.policy.model, policy.adapter))]
         value = None
         if config.value is not None:
-            value, window_seconds = self.train_value(command, config, inputs, output / "value")
+            value, window_seconds = self.train_value(command, config_text, inputs, output / "value")
             preparation_seconds += window_seconds
             merges.append(Merge(ModelKind.VALUE, PremergedWeights(config.value.model, value.adapter)))
             memory.append(released_memory(TrainingStage.VALUE, self.device, self.ranks))
@@ -358,13 +399,17 @@ class TrainerRank:
             )
 
     def train_value(
-        self, command: TrainerCommand, config: TrainingPhaseConfig, inputs: PhaseInputs, directory: Path
+        self, command: TrainerCommand, config_text: str, inputs: PhaseInputs, directory: Path
     ) -> tuple[ValueOutcome, float]:
-        """The value model on the window (read and labelled by the main rank now: it spans finished phases' trees
-        without texts); the outcome and the seconds the window took."""
+        """The value model on the window, which the main rank labelled while the phase sampled (what is left now);
+        the outcome and the seconds the rest of the window took."""
+        config = parse_phase_config(config_text)
         assert config.value is not None
         started = time.perf_counter()
-        window: Sequence[LabelledTree] = self.value_window(command, config) if self.ranks.is_main else ()
+        window: Sequence[LabelledTree] = ()
+        if self.ranks.is_main:
+            window = self.start_window_preparation(command, config_text).finish()
+            self.window_preparation = None
         window_seconds = time.perf_counter() - started
         tokenizer = self.tokenizers[ModelKind.VALUE]
         value_model = self.models[ModelKind.VALUE]
