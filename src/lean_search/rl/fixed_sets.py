@@ -7,7 +7,7 @@ each stratum, in a seeded hash order. The loop never feeds them (`StatementsConf
 
 import hashlib
 import json
-from collections.abc import Iterable, Sequence
+from collections.abc import Collection, Iterable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -52,6 +52,12 @@ class FixedSetsConfig:
     probe_per_stratum: int = 167
     gate_per_stratum: int = 134
     seed: str = "grpo-fixed-sets"
+    # Under $LEAN_SEARCH_DATA.
+    probe_set: str = "grpo/fixed_sets/probe.jsonl"
+    gate_set: str = "grpo/fixed_sets/gate.jsonl"
+    # The overfit test's fixed statements (`select_overfit_set`), disjoint from the probe and the gate.
+    overfit_per_stratum: int = 100
+    overfit_set: str = "grpo/fixed_sets/overfit_300.jsonl"
 
 
 @dataclass(frozen=True)
@@ -98,6 +104,19 @@ def select_fixed_sets(verified: Iterable[VerifiedStatement], config: FixedSetsCo
         )
         gate += rest[: config.gate_per_stratum]
     return FixedSets(tuple(probe), tuple(gate))
+
+
+def select_overfit_set(
+    verified: Iterable[VerifiedStatement], config: FixedSetsConfig, excluded: Collection[str]
+) -> tuple[HeldOutStatement, ...]:
+    """Per stratum, the first statements of a third hash order outside the probe and gate sets."""
+    available = [candidate for candidate in candidates(verified, config) if candidate.name not in excluded]
+    chosen: list[HeldOutStatement] = []
+    for name in Stratum:
+        members = [candidate for candidate in available if candidate.stratum == name]
+        members.sort(key=lambda member: hash_order(member.name, f"{config.seed}/overfit"))
+        chosen += members[: config.overfit_per_stratum]
+    return tuple(chosen)
 
 
 def write_fixed_set(path: Path, statements: Sequence[HeldOutStatement]) -> None:

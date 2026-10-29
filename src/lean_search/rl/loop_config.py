@@ -7,6 +7,7 @@ from pathlib import Path
 
 from lean_search.expert_iteration.curriculum import CurriculumConfig
 from lean_search.expert_iteration.loop_config import InitialModels, ServerEndpoint, ServingConfig
+from lean_search.rl.renaming import RenamingConfig
 from lean_search.search.records import from_json_object
 
 
@@ -103,6 +104,8 @@ class GrpoLoopConfig:
     training: LoopTrainingConfig
     statements: StatementsConfig = field(default_factory=StatementsConfig)
     evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
+    # Descriptive hypothesis names at search time (loop, probe, miniF2F), for a policy trained on named data.
+    renaming: RenamingConfig = field(default_factory=RenamingConfig)
 
     def released_servers(self) -> tuple[ServerEndpoint, ...]:
         """Servers on the training GPU: asleep while a phase trains."""

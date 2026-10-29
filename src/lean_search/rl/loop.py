@@ -49,6 +49,7 @@ from lean_search.expert_iteration.toml_text import toml_text
 from lean_search.monitoring.families import LoopState, LoopStatus, PhaseTiming, ValueBenchmarkResult
 from lean_search.monitoring.store import MetricsWriter
 from lean_search.rl.evaluation import EvaluationKind, EvaluationSummary
+from lean_search.rl.fixed_targets import target_config
 from lean_search.rl.loop_config import EvaluationTarget, GrpoLoopConfig
 from lean_search.rl.phase_metrics import search_phase_record
 from lean_search.rl.statement_sources import StatementSource
@@ -248,7 +249,7 @@ def value_published_by(versions: list[ModelVersion], phase: int) -> bool:
 
 
 def phase_config_text(template: str, current: ModelVersion, phase: int, value_share: float, train_value: bool) -> str:
-    """The template with the published adapters to continue from, μ and a per-phase shuffle; no value part unless due."""
+    """The template with the published adapters to continue from, μ and a per-phase seed; no value part unless due."""
     table = tomllib.loads(template)
     for section in ("reward", "value_targets"):
         table.setdefault(section, {})["value_share"] = value_share
@@ -287,16 +288,6 @@ def evaluated(progress: LoopProgress, kind: EvaluationKind) -> LoopProgress:
             return dataclasses.replace(progress, minif2f_at=progress.loop_seconds)
         case EvaluationKind.HELD_OUT_STATES:
             return dataclasses.replace(progress, held_out_states_at=progress.loop_seconds)
-
-
-def evaluation_target(config: GrpoLoopConfig, kind: EvaluationKind) -> EvaluationTarget:
-    match kind:
-        case EvaluationKind.PROBE:
-            return config.evaluation.probe
-        case EvaluationKind.MINIF2F:
-            return config.evaluation.minif2f
-        case EvaluationKind.HELD_OUT_STATES:
-            return config.evaluation.held_out_states
 
 
 def request_evaluation(paths: GrpoLoopPaths, kind: EvaluationKind) -> None:
@@ -435,7 +426,8 @@ class GrpoLoop:
                 self.searches_running -= 1
             result = completed.result
             if completed.tree is not None:
-                record = tree_record(completed.tree, fed.statement.formal_statement, result)
+                # The statement searched: the renamed one when the loop renames hypotheses.
+                record = tree_record(completed.tree, completed.tree.root.state.statement, result)
                 version = read_current(self.paths.models).version
                 async with self.store_lock:
                     await asyncio.to_thread(self.store.add, record, self.collecting, version, fed.difficulty)
@@ -485,7 +477,9 @@ class GrpoLoop:
         self.write_status()
         await self.searcher.pause()
         self.paused = True
-        entries = self.store.phase_entries(phase)
+        async with self.store_lock:
+            # A tree being written when the phase began still lands in this phase's directory.
+            entries = self.store.phase_entries(phase)
         self.log(
             f"Phase {phase}: {len(entries)} trees ({sum(entry.proved for entry in entries)} solved) after "
             f"{sampling / 60:.1f} min of sampling; {self.searches_running} searches paused"
@@ -589,7 +583,7 @@ class GrpoLoop:
         due = []
         for kind in EvaluationKind:
             requested = (self.paths.requests / kind.value).exists()
-            target = evaluation_target(self.config, kind)
+            target = target_config(self.config.evaluation, kind)
             last = last_evaluation(self.progress, kind)
             if requested or evaluation_due(target, last, self.progress.loop_seconds, at_start):
                 due.append(kind)
@@ -598,11 +592,9 @@ class GrpoLoop:
     async def run_evaluations(self, kinds: list[EvaluationKind], phase: int) -> None:
         if not kinds:
             return
+        # Only between phases or before the workers start: the searches are paused or not running.
         self.loop_state = LoopState.EVALUATING
         self.write_status()
-        if not self.paused and self.sampling_since is not None:
-            await self.searcher.pause()
-            self.paused = True
         for kind in kinds:
             summary = await self.evaluations.evaluate(kind, phase)
             self.log(f"Evaluation {kind} of version {summary.policy_version}: {summary.solved}/{summary.problems}")

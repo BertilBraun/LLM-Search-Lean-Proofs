@@ -5,6 +5,7 @@
     python experiments/grpo_loop.py --config ... check-servers       # one live request per policy server
     python experiments/grpo_loop.py --config ... run                 # the loop; restart it the same way after a crash
     python experiments/grpo_loop.py --config ... status
+    python experiments/grpo_loop.py --config ... report              # solve rate per phase (the overfit curve)
     python experiments/grpo_loop.py --config ... request-evaluation --target minif2f
 
 init records version 0 (the [initial] adapters merged into full weights) and refuses an existing loop. run copies the
@@ -46,6 +47,7 @@ from lean_search.rl.loop_services import (
     open_tree_searcher,
     serve_commands,
 )
+from lean_search.rl.renaming import load_renamings
 from lean_search.rl.search_models import served_run_config
 from lean_search.rl.statement_sources import CurriculumStatements, FixedStatements, StatementSource
 from lean_search.rl.tree_store import TreeStore
@@ -66,6 +68,7 @@ def parse_arguments() -> argparse.Namespace:
     commands.add_parser("check-servers")
     commands.add_parser("run")
     commands.add_parser("status")
+    commands.add_parser("report")
     request = commands.add_parser("request-evaluation")
     request.add_argument("--target", type=EvaluationKind, choices=list(EvaluationKind), required=True)
     return parser.parse_args()
@@ -152,7 +155,8 @@ async def run(config: GrpoLoopConfig, paths: GrpoLoopPaths) -> None:
     )
     writer = MetricsWriter(paths.directory)
     log(f"Loop {config.name}: version {read_current(paths.models).version}, {read_progress(paths.progress)}")
-    async with open_tree_searcher(search_run_config(config), statements.headers()) as searcher:
+    renamings = load_renamings(config.renaming, DATA_DIRECTORY)
+    async with open_tree_searcher(search_run_config(config), statements.headers(), renamings) as searcher:
         phase_template = (REPOSITORY_DIRECTORY / config.training.phase_config).read_text(encoding="utf-8")
         loop = GrpoLoop(
             config, paths, statements, searcher, trainer, servers, merged, evaluations, writer, log, phase_template
@@ -178,6 +182,22 @@ def status(paths: GrpoLoopPaths) -> None:
     print(f"requested evaluations: {requests}")
 
 
+def report(paths: GrpoLoopPaths) -> None:
+    """Solve rate per phase over the trees each phase trained on (the overfit test's curve), to report.md."""
+    store = TreeStore(paths.trees)
+    rows = ["| phase | trees | solved | solve rate | proofs | statements |", "|---|---|---|---|---|---|"]
+    for phase in sorted({entry.phase for entry in store.entries}):
+        entries = store.phase_entries(phase)
+        solved = sum(entry.proved for entry in entries)
+        rows.append(
+            f"| {phase} | {len(entries)} | {solved} | {solved / len(entries):.1%} | "
+            f"{sum(entry.proofs for entry in entries)} | {len({entry.problem_name for entry in entries})} |"
+        )
+    text = f"# {paths.name}: solve rate per phase\n\n" + "\n".join(rows) + "\n"
+    (paths.directory / "report.md").write_text(text, encoding="utf-8")
+    print(text)
+
+
 def main() -> None:
     arguments = parse_arguments()
     config_text = arguments.config.read_text(encoding="utf-8")
@@ -196,6 +216,8 @@ def main() -> None:
             asyncio.run(run(config, paths))
         case "status":
             status(paths)
+        case "report":
+            report(paths)
         case "request-evaluation":
             request_evaluation(paths, arguments.target)
             print(f"The loop evaluates {arguments.target} at its next phase pause.")

@@ -1,0 +1,29 @@
+# The naming A/B's MATH-500 retention (experiments/grpo_naming_ab.py): reasoning_retention_nothinking.toml's problems,
+# prompt, sampling and cap (thinking off, as the visible policy runs) for the data rewrite's two short fine-tunes.
+#   python experiments/reasoning_retention.py --config experiments/configs/evaluation/reasoning_retention_naming_ab.toml \
+#       run --gpu 0 --labels naming-numbered naming-named
+dataset = "/workspace/data/math500/test.jsonl"
+problem_count = 200
+judged_problem_count = 20
+seed = "reasoning-retention"
+sample_count = 4
+temperature = 0.6
+# Qwen's recommended sampling for thinking mode; temperature is the owner's.
+top_p = 0.95
+max_tokens = 4096
+max_model_length = 8192
+requests_in_flight = 64
+# A literal string: in a basic TOML string the backslash of \boxed would start the escape \b (backspace).
+instruction = 'Please reason step by step, and put your final answer within \boxed{}.'
+
+thinking = false
+
+[[models]]
+label = "naming-numbered"
+base = "Qwen/Qwen3.5-4B"
+adapter = "/workspace/checkpoints/data_rewrite_sft_numbered/adapter"
+
+[[models]]
+label = "naming-named"
+base = "Qwen/Qwen3.5-4B"
+adapter = "/workspace/checkpoints/data_rewrite_sft_named/adapter"

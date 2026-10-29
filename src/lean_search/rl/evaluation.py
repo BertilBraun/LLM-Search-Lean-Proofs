@@ -18,8 +18,9 @@ from lean_search.data import Problem
 from lean_search.expert_iteration.pool_search import PRELOADED_HEADER_SHARE, common_headers
 from lean_search.lean import LeanReplConfig, LeanReplPool
 from lean_search.monitoring.families import BandOutcome, FixedTargets
+from lean_search.rl.renaming import StatementRenamings, search_problem
 from lean_search.rl.search_models import open_search_models, run_config_text
-from lean_search.search import CompletedSearch, RunConfig, SearchResult, read_results, search_problems, tree_record
+from lean_search.search import CompletedSearch, RunConfig, SearchResult, read_results, tree_record
 from lean_search.search.records import from_json_object, to_json, write_tree
 
 
@@ -173,19 +174,19 @@ async def search_problem_set(
     config: RunConfig,
     paths: EvaluationPaths,
     log: Callable[[str], None],
+    renamings: StatementRenamings | None = None,
 ) -> list[SearchResult]:
-    """Searches the problems without a result yet; returns every problem's result."""
+    """Searches the problems without a result yet (renamed when given renamings); returns every problem's result."""
     keep_config(paths, config)
     done = read_results(paths.results) if paths.results.exists() else []
     finished = {result.problem_name for result in done}
     pending = [problem.problem for problem in problems if problem.problem.name not in finished]
-    statements = {problem.name: problem.formal_statement for problem in pending}
     results = list(done)
 
     async def on_completed(completed: CompletedSearch) -> None:
         result = completed.result
         if completed.tree is not None:
-            record = tree_record(completed.tree, statements[result.problem_name], result)
+            record = tree_record(completed.tree, completed.tree.root.state.statement, result)
             await asyncio.to_thread(write_tree, paths.trees / f"{result.problem_name}.json.gz", record)
         with paths.results.open("a", encoding="utf-8") as handle:
             handle.write(to_json(result) + "\n")
@@ -200,14 +201,21 @@ async def search_problem_set(
                 LeanReplPool(config.lean.pool_size, LeanReplConfig(), config.lean.restart_fraction)
             )
             await pool.start(common_headers(pending, PRELOADED_HEADER_SHARE))
-            await search_problems(
-                pending,
-                pool,
-                models.expander,
-                models.priority_function,
-                config.search,
-                config.lean.concurrency,
-                on_completed,
+            semaphore = asyncio.Semaphore(config.lean.concurrency)
+
+            async def search_one(problem: Problem) -> None:
+                async with semaphore:
+                    async with pool.acquire() as repl:
+                        completed = await search_problem(
+                            problem, repl, models.expander, models.priority_function, config.search, renamings
+                        )
+                    await on_completed(completed)
+
+            await asyncio.gather(*(search_one(problem) for problem in pending))
+        if renamings is not None:
+            log(
+                f"Renaming: {renamings.missing} problems without a renaming, "
+                f"{renamings.failed_original_checks} proofs failed the check against the original statement"
             )
     return results
 
@@ -220,10 +228,11 @@ async def run_problem_set_evaluation(
     config: RunConfig,
     paths: EvaluationPaths,
     log: Callable[[str], None],
+    renamings: StatementRenamings | None = None,
 ) -> EvaluationSummary:
     started_at = now()
     started = time.monotonic()
-    results = await search_problem_set(problems, config, paths, log)
+    results = await search_problem_set(problems, config, paths, log, renamings)
     summary = search_summary(
         kind, run_name, versions, problems, results, config, started_at, time.monotonic() - started
     )

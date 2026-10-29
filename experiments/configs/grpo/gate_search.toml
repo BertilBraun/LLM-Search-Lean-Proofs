@@ -1,0 +1,77 @@
+# The value gate's trees (experiments/grpo_fixed_sets.py gate-benchmark): the held-out gate statements searched once
+# by the starting policy without a value model (DESIGN.md "Benchmark and gate": no circular labels), with the loop's
+# harness (visible_student_v2.toml: n = 8, heartbeat limits, flattening) and its budget, no harvesting, no ε. The
+# policy servers serve the starting policy as policy-merged (loop.toml's ports); no value server is needed.
+
+[lean]
+pool_size = 96
+concurrency = 96
+
+[search]
+max_expansions = 64
+# Expansions are the budget; the wall cap only catches hung searches.
+max_wall_seconds = 14400.0
+max_depth = 16
+score_children_early = true
+# Policy steps stop at 50k heartbeats inside Lean, an ordinary error without a restart.
+tactic_heartbeats = 50000
+# Emergency stop for hangs heartbeats do not count (kernel reduction, big-number arithmetic).
+tactic_timeout_seconds = 60.0
+flatten_blocks = true
+name_inaccessible_hypotheses = true
+check_identifiers = true
+forbidden_steps = [
+    "exact?",
+    "apply?",
+    "rw?",
+    "simp?",
+    "simp_all?",
+    "dsimp?",
+    "aesop?",
+    "hint",
+    "rw_search",
+    "library_search",
+]
+
+[search.harvest]
+enabled = false
+max_remaining_steps = 2.0
+max_expansions = 16
+
+[search.exploration]
+enabled = false
+epsilon = 0.1
+top_k = 8
+seed = 0
+
+[expander]
+kind = "automation_then_policy"
+overlap = true
+
+[automation]
+tactics = ["omega", "constructor", "rfl", "field_simp", "ring_nf", "simp_all", "nlinarith"]
+# The sweep keeps Lean's default limit; the search's emergency stop applies.
+heartbeats = 200000
+max_wall_clock_timeouts_per_tactic = 1
+max_heartbeat_timeouts_per_tactic = 1
+
+[priority]
+# No value model: best-first on the path's step log-probabilities, so no value model chose which states were expanded
+# and labelled. A visible-reasoning sample's log-probability includes its explanation.
+kind = "cumulative_log_probability"
+length_exponent = 1.0
+automation_log_probability = -2.8
+
+[policy]
+model = "policy-merged"
+tokenizer = "Qwen/Qwen3.5-4B"
+server_urls = ["http://127.0.0.1:8101/v1", "http://127.0.0.1:8102/v1", "http://127.0.0.1:8103/v1"]
+sample_count = 8
+temperature = 0.8
+top_p = 1.0
+max_tokens = 1024
+thinking = false
+visible_reasoning = true
+few_shot = false
+force_answer_on_truncation = true
+forced_answer_tokens = 256

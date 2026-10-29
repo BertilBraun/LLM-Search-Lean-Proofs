@@ -10,6 +10,7 @@ other Lean error is `valid_but_failing`. Infrastructure failures count in none.
 import re
 from collections import Counter
 from collections.abc import Iterator, Sequence
+from dataclasses import dataclass
 from enum import StrEnum
 
 from lean_search.monitoring.families import FailureTiers, SearchPhase
@@ -23,6 +24,7 @@ INVALID_MESSAGES = re.compile(
     r"type mismatch|application type mismatch|failed to synthesize|function expected|invalid field|"
     r"unknown (?:free variable|hypothesis)|ambiguous|invalid argument"
 )
+UNKNOWN_NAME_MESSAGES = re.compile(r"unknown identifier|unknown constant|unknown free variable")
 # A forced answer repeats itself when one of its segments (lines or sentences this long) occurs this often.
 REPEATED_SEGMENT_CHARACTERS = 16
 REPEATED_SEGMENT_COUNT = 3
@@ -74,6 +76,43 @@ def failure_tiers(records: Sequence[TreeRecord]) -> FailureTiers:
         if tier is not None:
             counts[tier] += edge.sample_count
     return FailureTiers(**{tier.value: count for tier, count in counts.items()})
+
+
+@dataclass(frozen=True)
+class UnknownNames:
+    """Policy samples that refer to a name that does not exist (the naming A/B's error rate)."""
+
+    samples: int
+    unknown: int
+
+    @property
+    def rate(self) -> float:
+        return self.unknown / self.samples if self.samples else 0.0
+
+
+def refers_to_unknown_name(failure: Failure | None) -> bool:
+    if failure is None:
+        return False
+    match failure.kind:
+        case FailureKind.UNKNOWN_IDENTIFIER:
+            return True
+        case FailureKind.ERROR:
+            return UNKNOWN_NAME_MESSAGES.search(failure.message.lower()) is not None
+        case _:
+            return False
+
+
+def unknown_names(records: Sequence[TreeRecord]) -> UnknownNames:
+    """Per policy sample (infrastructure failures left out): the identifier check's rejections, Lean's unknown names."""
+    samples = 0
+    unknown = 0
+    for record, edge in policy_edges(records):
+        failure = executed_edge(record, edge).failure
+        if failure is not None and failure.kind == FailureKind.REPL_FAILURE:
+            continue
+        samples += edge.sample_count
+        unknown += edge.sample_count * refers_to_unknown_name(failure)
+    return UnknownNames(samples, unknown)
 
 
 def is_forced(completion: SampledCompletion) -> bool:

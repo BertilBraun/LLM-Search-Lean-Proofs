@@ -169,6 +169,8 @@ class SearchResult:
     plain_verified: bool | None = None
     step_statistics: tuple[StepStatistics, ...] = ()
     start_failure: str | None = None
+    # A search of a renamed statement: whether its proof verified against the original (False makes it unproved).
+    original_verified: bool | None = None
 
 
 @dataclass(frozen=True)

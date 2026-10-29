@@ -25,11 +25,40 @@ from lean_search.lean import LeanReplConfig, LeanReplPool, ProofState
 from lean_search.reasoning.states import ReasoningState
 from lean_search.rl.grpo_groups import PolicyGroup, RewardConfig, policy_groups
 from lean_search.rl.search_models import open_search_models
+from lean_search.rl.training_phase import LabelledPhaseData
+from lean_search.rl.tree_statistics import graph_statistics, total_statistics
 from lean_search.search import ExpanderKind, PriorityKind, RunConfig, TreeRecord, search_theorem, tree_record
 from lean_search.search.graph_labels import EdgeKind, GoalKey, GraphLabels, NodeClass, goal_key, label_graph
 from lean_search.search.records import read_tree, write_tree
 from lean_search.search.tactic_labels import TacticLabel, TacticOutcome, policy_tactics
 from lean_search.search.tree import EdgeOutcome, StepSource
+
+
+@dataclass(frozen=True)
+class SingleStepArm:
+    # Its run directory under the experiment's, and the training phase config (credit mode) it trains with.
+    name: str
+    phase_config: str
+
+
+@dataclass(frozen=True)
+class SingleStepConfig:
+    # $LEAN_SEARCH_RUNS/<name>/.
+    name: str
+    # The search template: the policy servers (serving the merged starting policy as `policy.model`) and the harness.
+    search_config: str
+    # The merged starting policy the arms' adapters apply to (the phase configs' `policy.model`).
+    policy_base_model: str
+    # States files (ReasoningState lines) under $LEAN_SEARCH_RUNS: the trained states and a disjoint set.
+    train_states: str
+    disjoint_states: str
+    arms: tuple[SingleStepArm, ...]
+    # Sampling and training rounds; each trains `passes_per_phase` passes over its round's groups.
+    rounds: int = 3
+    concurrency: int = 64
+    # Overrides the template's policy servers (e.g. the three serving GPUs); empty keeps them.
+    policy_server_urls: tuple[str, ...] = ()
+
 
 @dataclass(frozen=True)
 class StateProblem:
@@ -177,3 +206,17 @@ async def search_states(
 
             await asyncio.gather(*(search_one(state) for state in pending))
     return [read_tree(trees_directory / f"{state.problem.name}.json.gz") for state in states]
+
+
+def single_step_phase_data(
+    records: Sequence[TreeRecord], states: Sequence[StateProblem], config: RewardConfig
+) -> LabelledPhaseData:
+    """The root groups of the single-step trees, labelled against each state's reference proof."""
+    groups: list[PolicyGroup] = []
+    statistics = []
+    for record, state in zip(records, states, strict=True):
+        labels, tactics = reference_labels(record, state.reference_keys)
+        tree_groups = single_step_groups(record, state.reference_keys, config)
+        groups.extend(tree_groups)
+        statistics.append(graph_statistics(record, labels, (), tactics, tree_groups))
+    return LabelledPhaseData((), tuple(groups), total_statistics(statistics))

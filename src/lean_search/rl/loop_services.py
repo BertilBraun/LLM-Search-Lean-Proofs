@@ -24,9 +24,10 @@ from lean_search.policy.server_control import is_healthy, is_sleeping, publish_w
 from lean_search.rl.evaluation import EvaluationKind, EvaluationSummary, read_summary
 from lean_search.rl.loop import PHASE_OUTCOME_FILE, GrpoLoopPaths, TrainingRequest, read_phase_outcome
 from lean_search.rl.loop_config import GrpoLoopConfig, LoopTrainingConfig
+from lean_search.rl.renaming import StatementRenamings, search_problem
 from lean_search.rl.search_models import SearchModels, open_search_models
 from lean_search.rl.training_phase import PhaseOutcome
-from lean_search.search import CompletedSearch, RunConfig, search_theorem
+from lean_search.search import CompletedSearch, RunConfig
 
 REPOSITORY_DIRECTORY = Path(__file__).resolve().parents[3]
 # The GRPO trainer compares the sampler's log-probabilities with its own at the sampling temperature.
@@ -37,16 +38,29 @@ CHECK_GOALS = ("x : ℝ\nh₀ : 3 * x + 2 = 11\n⊢ x = 3",)
 class LeanTreeSearcher:
     """One search per REPL of the pool, with the served models behind the pause gate."""
 
-    def __init__(self, config: RunConfig, pool: LeanReplPool, models: SearchModels, gate: PauseGate) -> None:
+    def __init__(
+        self,
+        config: RunConfig,
+        pool: LeanReplPool,
+        models: SearchModels,
+        gate: PauseGate,
+        renamings: StatementRenamings | None,
+    ) -> None:
         self.config = config
         self.pool = pool
         self.models = models
         self.gate = gate
+        self.renamings = renamings
 
     async def search(self, problem: Problem) -> CompletedSearch:
         async with self.pool.acquire() as repl:
-            return await search_theorem(
-                problem, repl, self.models.expander, self.models.priority_function, self.config.search
+            return await search_problem(
+                problem,
+                repl,
+                self.models.expander,
+                self.models.priority_function,
+                self.config.search,
+                self.renamings,
             )
 
     async def pause(self) -> None:
@@ -57,7 +71,9 @@ class LeanTreeSearcher:
 
 
 @contextlib.asynccontextmanager
-async def open_tree_searcher(config: RunConfig, headers: Sequence[str]) -> AsyncIterator[LeanTreeSearcher]:
+async def open_tree_searcher(
+    config: RunConfig, headers: Sequence[str], renamings: StatementRenamings | None
+) -> AsyncIterator[LeanTreeSearcher]:
     """A REPL for each concurrent search (`config.lean.pool_size`), the headers imported up front."""
     gate = PauseGate()
     async with (
@@ -65,7 +81,7 @@ async def open_tree_searcher(config: RunConfig, headers: Sequence[str]) -> Async
         LeanReplPool(config.lean.pool_size, LeanReplConfig(), config.lean.restart_fraction) as pool,
     ):
         await pool.start(headers)
-        yield LeanTreeSearcher(config, pool, models, gate)
+        yield LeanTreeSearcher(config, pool, models, gate, renamings)
 
 
 async def run_logged(arguments: Sequence[str], log_path: Path, environment: dict[str, str]) -> None:

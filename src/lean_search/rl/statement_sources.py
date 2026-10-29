@@ -1,4 +1,4 @@
-"""Where the loop's statements come from: the curriculum over verified pool statements, or a fixed list (overfit test)."""
+"""Where the loop's statements come from: the curriculum over verified pool statements, or a fixed list (overfit)."""
 
 import json
 import math
