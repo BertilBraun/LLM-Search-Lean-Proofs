@@ -627,9 +627,10 @@ class DemoRun:
                 only_published=only_published,
                 p_value=0.5,
                 worse_p_value=0.8,
-                passed=only_published > only_reference,
+                passed=only_published > only_reference + 8,
                 reference_value_version=0,
                 published_value_version=self.value_version,
+                better_p_value=0.3,
             ),
             record_time=moment,
         )

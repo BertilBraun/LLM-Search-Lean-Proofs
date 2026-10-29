@@ -15,7 +15,8 @@ publishing  version k + 1 (the new policy adapter, the new value adapter only if
 evaluating  the fixed targets that are due (by loop hours, at the start, or requested) run as separate jobs while
             the searches stay paused, after the paused searches' REPL processes stopped to free host memory; the value
             servers serve the evaluations' fixed value model meanwhile; the value A/B search (both arms) turns μ on
-            once the published value model, which passed the gate, beats the reference
+            once the published value model, which passed the gate, is better than the reference, and publishes the
+            reference again (μ off) once it is worse
 resume      the searches continue with the new weights
 
 The boundaries to the outside (the searches with Lean and vLLM, the training job, the vLLM servers, the evaluation
@@ -45,10 +46,18 @@ from lean_search.expert_iteration.serving import (
     Publisher,
     read_current,
     read_versions,
+    record_published,
     write_json_atomically,
 )
 from lean_search.expert_iteration.toml_text import toml_text
-from lean_search.monitoring.families import LoopState, LoopStatus, PauseSegments, PhaseTiming, ValueBenchmarkResult
+from lean_search.monitoring.families import (
+    LoopState,
+    LoopStatus,
+    PauseSegments,
+    PhaseTiming,
+    ValueAbResult,
+    ValueBenchmarkResult,
+)
 from lean_search.monitoring.store import MetricsWriter
 from lean_search.policy.server_control import PhaseSeconds
 from lean_search.rl.evaluation import EvaluationKind, EvaluationSummary
@@ -92,7 +101,7 @@ class LoopProgress:
     value_gate_passed: bool = False
     # The last value adapter trained, accepted or not: the next value training continues it ("": the published one).
     value_adapter: str = ""
-    # μ is on: a value model passed the gate and a value A/B search found the published one ahead of the reference.
+    # μ is on: a value model passed the gate and a value A/B search found the published one better than the reference.
     value_share_on: bool = False
     # The pause of `phase` so far, segment by segment.
     pause: PauseSegments = field(default_factory=PauseSegments)
@@ -393,6 +402,28 @@ def pause_text(pause: PauseSegments) -> str:
 
 def published_time(version: ModelVersion) -> float:
     return datetime.datetime.fromisoformat(version.published_at).timestamp()
+
+
+def earlier_value_ab_results(paths: GrpoLoopPaths, version: int, published_value_version: int) -> list[ValueAbResult]:
+    """The comparisons of the other value A/Bs of this published value model, pooled with this version's."""
+    own = paths.evaluation_directory(EvaluationKind.VALUE_AB, version, 0, EvaluationValueModel.PUBLISHED)
+    pattern = f"{EvaluationKind.VALUE_AB}_v*_{EvaluationValueModel.PUBLISHED}/comparison.json"
+    results = [
+        from_json_object(ValueAbResult, json.loads(path.read_text(encoding="utf-8")))
+        for path in sorted(paths.evaluations.glob(pattern))
+        if path.parent != own
+    ]
+    return [result for result in results if result.published_value_version == published_value_version]
+
+
+def publish_value_model(paths: LoopPaths, publisher: Publisher, value_adapter: str, trigger: str) -> ModelVersion:
+    """The next version: the current policy with this value adapter."""
+    current = read_current(paths)
+    version = ModelVersion(current.version + 1, current.policy_adapter, value_adapter, now(), trigger)
+    prepared = publisher.prepare(version)
+    record_published(paths, prepared)
+    publisher.prune(prepared)
+    return prepared
 
 
 class GrpoLoop:
@@ -786,7 +817,8 @@ class GrpoLoop:
         return await self.evaluations.evaluate(kind, phase, repeat, value_model)
 
     async def run_value_ab(self, phase: int) -> None:
-        """Both arms with the policy fixed; μ turns on once the published value model passed."""
+        """Both arms with the policy fixed; μ turns on once the published value model is better than the reference,
+        and the reference is published again (μ off) once it is worse."""
         for arm in (EvaluationValueModel.INITIAL, EvaluationValueModel.PUBLISHED):
             await self.serve_value_model(arm)
             summary = await self.evaluations.evaluate(EvaluationKind.VALUE_AB, phase, 0, arm)
@@ -795,13 +827,31 @@ class GrpoLoop:
         self.log(
             f"Value A/B of version {summary.policy_version}: published value v{result.published_value_version} "
             f"{result.published_solved} vs reference {result.reference_solved} of {result.problems} "
-            f"({result.only_published} vs {result.only_reference} solved by one arm only, p = {result.p_value:.3f})"
+            f"({result.only_published} vs {result.only_reference} solved by one arm only); pooled over "
+            f"{result.pooled_runs} runs {result.pooled_only_published} vs {result.pooled_only_reference}, "
+            f"p(better) = {result.better_p_value:.3f}, p(worse) = {result.worse_p_value:.3f}"
         )
-        if result.passed and not self.progress.value_share_on:
-            self.log(
-                f"The published value model passed the A/B search: μ = {self.config.training.value_share_after_gate}"
-            )
+        if result.worse:
+            await self.revert_value_model(result.published_value_version)
+        elif result.passed and not self.progress.value_share_on:
+            self.log(f"The published value model is better than v0: μ = {self.config.training.value_share_after_gate}")
             self.save_progress(value_share_on=True)
+
+    async def revert_value_model(self, value_version: int) -> None:
+        """The reference value model is published again; value training continues from it, with μ off."""
+        self.save_progress(value_share_on=False, value_adapter="")
+        current = await asyncio.to_thread(
+            publish_value_model,
+            self.paths.models,
+            self.publisher,
+            self.config.initial.value_adapter,
+            f"value v{value_version} worse than v0 in the A/B",
+        )
+        await self.servers.serve(current)
+        self.served_value_weights = current.value_weights
+        self.searcher.serving(current.version)
+        self.update_context()
+        self.log(f"Value v{value_version} is worse than v0: version {current.version} serves v0's value model, μ off")
 
     async def run_evaluations(self, kinds: list[EvaluationKind], phase: int, at_start: bool = False) -> None:
         if not kinds:

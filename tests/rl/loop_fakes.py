@@ -290,8 +290,9 @@ class FakeEvaluations:
     runs: list[tuple[EvaluationKind, int]] = field(default_factory=list)
     repeats: list[tuple[EvaluationKind, int]] = field(default_factory=list)
     value_models: list[tuple[EvaluationKind, EvaluationValueModel]] = field(default_factory=list)
-    # The value A/B's published arm passes.
+    # The value A/B finds the published value model better, or worse, than the reference.
     value_ab_passes: bool = False
+    value_ab_worse: bool = False
 
     async def evaluate(
         self, kind: EvaluationKind, phase: int, repeat: int, value_model: EvaluationValueModel
@@ -300,9 +301,8 @@ class FakeEvaluations:
         self.value_models.append((kind, value_model))
         summary = dataclasses.replace(zero(EvaluationSummary), kind=kind, problems=10, solved=4 + repeat)
         if kind == EvaluationKind.VALUE_AB and value_model == EvaluationValueModel.PUBLISHED:
-            return dataclasses.replace(
-                summary, value_ab=dataclasses.replace(zero(ValueAbResult), passed=self.value_ab_passes)
-            )
+            result = dataclasses.replace(zero(ValueAbResult), passed=self.value_ab_passes, worse=self.value_ab_worse)
+            return dataclasses.replace(summary, value_ab=result)
         return summary
 
 

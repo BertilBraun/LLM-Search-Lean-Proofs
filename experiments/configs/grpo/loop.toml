@@ -97,7 +97,7 @@ max_sampling_minutes = 30.0
 min_solved_trees = 100
 check_seconds = 30.0
 # The value model every 4 phases on the last 8 phases' trees, continuing the last value adapter trained; μ turns on
-# once one passed the gate and the value A/B search ([evaluation.value_ab]) found the published one ahead of v0.
+# once one passed the gate and the value A/B search ([evaluation.value_ab]) found the published one better than v0.
 value_every_phases = 4
 value_window_phases = 8
 value_share_after_gate = 0.15
@@ -176,11 +176,10 @@ max_wall_seconds = 3600.0
 concurrency = 64
 every_hours = 12.0
 
-# μ turns on when the published value model solves at least min_solved_difference more problems than v0 and an exact
-# McNemar test does not find it worse at the one-sided significance level.
+# One-sided exact McNemar tests on the problems one arm solved, pooled over the A/Bs of the same published value model:
+# better than v0 at `significance` turns μ on; worse publishes v0's value model again and turns μ off.
 [evaluation.value_ab_test]
 problems = 250
-min_solved_difference = 1
 significance = 0.05
 
 # On only when the starting policy is the naming A/B's named arm (grpo_fixed_sets.py rename first).

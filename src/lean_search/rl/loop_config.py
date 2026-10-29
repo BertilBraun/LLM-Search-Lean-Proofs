@@ -57,8 +57,8 @@ class LoopTrainingConfig:
     # continuing the last value adapter trained (published or not); it is published only if it passes the gate.
     value_every_phases: int = 4
     value_window_phases: int = 8
-    # μ in the policy reward and the value targets once a value model passed the gate and the latest value A/B
-    # search (evaluation.value_ab) found it ahead of the reference (0 before; it then stays on).
+    # μ in the policy reward and the value targets once a value model passed the gate and a value A/B search
+    # (evaluation.value_ab) found it better than the reference (0 before, and again once an A/B finds it worse).
     value_share_after_gate: float = 0.15
     # The gate's benchmark (grpo_fixed_sets.py gate-benchmark) under $LEAN_SEARCH_RUNS; without it the value model
     # does not train, since nothing could accept it.
@@ -98,9 +98,8 @@ class EvaluationValueModel(StrEnum):
 class ValueAbConfig:
     # Probe-set problems searched by both arms: the first ones of each stratum in the set's order, strata alternating.
     problems: int = 250
-    # μ turns on once the published value model solves at least this many more problems than the reference...
-    min_solved_difference: int = 1
-    # ...and an exact McNemar test on the problems only one arm solved does not find it worse at this one-sided level.
+    # One-sided exact McNemar tests on the problems only one arm solved, pooled over the A/Bs of one published value
+    # model: better at this level turns μ on, worse publishes the reference value model again (and turns μ off).
     significance: float = 0.05
 
 

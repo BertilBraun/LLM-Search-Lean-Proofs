@@ -229,14 +229,23 @@ with fakes for them (`tests/rl/loop_fakes.py`) and real Lean for the start-state
   problems of the probe set (the strata in turn) at the probe's budget with the current policy twice: with the
   reference (`EvaluationValueModel.INITIAL`, value v0) and with the published value model, into
   `evaluations/value_ab_v<version>_{initial,published}/`. The published arm's job pairs the two per problem
-  (`evaluation.value_ab_result`: solved counts, the problems one arm solved, an exact McNemar test, two-sided and
-  one-sided against "published worse") into `comparison.json`, the summary and the `value_ab` line. Compared with v0,
+  (`evaluation.value_ab_result`: solved counts, the problems one arm solved, this run's two-sided exact McNemar test)
+  and pools the problems one arm solved over every A/B of the same published value model (`loop.earlier_value_ab_results`,
+  the other `value_ab_v*_published/comparison.json`) for two one-sided exact McNemar tests, "published better" and
+  "published worse", into `comparison.json`, the summary and the `value_ab` line. Compared with v0,
   not with the previously published model: v0 is the fixed reference of the evaluations, and successive small steps
   would each be below the A/B's noise while their sum may not be. The reference arm is not reused from a probe of the
   same version because it covers a different set of problems and would tie the A/B to the probe's schedule.
-- **μ**: `value_share_after_gate` (0.15) turns on, and stays on, once a value model passed the gate (it is published)
-  and the latest A/B found the published model ahead of v0 by `value_ab_test.min_solved_difference` (1) and not worse
-  at `significance` (0.05, one-sided); before that every phase trains with μ = 0.
+  Under the null (identical arms, the review's simulation of 250 problems with 42-62 discordant ones) one A/B finds
+  "better" 4% of the time and "worse" 4%; repeated A/Bs of one model look at the pooled evidence again each time, so
+  over six of them about 12% find "better" at some point.
+- **μ**: `value_share_after_gate` (0.15) turns on once a value model passed the gate (it is published) and an A/B
+  found the published model better than v0 (`value_ab_test.significance`, 0.05, one-sided, pooled); before that every
+  phase trains with μ = 0.
+- **Revert**: an A/B that finds the published model worse than v0 at that level publishes a new version with the same
+  policy and v0's value adapter (`loop.publish_value_model`; trigger "value v<k> worse than v0 in the A/B"), turns μ
+  off and lets the next value training continue from v0's adapter. Whether gate (a) or the A/B decides publication
+  itself is still open; publication stays with gate (a).
 - **Evaluations with a fixed value model**: the probe and miniF2F search with `evaluation.value_model` (default
   `initial`, value v0), so they measure the policy alone; before them the value servers swap to its merged weights
   (`Publisher.kept_value_weights`, merged once under `weights/kept_value/`, which pruning leaves alone; no swap while

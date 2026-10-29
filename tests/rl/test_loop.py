@@ -1,4 +1,5 @@
 import asyncio
+import dataclasses
 import tomllib
 from pathlib import Path
 
@@ -14,17 +15,20 @@ from loop_fakes import (
     record_version_zero,
     run_until,
     statement,
+    zero,
 )
 
 from lean_search.expert_iteration.pool import problem_name
-from lean_search.expert_iteration.serving import ModelVersion, read_current, read_versions
-from lean_search.monitoring.families import PauseSegments
+from lean_search.expert_iteration.serving import ModelVersion, read_current, read_versions, write_json_atomically
+from lean_search.monitoring.families import PauseSegments, ValueAbResult
 from lean_search.monitoring.store import RunReader
 from lean_search.rl.evaluation import EvaluationKind
 from lean_search.rl.loop import (
     GrpoLoop,
+    GrpoLoopPaths,
     PhaseStage,
     TrainingRequest,
+    earlier_value_ab_results,
     evaluation_due,
     phase_config_text,
     read_progress,
@@ -257,6 +261,56 @@ async def test_mu_stays_off_when_the_value_ab_does_not_pass(tmp_path: Path) -> N
     record_version_zero(world)
     await run_until(world, world.loop(), phases=2)
     assert value_shares(world)[:2] == [0.0, 0.0]
+
+
+def worse_value_world(root: Path) -> LoopWorld:
+    evaluations = FakeEvaluations(value_ab_worse=True)
+    return loop_world(root, VALUE_AB_TOML, trainer=FakeTrainer(value_passes=True), evaluations=evaluations)
+
+
+async def test_a_value_model_the_ab_finds_worse_is_replaced_by_v0(tmp_path: Path) -> None:
+    world = worse_value_world(tmp_path)
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=1)
+    assert read_current(world.paths.models).value_adapter == "value-v0-adapter"
+
+
+async def test_the_servers_serve_v0_after_the_ab_found_the_published_value_model_worse(tmp_path: Path) -> None:
+    world = worse_value_world(tmp_path)
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=1)
+    assert world.servers.served[-1] == read_current(world.paths.models).version
+
+
+async def test_value_training_continues_v0_after_the_ab_found_the_published_model_worse(tmp_path: Path) -> None:
+    world = worse_value_world(tmp_path)
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=2)
+    assert tomllib.loads(world.trainer.requests[1].config_text)["value"]["initial_adapter"] == "value-v0-adapter"
+
+
+async def test_mu_turns_off_when_the_ab_finds_the_published_value_model_worse(tmp_path: Path) -> None:
+    evaluations = FakeEvaluations(value_ab_passes=True)
+    world = loop_world(tmp_path, VALUE_AB_TOML, trainer=FakeTrainer(value_passes=True), evaluations=evaluations)
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=1)
+    evaluations.value_ab_passes, evaluations.value_ab_worse = False, True
+    request_evaluation(world.paths, EvaluationKind.VALUE_AB)
+    await run_until(world, world.loop(), phases=2)
+    assert value_shares(world)[1] == 0.0
+
+
+def write_value_ab(paths: GrpoLoopPaths, version: int, published_value_version: int) -> None:
+    directory = paths.evaluation_directory(EvaluationKind.VALUE_AB, version, 0, EvaluationValueModel.PUBLISHED)
+    result = dataclasses.replace(zero(ValueAbResult), published_value_version=published_value_version)
+    write_json_atomically(directory / "comparison.json", result)
+
+
+def test_value_abs_pool_with_the_other_runs_of_the_same_published_value_model(tmp_path: Path) -> None:
+    paths = GrpoLoopPaths(tmp_path, tmp_path, tmp_path, "loop")
+    for version, published_value_version in ((2, 1), (3, 2), (4, 2), (5, 2)):
+        write_value_ab(paths, version, published_value_version)
+    assert len(earlier_value_ab_results(paths, 5, 2)) == 2
 
 
 async def test_the_value_ab_runs_the_reference_arm_before_the_published_one(tmp_path: Path) -> None:

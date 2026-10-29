@@ -191,23 +191,33 @@ def value_ab_result(
     published: Sequence[SearchResult],
     config: ValueAbConfig,
     value_versions: tuple[int, int],
+    earlier: Sequence[ValueAbResult] = (),
 ) -> ValueAbResult:
-    """Paired per problem; the exact McNemar test counts only the problems one arm solved."""
+    """Paired per problem; the exact McNemar tests count only the problems one arm solved, the one-sided ones over
+    this run and the `earlier` A/Bs of the same published value model."""
     comparison = compare_repeats(reference, published)
-    discordant = comparison.discordant
-    worse = binomial_upper_tail(comparison.only_first, discordant)
-    better = binomial_upper_tail(comparison.only_second, discordant)
+    run_worse = binomial_upper_tail(comparison.only_first, comparison.discordant)
+    run_better = binomial_upper_tail(comparison.only_second, comparison.discordant)
+    only_reference = comparison.only_first + sum(result.only_reference for result in earlier)
+    only_published = comparison.only_second + sum(result.only_published for result in earlier)
+    worse = binomial_upper_tail(only_reference, only_reference + only_published)
+    better = binomial_upper_tail(only_published, only_reference + only_published)
     return ValueAbResult(
         problems=comparison.problems,
         reference_solved=comparison.first_solved,
         published_solved=comparison.second_solved,
         only_reference=comparison.only_first,
         only_published=comparison.only_second,
-        p_value=min(1.0, 2 * min(worse, better)),
+        p_value=min(1.0, 2 * min(run_worse, run_better)),
         worse_p_value=worse,
-        passed=comparison.difference >= config.min_solved_difference and worse >= config.significance,
+        passed=better < config.significance,
         reference_value_version=value_versions[0],
         published_value_version=value_versions[1],
+        better_p_value=better,
+        worse=worse < config.significance,
+        pooled_runs=1 + len(earlier),
+        pooled_only_reference=only_reference,
+        pooled_only_published=only_published,
     )
 
 

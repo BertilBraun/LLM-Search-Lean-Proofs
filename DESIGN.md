@@ -755,9 +755,11 @@ foundation of everything above, so it comes first.
     probe's budget twice, with v0 and with the published value model, paired per problem, exact McNemar test.
     Compared with v0, not with the previous model: v0 is the fixed reference, and successive small steps would each
     be below the A/B's noise.
-  - **μ = 0.15 switches on** (and stays on) only after a model passed (a) and the latest (b) found the published
-    model at least 1 problem ahead of v0 and not worse at p < 0.05 (one-sided). Before that every phase trains with
-    μ = 0.
+  - **μ = 0.15 switches on** only after a model passed (a) and (b) found the published model better than v0 at
+    p < 0.05 (one-sided exact McNemar, pooled over the A/Bs of the same published model; 2026-10-29, after review E:
+    the earlier "≥ 1 problem ahead and not worse" passed identical arms ~48% of the time, this rule ~4%). Before that
+    every phase trains with μ = 0. When (b) finds the published model worse than v0 at p < 0.05, v0's value model is
+    published again and μ is off.
 - **Evaluations with a fixed value model** (decided 2026-10-29): the probe and miniF2F always search with v0 as the
   value model (the value servers swap to v0's kept merged weights and back), so they measure the policy alone; the
   held-out states use no value model.
@@ -839,7 +841,7 @@ foundation of everything above, so it comes first.
 5. **Value gate benchmark**: the gate set searched once by the starting policy without a value model (~1–2 h; wider
    if the owner picks option (i) in "Benchmark and gate").
 6. **GRPO loop** with μ = 0 (proof graph only); the value model retrains in the loop every 4 phases, and μ = 0.15
-   switches on only after gate (a) and the A/B (b) passed.
+   switches on only after gate (a) passed and the A/B (b) found the published model better than v0.
 7. Write-up on the homepage: the ladder, the RL curves, what the dense signal adds.
 
 ### Dashboard
