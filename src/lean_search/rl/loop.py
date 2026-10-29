@@ -1,8 +1,9 @@
 """The search-tree GRPO loop: search curriculum statements, label the finished trees, pause, train, publish, resume.
 
 `concurrency` workers search statements from the statement source with the published models; every finished tree is
-written to the tree store under the phase collecting at that moment. A phase starts once enough sampling produced
-enough solved trees and runs these stages, each recorded in loop_state.json so a restarted loop finishes the stage a
+written to the tree store under the phase collecting at that moment, with its summary (`tree_summary.py`: the groups
+the policy would train on, budget and health signals). A phase starts once enough sampling produced enough trainable
+groups and runs these stages, each recorded in loop_state.json so a restarted loop finishes the stage a
 crash interrupted (searches cut off by the crash are lost and their statements fed again where the source allows):
 
 pause       every policy and value request waits at the gate; searches keep their trees and REPL states in place
@@ -17,7 +18,8 @@ evaluating  the fixed targets that are due (by loop hours, at the start, or requ
             the searches stay paused, after the paused searches' REPL processes stopped to free host memory; the value
             servers serve the evaluations' fixed value model meanwhile; the value A/B search (both arms) turns μ on
             once the published value model, which passed the gate, is better than the reference, and publishes the
-            reference again (μ off) once it is worse
+            reference again (μ off) once it is worse; then the phase's budget signals and health checks
+            (`health_checks.py`), whose hard stop ends the loop here
 resume      the searches continue with the new weights
 
 The boundaries to the outside (the searches with Lean and vLLM, the training job, the vLLM servers, the evaluation
@@ -62,8 +64,21 @@ from lean_search.monitoring.families import (
 )
 from lean_search.monitoring.store import MetricsWriter
 from lean_search.policy.server_control import PhaseSeconds
-from lean_search.rl.evaluation import EvaluationKind, EvaluationSummary
+from lean_search.rl.advantages import CreditMode
+from lean_search.rl.budget_signals import budget_phase_record
+from lean_search.rl.evaluation import EvaluationKind, EvaluationSummary, read_summary
 from lean_search.rl.fixed_targets import target_config
+from lean_search.rl.health_checks import (
+    append_health,
+    health_stop_text,
+    held_out_rates,
+    last_good_version,
+    measurements,
+    phase_health,
+    read_health_history,
+    read_health_stop,
+    write_health_stop,
+)
 from lean_search.rl.loop_config import EvaluationTarget, EvaluationValueModel, GrpoLoopConfig
 from lean_search.rl.phase_metrics import search_phase_record
 from lean_search.rl.retention import kept_adapters, prune_phase_adapters
@@ -77,6 +92,7 @@ from lean_search.rl.training_phase import (
     publish_phase,
 )
 from lean_search.rl.tree_store import TreeStore
+from lean_search.rl.tree_summary import tree_summary
 from lean_search.search import CompletedSearch, tree_record
 from lean_search.search.records import from_json_object, to_json
 
@@ -266,6 +282,17 @@ class GrpoLoopPaths:
     @property
     def log(self) -> Path:
         return self.directory / "loop.log"
+
+    @property
+    def health(self) -> Path:
+        """Each phase's health check (`PhaseHealth`), read back for the first phases' reference and the last good
+        version."""
+        return self.directory / "health.jsonl"
+
+    @property
+    def health_stop(self) -> Path:
+        """Present after the health check's hard stop; the loop refuses to start until it is cleared."""
+        return self.directory / "health_stop.json"
 
     @property
     def children(self) -> Path:
@@ -498,7 +525,11 @@ class GrpoLoop:
         # The merged value weights the value servers serve: the published version's, or an evaluation's fixed ones.
         self.served_value_weights = ""
         self.phase_template = phase_template
-        from_json_object(TrainingPhaseConfig, tomllib.loads(phase_template))
+        template = from_json_object(TrainingPhaseConfig, tomllib.loads(phase_template))
+        # What the phase trigger counts trainable groups with.
+        self.reward_config = template.reward
+        self.credit = CreditMode.PER_TACTIC if template.policy is None else template.policy.data.credit
+        self.stop: asyncio.Event | None = None
         self.update_context()
 
     def save_progress(self, **changes: object) -> None:
@@ -521,12 +552,16 @@ class GrpoLoop:
     def phase_due(self) -> bool:
         training = self.config.training
         minutes = self.sampling_seconds() / 60
-        solved = sum(entry.proved for entry in self.store.phase_entries(self.progress.phase))
+        groups = self.trainable_groups(self.progress.phase)
         if minutes >= training.max_sampling_minutes:
-            return solved >= 1
-        return minutes >= training.min_sampling_minutes and solved >= training.min_solved_trees
+            return groups >= 1
+        return minutes >= training.min_sampling_minutes and groups >= training.min_trainable_groups
+
+    def trainable_groups(self, phase: int) -> int:
+        return sum(entry.summary.trainable_groups for entry in self.store.phase_entries(phase))
 
     async def run(self, stop: asyncio.Event) -> None:
+        self.stop = stop
         session = asyncio.create_task(self.stopping_on_failure(self.session(stop), stop))
         try:
             await stop.wait()
@@ -547,6 +582,9 @@ class GrpoLoop:
         earlier = self.trainer.earlier_jobs()
         if earlier is not None:
             raise RuntimeError(earlier)
+        health_stop = read_health_stop(self.paths.health_stop)
+        if health_stop is not None:
+            raise RuntimeError(health_stop_text(health_stop))
         await self.servers.check()
         current = read_current(self.paths.models)
         await self.servers.serve(current)
@@ -556,6 +594,8 @@ class GrpoLoop:
             self.log(f"Finishing phase {self.progress.phase} from {self.progress.stage}")
             self.collecting = self.progress.phase + 1
             await self.finish_phase()
+            if stop.is_set():
+                return
         await self.run_evaluations(self.due_evaluations(at_start=True), self.progress.phase - 1, at_start=True)
         self.sampling_since = self.clock()
         coroutines: list[Coroutine[None, None, None]] = [
@@ -600,8 +640,11 @@ class GrpoLoop:
                 # The statement searched: the renamed one when the loop renames hypotheses.
                 record = tree_record(completed.tree, completed.tree.root.state.statement, result)
                 version = read_current(self.paths.models).version
+                summary = await asyncio.to_thread(
+                    tree_summary, record, self.reward_config, self.credit, self.config.sampling.max_expansions
+                )
                 async with self.store_lock:
-                    await asyncio.to_thread(self.store.add, record, self.collecting, version, fed.difficulty)
+                    await asyncio.to_thread(self.store.add, record, self.collecting, version, fed.difficulty, summary)
             self.statements.record_outcome(fed.name, result.proved)
             self.server_failures.pop(fed.name, None)
             self.session_trees += 1
@@ -712,8 +755,9 @@ class GrpoLoop:
             # A tree being written when the phase began still lands in this phase's directory.
             entries = self.store.phase_entries(phase)
         self.log(
-            f"Phase {phase}: {len(entries)} trees ({sum(entry.proved for entry in entries)} solved) after "
-            f"{sampling / 60:.1f} min of sampling; {self.searches_running} searches paused"
+            f"Phase {phase}: {len(entries)} trees ({sum(entry.proved for entry in entries)} solved, "
+            f"{self.trainable_groups(phase)} trainable groups) after {sampling / 60:.1f} min of sampling; "
+            f"{self.searches_running} searches paused"
         )
         self.save_progress(
             stage=PhaseStage.TRAINING, sampling_seconds=sampling, pause=PauseSegments(drain_seconds=drain_seconds)
@@ -755,7 +799,12 @@ class GrpoLoop:
         started = self.clock()
         kinds = self.due_evaluations(at_start=False)
         await self.run_evaluations(kinds, phase)
+        hard_stop = await asyncio.to_thread(self.check_health, phase, kinds)
         self.close_phase(phase, kinds, self.clock() - started)
+        if hard_stop:
+            assert self.stop is not None
+            self.stop.set()
+            return
         if self.paused:
             self.searcher.resume()
             self.paused = False
@@ -772,6 +821,40 @@ class GrpoLoop:
 
     async def log_host_memory(self, moment: str) -> None:
         self.log(f"Host memory {moment}: {await asyncio.to_thread(self.host_memory)}")
+
+    def check_health(self, phase: int, kinds: Sequence[EvaluationKind]) -> bool:
+        """Writes the phase's budget and health lines and logs the alerts; True when the loop must stop (then
+        health_stop.json names the last good version)."""
+        health = self.config.health
+        budget = budget_phase_record(self.store.entries, phase, health.late_solve_phases, health.max_late_solve_share)
+        self.writer.write(budget)
+        current = read_current(self.paths.models)
+        outcome_path = self.paths.phase_checkpoints(phase) / PHASE_OUTCOME_FILE
+        outcome = read_phase_outcome(outcome_path) if outcome_path.exists() else None
+        held_out = None
+        if EvaluationKind.HELD_OUT_STATES in kinds:
+            held_out = held_out_rates(self.held_out_summary(current.version))
+        version_zero_path = self.held_out_summary_path(0)
+        version_zero = held_out_rates(read_summary(version_zero_path)) if version_zero_path.exists() else None
+        measured = measurements(outcome, self.store.phase_entries(phase), held_out)
+        history = read_health_history(self.paths.health)
+        record = phase_health(phase, current.version, measured, history, version_zero, budget, health)
+        append_health(self.paths.health, record)
+        self.writer.write(record)
+        for alert in record.alerts:
+            self.log(f"Health of phase {phase} ({alert.severity}, {alert.check}): {alert.detail}")
+        if not record.alerts:
+            self.log(f"Health of phase {phase}: no alerts")
+        if not record.hard_stop:
+            return False
+        self.log(health_stop_text(write_health_stop(self.paths.health_stop, record)))
+        return True
+
+    def held_out_summary_path(self, version: int) -> Path:
+        return self.paths.evaluation_directory(EvaluationKind.HELD_OUT_STATES, version) / "summary.json"
+
+    def held_out_summary(self, version: int) -> EvaluationSummary:
+        return read_summary(self.held_out_summary_path(version))
 
     def value_window(self, phase: int) -> tuple[Path, ...]:
         """The tree directories the value model trains on when it is due this phase; none when it is not."""
@@ -858,7 +941,9 @@ class GrpoLoop:
         if not retention.adapter_versions:
             return
         versions = read_versions(self.paths.models)
-        kept = kept_adapters(versions, retention.adapter_versions, [self.progress.value_adapter])
+        # The health check's rollback target stays, however old.
+        good = versions[last_good_version(read_health_history(self.paths.health))]
+        kept = kept_adapters(versions, retention.adapter_versions, [self.progress.value_adapter, good.policy_adapter])
         phases = (self.paths.phase_checkpoints(number) for number in range(1, self.progress.phase + 1))
         removed = prune_phase_adapters(phases, kept)
         if removed:

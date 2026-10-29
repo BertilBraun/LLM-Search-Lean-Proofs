@@ -5,7 +5,15 @@ import pytest
 from metric_records import curriculum_phase, grpo_phase, loop_status, search_phase, system_usage, value_result
 
 from lean_search.monitoring.alerts import AlertThresholds, Severity, run_alerts
-from lean_search.monitoring.families import FixedTargets
+from lean_search.monitoring.families import (
+    FixedTargets,
+    HealthAlert,
+    HealthCheck,
+    HealthMeasurements,
+    HealthSeverity,
+    HealthThresholds,
+    PhaseHealth,
+)
 from lean_search.monitoring.store import MetricsWriter, RunReader
 
 NOW = 100_000.0
@@ -50,8 +58,16 @@ def high_kl(writer: MetricsWriter) -> None:
     writer.write(grpo_phase(kl=0.2), record_time=NOW)
 
 
-def high_clip_fraction(writer: MetricsWriter) -> None:
-    writer.write(grpo_phase(clip_fraction=0.5), record_time=NOW)
+def phase_health(*alerts: HealthAlert) -> PhaseHealth:
+    return PhaseHealth(1, 1, HealthMeasurements(), HealthThresholds(0.02, 0.1), alerts)
+
+
+def clip_alert() -> HealthAlert:
+    return HealthAlert(HealthCheck.CLIP_FRACTION, HealthSeverity.WARNING, "Clip fraction high", "0.3 > 0.1")
+
+
+def loop_health_alert(writer: MetricsWriter) -> None:
+    writer.write(phase_health(clip_alert()), record_time=NOW)
 
 
 def math_below_minimum(writer: MetricsWriter) -> None:
@@ -99,7 +115,7 @@ def failing_servers(writer: MetricsWriter) -> None:
         (high_no_progress, "No-progress rising"),
         (repetition_loops, "Repetition loops"),
         (high_kl, "KL high"),
-        (high_clip_fraction, "Clip fraction high"),
+        (loop_health_alert, "Clip fraction high"),
         (math_below_minimum, "MATH-500 dropping"),
         (math_drop, "MATH-500 dropping"),
         (few_mixed_groups, "Few mixed groups"),
@@ -141,8 +157,21 @@ def passing_gate(writer: MetricsWriter) -> None:
     write_all(writer, [value_result(gate_passed=False)] * 2 + [value_result(gate_passed=True)])
 
 
+def healthy_phase_after_an_alert(writer: MetricsWriter) -> None:
+    write_all(writer, [phase_health(clip_alert()), phase_health()])
+
+
 @pytest.mark.parametrize(
-    "scenario", [steady_search, calm_grpo, retained_math, busy_gpus, balanced_curriculum, passing_gate]
+    "scenario",
+    [
+        steady_search,
+        calm_grpo,
+        retained_math,
+        busy_gpus,
+        balanced_curriculum,
+        passing_gate,
+        healthy_phase_after_an_alert,
+    ],
 )
 def test_healthy_run_has_no_alerts(tmp_path: Path, scenario: Callable[[MetricsWriter], None]) -> None:
     writer = MetricsWriter(tmp_path)
@@ -154,6 +183,13 @@ def test_healthy_run_has_no_alerts(tmp_path: Path, scenario: Callable[[MetricsWr
 def test_missing_status_is_reported(tmp_path: Path) -> None:
     MetricsWriter(tmp_path)
     assert alert_titles(tmp_path) == {"No status yet"}
+
+
+def test_the_loops_hard_stop_is_critical(tmp_path: Path) -> None:
+    stop = HealthAlert(HealthCheck.HELD_OUT_VALID_LEAN, HealthSeverity.STOP, "Held-out valid Lean collapsed", "")
+    MetricsWriter(tmp_path).write(phase_health(stop), record_time=NOW)
+    alerts = run_alerts(RunReader(tmp_path), THRESHOLDS, NOW)
+    assert [alert.severity for alert in alerts if alert.page == "training"] == [Severity.CRITICAL]
 
 
 def test_critical_alerts_come_first(tmp_path: Path) -> None:

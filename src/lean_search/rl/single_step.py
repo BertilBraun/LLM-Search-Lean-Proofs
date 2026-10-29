@@ -85,6 +85,8 @@ class SampleSuccess:
     states: int
     samples: int
     successes: int
+    # Samples whose block ran completely in Lean, wherever it led.
+    valid: int = 0
 
     @property
     def rate(self) -> float:
@@ -161,10 +163,11 @@ def single_step_groups(
 
 
 def sample_success(record: TreeRecord, reference_keys: frozenset[GoalKey]) -> SampleSuccess:
-    """The root's policy samples whose block ran completely and ended closed or on a reference state."""
+    """The root's policy samples whose block ran completely (valid) and ended closed or on a reference state."""
     labels = label_graph(record)
     samples = 0
     successes = 0
+    valid = 0
     for edge in labels.edges:
         if edge.parent_id != 0 or edge.source != StepSource.POLICY:
             continue
@@ -174,12 +177,13 @@ def sample_success(record: TreeRecord, reference_keys: frozenset[GoalKey]) -> Sa
         executed = record.edges[edge.executed_edge_id]
         if executed.failure is not None or executed.outcome == EdgeOutcome.REJECTED or executed.target_id is None:
             continue
+        valid += edge.sample_count
         target = record.nodes[executed.target_id]
         goals = executed.tactic_goals[-1] if executed.tactic_goals else target.goals
         proved = not target.goals and labels.node_classes[target.node_id] == NodeClass.PROOF_GRAPH
         if proved or (goals and goal_key(goals) in reference_keys):
             successes += edge.sample_count
-    return SampleSuccess(1, samples, successes)
+    return SampleSuccess(1, samples, successes, valid)
 
 
 def total_success(successes: Sequence[SampleSuccess]) -> SampleSuccess:
@@ -187,6 +191,7 @@ def total_success(successes: Sequence[SampleSuccess]) -> SampleSuccess:
         sum(success.states for success in successes),
         sum(success.samples for success in successes),
         sum(success.successes for success in successes),
+        sum(success.valid for success in successes),
     )
 
 

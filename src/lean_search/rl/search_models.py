@@ -9,7 +9,7 @@ from lean_search.expert_iteration.loop_config import ServingConfig
 from lean_search.expert_iteration.loop_search import GatedExpander, GatedValueEstimator, PauseGate
 from lean_search.expert_iteration.toml_text import toml_text
 from lean_search.policy.expander import PolicyStatistics, open_policy_expander
-from lean_search.rl.loop_config import EvaluationTarget
+from lean_search.rl.loop_config import EvaluationTarget, SamplingConfig
 from lean_search.search import (
     Expander,
     PriorityFunction,
@@ -48,6 +48,13 @@ def served_run_config(template: RunConfig, serving: ServingConfig) -> RunConfig:
         else template.value
     )
     return dataclasses.replace(template, policy=policy, value=value)
+
+
+def training_run_config(config: RunConfig, sampling: SamplingConfig) -> RunConfig:
+    """The loop's own searches: the loop's expansion budget, one REPL per concurrent search."""
+    search = dataclasses.replace(config.search, max_expansions=sampling.max_expansions)
+    lean = dataclasses.replace(config.lean, pool_size=sampling.concurrency, concurrency=sampling.concurrency)
+    return dataclasses.replace(config, search=search, lean=lean)
 
 
 def evaluation_run_config(config: RunConfig, target: EvaluationTarget) -> RunConfig:

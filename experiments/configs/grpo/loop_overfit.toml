@@ -73,6 +73,7 @@ max_num_seqs = 96
 [sampling]
 # n = 8, harvesting and ε on, heartbeat limits, flattening; server URLs come from [serving].
 search_config = "experiments/configs/grpo/search/visible_student_v2.toml"
+max_expansions = 32
 # One REPL per search; most searches wait on the GPUs. Tune by the first hour (Lean cores and memory on the
 # dashboard's system page; a REPL holds 0.25-2 GiB of private memory).
 concurrency = 112
@@ -84,7 +85,7 @@ gpus = [0, 1, 2, 3]
 # Each statement is searched about once per phase (300 statements, 112 concurrent searches).
 min_sampling_minutes = 10.0
 max_sampling_minutes = 20.0
-min_solved_trees = 30
+min_trainable_groups = 100
 check_seconds = 30.0
 value_every_phases = 0
 value_share_after_gate = 0.15

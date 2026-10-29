@@ -182,7 +182,7 @@ function chartSeries(chart) {
   const main = series(state.run, chart.family, chart.allTime);
   if (!main) return [];
   const specs = chart.series.flatMap((spec) => expandedSpecs(main, spec));
-  const result = specs.map((spec, slot) => ({ label: spec.label, slot, points: points(main, chart.x, evaluate(main, spec)) }));
+  const result = specs.map((spec, slot) => ({ label: spec.label, slot, dashed: Boolean(spec.dashed), points: points(main, chart.x, evaluate(main, spec)) }));
   if (chart.compare) {
     for (const run of otherRuns()) {
       const other = series(run, chart.family, chart.allTime);
