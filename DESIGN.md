@@ -417,11 +417,14 @@ fixed part is paid per phase), or a trainer that stays alive between phases (not
 recompilation, ~1–3 min per phase, at ~54 GB of host RAM for four ranks).
 
 **Loop systems** (decided 2026-10-29, after reviews C and D): training and evaluation jobs run in their own process
-groups with PID records; stopping the loop stops the job, and a restarted loop refuses to start a job while a
-recorded one still runs. A search that ends on a policy or value server failure says nothing about its statement,
-which is fed again (up to 3 retries) and counted. Host memory has a budget (loop concurrency × p90 REPL memory +
-evaluation concurrency × p90 + vLLM + merge ≤ 0.85 × RAM; `rl/README.md`, "Host memory"): the paused searches' REPL
-processes stop before evaluations (they replay their states on resume), and evaluations run at concurrency 64. The
+groups with PID records and a marker in every job process's environment (torchrun's workers leave the group);
+stopping the loop stops the job and every marked process, and a restarted loop refuses to start, before waking any
+server, while a recorded job still runs. A search that ends on a policy or value server failure says nothing about
+its statement, which is fed again (up to 3 retries) and counted; when half of the last 20 searches failed on a server,
+the searches pause, dead servers are restarted, and the loop stops if one stays down. Host memory has a budget (loop
+concurrency × p90 REPL memory + evaluation concurrency × p90 + vLLM + merge + training ranks ≤ 0.85 × RAM;
+`rl/README.md`, "Host memory"): the paused searches' REPL processes stop before training and before evaluations
+(they replay their states on resume), and evaluations run at concurrency 64. The
 policy's NLL replay is the rewritten, flattened SFT data of the starting arm. Groups and texts are matched per tree
 (two searches of one statement in a phase used to swap texts and advantages).
 
@@ -769,9 +772,11 @@ foundation of everything above, so it comes first.
     probe's budget twice, with v0 and with the published value model, paired per problem, exact McNemar test.
     Compared with v0, not with the previous model: v0 is the fixed reference, and successive small steps would each
     be below the A/B's noise.
-  - **μ = 0.15 switches on** (and stays on) only after a model passed (a) and the latest (b) found the published
-    model at least 1 problem ahead of v0 and not worse at p < 0.05 (one-sided). Before that every phase trains with
-    μ = 0.
+  - **μ = 0.15 switches on** only after a model passed (a) and (b) found the published model better than v0 at
+    p < 0.05 (one-sided exact McNemar, pooled over the A/Bs of the same published model; 2026-10-29, after review E:
+    the earlier "≥ 1 problem ahead and not worse" passed identical arms ~48% of the time, this rule ~4%). Before that
+    every phase trains with μ = 0. When (b) finds the published model worse than v0 at p < 0.05, v0's value model is
+    published again and μ is off.
 - **Evaluations with a fixed value model** (decided 2026-10-29): the probe and miniF2F always search with v0 as the
   value model (the value servers swap to v0's kept merged weights and back), so they measure the policy alone; the
   held-out states use no value model.
@@ -799,7 +804,7 @@ foundation of everything above, so it comes first.
   (independent runs) to measure the run-to-run noise later versions are judged against. The value model is fixed
   to v0 ("Benchmark and gate").
 - **miniF2F-valid** at the full budget (64 expansions, n = 8; ~1–1.5 h) at the start, at milestones and at the end
-  (each on request, the baseline before phase 1 included; not on a clock), also with v0 as the value model.
+  (the baseline before phase 1 automatically, the others on request; not on a clock), also with v0 as the value model.
 - Per-sample success on the 512 held-out states with every probe (no value model). MATH-500 retention (visible and
   thinking) at milestones, run separately (`reasoning_retention.py`; not in the loop). Curves over training, not
   just a final score. Baselines are re-measured on the new node with the new settings (n = 8, heartbeat limits,
@@ -832,10 +837,14 @@ foundation of everything above, so it comes first.
    teacher; the loop systems (process groups, server-failure re-queue, host memory budget, probe wall cap and
    repeated baseline, original names for value in the naming A/B); all four GPUs serving and training data-parallel
    with timed pause segments; the value model in the loop (recorded bins, windowed retraining, the bootstrap gate,
-   the A/B against v0, v0 for evaluations, value diagnostics). Details: `src/lean_search/rl/README.md`. Nothing ran
+   the A/B against v0, v0 for evaluations, value diagnostics). After reviews E and F: the curriculum judged on the
+   statements fed first, the one-sided pooled A/B with a revert to v0, the server check and restart, torchrun's
+   workers stopped with their job, the REPLs stopped before training, adapter retention and a disk metric, and the
+   node check and smoke cycle (`grpo/loop_smoke.toml`). Details: `src/lean_search/rl/README.md`. Nothing ran
    on a GPU or a vLLM server yet: the first-hour checks of `deployment/README.md` come first.
-2. **New node**: rebuild, smoke tests, the heartbeat replay test, baselines with the new settings (student v2,
-   value v0). First-hour checks (`deployment/README.md`, "GRPO loop"): `grpo_loop.sh check` (recorded tokens and
+2. **New node**: the node check (disk, `/dev/shm`, a 4-rank NCCL all-reduce), rebuild, smoke tests, the heartbeat
+   replay test, the loop's smoke cycle (one hour, every stage and evaluation at a tiny size), baselines with the new
+   settings (student v2, value v0). First-hour checks (`deployment/README.md`, "GRPO loop"): `grpo_loop.sh check` (recorded tokens and
    log-probabilities, usable blocks); **serving precision**: fp16-merged, bf16-merged and unmerged LoRA serving
    against an fp32 reference (log-probabilities on a few hundred samples, plus throughput); the probe's wall time,
    its wall-clock stops (should be zero) and the two version-0 runs for the noise; host memory while sampling, while
@@ -853,7 +862,7 @@ foundation of everything above, so it comes first.
 5. **Value gate benchmark**: the gate set searched once by the starting policy without a value model (~1–2 h; wider
    if the owner picks option (i) in "Benchmark and gate").
 6. **GRPO loop** with μ = 0 (proof graph only); the value model retrains in the loop every 4 phases, and μ = 0.15
-   switches on only after gate (a) and the A/B (b) passed.
+   switches on only after gate (a) passed and the A/B (b) found the published model better than v0.
 7. Write-up on the homepage: the ladder, the RL curves, what the dense signal adds.
 
 ### Dashboard

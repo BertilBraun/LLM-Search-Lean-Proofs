@@ -6,16 +6,17 @@ where h(root) is the current value model's estimate, or the proof's tactic count
 known, and scored, for verified statements). Statements whose known proof compiled here are verified; the others
 (most of the pool: verification is slow) are fed as well and certified or taken out when the verifier reaches them,
 and every outcome is counted by kind so their solve rates can be compared. The scheduler takes statements at random
-from the band [low, low + width]. Outcomes of statements fed since the band last moved are counted; once `window` of
-them are in, the band moves up by `step` when at least `raise_solve_rate` were solved (by `fast_band_step` at
-`fast_raise_solve_rate`) and down when fewer than `lower_solve_rate`. When the band holds no statement it moves to the
+from the band [low, low + width]. The first `window` statements fed since the band last moved are its cohort; once
+every one of them finished (solved searches finish much sooner than unsolved ones, so the first outcomes to arrive
+would overstate the solve rate), the band moves up by `step` when at least `raise_solve_rate` were solved (by
+`fast_band_step` at `fast_raise_solve_rate`) and down when fewer than `lower_solve_rate`. A cohort statement that ends
+without an outcome (abandoned) leaves room for the next one fed. When the band holds no statement it moves to the
 nearest one. Statements the automation tactics alone close never enter.
 """
 
 import bisect
 import random
 import statistics
-from collections import deque
 from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass
 
@@ -71,6 +72,7 @@ class CurriculumState:
     band_low: float | None
     # Increases with every band move; outcomes of statements fed earlier do not count.
     generation: int
+    # The finished cohort's outcomes; empty while any cohort statement still ran, so a restart starts a new cohort.
     outcomes: tuple[bool, ...]
 
 
@@ -119,10 +121,11 @@ class Curriculum:
         self.ordered: list[tuple[float, str]] = []
         self.band_low: float | None = None
         self.generation = 0
-        self.fed: dict[str, int] = {}
         self.fed_verified: dict[str, bool] = {}
         self.kind_counts = {True: [0, 0, 0], False: [0, 0, 0]}
-        self.outcomes: deque[bool] = deque(maxlen=config.window)
+        # The band's cohort: statements still running, and the outcomes of those that finished.
+        self.cohort_running: set[str] = set()
+        self.outcomes: list[bool] = []
         self.random = random.Random(config.seed)
         # Band moves since the caller last took them, for its log.
         self.messages: list[str] = []
@@ -199,20 +202,22 @@ class Curriculum:
             start, end = self._band_range()
         _, name = ordered.pop(self.random.randrange(start, end))
         self.available.discard(name)
-        self.fed[name] = self.generation
+        if len(self.cohort_running) + len(self.outcomes) < self.config.window:
+            self.cohort_running.add(name)
         verified = self.statements[name].verified
         self.fed_verified[name] = verified
         self.kind_counts[verified][0] += 1
         return self.statements[name].statement
 
     def record_outcome(self, name: str, solved: bool) -> None:
-        """Counts the outcome of a statement fed from the current band and moves the band when the rate says so."""
+        """Counts the outcome of a cohort statement and moves the band once the whole cohort finished."""
         verified = self.fed_verified.pop(name, None)
         if verified is not None:
             self.kind_counts[verified][1] += 1
             self.kind_counts[verified][2] += solved
-        if self.fed.pop(name, None) != self.generation:
+        if name not in self.cohort_running:
             return
+        self.cohort_running.discard(name)
         self.outcomes.append(solved)
         if len(self.outcomes) < self.config.window or self.band_low is None:
             return
@@ -224,6 +229,13 @@ class Curriculum:
         elif rate < self.config.lower_solve_rate:
             floor = self.ordered[0][0] if self.ordered else self.band_low
             self._move(max(floor, self.band_low - self.config.band_step), f"lowered (solve rate {rate:.0%})")
+        else:
+            self._start_cohort()
+
+    def abandon(self, name: str) -> None:
+        """A statement that ended without an outcome; a cohort statement's place goes to the next one fed."""
+        self.fed_verified.pop(name, None)
+        self.cohort_running.discard(name)
 
     def take_messages(self) -> list[str]:
         messages, self.messages = self.messages, []
@@ -251,12 +263,14 @@ class Curriculum:
                 self._make_available(name)
 
     def state(self) -> CurriculumState:
-        return CurriculumState(self.band_low, self.generation, tuple(self.outcomes))
+        # Searches still running are lost in a restart; keeping their finished cohort mates would bias it to the fast.
+        outcomes = () if self.cohort_running else tuple(self.outcomes)
+        return CurriculumState(self.band_low, self.generation, outcomes)
 
     def restore(self, state: CurriculumState) -> None:
         self.band_low = state.band_low
         self.generation = state.generation
-        self.outcomes.extend(state.outcomes)
+        self.outcomes = list(state.outcomes)
 
     def counts(self) -> CurriculumCounts:
         band = self.band()
@@ -308,5 +322,9 @@ class Curriculum:
         previous = self.band_low
         self.band_low = band_low
         self.generation += 1
-        self.outcomes.clear()
+        self._start_cohort()
         self.messages.append(f"Curriculum band {reason}: low {previous} -> {band_low:.2f}")
+
+    def _start_cohort(self) -> None:
+        self.cohort_running.clear()
+        self.outcomes.clear()

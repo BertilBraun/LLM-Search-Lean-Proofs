@@ -1,7 +1,8 @@
 """Set up, run and inspect the search-tree GRPO loop (src/lean_search/rl/loop.py; deployment/README.md, "GRPO loop").
 
     python experiments/grpo_loop.py --config experiments/configs/grpo/loop.toml init
-    python experiments/grpo_loop.py --config ... serve-commands      # start every vLLM server on the current version
+    python experiments/grpo_loop.py --config ... start-servers       # start the servers not answering, GPUs in parallel
+    python experiments/grpo_loop.py --config ... serve-commands      # print every server's start command
     python experiments/grpo_loop.py --config ... check-servers       # one live request per policy server
     python experiments/grpo_loop.py --config ... run                 # the loop; restart it the same way after a crash
     python experiments/grpo_loop.py --config ... status
@@ -44,6 +45,7 @@ from lean_search.rl.loop_services import (
     SubprocessTrainer,
     VllmServers,
     check_policy_server,
+    host_memory_text,
     open_tree_searcher,
     serve_commands,
 )
@@ -64,6 +66,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--config", type=Path, required=True)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("init")
+    commands.add_parser("start-servers")
     commands.add_parser("serve-commands")
     commands.add_parser("check-servers")
     commands.add_parser("run")
@@ -132,6 +135,13 @@ def init(config: GrpoLoopConfig, config_text: str, paths: GrpoLoopPaths) -> None
         print(command)
 
 
+async def start_servers(config: GrpoLoopConfig, paths: GrpoLoopPaths) -> None:
+    servers = VllmServers(config.serving, config.released_servers(), publisher(config, paths))
+    down = await servers.unhealthy()
+    print(f"Starting {down} on version {read_current(paths.models).version}; the others answer", flush=True)
+    await servers.restart(down, read_current(paths.models))
+
+
 async def check_servers(config: GrpoLoopConfig) -> None:
     policy = search_run_config(config).policy
     for server in config.serving.policy_servers:
@@ -159,7 +169,18 @@ async def run(config: GrpoLoopConfig, paths: GrpoLoopPaths) -> None:
     async with open_tree_searcher(search_run_config(config), statements.headers(), renamings) as searcher:
         phase_template = (REPOSITORY_DIRECTORY / config.training.phase_config).read_text(encoding="utf-8")
         loop = GrpoLoop(
-            config, paths, statements, searcher, trainer, servers, merged, evaluations, writer, log, phase_template
+            config,
+            paths,
+            statements,
+            searcher,
+            trainer,
+            servers,
+            merged,
+            evaluations,
+            writer,
+            log,
+            phase_template,
+            host_memory=host_memory_text,
         )
         await loop.run(stop)
 
@@ -206,6 +227,8 @@ def main() -> None:
     match arguments.command:
         case "init":
             init(config, config_text, paths)
+        case "start-servers":
+            asyncio.run(start_servers(config, paths))
         case "serve-commands":
             for command in serve_commands(config, publisher(config, paths), read_current(paths.models)):
                 print(command)

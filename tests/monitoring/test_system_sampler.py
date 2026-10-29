@@ -7,6 +7,7 @@ from lean_search.monitoring.system_sampler import (
     CpuSnapshot,
     available_cores,
     cpu_usage,
+    fullest_disk,
     host_memory,
     memory_limit_bytes,
     percentile_90,
@@ -112,3 +113,8 @@ def test_available_memory_is_the_limit_less_the_cgroups_anonymous_memory(tmp_pat
 
 def test_percentile_90_of_ten_values_is_the_ninth() -> None:
     assert percentile_90(range(1, 11)) == 9
+
+
+def test_the_fullest_disk_reports_the_filesystem_of_its_path(tmp_path: Path) -> None:
+    disk = fullest_disk([tmp_path])
+    assert 0 < disk.free_bytes <= disk.total_bytes

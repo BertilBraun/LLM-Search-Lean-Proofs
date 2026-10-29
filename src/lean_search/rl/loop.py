@@ -6,16 +6,18 @@ enough solved trees and runs these stages, each recorded in loop_state.json so a
 crash interrupted (searches cut off by the crash are lost and their statements fed again where the source allows):
 
 pause       every policy and value request waits at the gate; searches keep their trees and REPL states in place
-training    the servers on the training GPUs sleep; the training job (grpo_phase.py, data-parallel over those GPUs)
-            labels the phase's trees, trains the policy (GRPO) and, every `value_every_phases`, the value model on the
-            window of recent phases' trees, gated on the held-out benchmark, and merges the new adapters on the GPUs;
-            meanwhile the loop labels the phase's trees for the search and curriculum metrics
+training    the paused searches' REPL processes stop to free host memory and the servers on the training GPUs sleep;
+            the training job (grpo_phase.py, data-parallel over those GPUs) labels the phase's trees, trains the
+            policy (GRPO) and, every `value_every_phases`, the value model on the window of recent phases' trees,
+            gated on the held-out benchmark, and merges the new adapters on the GPUs; meanwhile the loop labels the
+            phase's trees for the search and curriculum metrics
 publishing  version k + 1 (the new policy adapter, the new value adapter only if it passed the gate) is recorded
             with the job's merges; the sleeping servers wake with it, the others swap to it in place
 evaluating  the fixed targets that are due (by loop hours, at the start, or requested) run as separate jobs while
             the searches stay paused, after the paused searches' REPL processes stopped to free host memory; the value
             servers serve the evaluations' fixed value model meanwhile; the value A/B search (both arms) turns μ on
-            once the published value model, which passed the gate, beats the reference
+            once the published value model, which passed the gate, is better than the reference, and publishes the
+            reference again (μ off) once it is worse
 resume      the searches continue with the new weights
 
 The boundaries to the outside (the searches with Lean and vLLM, the training job, the vLLM servers, the evaluation
@@ -29,7 +31,8 @@ import json
 import time
 import tomllib
 import traceback
-from collections.abc import Callable, Coroutine
+from collections import deque
+from collections.abc import Callable, Coroutine, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -45,16 +48,25 @@ from lean_search.expert_iteration.serving import (
     Publisher,
     read_current,
     read_versions,
+    record_published,
     write_json_atomically,
 )
 from lean_search.expert_iteration.toml_text import toml_text
-from lean_search.monitoring.families import LoopState, LoopStatus, PauseSegments, PhaseTiming, ValueBenchmarkResult
+from lean_search.monitoring.families import (
+    LoopState,
+    LoopStatus,
+    PauseSegments,
+    PhaseTiming,
+    ValueAbResult,
+    ValueBenchmarkResult,
+)
 from lean_search.monitoring.store import MetricsWriter
 from lean_search.policy.server_control import PhaseSeconds
 from lean_search.rl.evaluation import EvaluationKind, EvaluationSummary
 from lean_search.rl.fixed_targets import target_config
 from lean_search.rl.loop_config import EvaluationTarget, EvaluationValueModel, GrpoLoopConfig
 from lean_search.rl.phase_metrics import search_phase_record
+from lean_search.rl.retention import kept_adapters, prune_phase_adapters
 from lean_search.rl.statement_sources import FedStatement, StatementSource
 from lean_search.rl.training_phase import (
     PhaseOutcome,
@@ -92,7 +104,7 @@ class LoopProgress:
     value_gate_passed: bool = False
     # The last value adapter trained, accepted or not: the next value training continues it ("": the published one).
     value_adapter: str = ""
-    # μ is on: a value model passed the gate and a value A/B search found the published one ahead of the reference.
+    # μ is on: a value model passed the gate and a value A/B search found the published one better than the reference.
     value_share_on: bool = False
     # The pause of `phase` so far, segment by segment.
     pause: PauseSegments = field(default_factory=PauseSegments)
@@ -162,6 +174,10 @@ class PhaseTrainer(Protocol):
         """Trains on the phase's trees; the outcome is also in output_directory/phase.json."""
         ...
 
+    def earlier_jobs(self) -> str | None:
+        """What still runs of the training and evaluation jobs of a loop that died without stopping them, if any."""
+        ...
+
 
 class ModelServers(Protocol):
     async def check(self) -> None:
@@ -179,6 +195,14 @@ class ModelServers(Protocol):
 
     async def serve_value(self, weights: str) -> None:
         """Every value server serves these merged value weights; the policy servers keep theirs."""
+        ...
+
+    async def unhealthy(self) -> list[str]:
+        """The names of the servers that do not answer their health check."""
+        ...
+
+    async def restart(self, names: Sequence[str], version: ModelVersion) -> None:
+        """Stops what is left of these servers and starts them on the version; raises when one does not come up."""
         ...
 
 
@@ -395,6 +419,32 @@ def published_time(version: ModelVersion) -> float:
     return datetime.datetime.fromisoformat(version.published_at).timestamp()
 
 
+def unmeasured_host_memory() -> str:
+    return "not measured"
+
+
+def earlier_value_ab_results(paths: GrpoLoopPaths, version: int, published_value_version: int) -> list[ValueAbResult]:
+    """The comparisons of the other value A/Bs of this published value model, pooled with this version's."""
+    own = paths.evaluation_directory(EvaluationKind.VALUE_AB, version, 0, EvaluationValueModel.PUBLISHED)
+    pattern = f"{EvaluationKind.VALUE_AB}_v*_{EvaluationValueModel.PUBLISHED}/comparison.json"
+    results = [
+        from_json_object(ValueAbResult, json.loads(path.read_text(encoding="utf-8")))
+        for path in sorted(paths.evaluations.glob(pattern))
+        if path.parent != own
+    ]
+    return [result for result in results if result.published_value_version == published_value_version]
+
+
+def publish_value_model(paths: LoopPaths, publisher: Publisher, value_adapter: str, trigger: str) -> ModelVersion:
+    """The next version: the current policy with this value adapter."""
+    current = read_current(paths)
+    version = ModelVersion(current.version + 1, current.policy_adapter, value_adapter, now(), trigger)
+    prepared = publisher.prepare(version)
+    record_published(paths, prepared)
+    publisher.prune(prepared)
+    return prepared
+
+
 class GrpoLoop:
     def __init__(
         self,
@@ -410,9 +460,12 @@ class GrpoLoop:
         log: Callable[[str], None],
         phase_template: str,
         clock: Callable[[], float] = time.monotonic,
+        host_memory: Callable[[], str] = unmeasured_host_memory,
     ) -> None:
-        """`phase_template`: the text of the training phase config (config.training.phase_config)."""
+        """`phase_template`: the text of the training phase config (config.training.phase_config); `host_memory`
+        describes the node's memory for the log at the pause's stage boundaries."""
         self.config = config
+        self.host_memory = host_memory
         self.paths = paths
         self.statements = statements
         self.searcher = searcher
@@ -437,6 +490,10 @@ class GrpoLoop:
         self.server_failures: dict[str, int] = {}
         self.session_server_failures = 0
         self.statements_given_up = 0
+        # The last searches to end, True for those a server failed.
+        self.recent_searches: deque[bool] = deque(maxlen=config.sampling.server_failure_window)
+        # One pause of the searches at a time: a phase's, or a check of the servers.
+        self.pause_lock = asyncio.Lock()
         self.failure: BaseException | None = None
         # The merged value weights the value servers serve: the published version's, or an evaluation's fixed ones.
         self.served_value_weights = ""
@@ -486,6 +543,10 @@ class GrpoLoop:
             raise RuntimeError("The loop stopped on a failure; a restart resumes it") from self.failure
 
     async def session(self, stop: asyncio.Event) -> None:
+        # Waking the servers into the GPU memory of an orphaned training job would fail the wake or the next training.
+        earlier = self.trainer.earlier_jobs()
+        if earlier is not None:
+            raise RuntimeError(earlier)
         await self.servers.check()
         current = read_current(self.paths.models)
         await self.servers.serve(current)
@@ -522,13 +583,18 @@ class GrpoLoop:
                 completed = await self.searcher.search(pool_problem(fed.statement))
             except httpx.HTTPError as error:
                 self.server_failed(fed, error)
-                await asyncio.sleep(self.config.sampling.server_failure_pause_seconds)
+                self.recent_searches.append(True)
+                if self.servers_failing():
+                    await self.recover_servers()
+                else:
+                    await asyncio.sleep(self.config.sampling.server_failure_pause_seconds)
                 continue
             except BaseException:
                 self.statements.abandon(fed.name)
                 raise
             finally:
                 self.searches_running -= 1
+            self.recent_searches.append(False)
             result = completed.result
             if completed.tree is not None:
                 # The statement searched: the renamed one when the loop renames hypotheses.
@@ -555,13 +621,54 @@ class GrpoLoop:
         self.statements.abandon(fed.name)
         self.log(f"{fed.name}: {type(error).__name__}: {error}; given up after {failures} failures")
 
+    def servers_failing(self) -> bool:
+        sampling = self.config.sampling
+        failed = sum(self.recent_searches)
+        return len(self.recent_searches) == sampling.server_failure_window and (
+            failed >= sampling.server_failure_share * sampling.server_failure_window
+        )
+
+    async def recover_servers(self) -> None:
+        """Pauses the searches and checks the servers: restarts the dead ones, and stops the loop if any stays down
+        (stopped is better than idle GPUs until someone looks)."""
+        async with self.pause_lock:
+            if not self.servers_failing():
+                return
+            self.log(
+                f"{sum(self.recent_searches)} of the last {len(self.recent_searches)} searches failed on a server: "
+                "pausing the searches to check the servers"
+            )
+            self.loop_state = LoopState.PAUSED
+            self.write_status()
+            await self.searcher.pause()
+            down = await self.servers.unhealthy()
+            if down and not self.config.sampling.restart_dead_servers:
+                raise RuntimeError(f"Servers not answering: {down}; start them (grpo_loop.sh servers), then the loop.")
+            if down:
+                self.log(f"Servers not answering: {down}; restarting them")
+                await self.servers.restart(down, read_current(self.paths.models))
+                still_down = await self.servers.unhealthy()
+                if still_down:
+                    raise RuntimeError(
+                        f"Servers {still_down} do not answer after a restart (logs: $LEAN_SEARCH_RUNS/servers/); "
+                        "start them (grpo_loop.sh servers), then the loop."
+                    )
+                self.log(f"Restarted {down}; the searches resume")
+            else:
+                self.log("Every server answers; the searches resume")
+            self.recent_searches.clear()
+            self.searcher.resume()
+            self.loop_state = LoopState.SEARCHING
+            self.write_status()
+
     async def watch(self, stop: asyncio.Event) -> None:
         while not stop.is_set():
             await asyncio.sleep(self.config.training.check_seconds)
             for message in self.statements.refresh():
                 self.log(message)
             if not stop.is_set() and self.phase_due():
-                await self.run_phase()
+                async with self.pause_lock:
+                    await self.run_phase()
             elif self.sampling_since is not None:
                 self.save_progress(sampling_seconds=self.sampling_seconds())
                 self.sampling_since = self.clock()
@@ -611,6 +718,7 @@ class GrpoLoop:
         self.save_progress(
             stage=PhaseStage.TRAINING, sampling_seconds=sampling, pause=PauseSegments(drain_seconds=drain_seconds)
         )
+        await self.log_host_memory("at the pause")
         await self.finish_phase()
 
     async def finish_phase(self) -> None:
@@ -619,10 +727,13 @@ class GrpoLoop:
             self.loop_state = LoopState.TRAINING
             self.write_status()
             started = self.clock()
+            await self.release_lean_memory(self.config.training.paused_repl_memory_gib, "the training job")
             await self.servers.release()
             released = self.clock()
+            await self.log_host_memory("before training")
             outcome = await self.train(phase)
             finished = self.clock()
+            await self.log_host_memory("after training")
             pause = with_trainer_timings(self.progress.pause, outcome.timings, finished - released)
             self.save_progress(
                 stage=PhaseStage.PUBLISHING,
@@ -640,6 +751,7 @@ class GrpoLoop:
                 publishing_seconds=self.clock() - started,
                 loop_seconds=progress.loop_seconds + progress.sampling_seconds + progress.training_seconds,
             )
+            await self.log_host_memory("after publishing")
         started = self.clock()
         kinds = self.due_evaluations(at_start=False)
         await self.run_evaluations(kinds, phase)
@@ -650,6 +762,16 @@ class GrpoLoop:
         self.loop_state = LoopState.SEARCHING
         self.sampling_since = self.clock()
         self.write_status()
+
+    async def release_lean_memory(self, threshold_gib: float, purpose: str) -> None:
+        released = await self.searcher.release_lean_memory(int(threshold_gib * GIB))
+        self.log(
+            f"Stopped {released.stopped_processes} search REPL processes ({released.freed_bytes / GIB:.1f} GiB) "
+            f"for {purpose}"
+        )
+
+    async def log_host_memory(self, moment: str) -> None:
+        self.log(f"Host memory {moment}: {await asyncio.to_thread(self.host_memory)}")
 
     def value_window(self, phase: int) -> tuple[Path, ...]:
         """The tree directories the value model trains on when it is due this phase; none when it is not."""
@@ -712,6 +834,7 @@ class GrpoLoop:
             current = await asyncio.to_thread(
                 publish_phase, self.paths.models, self.publisher, outcome, phase_trigger(phase)
             )
+            await asyncio.to_thread(self.prune_adapters)
         published = self.clock()
         served = await self.servers.serve(current)
         self.save_progress(
@@ -728,6 +851,18 @@ class GrpoLoop:
             self.log(f"Value model of phase {phase} passed the gate and is published")
             self.save_progress(value_gate_passed=True)
         self.log(f"Published version {current.version}")
+
+    def prune_adapters(self) -> None:
+        """Deletes the phase adapters of versions older than the retention that nothing uses any more."""
+        retention = self.config.retention
+        if not retention.adapter_versions:
+            return
+        versions = read_versions(self.paths.models)
+        kept = kept_adapters(versions, retention.adapter_versions, [self.progress.value_adapter])
+        phases = (self.paths.phase_checkpoints(number) for number in range(1, self.progress.phase + 1))
+        removed = prune_phase_adapters(phases, kept)
+        if removed:
+            self.log(f"Deleted {len(removed)} adapter directories of old phases: {[str(path) for path in removed]}")
 
     def write_training_metrics(self, outcome: PhaseOutcome, candidate_version: int) -> None:
         if outcome.policy is not None:
@@ -786,7 +921,8 @@ class GrpoLoop:
         return await self.evaluations.evaluate(kind, phase, repeat, value_model)
 
     async def run_value_ab(self, phase: int) -> None:
-        """Both arms with the policy fixed; μ turns on once the published value model passed."""
+        """Both arms with the policy fixed; μ turns on once the published value model is better than the reference,
+        and the reference is published again (μ off) once it is worse."""
         for arm in (EvaluationValueModel.INITIAL, EvaluationValueModel.PUBLISHED):
             await self.serve_value_model(arm)
             summary = await self.evaluations.evaluate(EvaluationKind.VALUE_AB, phase, 0, arm)
@@ -795,13 +931,32 @@ class GrpoLoop:
         self.log(
             f"Value A/B of version {summary.policy_version}: published value v{result.published_value_version} "
             f"{result.published_solved} vs reference {result.reference_solved} of {result.problems} "
-            f"({result.only_published} vs {result.only_reference} solved by one arm only, p = {result.p_value:.3f})"
+            f"({result.only_published} vs {result.only_reference} solved by one arm only); pooled over "
+            f"{result.pooled_runs} runs {result.pooled_only_published} vs {result.pooled_only_reference}, "
+            f"p(better) = {result.better_p_value:.3f}, p(worse) = {result.worse_p_value:.3f}"
         )
-        if result.passed and not self.progress.value_share_on:
-            self.log(
-                f"The published value model passed the A/B search: μ = {self.config.training.value_share_after_gate}"
-            )
+        if result.worse:
+            await self.revert_value_model(result.published_value_version)
+        elif result.passed and not self.progress.value_share_on:
+            self.log(f"The published value model is better than v0: μ = {self.config.training.value_share_after_gate}")
             self.save_progress(value_share_on=True)
+
+    async def revert_value_model(self, value_version: int) -> None:
+        """The reference value model is published again; value training continues from it, with μ off."""
+        self.save_progress(value_share_on=False, value_adapter="")
+        current = await asyncio.to_thread(
+            publish_value_model,
+            self.paths.models,
+            self.publisher,
+            self.config.initial.value_adapter,
+            f"value v{value_version} worse than v0 in the A/B",
+        )
+        await asyncio.to_thread(self.prune_adapters)
+        await self.servers.serve(current)
+        self.served_value_weights = current.value_weights
+        self.searcher.serving(current.version)
+        self.update_context()
+        self.log(f"Value v{value_version} is worse than v0: version {current.version} serves v0's value model, μ off")
 
     async def run_evaluations(self, kinds: list[EvaluationKind], phase: int, at_start: bool = False) -> None:
         if not kinds:
@@ -809,12 +964,8 @@ class GrpoLoop:
         # Only between phases or before the workers start: the searches are paused or not running.
         self.loop_state = LoopState.EVALUATING
         self.write_status()
-        threshold = int(self.config.evaluation.paused_repl_memory_gib * GIB)
-        released = await self.searcher.release_lean_memory(threshold)
-        self.log(
-            f"Stopped {released.stopped_processes} search REPL processes ({released.freed_bytes / GIB:.1f} GiB) "
-            "for the evaluations"
-        )
+        await self.release_lean_memory(self.config.evaluation.paused_repl_memory_gib, "the evaluations")
+        await self.log_host_memory("before the evaluations")
         for kind in kinds:
             if kind == EvaluationKind.VALUE_AB:
                 await self.run_value_ab(phase)

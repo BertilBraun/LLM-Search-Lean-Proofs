@@ -191,8 +191,12 @@ class GpuRelease(Protocol):
     async def restore(self, server: ServerEndpoint, version: ModelVersion) -> None: ...
 
 
+def weights_directory(weights_root: Path, version: int) -> Path:
+    return weights_root / f"v{version:04d}"
+
+
 def merged_directory(weights_root: Path, version: int, kind: str) -> Path:
-    return weights_root / f"v{version:04d}" / kind
+    return weights_directory(weights_root, version) / kind
 
 
 class MergedPublisher:
@@ -236,9 +240,12 @@ class MergedPublisher:
         return directory
 
     def prune(self, current: ModelVersion) -> None:
-        """Deletes merged weights the current version does not serve (~13 GB a version with a 4B policy)."""
+        """Deletes merged weights the current version does not serve (~13 GB a version with a 4B policy), except
+        version 0's: the baselines' weights, which a missed baseline evaluation can still be served from."""
         kept = {Path(current.policy_weights), Path(current.value_weights)}
         for version_directory in sorted(self.weights_root.glob("v*")):
+            if version_directory == weights_directory(self.weights_root, 0):
+                continue
             for directory in version_directory.iterdir():
                 if directory not in kept:
                     shutil.rmtree(directory)

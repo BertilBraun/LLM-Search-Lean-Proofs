@@ -97,7 +97,7 @@ max_sampling_minutes = 30.0
 min_solved_trees = 100
 check_seconds = 30.0
 # The value model every 4 phases on the last 8 phases' trees, continuing the last value adapter trained; μ turns on
-# once one passed the gate and the value A/B search ([evaluation.value_ab]) found the published one ahead of v0.
+# once one passed the gate and the value A/B search ([evaluation.value_ab]) found the published one better than v0.
 value_every_phases = 4
 value_window_phases = 8
 value_share_after_gate = 0.15
@@ -110,6 +110,10 @@ math_replay = "reasoning/visible_student_v3_numbered/math.jsonl"
 # v0's own training data (phase3_value_data.py --name v0; node_backup generated_data: data/value/v0/), replayed as
 # 10% of the value targets.
 value_replay = "value/v0/train.jsonl"
+# Before the training job starts, the paused searches' REPL processes above this private memory stop (0: all), so the
+# four ranks' parsed trees fit next to the sleeping servers; they replay their proof states on the next request.
+# Memory budget: src/lean_search/rl/README.md, "Host memory".
+paused_repl_memory_gib = 0.0
 
 [statements]
 kind = "curriculum"
@@ -123,6 +127,7 @@ proof_steps_weight = 0.5
 root_value_weight = 0.5
 band_width = 1.0
 band_step = 0.5
+# Each band is judged on the first 50 statements fed at it, once all 50 finished (not the first 50 to finish).
 window = 50
 raise_solve_rate = 0.5
 fast_raise_solve_rate = 0.8
@@ -150,13 +155,14 @@ every_hours = 6.0
 at_start = true
 baseline_runs = 2
 
-# Milestones only: grpo_loop.py request-evaluation --target minif2f (or grpo_evaluate.py with the loop stopped).
+# Version 0's baseline before the first phase (version 0's merged weights are never pruned), then milestones only:
+# grpo_loop.py request-evaluation --target minif2f (or grpo_evaluate.py with the loop stopped).
 [evaluation.minif2f]
 max_expansions = 64
 max_wall_seconds = 7200.0
 concurrency = 64
 every_hours = 0.0
-at_start = false
+at_start = true
 
 # Per-sample success on the 512 held-out states, with every probe.
 [evaluation.held_out_states]
@@ -175,12 +181,17 @@ max_wall_seconds = 3600.0
 concurrency = 64
 every_hours = 12.0
 
-# μ turns on when the published value model solves at least min_solved_difference more problems than v0 and an exact
-# McNemar test does not find it worse at the one-sided significance level.
+# One-sided exact McNemar tests on the problems one arm solved, pooled over the A/Bs of the same published value model:
+# better than v0 at `significance` turns μ on; worse publishes v0's value model again and turns μ off.
 [evaluation.value_ab_test]
 problems = 250
-min_solved_difference = 1
 significance = 0.05
+
+# After each publish, the phase adapters of versions older than the last 5 are deleted unless still used (the current
+# version's, the value adapter the next value training continues); 0 keeps every adapter. src/lean_search/rl/README.md,
+# "Disk".
+[retention]
+adapter_versions = 5
 
 # On only when the starting policy is the naming A/B's named arm (grpo_fixed_sets.py rename first).
 [renaming]

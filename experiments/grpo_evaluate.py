@@ -41,7 +41,13 @@ from lean_search.rl.evaluation import (
     value_ab_result,
 )
 from lean_search.rl.fixed_targets import evaluate_target
-from lean_search.rl.loop import GrpoLoopPaths, read_progress, value_adapter_version, value_version
+from lean_search.rl.loop import (
+    GrpoLoopPaths,
+    earlier_value_ab_results,
+    read_progress,
+    value_adapter_version,
+    value_version,
+)
 from lean_search.rl.loop_config import EvaluationValueModel, GrpoLoopConfig, load_loop_config
 from lean_search.rl.renaming import load_renamings
 from lean_search.rl.search_models import served_run_config
@@ -149,6 +155,7 @@ def compare_value_arms(
         read_results(published.results),
         config.evaluation.value_ab_test,
         value_versions,
+        earlier_value_ab_results(paths, version, summary.value_version),
     )
     compared = dataclasses.replace(summary, value_ab=result)
     published.comparison.write_text(to_json(result), encoding="utf-8")
@@ -168,8 +175,10 @@ def value_ab_text(result: ValueAbResult) -> str:
     return (
         f"Value A/B: published v{result.published_value_version} {result.published_solved}, reference "
         f"v{result.reference_value_version} {result.reference_solved} of {result.problems} ({result.only_published} "
-        f"solved by the published only, {result.only_reference} by the reference only; p = {result.p_value:.3f}, "
-        f"p(worse) = {result.worse_p_value:.3f}): {'passed' if result.passed else 'not passed'}"
+        f"solved by the published only, {result.only_reference} by the reference only; p = {result.p_value:.3f}); "
+        f"pooled over {result.pooled_runs} A/B runs {result.pooled_only_published} vs {result.pooled_only_reference}, "
+        f"p(better) = {result.better_p_value:.3f}, p(worse) = {result.worse_p_value:.3f}: "
+        + ("better" if result.passed else "worse" if result.worse else "no significant difference")
     )
 
 

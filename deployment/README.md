@@ -294,9 +294,11 @@ the new weights in place. No server changes are needed to switch.
 
 The loop process holds one Lean REPL per concurrent search (`[sampling] concurrency`, 112) and runs the training and
 evaluation jobs as child processes, each in its own process group and recorded in `$LEAN_SEARCH_RUNS/<loop>/children/`
-while it runs; stopping the loop stops the job too (torchrun and its ranks share the group). A loop that refuses to
-start because "Jobs of an earlier loop still run" died without stopping one: check it with `ps -o pid,cmd -g <process
-id>`, stop it with `kill -TERM -<process id>`, then start the loop again.
+while it runs; stopping the loop stops the job too: its group and every process carrying the job's marker
+(`LEAN_SEARCH_LOOP_JOB` in the environment; torchrun starts its ranks in sessions of their own, outside the group). A
+loop that refuses to start because "Jobs of an earlier loop still run" died without stopping one; it refuses before
+waking any server. The message lists the job's process ids (`process_ids`, the ranks included): check them with
+`ps -o pid,cmd -p <ids>`, stop them with `kill -TERM <ids>`, then start the loop again.
 
 Bring-up on a fresh node, after the rebuild (`setup_remote.sh`, pool v3 verified statements under
 `$LEAN_SEARCH_DATA/expert_iteration/pool_v3/`, the value v0 adapter at `phase3_value_v0/adapter` from `node_backup/`,
@@ -317,17 +319,58 @@ The configs name the numbered arm. If the naming A/B picks the named arm, change
 `math_replay` to `..._named` and set `[renaming] enabled = true` (`loop.toml`, `loop_overfit.toml`; the phase configs'
 and `single_step.toml`'s defaults likewise, though the loop fills in its own).
 
+Disk: plan on about 200 GB for the whole run and rent at least 300 GB (estimates): the Hugging Face cache (Qwen3.5-4B,
+-2B and the 9B teacher, ~32 GB), Mathlib's build, the datasets and the SFT checkpoints (~30-40 GB together), merged
+weights (the current version's and version 0's policy and value, the kept v0 value model and the next version's while
+publishing: ~50 GB at the peak), the last 5 versions' phase adapters (~4 GB; older ones are deleted,
+`src/lean_search/rl/README.md`, "Disk") and the trees, which grow by an estimated 150-250 MB per phase, 5-10 GB a day
+at 30-minute phases. `system.disk_free_gib` on the System page, alert below 50 GiB free.
+
+Order on a fresh node (each step catches what would otherwise surface hours later):
+
+1. **Node checks** (`deployment/grpo_loop.sh node-check`, minutes): `df` of the runs, the checkpoints and `/dev/shm`
+   (fails below 1 GiB of `/dev/shm`: Docker's 64 MB default breaks NCCL's shared-memory transport; rent with
+   `--shm-size 16g`), `nproc` and the cgroup's `cpu.max`, `nvidia-smi topo -m`, and a 4-rank NCCL all-reduce of
+   256 MiB (`experiments/nccl_check.py`, as the trainer sums its gradients; a hang means no peer-to-peer access over
+   PCIe: `NCCL_P2P_DISABLE=1` in the loop's environment). HF and GitHub reachability.
+2. **Rebuild**, then the heartbeat replay (`python experiments/heartbeat_replay.py ...`, DESIGN.md "Lean execution and
+   harness"), which fixes the caps every later search uses.
+3. **Smoke cycle** (`experiments/configs/grpo/loop_smoke.toml`, about an hour): the whole loop on the overfit
+   statements with visible student v2 as the starting policy, 5-10-minute phases, a value phase every phase whose gate
+   every candidate passes (`phase_smoke.toml`) and every evaluation at a tiny size (probe 12 problems twice, miniF2F 8,
+   held-out states 32, the value A/B on 12). It runs the at-start baselines, a pause with policy and value training on
+   four ranks, both GPU merges, the publish and the wake, the swap to the fixed v0 value model and the A/B's two arms,
+   and the adapter pruning after the second phase. Go through the first-hour checks below on it, stop it after two
+   phases and delete `$LEAN_SEARCH_RUNS/grpo_smoke*` and `$LEAN_SEARCH_CHECKPOINTS/grpo_smoke*`.
+4. **Cheap tests** (below): single-step GRPO with both credits (go or no-go on the learning rate), then the SFT stage
+   and the naming A/B (`src/lean_search/data_rewrite/README.md`).
+5. **Gate benchmark** with the starting policy served (`gate`, ~1-2 h).
+6. **Main loop**: a fresh `init`, then `loop`. Version 0's baselines run before the first phase: the probe twice, the
+   held-out states and miniF2F (`[evaluation.minif2f] at_start = true`; the loop evaluates only the version it serves,
+   so a baseline missed here needs version 0 served again: its merged weights stay under `weights/v0000/`, never
+   pruned).
+
 ```bash
-deployment/grpo_loop.sh sets         # probe (501), gate (402) and overfit (300) sets under $LEAN_SEARCH_DATA/grpo/
-deployment/grpo_loop.sh init         # version 0: the starting policy's and the value v0 adapter merged into their bases
-deployment/grpo_loop.sh servers      # eight vLLM servers, two per GPU (each waits until healthy)
+deployment/grpo_loop.sh node-check   # step 1
+deployment/grpo_loop.sh sets         # once: probe (501), gate (402) and overfit (300) sets under $LEAN_SEARCH_DATA/grpo/
+LOOP_CONFIG=experiments/configs/grpo/loop_smoke.toml deployment/grpo_loop.sh init   # step 3, the smoke cycle:
+LOOP_CONFIG=experiments/configs/grpo/loop_smoke.toml deployment/grpo_loop.sh servers
+LOOP_CONFIG=experiments/configs/grpo/loop_smoke.toml deployment/grpo_loop.sh check
+deployment/grpo_loop.sh smoke-gate   # 60 gate problems searched by the smoke's version 0, its tiny benchmark
+LOOP_CONFIG=experiments/configs/grpo/loop_smoke.toml deployment/grpo_loop.sh dashboard
+LOOP_CONFIG=experiments/configs/grpo/loop_smoke.toml deployment/grpo_loop.sh loop   # two phases, then stop
+deployment/grpo_loop.sh init         # step 6: the starting policy's and the value v0 adapter merged into their bases
+deployment/grpo_loop.sh servers      # eight vLLM servers: a GPU's two one after another, the GPUs in parallel
 deployment/grpo_loop.sh check        # one live request per policy server (below)
-python experiments/heartbeat_replay.py ...   # the heartbeat caps (DESIGN.md "Lean execution and harness")
-deployment/grpo_loop.sh gate         # the value gate's benchmark, ~1-2 h, before value phases can publish
+deployment/grpo_loop.sh gate         # step 5: the value gate's benchmark, ~1-2 h, before value phases can publish
 deployment/grpo_loop.sh dashboard    # http://<node>:8600 (open; tunnel or mapped port: "Dashboard" above)
-deployment/grpo_loop.sh loop         # probe and held-out states of version 0 first, then sampling
+deployment/grpo_loop.sh loop         # version 0's probe (twice), held-out states and miniF2F first, then sampling
 deployment/grpo_loop.sh status       # or the dashboard; `tail -f $LEAN_SEARCH_RUNS/grpo_loop_v1/loop.log`
 ```
+
+`servers` starts only the servers that do not answer, on the current version; the loop does the same by itself when
+searches keep failing on a server (`src/lean_search/rl/README.md`, "The loop", server failures) and stops with an
+error if a restarted server stays down.
 
 Restart after a crash: `deployment/grpo_loop.sh loop` again (servers still up; otherwise `servers` first: they start on
 the current version). The loop finishes an interrupted phase before sampling again. Milestones: `python
@@ -340,7 +383,8 @@ First-hour checks:
 - `check` prints, per policy server, one request the way the search sends it (the visible prompt, n = 8, 1,024
   tokens, temperature 0.8): `tokens_recorded` (token ids with one log-probability each), `tokens_decode_to_text`
   (the token ids decode to the text, plus the end of turn), `usable_blocks` > 0 and the finish reasons; it fails if any
-  is missing. `serve-commands` starts policy servers with `--logprobs-mode processed_logprobs`; after the first phase the dashboard's sampler-vs-trainer
+  is missing. `servers` starts policy servers with `--logprobs-mode processed_logprobs` (`serve-commands` prints every
+  start command); after the first phase the dashboard's sampler-vs-trainer
   difference (`grpo` family, `sampler_absolute_log_probability_difference`) must be small (bf16 resolution, ~0.01-0.05
   nats); a raw-mode server shows a systematic offset from the 1/0.8 temperature scaling. The same by sampling age
   (`sampler_by_age`, the Policy page): age 0 is that number, ages 1+ are samples from earlier versions in trees that
@@ -373,12 +417,19 @@ First-hour checks:
   differences smaller than about twice the discordant count's square root are noise.
 - Memory (System page, budget in `src/lean_search/rl/README.md`, "Host memory"): `memory_total_gib`,
   `memory_available_gib`, `lean_private_memory_gib` and its p90, `vllm_private_memory_gib`, once while sampling, once
-  while training (four ranks, each with the phase's trees, next to the paused searches' REPLs) and once during the
-  probe. `loop.log` reports the paused REPL processes stopped before
-  each evaluation. Lower `[evaluation.probe] concurrency` or `[sampling] concurrency` if available memory falls below
-  ~15% of the limit. Lean cores near the thread count and GPU utilization above ~80% mean the concurrency fits.
+  while training (four ranks, each with the phase's trees, after the paused searches' REPLs stopped) and once during
+  the probe; in a value phase (phase 4 with the defaults, a value phase every phase in the smoke cycle) the ranks hold
+  the window's trees. `loop.log` reports the paused REPL processes stopped before training and before each evaluation
+  and the host memory at each stage boundary of the pause (`Host memory before training: ...`). Lower
+  `[evaluation.probe] concurrency` or `[sampling] concurrency` if available memory falls below ~15% of the limit. Lean
+  cores near the thread count and GPU utilization above ~80% mean the concurrency fits.
 - Server failures: `status.server_failures` stays at 0 on a healthy run; failed searches feed their statement again
-  (`[sampling] server_failure_retries`), `statements_given_up` counts the dropped ones.
+  (`[sampling] server_failure_retries`), `statements_given_up` counts the dropped ones; `loop.log` reports any check
+  and restart of the servers.
+- Curriculum (main loop, after about 2 hours): the realized solve rate (Curriculum page) within the 30-70% band; each
+  band is judged on the first 50 statements fed at it once all finished, so slow unsolved searches no longer pull it
+  down. Also expansions and trees per hour and trained groups per phase, to set the phase length once.
+- Disk: `disk_free_gib` (System page) and its fall per phase against the projection above.
 - Training memory: `peak_memory_gib` in `$LEAN_SEARCH_CHECKPOINTS/grpo_loop_v1_phase_0001/phase.json`, against
   24 GiB minus the sleeping servers' remainder.
 

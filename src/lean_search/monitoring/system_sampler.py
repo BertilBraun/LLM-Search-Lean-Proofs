@@ -1,11 +1,12 @@
 """System usage of the node for the `system` family: GPUs (if NVML is available), the cgroup's CPU and memory, the CPU
-time and private memory of the Lean REPL processes, the vLLM processes' memory, and the money spent at an hourly
-price."""
+time and private memory of the Lean REPL processes, the vLLM processes' memory, the free disk, and the money spent at
+an hourly price."""
 
 import math
 import os
+import shutil
 import time
-from collections.abc import Collection, Mapping
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple
@@ -45,6 +46,12 @@ class HostMemory:
     # Private (anonymous) resident memory per Lean process: shared Mathlib .olean mappings are not counted.
     lean_private_bytes: tuple[int, ...]
     vllm_private_bytes: int
+
+
+@dataclass(frozen=True)
+class DiskSpace:
+    total_bytes: int
+    free_bytes: int
 
 
 @dataclass(frozen=True)
@@ -169,6 +176,13 @@ def host_memory(cgroup: Path, proc: Path, lean_names: Collection[str]) -> HostMe
     return HostMemory(total, available, processes.lean_bytes, processes.vllm_bytes)
 
 
+def fullest_disk(paths: Sequence[Path]) -> DiskSpace:
+    """The filesystem with the least free space among those holding the paths."""
+    usages = [shutil.disk_usage(path) for path in paths]
+    fullest = min(usages, key=lambda usage: usage.free)
+    return DiskSpace(fullest.total, fullest.free)
+
+
 def percentile_90(values: Collection[int]) -> int:
     ordered = sorted(values)
     return ordered[math.ceil(0.9 * len(ordered)) - 1] if ordered else 0
@@ -205,7 +219,11 @@ def run_started_at(run_directory: Path, default: float) -> float:
 
 
 def record_system(
-    run_directory: Path, interval_seconds: float, hourly_price: float, process_names: Collection[str]
+    run_directory: Path,
+    interval_seconds: float,
+    hourly_price: float,
+    process_names: Collection[str],
+    disk_paths: Sequence[Path],
 ) -> None:
     writer = MetricsWriter(run_directory)
     started_at = run_started_at(run_directory, time.time())
@@ -218,6 +236,7 @@ def record_system(
         cpu = cpu_usage(previous, current)
         gpu = gpus.usage()
         memory = host_memory(CGROUP, PROC, process_names)
+        disk = fullest_disk(disk_paths)
         now = time.time()
         writer.write(
             SystemUsage(
@@ -238,6 +257,8 @@ def record_system(
                 lean_private_memory_gib=sum(memory.lean_private_bytes) / 2**30,
                 lean_private_memory_p90_gib=percentile_90(memory.lean_private_bytes) / 2**30,
                 vllm_private_memory_gib=memory.vllm_private_bytes / 2**30,
+                disk_total_gib=disk.total_bytes / 2**30,
+                disk_free_gib=disk.free_bytes / 2**30,
             ),
             record_time=now,
         )

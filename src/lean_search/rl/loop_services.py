@@ -9,6 +9,8 @@ import shlex
 import signal
 import statistics
 import sys
+import time
+import uuid
 from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +20,7 @@ from lean_search.expert_iteration.loop_config import ServerEndpoint, ServingConf
 from lean_search.expert_iteration.loop_search import PauseGate
 from lean_search.expert_iteration.serving import MergedPublisher, ModelVersion, write_json_atomically
 from lean_search.lean import FORBIDDEN_TOKENS, LeanReplConfig, LeanReplPool
+from lean_search.monitoring.system_sampler import CGROUP, LEAN_PROCESS_NAMES, PROC, host_memory
 from lean_search.policy.client import PolicyClient
 from lean_search.policy.config import PolicyConfig
 from lean_search.policy.expander import load_tokenizer
@@ -32,6 +35,7 @@ from lean_search.policy.server_control import (
 )
 from lean_search.rl.evaluation import EvaluationKind, EvaluationSummary, read_summary
 from lean_search.rl.loop import (
+    GIB,
     PHASE_OUTCOME_FILE,
     GrpoLoopPaths,
     ReleasedLeanMemory,
@@ -51,6 +55,7 @@ POLICY_SERVER_ARGUMENTS = "--logprobs-mode processed_logprobs"
 CHECK_GOALS = ("x : ℝ\nh₀ : 3 * x + 2 = 11\n⊢ x = 3",)
 # A stopped job's process group gets SIGTERM, then SIGKILL after this long.
 CHILD_STOP_SECONDS = 30.0
+JOB_MARKER_VARIABLE = "LEAN_SEARCH_LOOP_JOB"
 
 
 class LeanTreeSearcher:
@@ -115,6 +120,16 @@ class ChildProcess:
     # Clock ticks after boot when the process started, so a reused process id is not taken for the child.
     start_ticks: int
     command: str
+    # JOB_MARKER_VARIABLE's value in the environment of every process of the job, which finds the processes that left
+    # its group (torchrun starts each worker in a session of its own).
+    marker: str = ""
+
+
+@dataclass(frozen=True)
+class LiveJob:
+    record: ChildProcess
+    # The running processes with the job's marker: the one the loop started and everything it started.
+    process_ids: tuple[int, ...]
 
 
 def running_start_ticks(process_id: int) -> int | None:
@@ -127,9 +142,27 @@ def running_start_ticks(process_id: int) -> int | None:
     return None if fields[0] == "Z" else int(fields[19])
 
 
-def live_children(directory: Path) -> list[ChildProcess]:
+def marked_processes(marker: str) -> list[int]:
+    """The running processes with this job marker in their environment."""
+    entry = f"{JOB_MARKER_VARIABLE}={marker}".encode()
+    process_ids = []
+    for path in Path("/proc").glob("[0-9]*/environ"):
+        try:
+            environment = path.read_bytes()
+        except OSError:
+            continue
+        if entry in environment.split(b"\0"):
+            process_ids.append(int(path.parent.name))
+    return process_ids
+
+
+def live_children(directory: Path) -> list[LiveJob]:
+    """Recorded jobs that still run: the process the loop started, or any process carrying the job's marker."""
     children = [from_json_object(ChildProcess, json.loads(path.read_text())) for path in directory.glob("*.pid")]
-    return [child for child in children if running_start_ticks(child.process_id) == child.start_ticks]
+    jobs = [LiveJob(child, tuple(marked_processes(child.marker))) for child in children]
+    return [
+        job for job in jobs if job.process_ids or running_start_ticks(job.record.process_id) == job.record.start_ticks
+    ]
 
 
 def signal_group(process_id: int, signal_number: signal.Signals) -> None:
@@ -137,44 +170,61 @@ def signal_group(process_id: int, signal_number: signal.Signals) -> None:
         os.killpg(process_id, signal_number)
 
 
-async def stop_process_group(process: asyncio.subprocess.Process) -> None:
+def signal_processes(process_ids: Sequence[int], signal_number: signal.Signals) -> None:
+    for process_id in process_ids:
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(process_id, signal_number)
+
+
+async def stop_job(process: asyncio.subprocess.Process, marker: str) -> None:
+    """SIGTERM to the job's group and every process with its marker; SIGKILL to what is left after the timeout."""
+    deadline = time.monotonic() + CHILD_STOP_SECONDS
     signal_group(process.pid, signal.SIGTERM)
-    try:
+    signal_processes(marked_processes(marker), signal.SIGTERM)
+    with contextlib.suppress(TimeoutError):
         await asyncio.wait_for(process.wait(), CHILD_STOP_SECONDS)
-    except TimeoutError:
-        signal_group(process.pid, signal.SIGKILL)
-        await process.wait()
-    # Its own children (Lean REPLs, data loader workers) share the group and may outlive it.
+    while marked_processes(marker) and time.monotonic() < deadline:
+        await asyncio.sleep(0.1)
+    # Its own children (Lean REPLs, data loader workers, torchrun's workers) may outlive it.
     signal_group(process.pid, signal.SIGKILL)
+    signal_processes(marked_processes(marker), signal.SIGKILL)
+    await process.wait()
+
+
+def earlier_jobs_text(running: Sequence[LiveJob]) -> str:
+    return (
+        f"Jobs of an earlier loop still run: {running}; stop them (kill -TERM each of process_ids, torchrun's workers "
+        "included) before restarting."
+    )
 
 
 async def run_logged(arguments: Sequence[str], log_path: Path, environment: dict[str, str], record_path: Path) -> None:
-    """The job in its own process group, recorded in `record_path` until it ends; cancelling stops the group."""
+    """The job in its own process group, recorded in `record_path` until it and every process carrying its marker
+    ended; cancelling, or its own end, stops whatever of the job is left."""
     # A job recorded beside it still running means an earlier loop died without stopping it.
     running = live_children(record_path.parent)
     if running:
-        raise RuntimeError(
-            f"Jobs of an earlier loop still run: {running}; stop them (kill -TERM -<process_id>) before restarting."
-        )
+        raise RuntimeError(earlier_jobs_text(running))
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    marker = f"{record_path.stem}-{uuid.uuid4().hex}"
     with log_path.open("ab") as log_file:
         process = await asyncio.create_subprocess_exec(
             *arguments,
             cwd=REPOSITORY_DIRECTORY,
             stdout=log_file,
             stderr=asyncio.subprocess.STDOUT,
-            env=environment,
+            env=environment | {JOB_MARKER_VARIABLE: marker},
             start_new_session=True,
         )
         try:
             start_ticks = running_start_ticks(process.pid)
             if start_ticks is not None:
-                write_json_atomically(record_path, ChildProcess(process.pid, start_ticks, shlex.join(arguments)))
+                child = ChildProcess(process.pid, start_ticks, shlex.join(arguments), marker)
+                write_json_atomically(record_path, child)
             return_code = await process.wait()
-        except BaseException:
-            await stop_process_group(process)
-            raise
         finally:
+            # After a SIGKILLed torchrun its workers live on outside its group.
+            await stop_job(process, marker)
             if process.returncode is not None:
                 record_path.unlink(missing_ok=True)
     if return_code:
@@ -187,6 +237,10 @@ class SubprocessTrainer:
     def __init__(self, paths: GrpoLoopPaths, config: LoopTrainingConfig) -> None:
         self.paths = paths
         self.config = config
+
+    def earlier_jobs(self) -> str | None:
+        running = live_children(self.paths.children)
+        return earlier_jobs_text(running) if running else None
 
     def launcher(self) -> list[str]:
         if len(self.config.gpus) == 1:
@@ -248,6 +302,46 @@ def slowest(seconds: Sequence[PhaseSeconds]) -> PhaseSeconds:
     )
 
 
+@dataclass(frozen=True)
+class ServerStart:
+    server: ServerEndpoint
+    command: str
+
+
+def serve_command(
+    serving: ServingConfig, publisher: MergedPublisher, version: ModelVersion, server: ServerEndpoint
+) -> str:
+    """The server's start command for the version; policy servers report the tempered log-probabilities."""
+    command = publisher.serve_command(version, server)
+    return f"{command} {POLICY_SERVER_ARGUMENTS}" if server in serving.policy_servers else command
+
+
+async def start_server(start: ServerStart) -> None:
+    """Stops what is left of the server, then starts it; serve_model.sh returns once it answers."""
+    name = start.server.name
+    for command in (f"deployment/stop_model.sh {name}", start.command):
+        process = await asyncio.create_subprocess_exec("bash", "-c", command, cwd=REPOSITORY_DIRECTORY)
+        if await process.wait():
+            raise RuntimeError(f"Starting {name} failed ({command}); see $LEAN_SEARCH_RUNS/servers/{name}.log")
+
+
+async def start_servers(starts: Sequence[ServerStart]) -> None:
+    """The servers of one GPU one after another (each sizes itself by the memory the others left), the GPUs in
+    parallel."""
+    by_gpu: dict[int, list[ServerStart]] = {}
+    for start in starts:
+        by_gpu.setdefault(start.server.gpu, []).append(start)
+
+    async def start_in_turn(group: Sequence[ServerStart]) -> None:
+        for start in group:
+            await start_server(start)
+
+    outcomes = await asyncio.gather(*(start_in_turn(group) for group in by_gpu.values()), return_exceptions=True)
+    failures = [str(outcome) for outcome in outcomes if isinstance(outcome, BaseException)]
+    if failures:
+        raise RuntimeError("; ".join(failures))
+
+
 class VllmServers:
     """The merged policy and value servers: in-place weight swaps, sleep on the training GPUs."""
 
@@ -257,10 +351,22 @@ class VllmServers:
         self.publisher = publisher
 
     async def check(self) -> None:
-        healthy = await asyncio.gather(*(is_healthy(server.url) for server in self.serving.servers))
-        down = [server.name for server, up in zip(self.serving.servers, healthy, strict=True) if not up]
+        down = await self.unhealthy()
         if down:
-            raise RuntimeError(f"Servers not answering: {down}; start them (grpo_loop.py serve-commands).")
+            raise RuntimeError(f"Servers not answering: {down}; start them (grpo_loop.py start-servers).")
+
+    async def unhealthy(self) -> list[str]:
+        healthy = await asyncio.gather(*(is_healthy(server.url) for server in self.serving.servers))
+        return [server.name for server, up in zip(self.serving.servers, healthy, strict=True) if not up]
+
+    async def restart(self, names: Sequence[str], version: ModelVersion) -> None:
+        await start_servers(
+            [
+                ServerStart(server, serve_command(self.serving, self.publisher, version, server))
+                for server in self.serving.servers
+                if server.name in names
+            ]
+        )
 
     async def release(self) -> PhaseSeconds:
         return slowest(await asyncio.gather(*(release_gpu(server.url) for server in self.released)))
@@ -318,13 +424,18 @@ class SubprocessEvaluations:
         return read_summary(directory / "summary.json")
 
 
+def host_memory_text() -> str:
+    """The node's memory as the system sampler reads it (cgroup limit, available, Lean REPLs, vLLM)."""
+    memory = host_memory(CGROUP, PROC, LEAN_PROCESS_NAMES)
+    return (
+        f"{memory.available_bytes / GIB:.1f} of {memory.total_bytes / GIB:.1f} GiB available; "
+        f"{len(memory.lean_private_bytes)} Lean processes {sum(memory.lean_private_bytes) / GIB:.1f} GiB private, "
+        f"vLLM {memory.vllm_private_bytes / GIB:.1f} GiB private"
+    )
+
+
 def serve_commands(config: GrpoLoopConfig, publisher: MergedPublisher, version: ModelVersion) -> list[str]:
-    """Each server's start command for the version; policy servers report the tempered log-probabilities."""
-    return [
-        publisher.serve_command(version, server)
-        + (f" {POLICY_SERVER_ARGUMENTS}" if server in config.serving.policy_servers else "")
-        for server in config.serving.servers
-    ]
+    return [serve_command(config.serving, publisher, version, server) for server in config.serving.servers]
 
 
 @dataclass(frozen=True)

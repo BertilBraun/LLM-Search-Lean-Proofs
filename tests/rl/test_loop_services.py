@@ -2,14 +2,23 @@ import asyncio
 import contextlib
 import json
 import os
+import subprocess
 import sys
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
 from lean_search.expert_iteration.serving import write_json_atomically
-from lean_search.rl.loop_services import ChildProcess, live_children, run_logged, running_start_ticks
+from lean_search.rl.loop_services import (
+    JOB_MARKER_VARIABLE,
+    ChildProcess,
+    host_memory_text,
+    live_children,
+    run_logged,
+    running_start_ticks,
+)
 from lean_search.search.records import from_json_object
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="process groups and /proc are POSIX")
@@ -20,6 +29,18 @@ PARENT_OF_A_SLEEPER = (
     "import subprocess, sys, time; "
     f"child = subprocess.Popen([sys.executable, '-c', {SLEEPER!r}]); "
     "open(sys.argv[1], 'w').write(str(child.pid)); time.sleep(60)"
+)
+# The same with the child in a session of its own, as torchrun starts its workers.
+PARENT_OF_A_SESSION_LEADER = (
+    "import subprocess, sys, time; "
+    f"child = subprocess.Popen([sys.executable, '-c', {SLEEPER!r}], start_new_session=True); "
+    "open(sys.argv[1], 'w').write(str(child.pid)); time.sleep(60)"
+)
+# Starts a sleeper in a session of its own, writes its process id to argv[1] and exits at once.
+ORPHANING_PARENT = (
+    "import subprocess, sys; "
+    f"child = subprocess.Popen([sys.executable, '-c', {SLEEPER!r}], start_new_session=True); "
+    "open(sys.argv[1], 'w').write(str(child.pid))"
 )
 
 
@@ -67,6 +88,39 @@ async def test_cancelling_a_job_stops_the_processes_it_started(tmp_path: Path) -
     assert await ends_within(int(grandchild_file.read_text()), seconds=5.0)
 
 
+async def test_cancelling_a_job_stops_the_processes_it_started_in_sessions_of_their_own(tmp_path: Path) -> None:
+    worker_file = tmp_path / "worker"
+    job = await start_job(tmp_path, [sys.executable, "-c", PARENT_OF_A_SESSION_LEADER, str(worker_file)])
+    while not worker_file.exists() or not worker_file.read_text():
+        await asyncio.sleep(0.01)
+    await cancel(job.task)
+    assert await ends_within(int(worker_file.read_text()), seconds=5.0)
+
+
+async def test_a_job_that_ended_leaves_no_worker_running(tmp_path: Path) -> None:
+    worker_file = tmp_path / "worker"
+    arguments = [sys.executable, "-c", ORPHANING_PARENT, str(worker_file)]
+    await run_logged(arguments, tmp_path / "job.log", dict(os.environ), tmp_path / "children" / "job.pid")
+    assert await ends_within(int(worker_file.read_text()), seconds=5.0)
+
+
+@contextlib.contextmanager
+def marked_sleeper(marker: str) -> Iterator[subprocess.Popen[bytes]]:
+    environment = os.environ | {JOB_MARKER_VARIABLE: marker}
+    sleeper = subprocess.Popen([sys.executable, "-c", SLEEPER], env=environment, start_new_session=True)
+    try:
+        yield sleeper
+    finally:
+        sleeper.kill()
+        sleeper.wait()
+
+
+def test_a_job_whose_launcher_ended_still_runs_while_a_worker_does(tmp_path: Path) -> None:
+    write_json_atomically(tmp_path / "training.pid", ChildProcess(os.getpid(), own_start_ticks() + 1, "torchrun", "m"))
+    with marked_sleeper("m") as worker:
+        assert [job.process_ids for job in live_children(tmp_path)] == [(worker.pid,)]
+
+
 async def test_a_finished_job_removes_its_record(tmp_path: Path) -> None:
     record = tmp_path / "children" / "job.pid"
     await run_logged([sys.executable, "-c", "pass"], tmp_path / "job.log", dict(os.environ), record)
@@ -84,6 +138,10 @@ async def test_a_job_does_not_start_while_an_earlier_loops_job_runs(tmp_path: Pa
     write_json_atomically(tmp_path / "children" / "training.pid", earlier)
     with pytest.raises(RuntimeError):
         await run_logged([sys.executable, "-c", "pass"], tmp_path / "job.log", {}, tmp_path / "children" / "job.pid")
+
+
+def test_the_host_memory_text_reports_what_is_available() -> None:
+    assert "GiB available" in host_memory_text()
 
 
 def test_a_record_whose_process_id_was_reused_is_not_a_live_job(tmp_path: Path) -> None:

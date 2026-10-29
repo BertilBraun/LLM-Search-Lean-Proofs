@@ -286,9 +286,9 @@ export const PAGES = [
             series: [{ label: "published only", field: "only_published" }, { label: "v0 only", field: "only_reference" }],
           },
           {
-            title: "A/B: exact McNemar test", subtitle: "two-sided, and one-sided against the published model being worse", family: "value_ab", x: "policy_version", unit: "number", allTime: true, yMin: 0, yMax: 1,
+            title: "A/B: exact McNemar test", subtitle: "this run two-sided; one-sided better and worse pooled over the A/Bs of the published model", family: "value_ab", x: "policy_version", unit: "number", allTime: true, yMin: 0, yMax: 1,
             references: [{ value: 0.05, label: "0.05", kind: "threshold" }],
-            series: [{ label: "p", field: "p_value" }, { label: "p (worse)", field: "worse_p_value" }],
+            series: [{ label: "p", field: "p_value" }, { label: "p (better)", field: "better_p_value" }, { label: "p (worse)", field: "worse_p_value" }],
           },
         ],
       },
@@ -536,6 +536,10 @@ export const PAGES = [
           },
           { title: "CPU throttled", subtitle: "share of cgroup periods", family: "system", unit: "share", series: [{ label: "throttled", field: "cpu_throttled_fraction" }] },
           { title: "Memory used", family: "system", unit: "gib", series: [{ label: "anonymous", field: "memory_used_gib" }] },
+          {
+            title: "Disk", subtitle: "the fullest filesystem of the run and its checkpoints", family: "system", unit: "gib", yMin: 0,
+            series: [{ label: "size", field: "disk_total_gib" }, { label: "free", field: "disk_free_gib" }],
+          },
           { title: "Cost so far", family: "system", unit: "dollars", series: [{ label: "spent", field: "cost_so_far" }] },
         ],
       },

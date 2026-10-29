@@ -64,6 +64,9 @@ class SystemUsage:
     lean_private_memory_gib: float = 0.0
     lean_private_memory_p90_gib: float = 0.0
     vllm_private_memory_gib: float = 0.0
+    # The fullest filesystem of the sampled paths (the run directory and the checkpoints).
+    disk_total_gib: float = 0.0
+    disk_free_gib: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -167,16 +170,24 @@ class ValueAbResult:
     problems: int
     reference_solved: int
     published_solved: int
-    # Problems only one arm solved: the paired test's evidence.
+    # Problems only one arm solved in this run: the paired test's evidence.
     only_reference: int
     only_published: int
-    # Exact McNemar test on those: two-sided, and one-sided against the published model being worse.
+    # Exact McNemar test on this run's, two-sided.
     p_value: float
+    # One-sided exact McNemar tests, pooled over every A/B of this published value model: worse, better.
     worse_p_value: float
-    # Ahead of the reference by the configured margin and not significantly worse: μ may turn on.
+    # Better than the reference at the configured level (pooled): μ may turn on.
     passed: bool
     reference_value_version: int
     published_value_version: int
+    better_p_value: float = 1.0
+    # Worse than the reference at that level (pooled): the loop publishes the reference value model again.
+    worse: bool = False
+    # The A/B runs pooled, this one included, and their problems solved by one arm only.
+    pooled_runs: int = 1
+    pooled_only_reference: int = 0
+    pooled_only_published: int = 0
 
 
 @dataclass(frozen=True)

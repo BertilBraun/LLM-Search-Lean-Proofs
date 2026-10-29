@@ -1,4 +1,5 @@
 import asyncio
+import dataclasses
 import tomllib
 from pathlib import Path
 
@@ -14,17 +15,21 @@ from loop_fakes import (
     record_version_zero,
     run_until,
     statement,
+    zero,
 )
 
 from lean_search.expert_iteration.pool import problem_name
-from lean_search.expert_iteration.serving import ModelVersion, read_current, read_versions
-from lean_search.monitoring.families import PauseSegments
+from lean_search.expert_iteration.serving import ModelVersion, read_current, read_versions, write_json_atomically
+from lean_search.monitoring.families import PauseSegments, ValueAbResult
 from lean_search.monitoring.store import RunReader
 from lean_search.rl.evaluation import EvaluationKind
 from lean_search.rl.loop import (
+    GIB,
     GrpoLoop,
+    GrpoLoopPaths,
     PhaseStage,
     TrainingRequest,
+    earlier_value_ab_results,
     evaluation_due,
     phase_config_text,
     read_progress,
@@ -145,6 +150,7 @@ async def test_a_pause_sleeps_every_server_trains_then_wakes_them_with_the_new_v
     await run_until(world, world.loop(), phases=1)
     assert first_pause(world) == [
         "pause",
+        "stop repls above 0",
         "sleep policy-gpu0",
         "sleep policy-gpu1",
         "sleep value-gpu0",
@@ -164,6 +170,7 @@ async def test_with_one_training_gpu_the_other_servers_swap_in_place(tmp_path: P
     await run_until(world, world.loop(), phases=1)
     assert first_pause(world) == [
         "pause",
+        "stop repls above 0",
         "sleep policy-gpu0",
         "sleep value-gpu0",
         "train 1",
@@ -257,6 +264,86 @@ async def test_mu_stays_off_when_the_value_ab_does_not_pass(tmp_path: Path) -> N
     record_version_zero(world)
     await run_until(world, world.loop(), phases=2)
     assert value_shares(world)[:2] == [0.0, 0.0]
+
+
+def worse_value_world(root: Path) -> LoopWorld:
+    evaluations = FakeEvaluations(value_ab_worse=True)
+    return loop_world(root, VALUE_AB_TOML, trainer=FakeTrainer(value_passes=True), evaluations=evaluations)
+
+
+async def test_a_value_model_the_ab_finds_worse_is_replaced_by_v0(tmp_path: Path) -> None:
+    world = worse_value_world(tmp_path)
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=1)
+    assert read_current(world.paths.models).value_adapter == "value-v0-adapter"
+
+
+async def test_the_servers_serve_v0_after_the_ab_found_the_published_value_model_worse(tmp_path: Path) -> None:
+    world = worse_value_world(tmp_path)
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=1)
+    assert world.servers.served[-1] == read_current(world.paths.models).version
+
+
+async def test_value_training_continues_v0_after_the_ab_found_the_published_model_worse(tmp_path: Path) -> None:
+    world = worse_value_world(tmp_path)
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=2)
+    assert tomllib.loads(world.trainer.requests[1].config_text)["value"]["initial_adapter"] == "value-v0-adapter"
+
+
+async def test_mu_turns_off_when_the_ab_finds_the_published_value_model_worse(tmp_path: Path) -> None:
+    evaluations = FakeEvaluations(value_ab_passes=True)
+    world = loop_world(tmp_path, VALUE_AB_TOML, trainer=FakeTrainer(value_passes=True), evaluations=evaluations)
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=1)
+    evaluations.value_ab_passes, evaluations.value_ab_worse = False, True
+    request_evaluation(world.paths, EvaluationKind.VALUE_AB)
+    await run_until(world, world.loop(), phases=2)
+    assert value_shares(world)[1] == 0.0
+
+
+def remaining_adapters(world: LoopWorld, kind: str) -> list[str]:
+    root = world.paths.checkpoints_root
+    return sorted(path.parent.parent.name for path in root.glob(f"*_phase_*/{kind}/adapter"))
+
+
+def retention_world(root: Path, adapter_versions: int) -> LoopWorld:
+    return loop_world(root, LOOP_TOML + f"\n[retention]\nadapter_versions = {adapter_versions}\n")
+
+
+async def test_policy_adapters_of_versions_beyond_the_retention_are_deleted(tmp_path: Path) -> None:
+    world = retention_world(tmp_path, adapter_versions=2)
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=4)
+    assert remaining_adapters(world, "policy") == ["test_loop_phase_0003", "test_loop_phase_0004"]
+
+
+async def test_the_value_adapter_the_next_value_training_continues_is_kept(tmp_path: Path) -> None:
+    world = retention_world(tmp_path, adapter_versions=2)
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=4)
+    assert remaining_adapters(world, "value") == ["test_loop_phase_0004"]
+
+
+async def test_a_retention_of_zero_keeps_every_adapter(tmp_path: Path) -> None:
+    world = retention_world(tmp_path, adapter_versions=0)
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=3)
+    assert len(remaining_adapters(world, "policy")) == 3
+
+
+def write_value_ab(paths: GrpoLoopPaths, version: int, published_value_version: int) -> None:
+    directory = paths.evaluation_directory(EvaluationKind.VALUE_AB, version, 0, EvaluationValueModel.PUBLISHED)
+    result = dataclasses.replace(zero(ValueAbResult), published_value_version=published_value_version)
+    write_json_atomically(directory / "comparison.json", result)
+
+
+def test_value_abs_pool_with_the_other_runs_of_the_same_published_value_model(tmp_path: Path) -> None:
+    paths = GrpoLoopPaths(tmp_path, tmp_path, tmp_path, "loop")
+    for version, published_value_version in ((2, 1), (3, 2), (4, 2), (5, 2)):
+        write_value_ab(paths, version, published_value_version)
+    assert len(earlier_value_ab_results(paths, 5, 2)) == 2
 
 
 async def test_the_value_ab_runs_the_reference_arm_before_the_published_one(tmp_path: Path) -> None:
@@ -369,6 +456,14 @@ async def test_a_restart_finishes_the_interrupted_training(tmp_path: Path) -> No
     assert [request.phase for request in world.trainer.requests] == [1, 1]
 
 
+async def test_a_restart_wakes_no_server_while_an_earlier_loops_job_runs(tmp_path: Path) -> None:
+    world = loop_world(tmp_path, trainer=FakeTrainer(earlier_job="torchrun grpo_phase.py"))
+    record_version_zero(world)
+    with pytest.raises(RuntimeError):
+        await run_until(world, world.loop(), phases=1)
+    assert world.servers.served == []
+
+
 async def test_an_interrupted_phase_is_recorded_as_training(tmp_path: Path) -> None:
     world = loop_world(tmp_path, trainer=FakeTrainer(fail_phases={1}))
     record_version_zero(world)
@@ -436,10 +531,34 @@ async def test_a_requested_probe_after_the_baseline_runs_once(tmp_path: Path) ->
 
 
 async def test_the_paused_searches_release_their_lean_memory_before_evaluating(tmp_path: Path) -> None:
-    world = loop_world(tmp_path, toml=BASELINE_TOML)
+    world = loop_world(tmp_path, toml=BASELINE_TOML + "\n[evaluation]\npaused_repl_memory_gib = 1.0\n")
     record_version_zero(world)
     await run_until(world, world.loop(), phases=1)
-    assert world.searcher.memory_releases == [0]
+    assert world.searcher.memory_releases[0] == GIB
+
+
+async def test_the_paused_searches_release_their_lean_memory_before_training(tmp_path: Path) -> None:
+    toml = LOOP_TOML.replace("value_every_phases = 1\n", "value_every_phases = 1\npaused_repl_memory_gib = 2.0\n")
+    world = loop_world(tmp_path, toml=toml)
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=1)
+    assert world.searcher.memory_releases == [2 * GIB]
+
+
+async def test_the_host_memory_is_logged_at_the_pause_stages(tmp_path: Path) -> None:
+    world = loop_world(tmp_path)
+    record_version_zero(world)
+    messages: list[str] = []
+    loop = world.loop()
+    loop.log = messages.append
+    loop.host_memory = lambda: "plenty"
+    await run_until(world, loop, phases=1)
+    assert [message for message in messages if message.startswith("Host memory")] == [
+        "Host memory at the pause: plenty",
+        "Host memory before training: plenty",
+        "Host memory after training: plenty",
+        "Host memory after publishing: plenty",
+    ]
 
 
 FAILING = problem_name(statement(0).statement)
@@ -483,6 +602,60 @@ async def test_a_statement_is_not_given_up_within_its_retries(tmp_path: Path) ->
     record_version_zero(world)
     await run_until_searched(world, world.loop(), times=3)
     assert last_status(world, "statements_given_up") == 0
+
+
+def dead_server_world(root: Path, settings: str = "") -> LoopWorld:
+    toml = LOOP_TOML.replace(
+        "status_seconds = 0.01\n",
+        f"status_seconds = 0.01\nserver_failure_pause_seconds = 0.0\nserver_failure_window = 4\n{settings}",
+    )
+    world = loop_world(root, toml=toml)
+    world.servers.down.add("policy-gpu1")
+    return world
+
+
+def events_from_the_first_pause(world: LoopWorld) -> list[str]:
+    events = world.searcher.events
+    return events[events.index("pause") :]
+
+
+async def test_a_dead_server_is_restarted(tmp_path: Path) -> None:
+    world = dead_server_world(tmp_path)
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=1)
+    assert world.servers.restarted == ["policy-gpu1"]
+
+
+async def test_the_searches_pause_while_a_dead_server_restarts(tmp_path: Path) -> None:
+    world = dead_server_world(tmp_path)
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=1)
+    assert events_from_the_first_pause(world)[:3] == ["pause", "restart policy-gpu1 v0", "resume"]
+
+
+async def test_a_server_that_stays_down_stops_the_loop(tmp_path: Path) -> None:
+    world = dead_server_world(tmp_path)
+    world.servers.restarts_fail = True
+    record_version_zero(world)
+    with pytest.raises(RuntimeError):
+        await run_until(world, world.loop(), phases=1)
+
+
+async def test_without_restarts_a_dead_server_stops_the_loop(tmp_path: Path) -> None:
+    world = dead_server_world(tmp_path, "restart_dead_servers = false\n")
+    record_version_zero(world)
+    with pytest.raises(RuntimeError):
+        await run_until(world, world.loop(), phases=1)
+    assert world.servers.restarted == []
+
+
+async def test_servers_that_answer_again_are_checked_but_not_restarted(tmp_path: Path) -> None:
+    world = dead_server_world(tmp_path)
+    world.servers.down.clear()
+    world.searcher.server_failures = {problem_name(statement(number).statement): 2 for number in range(6)}
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=1)
+    assert events_from_the_first_pause(world)[:2] == ["pause", "resume"]
 
 
 OVERFULL_GPU = LOOP_TOML.replace(

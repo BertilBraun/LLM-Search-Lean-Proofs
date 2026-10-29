@@ -38,6 +38,12 @@ class SamplingConfig:
     # A search a server failed feeds its statement again up to this many times, each after the pause.
     server_failure_retries: int = 3
     server_failure_pause_seconds: float = 5.0
+    # Once at least this share of the last `server_failure_window` searches ended on a server failure, the searches
+    # pause and the servers are checked: dead ones are restarted (if `restart_dead_servers`), and the loop stops with
+    # an error when any stays down.
+    server_failure_window: int = 20
+    server_failure_share: float = 0.5
+    restart_dead_servers: bool = True
 
 
 @dataclass(frozen=True)
@@ -57,8 +63,8 @@ class LoopTrainingConfig:
     # continuing the last value adapter trained (published or not); it is published only if it passes the gate.
     value_every_phases: int = 4
     value_window_phases: int = 8
-    # μ in the policy reward and the value targets once a value model passed the gate and the latest value A/B
-    # search (evaluation.value_ab) found it ahead of the reference (0 before; it then stays on).
+    # μ in the policy reward and the value targets once a value model passed the gate and a value A/B search
+    # (evaluation.value_ab) found it better than the reference (0 before, and again once an A/B finds it worse).
     value_share_after_gate: float = 0.15
     # The gate's benchmark (grpo_fixed_sets.py gate-benchmark) under $LEAN_SEARCH_RUNS; without it the value model
     # does not train, since nothing could accept it.
@@ -70,6 +76,9 @@ class LoopTrainingConfig:
     value_replay: str = ""
     # Command prefix of the training job, e.g. "nice -n 5"; the job runs with CUDA_VISIBLE_DEVICES=gpus.
     command_prefix: str = ""
+    # Paused searches' REPL processes above this private memory (0: all) stop before the training job starts, to
+    # leave host memory to its ranks; they replay their proof states later. A large value keeps them.
+    paused_repl_memory_gib: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -85,6 +94,9 @@ class EvaluationTarget:
     at_start: bool = False
     # Independent runs of that baseline; two measure the run-to-run noise.
     baseline_runs: int = 1
+    # Only the first this many problems (the probe's strata in turn; held-out states: states), 0 all: a smoke test's
+    # tiny evaluations. The value A/B takes value_ab_test.problems instead.
+    problems: int = 0
 
 
 class EvaluationValueModel(StrEnum):
@@ -98,9 +110,8 @@ class EvaluationValueModel(StrEnum):
 class ValueAbConfig:
     # Probe-set problems searched by both arms: the first ones of each stratum in the set's order, strata alternating.
     problems: int = 250
-    # μ turns on once the published value model solves at least this many more problems than the reference...
-    min_solved_difference: int = 1
-    # ...and an exact McNemar test on the problems only one arm solved does not find it worse at this one-sided level.
+    # One-sided exact McNemar tests on the problems only one arm solved, pooled over the A/Bs of one published value
+    # model: better at this level turns μ on, worse publishes the reference value model again (and turns μ off).
     significance: float = 0.05
 
 
@@ -130,6 +141,14 @@ class EvaluationConfig:
 
 
 @dataclass(frozen=True)
+class RetentionConfig:
+    # The phase adapters (policy and value) of the last this many published versions stay on disk, and those still in
+    # use (the value adapter the next value training continues); older ones are deleted after each publish, ~0.5 GB of
+    # fp32 policy adapter per phase. 0 keeps every adapter. Merged weights: only the current version's and version 0's.
+    adapter_versions: int = 5
+
+
+@dataclass(frozen=True)
 class GrpoLoopConfig:
     # The run directory $LEAN_SEARCH_RUNS/<name>; checkpoints under $LEAN_SEARCH_CHECKPOINTS/<name>_phase_<k>.
     name: str
@@ -142,6 +161,7 @@ class GrpoLoopConfig:
     evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
     # Descriptive hypothesis names at search time (loop, probe, miniF2F), for a policy trained on named data.
     renaming: RenamingConfig = field(default_factory=RenamingConfig)
+    retention: RetentionConfig = field(default_factory=RetentionConfig)
 
     def released_servers(self) -> tuple[ServerEndpoint, ...]:
         """Servers on the training GPUs: asleep while a phase trains."""
@@ -160,6 +180,9 @@ def parse_loop_config(text: str) -> GrpoLoopConfig:
         shares[server.gpu] = shares.get(server.gpu, 0.0) + server.memory_share
     if any(share > 1.0 for share in shares.values()):
         raise ValueError(f"The servers' memory shares exceed a GPU's memory: {shares}.")
+    sampling = config.sampling
+    if sampling.server_failure_window < 1 or not 0 < sampling.server_failure_share <= 1:
+        raise ValueError("sampling needs server_failure_window >= 1 and 0 < server_failure_share <= 1.")
     if config.statements.kind == StatementSourceKind.FIXED and not config.statements.fixed:
         raise ValueError('statements.kind = "fixed" needs statements.fixed.')
     training = config.training

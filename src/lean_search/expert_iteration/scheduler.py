@@ -185,7 +185,11 @@ class Scheduler:
             entry.priority = restart_priority(attempt)
             return
         self._finish(entry, attempt.decision)
-        if self.curriculum is not None and attempt.decision != Decision.RETIRED_LOAD_FAILURE:
+        if self.curriculum is None:
+            return
+        if attempt.decision == Decision.RETIRED_LOAD_FAILURE:
+            self.curriculum.abandon(attempt.problem_name)
+        else:
             self.curriculum.record_outcome(attempt.problem_name, attempt.decision == Decision.SOLVED)
 
     def release(self, job: Job) -> None:
