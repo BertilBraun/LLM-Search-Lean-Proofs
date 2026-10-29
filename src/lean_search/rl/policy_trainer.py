@@ -1,16 +1,19 @@
 """GRPO of the policy LoRA: a PPO-clipped objective per sampled token, at the sampling temperature, with replay."""
 
+import contextlib
 import random
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
+import peft
 import torch
 import torch.utils.checkpoint
 import transformers
 
+from lean_search.policy.adapters import load_adapter_weights, lora_rank, lora_scale, saved_adapter_weights
 from lean_search.rl.policy_data import (
     AdvantageSignRatios,
     PolicyDataConfig,
@@ -37,6 +40,7 @@ from lean_search.training.sft import (
     FineTuningMethod,
     LoraSettings,
     OptimizationConfig,
+    TrainableLoader,
     learning_rate_factor,
     load_trainable_model,
     micro_batch,
@@ -46,9 +50,8 @@ from lean_search.training.sft_data import IGNORE_INDEX, TokenizedExample
 
 # Smaller than the SFT loss chunks: the entropy needs the full log-softmax next to the logits.
 SCORE_CHUNK_POSITIONS = 512
-# PEFT's name of the adapter that trains, and of the starting policy's adapter while it scores the reference.
+# PEFT's name of the adapter that trains.
 TRAINED_ADAPTER_NAME = "default"
-REFERENCE_ADAPTER_NAME = "reference"
 
 
 class ReferencePolicy(StrEnum):
@@ -405,14 +408,24 @@ def reference_log_probabilities(
     if not config.reference_adapter:
         with saved_module.disable_adapter():
             return scored()
-    saved_module.load_adapter(config.reference_adapter, adapter_name=REFERENCE_ADAPTER_NAME)
-    saved_module.set_adapter(REFERENCE_ADAPTER_NAME)
-    try:
+    with reference_weights_in_place(saved_module, config.reference_adapter):
         return scored()
+
+
+@contextlib.contextmanager
+def reference_weights_in_place(saved_module: peft.PeftModel, reference_adapter: str) -> Iterator[None]:
+    """The reference adapter's weights in the trained adapter's place, the trained ones back afterwards. The reference
+    is the starting adapter the trained one continues, so they share rank and scale; loading it as a second adapter
+    would add modules, which recompiles the compiled layers of a resident model in every phase."""
+    trained = saved_module.peft_config[TRAINED_ADAPTER_NAME]
+    reference = Path(reference_adapter)
+    assert (lora_rank(reference), lora_scale(reference)) == (trained.r, trained.lora_alpha / trained.r), reference
+    kept = {name: tensor.clone() for name, tensor in peft.get_peft_model_state_dict(saved_module).items()}
+    load_adapter_weights(saved_module, saved_adapter_weights(reference, next(saved_module.parameters()).device))
+    try:
+        yield
     finally:
-        # Setting the trained adapter active also makes it the only one requiring gradients again.
-        saved_module.set_adapter(TRAINED_ADAPTER_NAME)
-        saved_module.delete_adapter(REFERENCE_ADAPTER_NAME)
+        load_adapter_weights(saved_module, kept)
 
 
 def reference_tensors(
@@ -510,16 +523,16 @@ def train_grpo(
     output_directory: Path,
     on_step: Callable[[GrpoStepRecord], None],
     ranks: Ranks = SINGLE_PROCESS,
+    load: TrainableLoader = load_trainable_model,
 ) -> GrpoTrainingResult:
-    """On every rank with the same arguments; only the main rank reports steps and saves the adapter."""
+    """On every rank with the same arguments; only the main rank reports steps and saves the adapter. `load` gives
+    the model (a resident one in the persistent training job)."""
     optimization = config.optimization
     assert optimization.method == FineTuningMethod.LORA, optimization.method
     longest = max((sequence.token_count for sequence in sequences), default=0)
     assert longest <= config.max_sequence_tokens, f"a recorded sample of {longest} tokens"
     load_started = time.perf_counter()
-    saved_module, causal_model = load_trainable_model(
-        config.model, optimization, config.lora, device, config.initial_adapter
-    )
+    saved_module, causal_model = load(config.model, optimization, config.lora, device, config.initial_adapter)
     scorer = CompletionTokenScores(causal_model)
     load_seconds = time.perf_counter() - load_started
     examples = [sequence.tokenized for sequence in sequences]

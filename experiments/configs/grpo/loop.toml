@@ -114,6 +114,11 @@ value_replay = "value/v0/train.jsonl"
 # four ranks' parsed trees fit next to the sleeping servers; they replay their proof states on the next request.
 # Memory budget: src/lean_search/rl/README.md, "Host memory".
 paused_repl_memory_gib = 0.0
+# One training job for the whole loop, its models parked in host memory between phases and its merges handed to the
+# servers in memory (rl/README.md, "Persistent trainer"); false: grpo_phase.py per phase. The host directory needs
+# ~28 GiB of tmpfs (rent with --shm-size 32g or more).
+persistent = true
+host_directory = "/dev/shm/lean_search"
 
 [statements]
 kind = "curriculum"

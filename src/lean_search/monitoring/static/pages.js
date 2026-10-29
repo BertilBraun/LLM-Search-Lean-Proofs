@@ -570,6 +570,7 @@ export const PAGES = [
               { label: "value training", field: "pause.value_training_seconds" },
               { label: "gate", field: "pause.gate_seconds" },
               { label: "merge and write", fields: ["pause.merge_seconds", "pause.write_seconds"] },
+              { label: "park and handoff", fields: ["pause.park_seconds", "pause.handoff_seconds"] },
               { label: "publish, wake, resume", fields: ["pause.publish_seconds", "pause.wake_seconds", "pause.resume_seconds"] },
             ],
           },

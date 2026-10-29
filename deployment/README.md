@@ -286,11 +286,19 @@ The search-tree GRPO loop (`src/lean_search/rl/README.md`, "The loop") on 4x RTX
 
 | GPUs | While sampling | During a phase's pause (every search paused) |
 |---|---|---|
-| 0-3 | each serves the merged policy (port 810x, `GPU_MEMORY_UTILIZATION=0.62`, `--logprobs-mode processed_logprobs`) and the merged value model (port 820x, 0.28, `MAX_NUM_SEQS=96`), all with `SLEEP_MODE=1` | the servers drain and sleep (level 2, ~0.8 GiB each left in use); `grpo_phase.py` trains on all four with `torchrun` (`[training] gpus`): policy GRPO, the value model, its gate (rank 0), the merges; then the servers wake with the new weights |
+| 0-3 | each serves the merged policy (port 810x, `GPU_MEMORY_UTILIZATION=0.62`, `--logprobs-mode processed_logprobs`) and the merged value model (port 820x, 0.28, `MAX_NUM_SEQS=96`), all with `SLEEP_MODE=1` | the servers drain and sleep (level 2, ~0.8 GiB each left in use); the persistent training job (`grpo_trainer.py`, `[training] persistent = true`; started once with the loop, its models parked in host memory between phases) trains on all four with `torchrun` (`[training] gpus`): policy GRPO, the value model, its gate (rank 0), the merges into host memory; then the servers wake with the new weights from there and the searches resume while the weights are written to disk |
 
 Fallback if the data-parallel pause costs too much (`src/lean_search/rl/README.md`, "Timing"): `gpus = [0]` in
 `[training]`; GPU 0's two servers sleep and one process trains there, the other six stay loaded and idle and swap to
-the new weights in place. No server changes are needed to switch.
+the new weights in place. No server changes are needed to switch. `persistent = false` runs `grpo_phase.py` once per
+phase instead of the persistent job (start, loads and compilation paid every phase; merges written to disk first).
+
+The persistent job keeps its parked bases (one copy for all ranks, ~14 GiB) and the merges it hands to the servers
+(up to ~14 GiB until written to disk) under `[training] host_directory` (`/dev/shm/lean_search/<loop>`): rent with
+`--shm-size 32g` or more (`df -h /dev/shm`; the job fails building its models, with the sizes, when the tmpfs is too small;
+another directory works too, then the parked weights live in the page cache). Its log is
+`$LEAN_SEARCH_RUNS/<loop>/training/trainer.log` (all phases, ranks prefixed), its commands and replies
+`training/trainer/`.
 
 The loop process holds one Lean REPL per concurrent search (`[sampling] concurrency`, 112) and runs the training and
 evaluation jobs as child processes, each in its own process group and recorded in `$LEAN_SEARCH_RUNS/<loop>/children/`
@@ -329,8 +337,9 @@ at 30-minute phases. `system.disk_free_gib` on the System page, alert below 50 G
 Order on a fresh node (each step catches what would otherwise surface hours later):
 
 1. **Node checks** (`deployment/grpo_loop.sh node-check`, minutes): `df` of the runs, the checkpoints and `/dev/shm`
-   (fails below 1 GiB of `/dev/shm`: Docker's 64 MB default breaks NCCL's shared-memory transport; rent with
-   `--shm-size 16g`), `nproc` and the cgroup's `cpu.max`, `nvidia-smi topo -m`, and a 4-rank NCCL all-reduce of
+   (fails below 1 GiB of `/dev/shm`: Docker's 64 MB default breaks NCCL's shared-memory transport; the persistent
+   trainer needs ~28 GiB there, so rent with
+   `--shm-size 32g`), `nproc` and the cgroup's `cpu.max`, `nvidia-smi topo -m`, and a 4-rank NCCL all-reduce of
    256 MiB (`experiments/nccl_check.py`, as the trainer sums its gradients; a hang means no peer-to-peer access over
    PCIe: `NCCL_P2P_DISABLE=1` in the loop's environment). HF and GitHub reachability.
 2. **Rebuild**, then the heartbeat replay (`python experiments/heartbeat_replay.py ...`, DESIGN.md "Lean execution and
@@ -397,13 +406,20 @@ First-hour checks:
   100 and re-select before the loop starts); the first phase's `timing` line gives sampling vs training (two passes if
   training stays well below sampling, else `passes_per_phase = 1` in `phase.toml`) and publishing.
 - The pause, segment by segment (`loop.log`'s `Phase <k> pause:` line, the `timing` family's `pause.*`, the System
-  page's "Pause segments"; `src/lean_search/rl/README.md`, "Timing"). Expected on four GPUs: `drain` and
-  `server_sleep` seconds; `trainer_start` under a minute (torchrun, imports, NCCL, reading the trees); `policy_load`
-  and `compile` 1-2 minutes together; `scoring` plus `policy_training` about a quarter of the one-GPU 4-8 minutes;
-  `value_training` and `gate` (rank 0 alone, ~2-3 minutes) next; `merge` and `write` well under a minute (policy and
-  value merge on different GPUs in parallel); `publish` seconds (the merges are moved, not redone: a `publish` of a
-  minute or more means the CPU merge ran, see `training/phase_<k>.log`); `wake` a few seconds per server. If the
-  fixed segments dominate, compare one phase with `gpus = [0]` before deciding.
+  page's "Pause segments"; `src/lean_search/rl/README.md`, "Timing" and "Persistent trainer"). Expected on four GPUs
+  with the persistent job: `drain` and `server_sleep` seconds; `trainer_start` 0 (the job and its models came up
+  during the first sampling: `Persistent trainer started` and `Policy ... resident after` in the logs); `compile` 1-2
+  minutes in the first phase only, and `phase.json`'s `timings.compiled_graphs` 0 from the second phase on (`trainer.log`
+  prints it per phase; a count every phase means recompilation, worth its own look); `preparation` well under a
+  minute outside value phases; `policy_load` (unpark) and `park` seconds; `scoring` plus `policy_training` about a
+  quarter of the one-GPU 4-8 minutes; `value_training` and `gate` (rank 0 alone, ~2-3 minutes) in value phases;
+  `merge` and `handoff` well under a minute; `publish` ~0 (`Published version <k> from host memory` in `loop.log`; a
+  `publish` of a minute or more means the CPU merge ran); `wake` a few seconds per server; then `durable_write` about
+  a minute in the background (`Version <k> written to disk and recorded`). Together about 1 minute outside value
+  phases; if the fixed segments still dominate, compare one phase with `gpus = [0]` before deciding.
+- The parked job's GPU memory between phases: `nvidia-smi` while sampling shows each GPU's two servers plus the
+  trainer rank's CUDA context and NCCL buffers (~0.5-1 GiB); a wake failing on memory means the servers' shares
+  (0.62 + 0.28) leave too little beside it: lower `GPU_MEMORY_UTILIZATION` of the value servers by 0.02.
 - Training on the GPUs the servers left: `nvidia-smi --query-gpu=index,memory.used,memory.total --format=csv -l 5`
   during the first training stage. Each GPU holds the two sleeping servers' remainder (~1.6 GiB) plus one rank; the
   ranks' `peak_memory_gib` (largest over ranks) is in `phase.json`. An out-of-memory rank fails the job (the loop

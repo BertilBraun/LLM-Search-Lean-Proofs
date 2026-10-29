@@ -19,6 +19,7 @@ from lean_search.training.packing import packed_positions, sequence_starts
 from lean_search.training.sft import (
     LoraSettings,
     OptimizationConfig,
+    TrainableLoader,
     learning_rate_factor,
     load_trainable_model,
     trainable_parameters,
@@ -441,6 +442,10 @@ def mean(values: Sequence[float]) -> float:
     return sum(values) / len(values) if values else 0.0
 
 
+def value_initial_adapter(config: GraphValueConfig) -> str:
+    return "" if config.retrain_from_base else config.initial_adapter
+
+
 def train_graph_value_model(
     config: GraphValueConfig,
     tokenizer: ValueTokenizer,
@@ -450,11 +455,12 @@ def train_graph_value_model(
     output_directory: Path,
     on_step: Callable[[GraphValueStepRecord], None],
     ranks: Ranks = SINGLE_PROCESS,
+    load: TrainableLoader = load_trainable_model,
 ) -> GraphValueTrainingResult:
-    """On every rank with the same arguments; only the main rank reports steps and saves the adapter."""
+    """On every rank with the same arguments; only the main rank reports steps and saves the adapter. `load` gives
+    the model (a resident one in the persistent training job)."""
     optimization = config.optimization
-    initial_adapter = "" if config.retrain_from_base else config.initial_adapter
-    saved_module, causal_model = load_trainable_model(config.model, optimization, config.lora, device, initial_adapter)
+    saved_module, causal_model = load(config.model, optimization, config.lora, device, value_initial_adapter(config))
     model = LastPositionLogits(causal_model)
     bin_ids = torch.tensor(bin_token_ids(tokenizer), device=device)
     parameters = trainable_parameters(saved_module)

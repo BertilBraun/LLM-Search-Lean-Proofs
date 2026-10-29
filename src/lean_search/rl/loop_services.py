@@ -20,7 +20,7 @@ from lean_search.expert_iteration.loop_config import ServerEndpoint, ServingConf
 from lean_search.expert_iteration.loop_search import PauseGate
 from lean_search.expert_iteration.serving import MergedPublisher, ModelVersion, write_json_atomically
 from lean_search.lean import FORBIDDEN_TOKENS, LeanReplConfig, LeanReplPool
-from lean_search.monitoring.system_sampler import CGROUP, LEAN_PROCESS_NAMES, PROC, host_memory
+from lean_search.monitoring.system_sampler import CGROUP, LEAN_PROCESS_NAMES, PROC, host_memory, percentile_90
 from lean_search.policy.client import PolicyClient
 from lean_search.policy.config import PolicyConfig
 from lean_search.policy.expander import load_tokenizer
@@ -34,6 +34,7 @@ from lean_search.policy.server_control import (
     restore_gpu,
 )
 from lean_search.rl.evaluation import EvaluationKind, EvaluationSummary, read_summary
+from lean_search.rl.host_memory import HostMemoryTerms, budget_conditions, budget_text
 from lean_search.rl.loop import (
     GIB,
     PHASE_OUTCOME_FILE,
@@ -45,9 +46,11 @@ from lean_search.rl.loop import (
 from lean_search.rl.loop_config import EvaluationValueModel, GrpoLoopConfig, LoopTrainingConfig
 from lean_search.rl.renaming import StatementRenamings, search_problem
 from lean_search.rl.search_models import SearchModels, open_search_models
+from lean_search.rl.trainer_channel import TrainerChannel, TrainerCommand, TrainerCommandKind
 from lean_search.rl.training_phase import PhaseOutcome
 from lean_search.search import CompletedSearch, RunConfig
 from lean_search.search.records import from_json_object
+from lean_search.training.resident import HostDirectories
 
 REPOSITORY_DIRECTORY = Path(__file__).resolve().parents[3]
 # The GRPO trainer compares the sampler's log-probabilities with its own at the sampling temperature.
@@ -231,6 +234,41 @@ async def run_logged(arguments: Sequence[str], log_path: Path, environment: dict
         raise RuntimeError(f"{shlex.join(arguments)} failed; see {log_path}")
 
 
+def training_launcher(config: LoopTrainingConfig) -> list[str]:
+    """The command prefix, then one process, or torchrun with a rank per training GPU."""
+    launcher = [sys.executable]
+    if len(config.gpus) > 1:
+        launcher += ["-m", "torch.distributed.run", "--standalone", f"--nproc-per-node={len(config.gpus)}"]
+    return [*shlex.split(config.command_prefix), *launcher]
+
+
+def replay_arguments(paths: GrpoLoopPaths, config: LoopTrainingConfig) -> list[str]:
+    arguments = []
+    for option, relative in (
+        ("--lean-replay", config.lean_replay),
+        ("--math-replay", config.math_replay),
+        ("--value-replay", config.value_replay),
+    ):
+        if relative:
+            arguments += [option, str(paths.data_root / relative)]
+    return arguments
+
+
+def training_environment(paths: GrpoLoopPaths, config: LoopTrainingConfig) -> dict[str, str]:
+    return os.environ | {
+        "CUDA_VISIBLE_DEVICES": ",".join(str(gpu) for gpu in config.gpus),
+        "LEAN_SEARCH_CHECKPOINTS": str(paths.checkpoints_root),
+        "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+    }
+
+
+def write_phase_config(paths: GrpoLoopPaths, request: TrainingRequest) -> Path:
+    config_path = paths.training / f"phase_{request.phase:04d}.toml"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(request.config_text, encoding="utf-8")
+    return config_path
+
+
 class SubprocessTrainer:
     """experiments/grpo_phase.py on the training GPUs, one job per phase: one process, or a torchrun rank per GPU."""
 
@@ -242,21 +280,9 @@ class SubprocessTrainer:
         running = live_children(self.paths.children)
         return earlier_jobs_text(running) if running else None
 
-    def launcher(self) -> list[str]:
-        if len(self.config.gpus) == 1:
-            return [sys.executable]
-        return [
-            sys.executable,
-            "-m",
-            "torch.distributed.run",
-            "--standalone",
-            f"--nproc-per-node={len(self.config.gpus)}",
-        ]
-
     def arguments(self, request: TrainingRequest, config_path: Path) -> list[str]:
         arguments = [
-            *shlex.split(self.config.command_prefix),
-            *self.launcher(),
+            *training_launcher(self.config),
             "experiments/grpo_phase.py",
             "--config",
             str(config_path),
@@ -265,32 +291,191 @@ class SubprocessTrainer:
             "--run-name",
             request.run_name,
             "--merge-adapters",
+            *replay_arguments(self.paths, self.config),
         ]
-        for option, relative in (
-            ("--lean-replay", self.config.lean_replay),
-            ("--math-replay", self.config.math_replay),
-            ("--value-replay", self.config.value_replay),
-        ):
-            if relative:
-                arguments += [option, str(self.paths.data_root / relative)]
         if request.train_value:
             arguments += ["--value-benchmark", str(self.paths.runs_root / self.config.value_benchmark)]
             arguments += ["--value-trees", *(str(directory) for directory in request.value_trees)]
         return arguments
 
+    async def prepare(self, request: TrainingRequest) -> None:
+        """The phase's job reads and labels its trees when it starts."""
+
     async def train(self, request: TrainingRequest) -> PhaseOutcome:
-        config_path = self.paths.training / f"phase_{request.phase:04d}.toml"
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-        config_path.write_text(request.config_text, encoding="utf-8")
-        environment = os.environ | {
-            "CUDA_VISIBLE_DEVICES": ",".join(str(gpu) for gpu in self.config.gpus),
-            "LEAN_SEARCH_CHECKPOINTS": str(self.paths.checkpoints_root),
-            "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
-        }
+        config_path = write_phase_config(self.paths, request)
         log_path = self.paths.training / f"phase_{request.phase:04d}.log"
         arguments = self.arguments(request, config_path)
+        environment = training_environment(self.paths, self.config)
         await run_logged(arguments, log_path, environment, self.paths.children / "training.pid")
         return read_phase_outcome(request.output_directory / PHASE_OUTCOME_FILE)
+
+
+class TrainerDiedError(RuntimeError):
+    pass
+
+
+class PersistentTrainer:
+    """experiments/grpo_trainer.py: one training job for the whole loop, a rank per training GPU, that keeps its
+    models between phases and takes the loop's commands through files (`trainer_channel.py`).
+
+    It starts with the first `prepare` (at the start of sampling, so that its start and model building overlap the
+    searches) or `train`; its record lies in children/persistent/, apart from the evaluation jobs', which start while
+    it runs. A job that dies is started again at the next command; one that dies during a `train` is started again and
+    trains the phase once more, and a second death fails the phase as a failed per-phase job would. Leaving the
+    context sends `stop` and stops whatever is left; the job also stops by itself once the loop's process is gone.
+    """
+
+    def __init__(
+        self,
+        paths: GrpoLoopPaths,
+        config: LoopTrainingConfig,
+        arguments: Sequence[str],
+        environment: dict[str, str],
+        log: Callable[[str], None],
+        poll_seconds: float = 0.5,
+        stop_seconds: float = 60.0,
+    ) -> None:
+        self.paths = paths
+        self.config = config
+        self.arguments = list(arguments)
+        self.environment = environment
+        self.log = log
+        self.poll_seconds = poll_seconds
+        self.stop_seconds = stop_seconds
+        self.channel = TrainerChannel(paths.training / "trainer")
+        self.record_path = paths.children / "persistent" / "training.pid"
+        self.job: asyncio.Task[None] | None = None
+        self.sequence = 0
+        self.starts = 0
+
+    def earlier_jobs(self) -> str | None:
+        running = live_children(self.paths.children) + live_children(self.record_path.parent)
+        return earlier_jobs_text(running) if running else None
+
+    def running(self) -> bool:
+        return self.job is not None and not self.job.done()
+
+    def start(self) -> None:
+        self.channel.clear()
+        self.sequence = 0
+        self.starts += 1
+        log_path = self.paths.training / "trainer.log"
+        self.job = asyncio.create_task(run_logged(self.arguments, log_path, self.environment, self.record_path))
+        self.job.add_done_callback(self.job_ended)
+        self.log(f"Persistent trainer started (start {self.starts}; log {log_path})")
+
+    def job_ended(self, job: asyncio.Task[None]) -> None:
+        if job.cancelled():
+            return
+        error = job.exception()
+        self.log(f"Persistent trainer ended: {error or 'stopped'}")
+
+    def ensure_running(self) -> None:
+        if not self.running():
+            if self.starts:
+                self.log("Persistent trainer not running; starting it again")
+            self.start()
+
+    async def wait_for(self, condition: Callable[[], bool], what: str) -> None:
+        """Polls until `condition` holds; raises TrainerDiedError when the job ends first."""
+        assert self.job is not None
+        while not condition():
+            done, _ = await asyncio.wait({self.job}, timeout=self.poll_seconds)
+            if done and not condition():
+                raise TrainerDiedError(
+                    f"the persistent trainer ended while {what}; see {self.paths.training}/trainer.log"
+                )
+
+    def send(self, kind: TrainerCommandKind, request: TrainingRequest | None = None) -> int:
+        self.sequence += 1
+        if request is None:
+            self.channel.send(TrainerCommand(self.sequence, kind))
+            return self.sequence
+        command = TrainerCommand(
+            self.sequence,
+            kind,
+            phase=request.phase,
+            config=str(write_phase_config(self.paths, request)),
+            trees=str(request.trees),
+            value_trees=tuple(str(directory) for directory in request.value_trees),
+            output_directory=str(request.output_directory),
+        )
+        self.channel.send(command)
+        return self.sequence
+
+    async def prepare(self, request: TrainingRequest) -> None:
+        self.ensure_running()
+        self.send(TrainerCommandKind.PREPARE, request)
+
+    async def train(self, request: TrainingRequest) -> PhaseOutcome:
+        try:
+            try:
+                return await self.train_once(request)
+            except TrainerDiedError as died:
+                self.log(f"Phase {request.phase}: {died}; starting it again to train the phase once more")
+            try:
+                return await self.train_once(request)
+            except TrainerDiedError as again:
+                raise RuntimeError(f"Phase {request.phase} failed twice: {again}") from again
+        except asyncio.CancelledError:
+            # A job cut off mid-phase holds the GPUs; the phase reruns after a restart.
+            await self.stop_job()
+            raise
+
+    async def train_once(self, request: TrainingRequest) -> PhaseOutcome:
+        self.ensure_running()
+        await self.wait_for(lambda: self.channel.ready() is not None, "starting")
+        sequence = self.send(TrainerCommandKind.TRAIN, request)
+        await self.wait_for(lambda: self.channel.reply_to(sequence) is not None, f"training phase {request.phase}")
+        return read_phase_outcome(request.output_directory / PHASE_OUTCOME_FILE)
+
+    async def stop_job(self) -> None:
+        if self.job is not None:
+            self.job.cancel()
+            await asyncio.gather(self.job, return_exceptions=True)
+
+    async def close(self) -> None:
+        if self.running():
+            self.send(TrainerCommandKind.STOP)
+            assert self.job is not None
+            await asyncio.wait({self.job}, timeout=self.stop_seconds)
+        await self.stop_job()
+
+
+def persistent_trainer_arguments(paths: GrpoLoopPaths, config: GrpoLoopConfig) -> list[str]:
+    training = config.training
+    arguments = [
+        *training_launcher(training),
+        "experiments/grpo_trainer.py",
+        "--channel",
+        str(paths.training / "trainer"),
+        "--host-directory",
+        str(config.host_directory()),
+        "--loop-process-id",
+        str(os.getpid()),
+        "--loop-start-ticks",
+        str(running_start_ticks(os.getpid())),
+        *replay_arguments(paths, training),
+    ]
+    if training.value_benchmark:
+        arguments += ["--value-benchmark", str(paths.runs_root / training.value_benchmark)]
+    return arguments
+
+
+@contextlib.asynccontextmanager
+async def open_trainer(
+    paths: GrpoLoopPaths, config: GrpoLoopConfig, log: Callable[[str], None]
+) -> AsyncIterator[SubprocessTrainer | PersistentTrainer]:
+    """The persistent trainer with `[training] persistent`, else one job per phase."""
+    if not config.training.persistent:
+        yield SubprocessTrainer(paths, config.training)
+        return
+    arguments = persistent_trainer_arguments(paths, config)
+    trainer = PersistentTrainer(paths, config.training, arguments, training_environment(paths, config.training), log)
+    try:
+        yield trainer
+    finally:
+        await trainer.close()
 
 
 def slowest(seconds: Sequence[PhaseSeconds]) -> PhaseSeconds:
@@ -424,13 +609,41 @@ class SubprocessEvaluations:
         return read_summary(directory / "summary.json")
 
 
-def host_memory_text() -> str:
-    """The node's memory as the system sampler reads it (cgroup limit, available, Lean REPLs, vLLM)."""
+def directory_bytes(directory: Path) -> int:
+    return sum(path.stat().st_size for path in directory.rglob("*") if path.is_file())
+
+
+def host_memory_text(config: GrpoLoopConfig | None = None) -> str:
+    """The node's memory as the system sampler reads it (cgroup limit, available, Lean REPLs, vLLM); with the loop's
+    config also what the persistent trainer keeps in its host directory (a tmpfs: parked weights, merges handed to the
+    servers) and the budget's conditions on these measurements (`host_memory.budget_conditions`)."""
     memory = host_memory(CGROUP, PROC, LEAN_PROCESS_NAMES)
-    return (
+    text = (
         f"{memory.available_bytes / GIB:.1f} of {memory.total_bytes / GIB:.1f} GiB available; "
         f"{len(memory.lean_private_bytes)} Lean processes {sum(memory.lean_private_bytes) / GIB:.1f} GiB private, "
         f"vLLM {memory.vllm_private_bytes / GIB:.1f} GiB private"
+    )
+    if config is None:
+        return text
+    host = HostDirectories(config.host_directory())
+    terms = HostMemoryTerms(
+        total=memory.total_bytes / GIB,
+        repl_p90=percentile_90(memory.lean_private_bytes) / GIB,
+        vllm=memory.vllm_private_bytes / GIB,
+        parked=directory_bytes(host.parked) / GIB,
+        handoff=directory_bytes(host.handoff) / GIB,
+    )
+    evaluation = config.evaluation
+    evaluation_concurrency = max(
+        target.concurrency
+        for target in (evaluation.probe, evaluation.minif2f, evaluation.held_out_states, evaluation.value_ab)
+    )
+    conditions = budget_conditions(
+        terms, config.sampling.concurrency, evaluation_concurrency, len(config.training.gpus)
+    )
+    return (
+        f"{text}; persistent trainer {terms.parked:.1f} GiB parked, {terms.handoff:.1f} GiB handed off; "
+        f"{budget_text(conditions)} (training ranks and merges not measured)"
     )
 
 

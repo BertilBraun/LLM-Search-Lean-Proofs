@@ -39,6 +39,11 @@ def test_loop_trains_on_every_gpu(name: str) -> None:
     assert loop(name).training.gpus == (0, 1, 2, 3)
 
 
+@pytest.mark.parametrize("name", ["grpo/loop.toml", "grpo/loop_smoke.toml"])
+def test_loop_trains_with_the_persistent_trainer(name: str) -> None:
+    assert loop(name).training.persistent
+
+
 @pytest.mark.parametrize("name", LOOPS)
 def test_every_server_sleeps_while_the_loop_trains(name: str) -> None:
     config = loop(name)

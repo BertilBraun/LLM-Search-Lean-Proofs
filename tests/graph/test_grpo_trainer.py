@@ -7,8 +7,9 @@ from tiny_models import CharacterTokenizer, expansion_texts, save_tiny_model
 
 torch = pytest.importorskip("torch")
 pytest.importorskip("transformers")
-pytest.importorskip("peft")
+peft = pytest.importorskip("peft")
 
+from lean_search.policy.adapters import saved_adapter_weights  # noqa: E402
 from lean_search.rl.policy_data import PolicyDataConfig, PolicySequence, PolicyTree, build_policy_data  # noqa: E402
 from lean_search.rl.policy_trainer import (  # noqa: E402
     CompletionTokenScores,
@@ -186,6 +187,15 @@ def test_scoring_the_reference_leaves_only_the_published_adapter_trainable(
     _, saved = reference_after_continuing(tiny_model, perturbed_adapter, starting_adapter)
     trainable = {name for name, parameter in saved.named_parameters() if parameter.requires_grad}
     assert trainable and all(".default." in name for name in trainable)
+
+
+def test_scoring_the_reference_puts_the_published_weights_back(
+    tiny_model: Path, perturbed_adapter: Path, starting_adapter: Path
+) -> None:
+    _, saved = reference_after_continuing(tiny_model, perturbed_adapter, starting_adapter)
+    published = saved_adapter_weights(perturbed_adapter, CPU)
+    weights = peft.get_peft_model_state_dict(saved)
+    assert all(torch.equal(weights[name].float(), tensor.float()) for name, tensor in published.items())
 
 
 @pytest.mark.parametrize(("kl_coefficient", "scored"), [(0.0, 1), (0.1, 4)], ids=["reported only", "penalty"])

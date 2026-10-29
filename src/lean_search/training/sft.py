@@ -371,6 +371,12 @@ def load_trainable_model(
     return saved, causal_model
 
 
+# Gives a trainer its model as load_trainable_model does: loaded from disk, or a resident one (training/resident.py).
+TrainableLoader = Callable[
+    [str, OptimizationConfig, LoraSettings, torch.device, str], tuple[torch.nn.Module, transformers.PreTrainedModel]
+]
+
+
 def trainable_parameters(module: torch.nn.Module) -> list[torch.nn.Parameter]:
     return [parameter for parameter in module.parameters() if parameter.requires_grad]
 

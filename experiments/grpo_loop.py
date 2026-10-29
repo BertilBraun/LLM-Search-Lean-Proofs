@@ -20,6 +20,7 @@ import argparse
 import asyncio
 import dataclasses
 import datetime
+import functools
 import json
 import os
 import signal
@@ -27,7 +28,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from lean_search.expert_iteration.merging import merge
+from lean_search.expert_iteration.merging import handoff_merge
 from lean_search.expert_iteration.serving import (
     MergedPublisher,
     ModelVersion,
@@ -42,10 +43,10 @@ from lean_search.rl.loop import GrpoLoop, GrpoLoopPaths, read_progress, request_
 from lean_search.rl.loop_config import GrpoLoopConfig, StatementSourceKind, load_loop_config
 from lean_search.rl.loop_services import (
     SubprocessEvaluations,
-    SubprocessTrainer,
     VllmServers,
     check_policy_server,
     host_memory_text,
+    open_trainer,
     open_tree_searcher,
     serve_commands,
 )
@@ -54,6 +55,7 @@ from lean_search.rl.search_models import served_run_config
 from lean_search.rl.statement_sources import CurriculumStatements, FixedStatements, StatementSource
 from lean_search.rl.tree_store import TreeStore
 from lean_search.search import RunConfig, load_run_config
+from lean_search.training.resident import HostDirectories
 
 REPOSITORY_DIRECTORY = Path(__file__).resolve().parents[1]
 DATA_DIRECTORY = Path(os.environ["LEAN_SEARCH_DATA"])
@@ -82,7 +84,10 @@ def loop_paths(config: GrpoLoopConfig) -> GrpoLoopPaths:
 
 
 def publisher(config: GrpoLoopConfig, paths: GrpoLoopPaths) -> MergedPublisher:
-    return MergedPublisher(config.serving, paths.weights, merge)
+    """Takes over the training jobs' merges: beside the adapter, or handed off in host memory (persistent job)."""
+    return MergedPublisher(
+        config.serving, paths.weights, handoff_merge(HostDirectories(config.host_directory()).handoff)
+    )
 
 
 def search_run_config(config: GrpoLoopConfig) -> RunConfig:
@@ -159,14 +164,17 @@ async def run(config: GrpoLoopConfig, paths: GrpoLoopPaths) -> None:
     statements = statement_source(config, paths)
     merged = publisher(config, paths)
     servers = VllmServers(config.serving, config.released_servers(), merged)
-    trainer = SubprocessTrainer(paths, config.training)
     evaluations = SubprocessEvaluations(
         paths, config.evaluation.command_prefix, lambda: read_current(paths.models).version
     )
     writer = MetricsWriter(paths.directory)
     log(f"Loop {config.name}: version {read_current(paths.models).version}, {read_progress(paths.progress)}")
     renamings = load_renamings(config.renaming, DATA_DIRECTORY)
-    async with open_tree_searcher(search_run_config(config), statements.headers(), renamings) as searcher:
+    host_memory = functools.partial(host_memory_text, config)
+    async with (
+        open_tree_searcher(search_run_config(config), statements.headers(), renamings) as searcher,
+        open_trainer(paths, config, log) as trainer,
+    ):
         phase_template = (REPOSITORY_DIRECTORY / config.training.phase_config).read_text(encoding="utf-8")
         loop = GrpoLoop(
             config,
@@ -180,7 +188,7 @@ async def run(config: GrpoLoopConfig, paths: GrpoLoopPaths) -> None:
             writer,
             log,
             phase_template,
-            host_memory=host_memory_text,
+            host_memory=host_memory,
         )
         await loop.run(stop)
 
