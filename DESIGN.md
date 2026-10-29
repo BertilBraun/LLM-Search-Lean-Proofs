@@ -681,9 +681,16 @@ foundation of everything above, so it comes first.
    (heartbeats, flattening, `rename_i`, identifier check, full sample texts, unparsed samples). Done since
    (2026-10-29): per-tactic states, per-tactic labels and credit, groups only at proof-graph nodes, the μ-mix,
    harvesting and ε-exploration, recorded tokens and log-probabilities with the temperature in the trainer, no
-   length filter, two passes as a setting, the dashboard metrics of proofs, harvesting and credit labels.
-   Remaining: the data rewrite (flattening, chunks, descriptive renaming); the probe set; the loop integration
-   (search → label → train → publish, writing the metrics); the cheap tests below.
+   length filter, two passes as a setting, the dashboard metrics of proofs, harvesting and credit labels; then the
+   data rewrite (flattening, chunks, descriptive renaming; `data_rewrite/`); the loop
+   integration (`rl/loop.py`, `experiments/grpo_loop.py`, `grpo/loop.toml`: search → label → pause–train–publish on
+   GPU 0 with three serving GPUs, all dashboard families, restart from the last stage and the tree store); the probe,
+   value-gate and overfit statement sets (`grpo_fixed_sets.py`), the probe / miniF2F / held-out-states evaluations
+   (`grpo_evaluate.py`, inside the loop's pauses), the gate's value-free benchmark search; optional search-time
+   renaming with every proof checked against the original statement; the cheap tests as runnable experiments
+   (`grpo_single_step.py`, `grpo/loop_overfit.toml`, `grpo_naming_ab.py`); the node bring-up
+   (`deployment/grpo_loop.sh`, `deployment/README.md` "GRPO loop"). Details: `src/lean_search/rl/README.md`.
+   Nothing ran on a GPU or a vLLM server yet: the first-hour checks of `deployment/README.md` come first.
 2. **New node**: rebuild, smoke tests, the heartbeat replay test, baselines with the new settings (student v2,
    value v0), timings of search, training and the probe.
 3. **Cheap tests before the loop**: the naming A/B (two short fine-tunes); single-step GRPO on the 512 states with
