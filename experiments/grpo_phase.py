@@ -1,12 +1,16 @@
-"""One search-tree GRPO training phase on one GPU: GRPO of the policy and/or the value model on labelled trees.
+"""One search-tree GRPO training phase: GRPO of the policy and/or the value model on labelled trees, on one GPU or
+data-parallel on several under torchrun (each optimizer step equals the one-GPU step on the same batch).
 
-    python experiments/grpo_phase.py --config experiments/configs/grpo/phase.toml --trees runs/<run>/trees \
-        --run-name grpo_phase_0001 [--part policy|value] [--metrics-run runs/<loop> --phase 12 --sampling-seconds 1500]
+    [torchrun --standalone --nproc-per-node 4] experiments/grpo_phase.py --config experiments/configs/grpo/phase.toml \
+        --trees runs/<run>/trees --run-name grpo_phase_0001 [--part policy|value] [--merge-adapters] \
+        [--metrics-run runs/<loop> --phase 12 --sampling-seconds 1500]
 
 Writes the adapters to $LEAN_SEARCH_CHECKPOINTS/<run-name>/{policy,value}/adapter, the step records next to them and
-the phase's outcome (data metrics, training results, the value gate) to phase.json there. The policy texts come from
-the tree records (`TreeRecord.expansions`). The replay files and the value benchmark are optional. With --metrics-run
-the policy outcome is appended to that run's dashboard metrics (the grpo family).
+the phase's outcome (data metrics, training results, the value gate, the job's timings) to phase.json there. With
+--merge-adapters the new policy adapter and an accepted value adapter are also merged into their bases on the GPUs
+(<adapter>/../merged), which the GRPO loop's publisher takes over. The policy texts come from the tree records
+(`TreeRecord.expansions`). The replay files and the value benchmark are optional. With --metrics-run the policy outcome
+is appended to that run's dashboard metrics (the grpo family).
 """
 
 import argparse
@@ -23,6 +27,7 @@ from lean_search.reasoning.dataset import read_examples as read_reasoning_exampl
 from lean_search.rl.training_phase import PhaseInputs, TrainingPhaseConfig, grpo_phase_record, run_training_phase
 from lean_search.search import read_tree
 from lean_search.search.records import from_json_object
+from lean_search.training.data_parallel import start_process_group, stop_process_group
 from lean_search.training.math_data import read_solutions
 from lean_search.value.benchmark import read_benchmark
 from lean_search.value.labels import read_examples as read_value_examples
@@ -39,6 +44,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--value-replay", type=Path, help="v0 value examples JSON lines")
     parser.add_argument("--value-benchmark", type=Path, help="a value benchmark; without it no value model is accepted")
     parser.add_argument("--part", choices=("policy", "value"), help="train only this model")
+    parser.add_argument("--merge-adapters", action="store_true", help="merge the new adapters on the GPUs")
     parser.add_argument("--run-name", required=True)
     parser.add_argument("--metrics-run", type=Path, help="a loop run directory whose dashboard metrics get the phase")
     parser.add_argument("--sampling-seconds", type=float, help="the search time behind the phase's trees")
@@ -60,6 +66,9 @@ def load_config(arguments: argparse.Namespace) -> TrainingPhaseConfig:
 def main() -> None:
     os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     arguments = parse_arguments()
+    device = torch.device("cuda", int(os.environ.get("LOCAL_RANK", "0")))
+    torch.cuda.set_device(device)
+    ranks = start_process_group("nccl")
     config = load_config(arguments)
     records = [read_tree(path) for directory in arguments.trees for path in sorted(directory.glob("*.json.gz"))]
     inputs = PhaseInputs(
@@ -74,8 +83,11 @@ def main() -> None:
     output_directory = CHECKPOINTS_DIRECTORY / arguments.run_name
     output_directory.mkdir(parents=True, exist_ok=True)
     outcome = run_training_phase(
-        config, inputs, policy_tokenizer, value_tokenizer, torch.device("cuda"), output_directory
+        config, inputs, policy_tokenizer, value_tokenizer, device, output_directory, ranks, arguments.merge_adapters
     )
+    stop_process_group(ranks)
+    if not ranks.is_main:
+        return
     print(f"{outcome.trees} trees, {outcome.groups} groups", flush=True)
     if outcome.policy is not None:
         print(f"policy: {outcome.policy.data}\n{outcome.policy.result}", flush=True)

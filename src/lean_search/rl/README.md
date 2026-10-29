@@ -154,14 +154,31 @@ sampling produced `min_solved_trees` solved trees (or after `max_sampling_minute
 | Stage | What happens |
 |---|---|
 | pause | every policy and value request waits at the pause gate; searches keep their trees and REPL states in place, and trees finishing now belong to the next phase |
-| training | servers on the training GPU sleep; `grpo_phase.py` runs on that GPU (`SubprocessTrainer`, log in `training/phase_<k>.log`): labels the phase's trees, trains the policy (two passes) and, every `value_every_phases` with a gate benchmark, the value model plus its gate; the loop labels the same trees meanwhile for the `search` and `curriculum` metrics |
-| publishing | `training_phase.publish_phase`: version k + 1 with the new policy adapter and the new value adapter only if it passed the gate, merged on the CPU into `serving.policy_base_model` and `value_base_model` (`MergedPublisher`); every server swaps to it in place (`publish_weights`), sleeping ones wake with it (`restore_gpu`), and the searches' pause gate records the version for the samples to come; the first accepted value model turns μ on (`value_share_after_gate`) for later phases |
+| training | the servers on the training GPUs drain and sleep (level 2: weights and KV cache freed, `release_gpu`); `grpo_phase.py --merge-adapters` runs on those GPUs (`SubprocessTrainer`; several GPUs: `torchrun --standalone`, one rank each; log in `training/phase_<k>.log`): labels the phase's trees, trains the policy (two passes) and, every `value_every_phases` with a gate benchmark, the value model plus its gate (main rank), then merges the new policy adapter and an accepted value adapter into their bases on the GPUs (`<adapter>/../merged`, one rank per adapter); the loop labels the same trees meanwhile for the `search` and `curriculum` metrics |
+| publishing | `training_phase.publish_phase`: version k + 1 with the new policy adapter and the new value adapter only if it passed the gate, its weights the job's GPU merges moved into `weights/v<k+1>/` (`merging.merge`; without them, e.g. after a crash, merged on the CPU into `serving.policy_base_model` and `value_base_model`, `MergedPublisher`); sleeping servers wake with it (`restore_gpu`: memory back, `reload_weights` of the new directory, KV cache back), servers off the training GPUs swap in place (`publish_weights`), and the searches' pause gate records the version for the samples to come; the first accepted value model turns μ on (`value_share_after_gate`) for later phases |
 | evaluating | the paused searches' REPL processes stop (`evaluation.paused_repl_memory_gib`, "Host memory" below); due fixed targets run as their own jobs (`grpo_evaluate.py`) while the searches stay paused: by loop hours (`every_hours`), once before the first phase (`at_start`; `baseline_runs` independent runs), or when requested (`grpo_loop.py request-evaluation`) |
 | resume | the searches continue with the new weights |
 
-GPU assignment: `training.gpu` trains; servers on it are released for the phase (none in `loop.toml`: GPU 0 trains,
-GPUs 1–3 each serve the merged policy and the merged value model). Policy servers run with `--logprobs-mode
-processed_logprobs` (`grpo_loop.py serve-commands` prints every start command).
+GPU layout (`loop.toml`): while sampling, each of the four GPUs serves the merged policy (62% of its memory) and the
+merged value model (28%), so nothing is left for training; during a phase's pause all four sleep and train
+(`training.gpus = [0, 1, 2, 3]`). The fallback, if the data-parallel pause costs more than it saves, is `gpus = [0]`:
+GPU 0's servers sleep and one process trains there, the other GPUs' servers stay loaded and idle (every search is
+paused either way) and swap to the new weights in place. Policy servers run with `--logprobs-mode processed_logprobs`
+(`grpo_loop.py serve-commands` prints every start command); all servers with `SLEEP_MODE=1`.
+
+Data parallelism (`training/data_parallel.py`): every rank plans the same steps (same seeds and data order); a step's
+64 sequences are split across the ranks by tokens (`balanced_shards`, costliest first to the least loaded rank) and
+each rank plans its own micro-batches; the loss keeps the global normalization, Σ weight · token loss / (sequences in
+the step × 256), so the ranks' gradients sum to the single-GPU gradient; the LoRA gradients are summed with one
+all-reduce per 256 MiB bucket (`sum_gradients`; no DDP wrapper, a rank without micro-batches adds zeros) before the
+clipping, so every rank takes the same optimizer step. The old and reference log-probabilities are scored on each
+rank's share of the sequences and gathered on every rank; replay examples are split the same way under the global
+token mean. The fp32 output layer per chunk is per rank as before. Metrics are summed over the ranks (peak memory:
+the largest); only the main rank writes step records, adapters, merged weights and `phase.json`. The value trainer
+splits each step's units (sibling groups with their pairs) the same way, under the step's global weights. The value
+gate scores on the main rank while the others wait. With one rank everything is the single-GPU path. A step on two
+ranks equals the one-process step (`tests/graph/test_data_parallel_trainers.py`, gloo on the CPU). The LoRA
+gradients are fp32 (~0.5 GB for the policy adapter), so each policy step all-reduces about that much over PCIe.
 
 Restart: `loop_state.json` holds the phase, its stage, sampling and training time, whether a value model passed the
 gate and the evaluation clock; `models/current.json` and `versions.jsonl` the published versions; the tree index the
@@ -185,7 +202,8 @@ dropped; the worker waits `server_failure_pause_seconds` after each failure. `st
 Metrics per phase (`MetricsWriter`, `<run>/metrics/`): `status` every `status_seconds`, `curriculum` and `search`
 (`phase_metrics.search_phase_record`: graph statistics, failure tiers, forced answers and repetition loops, Lean time
 per expansion, block length), `grpo` (from the trainer's `phase.json`), `value` when a value model met the gate,
-`timing` (sampling, training, publishing and evaluation seconds), `fixed_targets` from the evaluations; `system`
+`timing` (sampling, training, publishing and evaluation seconds, and the pause's segments, below), `fixed_targets`
+from the evaluations; `system`
 from `dashboard.py record-system`, including host memory (the limit, what is available, the Lean REPLs' private
 memory in total and at p90, the vLLM processes' private memory). Failure tiers are a message-based approximation
 (`phase_metrics.py`).
@@ -193,13 +211,55 @@ memory in total and at p90, the vLLM processes' private memory). Failure tiers a
 The boundaries are protocols (`TreeSearcher`, `PhaseTrainer`, `ModelServers`, `Evaluations`); the tests run the loop
 with fakes for them (`tests/rl/loop_fakes.py`) and real Lean for the start-state and renamed searches.
 
+## Timing
+
+Each phase's pause is recorded segment by segment (`PauseSegments`: the `timing` line's `pause.*`, `phases.jsonl`, a
+`Phase <k> pause:` line in `loop.log`, and the System page's "Pause segments" chart). The loop measures its own
+segments; the training job's come from its `phase.json` (`TrainerTimings`, the main rank's clock):
+
+| Segment | Measured by | What |
+|---|---|---|
+| `drain` | loop | the searches' requests in flight finishing at the pause gate |
+| `server_sleep` | loop | the training GPUs' servers draining and sleeping |
+| `trainer_start` | loop | the job's wall time minus its own total: process and rank start, imports, NCCL setup, reading the trees, loading tokenizers, exit |
+| `preparation` | job | labelling the trees, building the policy sequences, replay and value data |
+| `policy_load` | job | loading the 4B base with the adapter (and torch.compile's wrappers) |
+| `compile` | job | one scoring and one training micro-batch on the shortest sequence before scoring, which compile the compiled layers (`compile_warm_up`; 0 without `compile_layers`) |
+| `scoring` | job | the old (and, when it differs, reference) log-probabilities, sharded |
+| `policy_training` | job | the policy steps (both passes, replay included) |
+| `value_training` | job | the value model's load, compilation, steps and adapter save |
+| `gate` | job | the gate's two benchmark scorings (main rank) |
+| `merge` | job | loading each base and merging the new adapters on the GPUs (the slowest rank) |
+| `write` | job | writing the policy adapter and the merged weights |
+| `publish` | loop | recording the version: moving the job's merges into place (else merging on the CPU) |
+| `wake` | loop | the slowest server waking with the new weights (or swapping them in place) |
+| `resume` | loop | the slowest server resuming |
+
+The evaluations that follow some phases are timed separately (`evaluation_seconds`). Estimate before the first node
+hour: 10-15 minutes per pause on one GPU, of which training compute 4-8 minutes; on four GPUs the compute shrinks
+about fourfold while `trainer_start`, the loads, `compile`, `gate`, the merges and the wake do not.
+
+If the pause still costs too much, two levers:
+
+- Longer sampling phases (`min_sampling_minutes`, `min_solved_trees`): the fixed part of the pause (start, loads,
+  compile, gate, merges, wake) is paid per phase, so its share falls with the sampling time, at the price of fewer and
+  staler updates per hour.
+- A trainer that stays alive between phases (not implemented): the ranks would keep their processes, NCCL group and
+  compiled graphs and move the weights to host memory while the servers run, saving `trainer_start`, most of the loads
+  and the recompilation (an estimated 1-3 minutes per phase). Its cost is host memory: per rank the 4B policy and 2B
+  value bases in bf16, about 9 + 4.5 GB, so about 54 GB for four ranks (or about 14 GB with one shared copy), next to
+  the 112 REPLs and eight vLLM processes of "Host memory", plus a CUDA context (~0.5 GB) left on each GPU that the
+  servers' memory shares must leave free.
+
 ## Host memory
 
 The node has about 128 GB of RAM (check the cgroup limit, `system.memory_total_gib`). Its users: one Lean REPL per
 search (`sampling.concurrency`, 112) whose private memory grows from ~0.25 GiB after the import by ~0.25 MiB per proof
 state, restarted at 1 GiB when released and at 2 GiB in any case (`lean/repl.py`; the Mathlib .olean mappings are
 shared and not counted); an evaluation job's own pool (`evaluation.<target>.concurrency`, 64) next to the paused
-searches; the six vLLM processes; and the loop process, which merges a published version on the CPU. The budget:
+searches; the eight vLLM processes; the training job's ranks (each reads and labels the phase's trees; the weights load
+straight to the GPUs); and the loop process, which merges a published version on the CPU only when the job did not
+merge it on the GPUs. The budget:
 
     loop concurrency × p90 REPL memory + evaluation concurrency × p90 REPL memory + vLLM private memory + merge
         ≤ 0.85 × RAM

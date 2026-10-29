@@ -44,8 +44,9 @@ class SamplingConfig:
 class LoopTrainingConfig:
     # A training phase template (experiments/grpo_phase.py); the loop fills in the adapters, μ and the seed.
     phase_config: str
-    # The GPU that trains; servers on it sleep while a phase trains, servers on the others pause in place.
-    gpu: int = 0
+    # The GPUs that train, data-parallel (torchrun, one rank each) when several; servers on them sleep while a phase
+    # trains, servers on the others stay loaded and idle (every search is paused).
+    gpus: tuple[int, ...] = (0,)
     # A phase starts once `min_sampling_minutes` of sampling produced `min_solved_trees` solved trees, or after
     # `max_sampling_minutes` with at least one.
     min_sampling_minutes: float = 15.0
@@ -63,7 +64,7 @@ class LoopTrainingConfig:
     lean_replay: str = ""
     math_replay: str = ""
     value_replay: str = ""
-    # Command prefix of the training job, e.g. "nice -n 5"; the job runs with CUDA_VISIBLE_DEVICES=gpu.
+    # Command prefix of the training job, e.g. "nice -n 5"; the job runs with CUDA_VISIBLE_DEVICES=gpus.
     command_prefix: str = ""
 
 
@@ -115,16 +116,22 @@ class GrpoLoopConfig:
     renaming: RenamingConfig = field(default_factory=RenamingConfig)
 
     def released_servers(self) -> tuple[ServerEndpoint, ...]:
-        """Servers on the training GPU: asleep while a phase trains."""
-        return tuple(server for server in self.serving.servers if server.gpu == self.training.gpu)
+        """Servers on the training GPUs: asleep while a phase trains."""
+        return tuple(server for server in self.serving.servers if server.gpu in self.training.gpus)
 
 
 def parse_loop_config(text: str) -> GrpoLoopConfig:
     config = from_json_object(GrpoLoopConfig, tomllib.loads(text))
     if not config.serving.policy_servers:
         raise ValueError("The loop needs at least one policy server.")
-    if all(server.gpu == config.training.gpu for server in config.serving.policy_servers):
-        raise ValueError("Every policy server is on the training GPU: nothing would sample while a phase trains.")
+    gpus = config.training.gpus
+    if not gpus or len(set(gpus)) < len(gpus):
+        raise ValueError("training.gpus needs at least one GPU, each once.")
+    shares: dict[int, float] = {}
+    for server in config.serving.servers:
+        shares[server.gpu] = shares.get(server.gpu, 0.0) + server.memory_share
+    if any(share > 1.0 for share in shares.values()):
+        raise ValueError(f"The servers' memory shares exceed a GPU's memory: {shares}.")
     if config.statements.kind == StatementSourceKind.FIXED and not config.statements.fixed:
         raise ValueError('statements.kind = "fixed" needs statements.fixed.')
     training = config.training

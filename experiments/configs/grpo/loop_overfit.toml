@@ -19,6 +19,12 @@ policy_model = "policy-merged"
 value_model = "value-merged"
 
 [[serving.policy_servers]]
+name = "policy-gpu0"
+gpu = 0
+url = "http://127.0.0.1:8100/v1"
+memory_share = 0.62
+
+[[serving.policy_servers]]
 name = "policy-gpu1"
 gpu = 1
 url = "http://127.0.0.1:8101/v1"
@@ -35,6 +41,13 @@ name = "policy-gpu3"
 gpu = 3
 url = "http://127.0.0.1:8103/v1"
 memory_share = 0.62
+
+[[serving.value_servers]]
+name = "value-gpu0"
+gpu = 0
+url = "http://127.0.0.1:8200/v1"
+memory_share = 0.28
+max_num_seqs = 96
 
 [[serving.value_servers]]
 name = "value-gpu1"
@@ -67,7 +80,7 @@ status_seconds = 30.0
 
 [training]
 phase_config = "experiments/configs/grpo/phase.toml"
-gpu = 0
+gpus = [0, 1, 2, 3]
 # Each statement is searched about once per phase (300 statements, 112 concurrent searches).
 min_sampling_minutes = 10.0
 max_sampling_minutes = 20.0

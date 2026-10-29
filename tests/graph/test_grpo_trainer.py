@@ -15,6 +15,7 @@ from lean_search.rl.policy_trainer import (  # noqa: E402
     GrpoConfig,
     GrpoStepRecord,
     ReferencePolicy,
+    compile_warm_up,
     completion_log_probabilities,
     plan_grpo_steps,
     reference_log_probabilities,
@@ -232,3 +233,13 @@ def test_passes_per_phase(tiny_model: Path, passes: int, steps: int) -> None:
 def test_a_sequence_beyond_the_servers_context_is_a_bug(tiny_model: Path, tmp_path: Path) -> None:
     with pytest.raises(AssertionError):
         train(grpo_config(tiny_model, passes=1, max_sequence_tokens=10), tmp_path / "adapter")
+
+
+def test_the_compile_warm_up_leaves_no_gradients(tiny_model: Path) -> None:
+    saved, causal_model = load_trainable_model(
+        str(tiny_model), OptimizationConfig(gradient_checkpointing=False), LORA, CPU
+    )
+    sequence = sequences()[0]
+    scorer = CompletionTokenScores(causal_model)
+    compile_warm_up(saved, scorer, sequence.tokenized, sequence.temperature, False, 0, CPU)
+    assert all(parameter.grad is None for parameter in saved.parameters())

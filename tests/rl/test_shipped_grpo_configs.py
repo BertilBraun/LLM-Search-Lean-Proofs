@@ -30,9 +30,19 @@ def test_loop_phase_template_loads(name: str) -> None:
 
 
 @pytest.mark.parametrize("name", LOOPS)
-def test_loop_trains_on_a_gpu_without_policy_servers(name: str) -> None:
+def test_loop_serves_on_every_gpu(name: str) -> None:
+    assert {server.gpu for server in loop(name).serving.policy_servers} == {0, 1, 2, 3}
+
+
+@pytest.mark.parametrize("name", LOOPS)
+def test_loop_trains_on_every_gpu(name: str) -> None:
+    assert loop(name).training.gpus == (0, 1, 2, 3)
+
+
+@pytest.mark.parametrize("name", LOOPS)
+def test_every_server_sleeps_while_the_loop_trains(name: str) -> None:
     config = loop(name)
-    assert all(server.gpu != config.training.gpu for server in config.serving.servers)
+    assert config.released_servers() == config.serving.servers
 
 
 def test_overfit_loop_searches_a_fixed_list() -> None:

@@ -3,6 +3,7 @@
 import dataclasses
 import json
 import random
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -12,6 +13,7 @@ import torch
 from lean_search.expert_iteration.serving import LoopPaths, ModelVersion, Publisher, read_current, record_published
 from lean_search.expert_iteration.shards import now
 from lean_search.monitoring.families import GrpoPhase
+from lean_search.policy.adapters import MergeSeconds, PremergedWeights, premerge_adapter
 from lean_search.reasoning.dataset import ReasoningExample, tokenize_reasoning_example
 from lean_search.rl.grpo_groups import PolicyGroup, RewardConfig, policy_groups
 from lean_search.rl.policy_data import (
@@ -26,6 +28,7 @@ from lean_search.rl.tree_statistics import GraphStatistics, graph_statistics, to
 from lean_search.search.graph_labels import label_graph
 from lean_search.search.records import TreeRecord, to_json
 from lean_search.search.tactic_labels import policy_tactics
+from lean_search.training.data_parallel import SINGLE_PROCESS, Ranks, broadcast_from_main, largest
 from lean_search.training.math_data import MathSolution, tokenize_math_solution
 from lean_search.training.sft_data import TokenizedExample
 from lean_search.value.benchmark import LabelledTree, ValueBenchmark
@@ -100,6 +103,8 @@ class PolicyOutcome:
     data: PolicyDataMetrics
     replay_examples: int
     result: GrpoTrainingResult
+    # Building the sequences and the replay examples.
+    data_seconds: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -107,10 +112,33 @@ class ValueOutcome:
     adapter: str
     result: GraphValueTrainingResult
     gate: GateResult | None
+    data_seconds: float = 0.0
+    # Loading, compiling, training and saving.
+    training_seconds: float = 0.0
+    gate_seconds: float = 0.0
 
     @property
     def accepted(self) -> bool:
         return self.gate is not None and self.gate.passed
+
+
+@dataclass(frozen=True)
+class TrainerTimings:
+    """The training job's parts in wall seconds, as the main rank saw them; the parts need not add up to the total."""
+
+    # Labelling the trees and building the policy and value data.
+    preparation_seconds: float = 0.0
+    policy_load_seconds: float = 0.0
+    compile_seconds: float = 0.0
+    scoring_seconds: float = 0.0
+    policy_training_seconds: float = 0.0
+    value_training_seconds: float = 0.0
+    gate_seconds: float = 0.0
+    # Merging the new adapters into their bases on the GPUs (grpo_phase.py --merge-adapters), the slowest rank.
+    merge_seconds: float = 0.0
+    # The policy adapter and the merged weights written.
+    write_seconds: float = 0.0
+    total_seconds: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -119,6 +147,7 @@ class PhaseOutcome:
     groups: int
     policy: PolicyOutcome | None
     value: ValueOutcome | None
+    timings: TrainerTimings = field(default_factory=TrainerTimings)
 
 
 def label_phase_data(records: Sequence[TreeRecord], config: TrainingPhaseConfig) -> LabelledPhaseData:
@@ -171,12 +200,15 @@ def train_policy_phase(
     device: torch.device,
     directory: Path,
     on_step: Callable[[GrpoStepRecord], None],
+    ranks: Ranks = SINGLE_PROCESS,
 ) -> PolicyOutcome:
+    started = time.perf_counter()
     data = build_policy_data(labelled.policy_trees, tokenizer, grpo.data)
     replay = policy_replay_examples(tokenizer, inputs, config.policy_replay, grpo.max_sequence_tokens)
+    data_seconds = time.perf_counter() - started
     adapter = directory / "adapter"
-    result = train_grpo(grpo, tokenizer.pad_token_id, data.sequences, replay, device, adapter, on_step)
-    return PolicyOutcome(str(adapter), data.metrics, len(replay), result)
+    result = train_grpo(grpo, tokenizer.pad_token_id, data.sequences, replay, device, adapter, on_step, ranks)
+    return PolicyOutcome(str(adapter), data.metrics, len(replay), result, data_seconds)
 
 
 def train_value_phase(
@@ -189,16 +221,40 @@ def train_value_phase(
     device: torch.device,
     directory: Path,
     on_step: Callable[[GraphValueStepRecord], None],
+    ranks: Ranks = SINGLE_PROCESS,
 ) -> ValueOutcome:
+    """The gate runs on the main rank alone; the other ranks' outcomes have none."""
+    started = time.perf_counter()
     data = build_graph_value_data(labelled.trees, config.ranking, inputs.value_replay, tokenizer, value)
+    data_built = time.perf_counter()
     adapter = directory / "adapter"
-    result = train_graph_value_model(value, tokenizer, pad_token_id, data, device, adapter, on_step)
+    result = train_graph_value_model(value, tokenizer, pad_token_id, data, device, adapter, on_step, ranks)
+    trained = time.perf_counter()
     gate = None
-    if inputs.value_benchmark is not None:
+    if inputs.value_benchmark is not None and ranks.is_main:
         gate = run_value_gate(
             value, tokenizer, pad_token_id, inputs.value_benchmark, str(adapter), value.initial_adapter, device
         )
-    return ValueOutcome(str(adapter), result, gate)
+    gated = time.perf_counter()
+    return ValueOutcome(str(adapter), result, gate, data_built - started, trained - data_built, gated - trained)
+
+
+def release_cached_memory(device: torch.device) -> None:
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+
+
+def merge_on_gpus(merges: Sequence[PremergedWeights], device: torch.device, ranks: Ranks) -> MergeSeconds:
+    """Each adapter merged into its base on one rank's GPU (in turn), next to the adapter; the slowest rank's time."""
+    seconds = [
+        premerge_adapter(merge.base_model, Path(merge.adapter), device)
+        for index, merge in enumerate(merges)
+        if index % ranks.world_size == ranks.rank
+    ]
+    return MergeSeconds(
+        largest(sum(part.merge for part in seconds), device, ranks),
+        largest(sum(part.write for part in seconds), device, ranks),
+    )
 
 
 def run_training_phase(
@@ -208,9 +264,15 @@ def run_training_phase(
     value_tokenizer: ValueTokenizer | None,
     device: torch.device,
     output_directory: Path,
+    ranks: Ranks = SINGLE_PROCESS,
+    merge_adapters: bool = False,
 ) -> PhaseOutcome:
-    """Adapters under output_directory/{policy,value}/adapter, step records next to them, phase.json at the top."""
+    """Adapters under output_directory/{policy,value}/adapter, step records next to them, phase.json at the top, all
+    written by the main rank; `merge_adapters` also merges the new adapters on the GPUs (`premerged_directory`)."""
+    started = time.perf_counter()
     labelled = label_phase_data(inputs.records, config)
+    labelling_seconds = time.perf_counter() - started
+    merges: list[PremergedWeights] = []
     policy = None
     if config.policy is not None:
         assert policy_tokenizer is not None
@@ -224,9 +286,10 @@ def run_training_phase(
             device,
             directory,
             lambda record: append_json_line(directory / "steps.jsonl", record),
+            ranks,
         )
-        if device.type == "cuda":
-            torch.cuda.empty_cache()
+        merges.append(PremergedWeights(config.policy.model, policy.adapter))
+        release_cached_memory(device)
     value = None
     if config.value is not None:
         assert value_tokenizer is not None
@@ -241,10 +304,51 @@ def run_training_phase(
             device,
             directory,
             lambda record: append_json_line(directory / "steps.jsonl", record),
+            ranks,
         )
-    outcome = PhaseOutcome(len(labelled.trees), len(labelled.groups), policy, value)
-    (output_directory / "phase.json").write_text(to_json(outcome), encoding="utf-8")
+        if broadcast_from_main(value.accepted, ranks):
+            merges.append(PremergedWeights(config.value.model, value.adapter))
+        release_cached_memory(device)
+    merged = merge_on_gpus(merges, device, ranks) if merge_adapters else MergeSeconds()
+    timings = trainer_timings(labelling_seconds, policy, value, merged, time.perf_counter() - started)
+    outcome = PhaseOutcome(len(labelled.trees), len(labelled.groups), policy, value, timings)
+    if ranks.is_main:
+        (output_directory / "phase.json").write_text(to_json(outcome), encoding="utf-8")
     return outcome
+
+
+def trainer_timings(
+    labelling_seconds: float,
+    policy: PolicyOutcome | None,
+    value: ValueOutcome | None,
+    merged: MergeSeconds,
+    total_seconds: float,
+) -> TrainerTimings:
+    timings = TrainerTimings(
+        preparation_seconds=labelling_seconds,
+        merge_seconds=merged.merge,
+        write_seconds=merged.write,
+        total_seconds=total_seconds,
+    )
+    if policy is not None:
+        result = policy.result
+        timings = dataclasses.replace(
+            timings,
+            preparation_seconds=timings.preparation_seconds + policy.data_seconds,
+            policy_load_seconds=result.load_seconds,
+            compile_seconds=result.compile_seconds,
+            scoring_seconds=result.scoring_seconds,
+            policy_training_seconds=result.training_seconds,
+            write_seconds=timings.write_seconds + result.save_seconds,
+        )
+    if value is not None:
+        timings = dataclasses.replace(
+            timings,
+            preparation_seconds=timings.preparation_seconds + value.data_seconds,
+            value_training_seconds=value.training_seconds,
+            gate_seconds=value.gate_seconds,
+        )
+    return timings
 
 
 def sampler_agreement_by_age(result: GrpoTrainingResult, trained_version: int) -> dict[str, SamplerAgreement]:
