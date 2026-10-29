@@ -94,6 +94,9 @@ class EvaluationTarget:
     at_start: bool = False
     # Independent runs of that baseline; two measure the run-to-run noise.
     baseline_runs: int = 1
+    # Only the first this many problems (the probe's strata in turn; held-out states: states), 0 all: a smoke test's
+    # tiny evaluations. The value A/B takes value_ab_test.problems instead.
+    problems: int = 0
 
 
 class EvaluationValueModel(StrEnum):

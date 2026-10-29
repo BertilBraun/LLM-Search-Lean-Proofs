@@ -787,7 +787,7 @@ foundation of everything above, so it comes first.
   (independent runs) to measure the run-to-run noise later versions are judged against. The value model is fixed
   to v0 ("Benchmark and gate").
 - **miniF2F-valid** at the full budget (64 expansions, n = 8; ~1–1.5 h) at the start, at milestones and at the end
-  (each on request, the baseline before phase 1 included; not on a clock), also with v0 as the value model.
+  (the baseline before phase 1 automatically, the others on request; not on a clock), also with v0 as the value model.
 - Per-sample success on the 512 held-out states with every probe (no value model). MATH-500 retention (visible and
   thinking) at milestones, run separately (`reasoning_retention.py`; not in the loop). Curves over training, not
   just a final score. Baselines are re-measured on the new node with the new settings (n = 8, heartbeat limits,
@@ -820,10 +820,14 @@ foundation of everything above, so it comes first.
    teacher; the loop systems (process groups, server-failure re-queue, host memory budget, probe wall cap and
    repeated baseline, original names for value in the naming A/B); all four GPUs serving and training data-parallel
    with timed pause segments; the value model in the loop (recorded bins, windowed retraining, the bootstrap gate,
-   the A/B against v0, v0 for evaluations, value diagnostics). Details: `src/lean_search/rl/README.md`. Nothing ran
+   the A/B against v0, v0 for evaluations, value diagnostics). After reviews E and F: the curriculum judged on the
+   statements fed first, the one-sided pooled A/B with a revert to v0, the server check and restart, torchrun's
+   workers stopped with their job, the REPLs stopped before training, adapter retention and a disk metric, and the
+   node check and smoke cycle (`grpo/loop_smoke.toml`). Details: `src/lean_search/rl/README.md`. Nothing ran
    on a GPU or a vLLM server yet: the first-hour checks of `deployment/README.md` come first.
-2. **New node**: rebuild, smoke tests, the heartbeat replay test, baselines with the new settings (student v2,
-   value v0). First-hour checks (`deployment/README.md`, "GRPO loop"): `grpo_loop.sh check` (recorded tokens and
+2. **New node**: the node check (disk, `/dev/shm`, a 4-rank NCCL all-reduce), rebuild, smoke tests, the heartbeat
+   replay test, the loop's smoke cycle (one hour, every stage and evaluation at a tiny size), baselines with the new
+   settings (student v2, value v0). First-hour checks (`deployment/README.md`, "GRPO loop"): `grpo_loop.sh check` (recorded tokens and
    log-probabilities, usable blocks); **serving precision**: fp16-merged, bf16-merged and unmerged LoRA serving
    against an fp32 reference (log-probabilities on a few hundred samples, plus throughput); the probe's wall time,
    its wall-clock stops (should be zero) and the two version-0 runs for the noise; host memory while sampling, while

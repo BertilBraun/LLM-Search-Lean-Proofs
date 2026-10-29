@@ -19,7 +19,7 @@ from lean_search.rl.evaluation import (
     search_summary,
     value_ab_result,
 )
-from lean_search.rl.fixed_targets import value_ab_problems
+from lean_search.rl.fixed_targets import first_problems_by_stratum
 from lean_search.rl.loop_config import EvaluationTarget, ValueAbConfig
 from lean_search.rl.renaming import (
     RenamedStatement,
@@ -236,6 +236,6 @@ def test_the_two_sided_mcnemar_p_value_is_twice_the_smaller_tail() -> None:
     assert value_ab([True] * 3, [False] * 3).p_value == pytest.approx(0.25)
 
 
-def test_value_ab_problems_take_the_strata_in_turn() -> None:
+def test_first_problems_by_stratum_take_the_strata_in_turn() -> None:
     problems = [EvaluationProblem(PROBLEM, stratum) for stratum in ("easy", "easy", "medium", "hard", "hard")]
-    assert [problem.stratum for problem in value_ab_problems(problems, 4)] == ["easy", "medium", "hard", "easy"]
+    assert [problem.stratum for problem in first_problems_by_stratum(problems, 4)] == ["easy", "medium", "hard", "easy"]

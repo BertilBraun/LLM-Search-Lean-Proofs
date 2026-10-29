@@ -367,7 +367,7 @@ checkpoints (`system.disk_total_gib`, `disk_free_gib`, `record-system --disk-pat
   zero. Version 0's probe runs twice (`baseline_runs = 2`; the second into `probe_v0000_repeat1/`, the policy samples
   unseeded and ε off, so the runs are independent): `comparison.json` there and the `fixed_targets` line
   (`probe_repeat_difference`, `probe_repeat_discordant`) give the run-to-run noise later versions are judged against.
-  `minif2f`: miniF2F-valid at 64 expansions, at milestones. `held_out_states`: per-sample success on the 512 per-step
+  `minif2f`: miniF2F-valid at 64 expansions, before the first phase (version 0's baseline) and at milestones. `held_out_states`: per-sample success on the 512 per-step
   evaluation states (`single_step.py`), with the probe. Each writes `evaluations/<target>_v<version>/` (resumable), a
   `fixed_targets` line and `evaluations.jsonl`.
 - `grpo_fixed_sets.py gate-benchmark` searches the gate set once with the starting policy and no value model
@@ -390,6 +390,10 @@ trees.
 
 ## Cheap tests
 
+- **Smoke cycle** (`grpo/loop_smoke.toml`, `phase_smoke.toml`; `deployment/README.md`, "GRPO loop" step 3): the loop on
+  the overfit statements with short phases, a value phase every phase whose gate every candidate passes, and every
+  evaluation at a tiny size (`EvaluationTarget.problems`; `grpo_fixed_sets.py gate-benchmark --problems` for a tiny
+  benchmark), so every stage, merge, swap and evaluation runs within the first hour on the node.
 - **Single-step GRPO** (`single_step.py`, `experiments/grpo_single_step.py`, `grpo/single_step.toml`): one policy
   request per held-out state, executed from the state rebuilt by replay (`search_theorem(..., start_state=...)`).
   Proof graph: the state's traced proof proves it and every later state of it, so a tactic that closes the goals or

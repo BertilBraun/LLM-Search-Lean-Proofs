@@ -1,18 +1,21 @@
 #!/usr/bin/env bash
 # The search-tree GRPO loop on a 4x RTX 3090 node, one step at a time (deployment/README.md, "GRPO loop").
 #
+#   deployment/grpo_loop.sh node-check           # first: disk, /dev/shm, CPUs, GPU topology, a 4-rank NCCL all-reduce
 #   deployment/grpo_loop.sh sets                 # once: probe, value gate and overfit statement sets (CPU)
 #   deployment/grpo_loop.sh init                 # once: version 0 (merges the policy and value [initial] adapters)
 #   deployment/grpo_loop.sh servers              # start the vLLM servers not answering on the current version
 #                                                # (a GPU's two one after another, the GPUs in parallel)
 #   deployment/grpo_loop.sh check                # one live request per policy server: what the search parses
 #   deployment/grpo_loop.sh gate                 # once, ~1-2 h: the value gate's benchmark (no value model)
+#   deployment/grpo_loop.sh smoke-gate           # the smoke cycle's tiny benchmark (60 gate problems, loop_smoke.toml)
 #   deployment/grpo_loop.sh dashboard            # system sampler and dashboard on port ${DASHBOARD_PORT:-8600}
 #   deployment/grpo_loop.sh loop                 # the loop in the background; rerun after a crash to resume
 #   deployment/grpo_loop.sh status               # progress, versions, trees, the last phase
 #   deployment/grpo_loop.sh stop                 # stops the loop (SIGTERM: saves its state, stops its job), servers
 #
-# LOOP_CONFIG (default experiments/configs/grpo/loop.toml) picks the loop, e.g. loop_overfit.toml for the overfit test.
+# LOOP_CONFIG (default experiments/configs/grpo/loop.toml) picks the loop, e.g. loop_smoke.toml for the smoke cycle or
+# loop_overfit.toml for the overfit test.
 # HOURLY_PRICE (0.80) feeds the dashboard's cost; BACKGROUND_CPUS, if set, pins the loop (its Lean REPLs) through
 # background.sh.
 
@@ -26,9 +29,22 @@ config="${LOOP_CONFIG:-experiments/configs/grpo/loop.toml}"
 name="$(python -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["name"])' "${config}")"
 run_directory="${LEAN_SEARCH_RUNS}/${name}"
 
-[[ $# -ge 1 ]] || { sed -n '2,17p' "$0" >&2; exit 2; }
+[[ $# -ge 1 ]] || { sed -n '2,20p' "$0" >&2; exit 2; }
 
 case "$1" in
+    node-check)
+        mkdir -p "${LEAN_SEARCH_RUNS}" "${LEAN_SEARCH_CHECKPOINTS}"
+        df -h "${LEAN_SEARCH_RUNS}" "${LEAN_SEARCH_CHECKPOINTS}" /dev/shm
+        nproc
+        cat /sys/fs/cgroup/cpu.max 2>/dev/null || true
+        nvidia-smi topo -m
+        shm_mebibytes=$(( $(df -k --output=size /dev/shm | tail -n 1) / 1024 ))
+        if (( shm_mebibytes < 1024 )); then
+            echo "/dev/shm holds ${shm_mebibytes} MiB, too small for NCCL (docker --shm-size 16g)" >&2
+            exit 1
+        fi
+        python -m torch.distributed.run --standalone --nproc-per-node "$(nvidia-smi -L | wc -l)" experiments/nccl_check.py
+        ;;
     sets)
         python experiments/grpo_fixed_sets.py --config experiments/configs/grpo/fixed_sets.toml select
         python experiments/grpo_fixed_sets.py --config experiments/configs/grpo/fixed_sets.toml select-overfit
@@ -46,6 +62,12 @@ case "$1" in
         python experiments/grpo_fixed_sets.py --config experiments/configs/grpo/fixed_sets.toml gate-benchmark \
             --search-config experiments/configs/grpo/gate_search.toml --run-name grpo_gate_search \
             --output grpo_gate/benchmark.json.gz 2>&1 | tee -a "${LEAN_SEARCH_RUNS}/grpo_gate_search.log"
+        ;;
+    smoke-gate)
+        python experiments/grpo_fixed_sets.py --config experiments/configs/grpo/fixed_sets.toml gate-benchmark \
+            --search-config experiments/configs/grpo/gate_search.toml --run-name grpo_smoke_gate_search \
+            --output grpo_smoke_gate/benchmark.json.gz --problems 60 2>&1 \
+            | tee -a "${LEAN_SEARCH_RUNS}/grpo_smoke_gate_search.log"
         ;;
     dashboard)
         mkdir -p "${run_directory}"

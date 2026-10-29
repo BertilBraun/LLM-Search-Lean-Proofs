@@ -4,7 +4,7 @@
     python experiments/grpo_fixed_sets.py --config ... select-overfit       # the overfit test's 300 statements
     python experiments/grpo_fixed_sets.py --config ... gate-benchmark \
         --search-config experiments/configs/grpo/gate_search.toml --run-name grpo_gate_search \
-        --output grpo_gate/benchmark.json.gz [--renamings grpo/renamings.jsonl]
+        --output grpo_gate/benchmark.json.gz [--renamings grpo/renamings.jsonl] [--problems 24]
     python experiments/grpo_fixed_sets.py --config ... rename \
         --rewrite-config experiments/configs/data_rewrite/rewrite_visible_student_v2.toml \
         --sources probe gate pool minif2f --output grpo/renamings.jsonl
@@ -16,6 +16,7 @@ curriculum never feeds them. It refuses to overwrite existing sets (they are fix
 gate-benchmark (once, ~1-2 h with the starting policy served, no value model) searches the gate set by log-probability
 best-first (value-free, so no value model chose its labels) into $LEAN_SEARCH_RUNS/<run-name>/ and builds the value
 benchmark from those trees into $LEAN_SEARCH_RUNS/<output>, the loop's `training.value_benchmark`. Resumable.
+--problems N takes only the first N (strata in turn): the smoke test's tiny benchmark (loop_smoke.toml).
 
 rename (only for a starting policy trained on descriptive names; the naming A/B's named arm) renames the statements'
 numbered hypotheses with the data rewrite's namer and NamingConfig (its [namer] server, or rules when its model is
@@ -47,6 +48,7 @@ from lean_search.rl.fixed_sets import (
     select_overfit_set,
     write_fixed_set,
 )
+from lean_search.rl.fixed_targets import first_problems_by_stratum
 from lean_search.rl.renaming import read_renamings, rename_problems, write_renamings
 from lean_search.search import TreeRecord, load_run_config, read_tree
 from lean_search.search.graph_labels import label_graph
@@ -81,6 +83,9 @@ def parse_arguments() -> argparse.Namespace:
     gate.add_argument("--run-name", required=True)
     gate.add_argument("--output", required=True, help="under $LEAN_SEARCH_RUNS")
     gate.add_argument("--renamings", nargs="*", default=[], help="renaming files under $LEAN_SEARCH_DATA")
+    gate.add_argument(
+        "--problems", type=int, default=0, help="only the first N of the gate set, strata in turn (a smoke test)"
+    )
     rename = commands.add_parser("rename")
     rename.add_argument("--rewrite-config", type=Path, required=True)
     rename.add_argument("--sources", nargs="+", choices=SOURCES, required=True)
@@ -138,6 +143,7 @@ async def gate_benchmark(config: FixedSetsConfig, arguments: argparse.Namespace)
         EvaluationProblem(statement.problem, statement.stratum.value)
         for statement in read_fixed_set(DATA_DIRECTORY / config.gate_set)
     ]
+    problems = first_problems_by_stratum(problems, arguments.problems) if arguments.problems else problems
     paths = EvaluationPaths(RUNS_DIRECTORY / arguments.run_name)
     renamings = read_renamings([DATA_DIRECTORY / path for path in arguments.renamings]) if arguments.renamings else None
     results = await search_problem_set(

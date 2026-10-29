@@ -11,7 +11,7 @@ from lean_search.search import PriorityKind, RunConfig, load_run_config
 from lean_search.search.records import from_json_object
 
 CONFIGS = Path(__file__).resolve().parents[2] / "experiments" / "configs"
-LOOPS = ["grpo/loop.toml", "grpo/loop_overfit.toml"]
+LOOPS = ["grpo/loop.toml", "grpo/loop_overfit.toml", "grpo/loop_smoke.toml"]
 
 
 def loop(name: str) -> GrpoLoopConfig:
@@ -84,7 +84,7 @@ def test_loop_continues_the_starting_policys_own_adapter(name: str) -> None:
     assert loop(name).initial.policy_adapter.endswith("/adapter")
 
 
-@pytest.mark.parametrize("name", LOOPS)
+@pytest.mark.parametrize("name", ["grpo/loop.toml", "grpo/loop_overfit.toml"])
 def test_loop_replays_the_flattened_sft_data(name: str) -> None:
     training = loop(name).training
     assert (training.lean_replay, training.math_replay) == (
@@ -132,3 +132,25 @@ def test_loop_replays_the_v0_value_training_data() -> None:
 @pytest.mark.parametrize("name", LOOPS)
 def test_loop_evaluations_search_with_the_starting_value_model(name: str) -> None:
     assert loop(name).evaluation.value_model == EvaluationValueModel.INITIAL
+
+
+def test_the_smoke_phase_differs_from_the_phase_only_in_its_gate() -> None:
+    phase, smoke = (
+        tomllib.loads((CONFIGS / name).read_text(encoding="utf-8"))
+        for name in ("grpo/phase.toml", "grpo/phase_smoke.toml")
+    )
+    smoke["value"]["gate"]["min_lower_bound"] = phase["value"]["gate"]["min_lower_bound"]
+    assert smoke == phase
+
+
+def test_the_smoke_loop_trains_the_value_model_every_phase() -> None:
+    assert loop("grpo/loop_smoke.toml").training.value_every_phases == 1
+
+
+def test_the_smoke_loop_runs_every_evaluation_before_its_first_phase() -> None:
+    evaluation = loop("grpo/loop_smoke.toml").evaluation
+    assert all(target.at_start for target in (evaluation.probe, evaluation.minif2f, evaluation.held_out_states))
+
+
+def test_the_loop_measures_the_minif2f_baseline_before_its_first_phase() -> None:
+    assert loop("grpo/loop.toml").evaluation.minif2f.at_start

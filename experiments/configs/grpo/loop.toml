@@ -155,13 +155,14 @@ every_hours = 6.0
 at_start = true
 baseline_runs = 2
 
-# Milestones only: grpo_loop.py request-evaluation --target minif2f (or grpo_evaluate.py with the loop stopped).
+# Version 0's baseline before the first phase (version 0's merged weights are never pruned), then milestones only:
+# grpo_loop.py request-evaluation --target minif2f (or grpo_evaluate.py with the loop stopped).
 [evaluation.minif2f]
 max_expansions = 64
 max_wall_seconds = 7200.0
 concurrency = 64
 every_hours = 0.0
-at_start = false
+at_start = true
 
 # Per-sample success on the 512 held-out states, with every probe.
 [evaluation.held_out_states]

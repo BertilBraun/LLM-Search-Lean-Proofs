@@ -54,7 +54,7 @@ def probe_problems(path: Path) -> list[EvaluationProblem]:
     return [EvaluationProblem(statement.problem, statement.stratum.value) for statement in read_fixed_set(path)]
 
 
-def value_ab_problems(problems: Sequence[EvaluationProblem], count: int) -> list[EvaluationProblem]:
+def first_problems_by_stratum(problems: Sequence[EvaluationProblem], count: int) -> list[EvaluationProblem]:
     """The first problems of each stratum in the set's order, taking the strata in turn."""
     by_stratum: dict[str, list[EvaluationProblem]] = {}
     for problem in problems:
@@ -74,6 +74,7 @@ async def evaluate_held_out_states(
     started_at = now()
     started = time.monotonic()
     states = [state_problem(state) for state in read_records(states_path, ReasoningState)]
+    states = states[: target.problems] if target.problems else states
     config = single_step_run_config(evaluation_run_config(template, target))
     records = await search_states(states, config, directory / "trees", log)
     success = total_success(
@@ -116,13 +117,15 @@ async def evaluate_target(
     match kind:
         case EvaluationKind.PROBE:
             problems = probe_problems(data_root / evaluation.probe_set)
+            problems = first_problems_by_stratum(problems, target.problems) if target.problems else problems
         case EvaluationKind.MINIF2F:
             problems = [EvaluationProblem(problem) for problem in load_minif2f(Split.VALID)]
+            problems = problems[: target.problems] if target.problems else problems
         case EvaluationKind.HELD_OUT_STATES:
             states_path = runs_root / evaluation.held_out_states_file
             return await evaluate_held_out_states(states_path, template, target, directory, versions, log)
         case EvaluationKind.VALUE_AB:
-            problems = value_ab_problems(
+            problems = first_problems_by_stratum(
                 probe_problems(data_root / evaluation.probe_set), evaluation.value_ab_test.problems
             )
     config = evaluation_run_config(template, target)
