@@ -39,6 +39,18 @@ const FIXED = {
     family: "fixed_targets", x: "policy_version", unit: "share", compare: true, baseline: true, allTime: true,
     series: [{ label: "success", field: "held_out_success" }],
   },
+  probe: {
+    title: "Probe set solved", subtitle: "held-out pool statements at 16 expansions, by policy version",
+    family: "fixed_targets", x: "policy_version", unit: "count", compare: true, baseline: true, allTime: true,
+    series: [{ label: "solved", field: "probe_solved" }],
+  },
+  probeBands: {
+    title: "Probe set by difficulty", subtitle: "solve rate per stratum, by policy version",
+    family: "fixed_targets", x: "policy_version", unit: "share", compare: true, allTime: true,
+    series: ["easy", "medium", "hard"].map((stratum) => ({
+      label: stratum, field: `probe_by_difficulty.${stratum}.solved`, over: `probe_by_difficulty.${stratum}.attempts`,
+    })),
+  },
   math: {
     title: "MATH-500 retention", subtitle: "by policy version",
     family: "fixed_targets", x: "policy_version", unit: "share", allTime: true,
@@ -126,7 +138,7 @@ export const PAGES = [
     families: [],
     sections: [
       { title: "Status", tiles: "overview" },
-      { title: "Fixed targets", charts: [FIXED.minif2f, FIXED.heldOut, FIXED.math] },
+      { title: "Fixed targets", charts: [FIXED.probe, FIXED.minif2f, FIXED.heldOut, FIXED.math] },
       { title: "RL health", charts: [GRPO.kl, GRPO.clip, GRPO.mixed, GRPO.rewards] },
       { title: "Value health", charts: [VALUE.ranking, VALUE.calibration] },
       { title: "Search behaviour", charts: [SEARCH.samples, SEARCH.noProgress, SEARCH.loops] },
@@ -364,6 +376,8 @@ export const PAGES = [
       {
         title: "Fixed targets",
         charts: [
+          FIXED.probe,
+          FIXED.probeBands,
           FIXED.minif2f,
           FIXED.heldOut,
           { ...FIXED.math, compare: true, series: [{ label: "visible", field: "math500_visible" }] },
@@ -376,7 +390,7 @@ export const PAGES = [
   {
     id: "system",
     title: "System",
-    families: ["system", "status"],
+    families: ["system", "status", "timing"],
     sections: [
       {
         title: "GPUs",
@@ -408,6 +422,15 @@ export const PAGES = [
           { title: "Proofs per hour", family: "status", unit: "number", compare: true, series: [{ label: "proofs", field: "proofs_per_hour" }] },
           { title: "Statements per hour", family: "status", unit: "number", series: [{ label: "statements", field: "statements_per_hour" }] },
           { title: "Searches running", family: "status", unit: "count", series: [{ label: "searches", field: "searches_running" }] },
+          {
+            title: "Phase time", subtitle: "share of each phase: sampling, then the pause (training, publishing, evaluations)", family: "timing", kind: "stacked", unit: "seconds",
+            series: [
+              { label: "sampling", field: "sampling_seconds" },
+              { label: "training", field: "training_seconds" },
+              { label: "publishing", field: "publishing_seconds" },
+              { label: "evaluations", field: "evaluation_seconds" },
+            ],
+          },
         ],
       },
     ],

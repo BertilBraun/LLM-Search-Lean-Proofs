@@ -61,6 +61,21 @@ async def publish_weights(server_url: str, weights_directory: Path) -> PhaseSeco
         return PhaseSeconds(paused - started, reloaded - paused, time.monotonic() - reloaded)
 
 
+async def is_sleeping(server_url: str) -> bool:
+    async with httpx.AsyncClient(base_url=server_root(server_url), timeout=30.0) as http:
+        response = await http.get("/is_sleeping")
+        response.raise_for_status()
+        return bool(response.json()["is_sleeping"])
+
+
+async def is_healthy(server_url: str) -> bool:
+    async with httpx.AsyncClient(base_url=server_root(server_url), timeout=10.0) as http:
+        try:
+            return (await http.get("/health")).status_code == 200
+        except httpx.TransportError:
+            return False
+
+
 async def release_gpu(server_url: str) -> PhaseSeconds:
     """Drains the server and discards its weights and KV cache (sleep level 2); new requests wait for restore_gpu."""
     async with httpx.AsyncClient(base_url=server_root(server_url), timeout=RELOAD_TIMEOUT_SECONDS) as http:
