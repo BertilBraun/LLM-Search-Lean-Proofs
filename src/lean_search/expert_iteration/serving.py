@@ -213,6 +213,9 @@ class MergedPublisher:
 
     def merged_weights(self, base_model: str, adapter: str, directory: Path) -> Path:
         """An adapter merged once: an unchanged adapter (e.g. the value model when it did not train) reuses it."""
+        if not adapter:
+            # No adapter yet (the GRPO loop's version 0): the base model's weights are served as they are.
+            return Path(base_model)
         if adapter in self.merged:
             return self.merged[adapter]
         if not (directory / MERGED_MARKER).exists():

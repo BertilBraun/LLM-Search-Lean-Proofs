@@ -16,6 +16,7 @@ from lean_search.monitoring.families import (
     GrpoPhase,
     LoopState,
     LoopStatus,
+    PhaseTiming,
     SearchPhase,
     SystemUsage,
     ValueBenchmarkResult,
@@ -192,6 +193,7 @@ class DemoRun:
         self.write_search(moment)
         self.write_curriculum(moment)
         self.write_grpo(moment + 240)
+        self.write_timing(moment + 270)
         self.phase += 1
         self.last_publish = moment + 270
         self.context()
@@ -199,6 +201,20 @@ class DemoRun:
             self.write_value(moment + 280)
         if self.phase % self.schedule.evaluation_every_phases == 0:
             self.write_fixed_targets(moment + 290)
+
+    def write_timing(self, moment: float) -> None:
+        schedule = self.schedule
+        self.writer.write(
+            PhaseTiming(
+                sampling_seconds=(schedule.phase_minutes - schedule.training_minutes) * 60,
+                training_seconds=schedule.training_minutes * 60 * (1 + self.noise(0.05)),
+                publishing_seconds=22 + abs(self.noise(3)),
+                evaluation_seconds=0.0,
+                trees=round(62 + self.noise(5)),
+                searches_paused=round(100 + self.noise(6)),
+            ),
+            record_time=moment,
+        )
 
     def write_fixed_targets(self, moment: float) -> None:
         learned = self.progress(moment)
@@ -211,6 +227,14 @@ class DemoRun:
                 held_out_states=512,
                 math500_visible=0.876 + self.profile.math500_drift * learned + self.noise(0.006),
                 math500_thinking=0.845 + self.profile.math500_drift * learned * 0.5 + self.noise(0.006),
+                probe_solved=round(250 + self.profile.minif2f_gain * 2 * learned + self.noise(4)),
+                probe_problems=501,
+                probe_expansion_budget=16,
+                probe_by_difficulty={
+                    stratum: BandOutcome(167, round(167 * rate * (1 + 0.2 * learned) + self.noise(3)))
+                    for stratum, rate in (("easy", 0.8), ("medium", 0.45), ("hard", 0.15))
+                },
+                evaluation_seconds=2900 + self.noise(120),
             ),
             record_time=moment,
         )

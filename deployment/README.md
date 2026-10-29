@@ -17,6 +17,7 @@ node's checkout.
 | `serve_model.sh` | node | Start a detached vLLM server for one model on one GPU (prefix caching, runtime LoRA). |
 | `stop_model.sh` | node | Stop servers started by `serve_model.sh` (by name or `--all`). |
 | `background.sh` | node | Run a CPU-heavy job pinned to the last `BACKGROUND_CPUS` (32) CPUs at nice 19 (CPU budget). |
+| `grpo_loop.sh` | node | The GRPO loop step by step: held-out sets, version 0, servers, checks, gate, dashboard, loop, status. |
 | `setup_lean.sh` | node | Install elan, the pinned Lean toolchain, Mathlib (from cache) and the REPL. |
 
 ## First-time setup
@@ -278,6 +279,84 @@ TensorBoard: `MetricsWriter(..., tensorboard=True)` mirrors every scalar to `$R/
 installed (`uv pip install tensorboard`; not in the lock file). TensorBoard has no authentication, so never map
 its port openly: run `tensorboard --logdir $R/tensorboard --host 127.0.0.1 --port 6006` and reach it through an SSH
 forward or a tunnel that authenticates (Vast's Instance Portal; Cloudflare Access), not a bare quick tunnel.
+
+## GRPO loop
+
+The search-tree GRPO loop (`src/lean_search/rl/README.md`, "The loop") on 4x RTX 3090 with ~96 CPU threads:
+
+| GPU | Role |
+|---|---|
+| 0 | training: the policy GRPO phase, then the value model and its gate (`[training] gpu`) |
+| 1-3 | serving: the merged policy (port 810x, 62% of memory, `--logprobs-mode processed_logprobs`) and the merged value model (port 820x, 28%, `MAX_NUM_SEQS=96`) |
+
+The loop process holds one Lean REPL per concurrent search (`[sampling] concurrency`, 112) and runs the training and
+evaluation jobs as child processes. Servers on the training GPU (none by default) would sleep during each phase.
+
+Bring-up on a fresh node, after the rebuild (`setup_remote.sh`, pool v3 verified statements under
+`$LEAN_SEARCH_DATA/expert_iteration/pool_v3/`, from `node_backup/` the merged starting policy at
+`$LEAN_SEARCH_CHECKPOINTS/grpo_start/merged`, the value v0 adapter at `phase3_value_v0/adapter`, and the per-step
+evaluation's states at `$LEAN_SEARCH_RUNS/phase5_eval_visible_student_v2_visible/states.jsonl`):
+
+```bash
+deployment/grpo_loop.sh sets         # probe (501), gate (402) and overfit (300) sets under $LEAN_SEARCH_DATA/grpo/
+deployment/grpo_loop.sh init         # version 0: the starting policy as is, the value v0 adapter merged (~20 s)
+deployment/grpo_loop.sh servers      # six vLLM servers on GPUs 1-3 (each waits until healthy)
+deployment/grpo_loop.sh check        # one live request per policy server (below)
+python experiments/heartbeat_replay.py ...   # the heartbeat caps (DESIGN.md "Lean execution and harness")
+deployment/grpo_loop.sh gate         # the value gate's benchmark, ~1-2 h, before value phases can publish
+deployment/grpo_loop.sh dashboard    # http://<node>:8600 (open; tunnel or mapped port: "Dashboard" above)
+deployment/grpo_loop.sh loop         # probe and held-out states of version 0 first, then sampling
+deployment/grpo_loop.sh status       # or the dashboard; `tail -f $LEAN_SEARCH_RUNS/grpo_loop_v1/loop.log`
+```
+
+Restart after a crash: `deployment/grpo_loop.sh loop` again (servers still up; otherwise `servers` first: they start on
+the current version). The loop finishes an interrupted phase before sampling again. Milestones: `python
+experiments/grpo_loop.py --config experiments/configs/grpo/loop.toml request-evaluation --target minif2f` (run at the
+next pause); with the loop stopped, `python experiments/grpo_evaluate.py --loop-directory $LEAN_SEARCH_RUNS/grpo_loop_v1
+--target minif2f`. To end: `deployment/grpo_loop.sh stop`, then the final miniF2F and probe with grpo_evaluate.py.
+
+First-hour checks:
+
+- `check` prints, per policy server, one request the way the search sends it (the visible prompt, n = 8, 1,024
+  tokens, temperature 0.8): `tokens_recorded` (token ids with one log-probability each), `tokens_decode_to_text`
+  (the token ids decode to the text, plus the end of turn), `usable_blocks` > 0 and the finish reasons; it fails if any
+  is missing. `serve-commands` starts policy servers with `--logprobs-mode processed_logprobs`; after the first phase the dashboard's sampler-vs-trainer
+  difference (`grpo` family, `sampler_absolute_log_probability_difference`) must be small (bf16 resolution, ~0.01-0.05
+  nats); a raw-mode server shows a systematic offset from the 1/0.8 temperature scaling.
+- Timings: the version-0 probe and held-out-states runs before the first phase give the probe's wall time
+  (`fixed_targets.evaluation_seconds`; target 40-60 min, else lower `probe_per_stratum` to 100 and re-select before the
+  loop starts); the first phase's `timing` line gives sampling vs training (two passes if training stays well below
+  sampling, else `passes_per_phase = 1` in `phase.toml`) and publishing (~20 s merge plus swaps).
+- Memory and CPU (System page): the paused searches' REPLs plus the evaluation's own pool during the probe; lower
+  `[evaluation.probe] concurrency` or `[sampling] concurrency` if memory runs short. Lean cores near the thread count
+  and GPU utilization above ~80% mean the concurrency fits.
+- Training memory: `peak_memory_gib` in `$LEAN_SEARCH_CHECKPOINTS/grpo_loop_v1_phase_0001/phase.json`.
+
+Cheap tests (DESIGN.md "Order of work", step 3), with the same servers:
+
+```bash
+# Single-step GRPO, per-tactic vs sequence credit (~1 GPU-hour each; the loop must not run).
+python experiments/phase5_reasoning_data.py states \
+    --config experiments/configs/grpo/single_step_disjoint_states.toml --run-name grpo_single_step_disjoint_states
+CUDA_VISIBLE_DEVICES=0 python experiments/grpo_single_step.py --config experiments/configs/grpo/single_step.toml run --arm per_tactic
+CUDA_VISIBLE_DEVICES=0 python experiments/grpo_single_step.py --config experiments/configs/grpo/single_step.toml run --arm sequence
+python experiments/grpo_single_step.py --config experiments/configs/grpo/single_step.toml report
+# Overfit on 300 statements: a few phases, the solve rate per phase must rise.
+LOOP_CONFIG=experiments/configs/grpo/loop_overfit.toml deployment/grpo_loop.sh init   # then servers, loop
+python experiments/grpo_loop.py --config experiments/configs/grpo/loop_overfit.toml report
+# Naming A/B (after the data rewrite's two fine-tunes; renamings first for the named arm).
+python experiments/grpo_fixed_sets.py --config experiments/configs/grpo/fixed_sets.toml rename \
+    --rewrite-config experiments/configs/data_rewrite/rewrite_visible_student_v2.toml \
+    --sources probe gate pool minif2f --output grpo/renamings.jsonl
+python experiments/grpo_naming_ab.py --config experiments/configs/grpo/naming_ab.toml probe --arm numbered
+python experiments/grpo_naming_ab.py --config experiments/configs/grpo/naming_ab.toml probe --arm named
+python experiments/reasoning_retention.py --config experiments/configs/evaluation/reasoning_retention_naming_ab.toml \
+    run --gpu 0 --labels naming-numbered naming-named
+python experiments/grpo_naming_ab.py --config experiments/configs/grpo/naming_ab.toml report
+```
+
+The single-step test and the naming A/B swap weights into the policy servers; restore the loop's version afterwards
+(`servers` after `stop_model.sh --all`, or the loop's own start swaps them back).
 
 ## Node layout
 

@@ -1,0 +1,120 @@
+# Cheap test (DESIGN.md "Order of work", step 3): the full loop restricted to 300 fixed statements (100 per difficulty
+# stratum, disjoint from the probe and the gate sets) for a few phases; their solve rate per phase must go up.
+#   python experiments/grpo_fixed_sets.py --config experiments/configs/grpo/fixed_sets.toml select-overfit
+#   python experiments/grpo_loop.py --config experiments/configs/grpo/loop_overfit.toml init     # then serve, run
+#   python experiments/grpo_loop.py --config experiments/configs/grpo/loop_overfit.toml report   # solve rate per phase
+# Everything else is loop.toml: the policy alone trains (no value phases, so μ stays 0) and only the probe at the start
+# and end runs (request-evaluation), so the phases are short and the curve is the statements' own solve rate.
+name = "grpo_overfit_300"
+
+[initial]
+# "": version 0 serves the starting policy itself (serving.policy_base_model); GRPO adapters apply to it.
+policy_adapter = ""
+value_adapter = "/workspace/checkpoints/phase3_value_v0/adapter"
+
+[serving]
+policy_base_model = "/workspace/checkpoints/grpo_start/merged"
+value_base_model = "Qwen/Qwen3.5-2B"
+policy_model = "policy-merged"
+value_model = "value-merged"
+
+[[serving.policy_servers]]
+name = "policy-gpu1"
+gpu = 1
+url = "http://127.0.0.1:8101/v1"
+memory_share = 0.62
+
+[[serving.policy_servers]]
+name = "policy-gpu2"
+gpu = 2
+url = "http://127.0.0.1:8102/v1"
+memory_share = 0.62
+
+[[serving.policy_servers]]
+name = "policy-gpu3"
+gpu = 3
+url = "http://127.0.0.1:8103/v1"
+memory_share = 0.62
+
+[[serving.value_servers]]
+name = "value-gpu1"
+gpu = 1
+url = "http://127.0.0.1:8201/v1"
+memory_share = 0.28
+max_num_seqs = 96
+
+[[serving.value_servers]]
+name = "value-gpu2"
+gpu = 2
+url = "http://127.0.0.1:8202/v1"
+memory_share = 0.28
+max_num_seqs = 96
+
+[[serving.value_servers]]
+name = "value-gpu3"
+gpu = 3
+url = "http://127.0.0.1:8203/v1"
+memory_share = 0.28
+max_num_seqs = 96
+
+[sampling]
+# n = 8, harvesting and ε on, heartbeat limits, flattening; server URLs come from [serving].
+search_config = "experiments/configs/grpo/search/visible_student_v2.toml"
+# One REPL per search; most searches wait on the GPUs. Tune by the first hour (Lean cores and memory on the
+# dashboard's system page; a REPL holds 0.25-2 GiB of private memory).
+concurrency = 112
+status_seconds = 30.0
+
+[training]
+phase_config = "experiments/configs/grpo/phase.toml"
+gpu = 0
+# Each statement is searched about once per phase (300 statements, 112 concurrent searches).
+min_sampling_minutes = 10.0
+max_sampling_minutes = 20.0
+min_solved_trees = 30
+check_seconds = 30.0
+value_every_phases = 0
+value_share_after_gate = 0.15
+# grpo_fixed_sets.py gate-benchmark; under $LEAN_SEARCH_RUNS.
+value_benchmark = "grpo_gate/benchmark.json.gz"
+# Under $LEAN_SEARCH_DATA: the visible student v2's SFT data and its math solutions (phase.toml [policy_replay]).
+lean_replay = "reasoning/visible_student_v2/train.jsonl"
+math_replay = "reasoning/visible_student_v2/math.jsonl"
+# The v0 value examples (10% replay in the value phase); empty until their path on the node is checked.
+value_replay = ""
+
+[statements]
+kind = "fixed"
+fixed = "grpo/fixed_sets/overfit_300.jsonl"
+
+[evaluation]
+probe_set = "grpo/fixed_sets/probe.jsonl"
+held_out_states_file = "phase5_eval_visible_student_v2_visible/states.jsonl"
+
+# Only when requested (grpo_loop.py request-evaluation --target probe).
+[evaluation.probe]
+max_expansions = 16
+max_wall_seconds = 600.0
+concurrency = 96
+every_hours = 0.0
+at_start = false
+
+# Milestones only: grpo_loop.py request-evaluation --target minif2f (or grpo_evaluate.py with the loop stopped).
+[evaluation.minif2f]
+max_expansions = 64
+max_wall_seconds = 7200.0
+concurrency = 120
+every_hours = 0.0
+at_start = false
+
+[evaluation.held_out_states]
+max_expansions = 1
+max_wall_seconds = 600.0
+concurrency = 64
+every_hours = 0.0
+at_start = false
+
+# On only when the starting policy is the naming A/B's named arm (grpo_fixed_sets.py rename first).
+[renaming]
+enabled = false
+renamings = ["grpo/renamings.jsonl"]

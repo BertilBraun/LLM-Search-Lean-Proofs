@@ -85,3 +85,82 @@ groups with a signal, the global and local reward parts, proofs with their tacti
 the proofs and proof-graph nodes they created, and ε-picks. `training_phase.grpo_phase_record` turns a policy outcome
 into the dashboard's `grpo` line (trained groups, tactics by label, local share of the advantages, sampler mismatch,
 forced answers kept, training and sampling time).
+
+## The loop (`loop.py`, `loop_services.py`, `experiments/grpo_loop.py`, `experiments/configs/grpo/loop.toml`)
+
+One long-running process. `sampling.concurrency` workers take statements from the statement source and search them
+with the new search (`search_theorem`; n = 8, harvesting and ε on, `grpo/search/visible_student_v2.toml` on the
+loop's servers), one Lean REPL each; every finished tree goes gzipped to `trees/phase_<k>/` of the phase collecting at
+that moment, with a line in `trees/index.jsonl` (`tree_store.py`). A phase starts once `min_sampling_minutes` of
+sampling produced `min_solved_trees` solved trees (or after `max_sampling_minutes` with one) and runs:
+
+| Stage | What happens |
+|---|---|
+| pause | every policy and value request waits at the pause gate; searches keep their trees and REPL states in place, and trees finishing now belong to the next phase |
+| training | servers on the training GPU sleep; `grpo_phase.py` runs on that GPU (`SubprocessTrainer`, log in `training/phase_<k>.log`): labels the phase's trees, trains the policy (two passes) and, every `value_every_phases` with a gate benchmark, the value model plus its gate; the loop labels the same trees meanwhile for the `search` and `curriculum` metrics |
+| publishing | `training_phase.publish_phase`: version k + 1 with the new policy adapter and the new value adapter only if it passed the gate, merged on the CPU (`MergedPublisher`); every server swaps to it in place (`publish_weights`), sleeping ones wake with it (`restore_gpu`); the first accepted value model turns μ on (`value_share_after_gate`) for later phases |
+| evaluating | due fixed targets run as their own jobs (`grpo_evaluate.py`) while the searches stay paused: by loop hours (`every_hours`), once before the first phase (`at_start`), or when requested (`grpo_loop.py request-evaluation`) |
+| resume | the searches continue with the new weights |
+
+GPU assignment: `training.gpu` trains; servers on it are released for the phase (none in `loop.toml`: GPU 0 trains,
+GPUs 1–3 each serve the merged policy and the merged value model). Policy servers run with `--logprobs-mode
+processed_logprobs` (`grpo_loop.py serve-commands` prints every start command).
+
+Restart: `loop_state.json` holds the phase, its stage, sampling and training time, whether a value model passed the
+gate and the evaluation clock; `models/current.json` and `versions.jsonl` the published versions; the tree index the
+searched statements and per-phase trees. `grpo_loop.py run` after a crash first swaps every server to the current
+version, finishes the interrupted stage (training again, publishing only if `current.json` lacks the phase's
+version, the remaining evaluations), then resumes sampling. Searches cut off by the crash are lost (the curriculum
+feeds each statement once; the fixed list feeds it again). The node's disk is not persistent: back up the run's
+`metrics/`, `phases.jsonl`, `evaluations*/summary.json` and `report.md`; trees and adapters stay on the node.
+
+Metrics per phase (`MetricsWriter`, `<run>/metrics/`): `status` every `status_seconds`, `curriculum` and `search`
+(`phase_metrics.search_phase_record`: graph statistics, failure tiers, forced answers and repetition loops, Lean time
+per expansion, block length), `grpo` (from the trainer's `phase.json`), `value` when a value model met the gate,
+`timing` (sampling, training, publishing and evaluation seconds), `fixed_targets` from the evaluations; `system`
+from `dashboard.py record-system`. Failure tiers are a message-based approximation (`phase_metrics.py`).
+
+The boundaries are protocols (`TreeSearcher`, `PhaseTrainer`, `ModelServers`, `Evaluations`); the tests run the loop
+with fakes for them (`tests/rl/loop_fakes.py`) and real Lean for the start-state and renamed searches.
+
+## Fixed targets (`fixed_sets.py`, `fixed_targets.py`, `evaluation.py`)
+
+- `grpo_fixed_sets.py select` fixes the probe set (167 per stratum) and the value gate's set (134 per stratum):
+  verified pool v3 statements the automation does not close, easy (difficulty < 2), medium (< 4) or hard by the
+  curriculum's difficulty estimate (the known proof's tactic count until roots are scored), disjoint, in seeded hash
+  orders. The loop's curriculum never feeds either (`statements.held_out`).
+- `probe`: 16 expansions, 10-minute cap per problem, no harvesting, no ε, with the loop's value model; every 6 hours
+  of loop time and before the first phase, inside the loop's pause (GPUs free, the evaluation's own pool of
+  `concurrency` REPLs next to the paused searches' idle ones). `minif2f`: miniF2F-valid at 64 expansions, at
+  milestones. `held_out_states`: per-sample success on the 512 per-step evaluation states (`single_step.py`), with the
+  probe. Each writes `evaluations/<target>_v<version>/` (resumable), a `fixed_targets` line and `evaluations.jsonl`.
+- `grpo_fixed_sets.py gate-benchmark` searches the gate set once with the starting policy and no value model
+  (`grpo/gate_search.toml`, log-probability best-first) and builds the value benchmark from those trees
+  (`value/benchmark.py`), the loop's `training.value_benchmark`.
+
+## Statement renaming (`renaming.py`)
+
+Off by default; `[renaming] enabled = true` when the starting policy is the naming A/B's named arm. Renamings are
+computed once with the data rewrite's namer (`grpo_fixed_sets.py rename --sources probe gate pool minif2f`) and
+looked up by problem name in the loop, the probe and miniF2F evaluations and the gate search. The search runs on the
+renamed statement; a found proof is verified against the original statement with `rename'` first
+(`data_rewrite.statement_renaming.verify_against_original`); a proof that fails counts as unsolved
+(`SearchResult.original_verified = False`) and keeps no tree. Tree records hold the renamed statement. The held-out
+states are traced states and are never renamed.
+
+## Cheap tests
+
+- **Single-step GRPO** (`single_step.py`, `experiments/grpo_single_step.py`, `grpo/single_step.toml`): one policy
+  request per held-out state, executed from the state rebuilt by replay (`search_theorem(..., start_state=...)`).
+  Proof graph: the state's traced proof proves it and every later state of it, so a tactic that closes the goals or
+  reaches one of those states (by goal key) is on the proof graph and the root always forms a group; other new states
+  are unknown (neutral). No extra search per state. Success per sample = the block runs completely and ends there
+  (the per-step evaluation's criterion). Each arm (per-tactic, sequence credit) runs 3 rounds of sample, measure
+  (training and 512 disjoint states), train (one phase, two passes), then a last measurement; `report` writes both
+  curves. States whose goals had inaccessible names are renamed by the search, so their reference keys may not match.
+- **Overfit on 300 statements** (`grpo/loop_overfit.toml`): the loop on a fixed list (`grpo_fixed_sets.py
+  select-overfit`: 100 per stratum outside the probe and gate), policy only; `grpo_loop.py report` gives the solve
+  rate per phase, which must rise.
+- **Naming A/B** (`experiments/grpo_naming_ab.py`, `grpo/naming_ab.toml`): the data rewrite's two short fine-tunes on
+  the probe (the named arm on renamed statements), the unknown-name error rate per policy sample of those searches
+  (`phase_metrics.unknown_names`) and MATH-500 (`evaluation/reasoning_retention_naming_ab.toml`).

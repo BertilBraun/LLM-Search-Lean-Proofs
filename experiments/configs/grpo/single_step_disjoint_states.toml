@@ -1,0 +1,56 @@
+# The single-step GRPO test's disjoint states (experiments/configs/grpo/single_step.toml): 512 more validation states
+# chosen like the per-step evaluation's (phase5_eval_visible_student_v2_visible.toml), excluding those. Only [states] is
+# used (`phase5_reasoning_data.py states`); the other sections are the evaluation's.
+#   python experiments/phase5_reasoning_data.py states \
+#       --config experiments/configs/grpo/single_step_disjoint_states.toml --run-name grpo_single_step_disjoint_states
+
+[states]
+count = 512
+states_per_proof = 2
+max_goal_characters = 3000
+seed = "grpo-single-step-disjoint"
+seen_sft_data = ["v2", "4b"]
+unseen_only = true
+# The deferred Goedel SFT v2 tracing is in the shards, not in the snapshot SFT v2 was built from.
+traced = "shards"
+# The sources whose unseen states are not biased: the other sources' few unseen states are mostly those whose
+# reference step SFT dropped as too long.
+sources = ["goedel_sft_v2", "stp_lean_workbook"]
+# Disjoint from the per-step evaluation's 512 states (the single-step test's training states).
+excluded_runs = ["phase5_eval_visible_student_v2_visible"]
+split = "validation"
+
+[policy]
+model = "visible-student"
+tokenizer = "Qwen/Qwen3.5-4B"
+server_urls = ["http://127.0.0.1:8100/v1", "http://127.0.0.1:8101/v1"]
+sample_count = 8
+temperature = 0.8
+top_p = 1.0
+max_tokens = 1024
+thinking = false
+visible_reasoning = true
+few_shot = false
+# Forced samples are recorded but never selected for training (their explanation is cut off).
+force_answer_on_truncation = true
+forced_answer_tokens = 256
+request_timeout_seconds = 1800.0
+
+[execution]
+pool_size = 16
+tactic_timeout_seconds = 10.0
+foreign_header_batch_size = 16
+
+[pipeline]
+chunk_states = 128
+requests_in_flight = 128
+
+[reward]
+accept_later_reference_states = true
+value_progress = false
+value_progress_margin = 1.0
+
+[selection]
+max_per_state = 2
+min_reasoning_tokens = 16
+max_reasoning_tokens = 0

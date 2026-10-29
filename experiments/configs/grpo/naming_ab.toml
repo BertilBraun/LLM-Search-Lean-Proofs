@@ -1,0 +1,20 @@
+# Cheap test (DESIGN.md "Order of work", step 3): the naming A/B (experiments/grpo_naming_ab.py). The two short
+# fine-tunes of the data rewrite (experiments/configs/data_rewrite/sft_{numbered,named}.toml) compared on the probe set
+# (loop.toml's servers, search template and probe budget), the unknown-name error rate of the probe searches and
+# MATH-500 (experiments/configs/evaluation/reasoning_retention_naming_ab.toml). The named arm searches statements
+# renamed by the data's namer (grpo_fixed_sets.py rename --sources probe gate pool minif2f) and checks every proof
+# against the original statement.
+name = "grpo_naming_ab"
+loop_config = "experiments/configs/grpo/loop.toml"
+base_model = "Qwen/Qwen3.5-4B"
+
+[[arms]]
+name = "numbered"
+adapter = "/workspace/checkpoints/data_rewrite_sft_numbered/adapter"
+math500_label = "naming-numbered"
+
+[[arms]]
+name = "named"
+adapter = "/workspace/checkpoints/data_rewrite_sft_named/adapter"
+renamings = ["grpo/renamings.jsonl"]
+math500_label = "naming-named"

@@ -169,6 +169,8 @@ class SearchResult:
     plain_verified: bool | None = None
     step_statistics: tuple[StepStatistics, ...] = ()
     start_failure: str | None = None
+    # A search of a renamed statement: whether its proof verified against the original (False makes it unproved).
+    original_verified: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -192,8 +194,10 @@ async def search_theorem(
     expander: Expander,
     priority_function: PriorityFunction,
     config: SearchConfig,
+    start_state: ProofState | None = None,
 ) -> CompletedSearch:
-    return await _TheoremSearch(problem, repl, expander, priority_function, config).run()
+    """`start_state`: a state inside the proof (e.g. a traced step's, rebuilt by replay) instead of the statement's."""
+    return await _TheoremSearch(problem, repl, expander, priority_function, config, start_state).run()
 
 
 async def search_problems(
@@ -303,8 +307,10 @@ class _TheoremSearch:
         expander: Expander,
         priority_function: PriorityFunction,
         config: SearchConfig,
+        start_state: ProofState | None = None,
     ) -> None:
         self.problem = problem
+        self.start_state = start_state
         self.repl = repl
         self.expander = expander
         self.priority_function = priority_function
@@ -330,16 +336,20 @@ class _TheoremSearch:
 
     async def run(self) -> CompletedSearch:
         self.started = time.monotonic()
-        start = await self.repl.start_proof(self.problem.formal_statement, self.problem.header)
-        self.accounting.lean_seconds += start.elapsed_seconds
-        match start.outcome:
-            case LeanError() | LeanTimeout() | ReplFailure() as failure:
-                result = self._result(StopReason.START_FAILED, None, None)
-                return CompletedSearch(dataclasses.replace(result, start_failure=failure.message), None)
-            case ProofState() as root_state:
-                root_state, naming_seconds = await self._named(root_state)
-                self.accounting.lean_seconds += naming_seconds
-                tree = SearchTree(self.problem.name, root_state, start.elapsed_seconds + naming_seconds)
+        if self.start_state is None:
+            start = await self.repl.start_proof(self.problem.formal_statement, self.problem.header)
+            self.accounting.lean_seconds += start.elapsed_seconds
+            match start.outcome:
+                case LeanError() | LeanTimeout() | ReplFailure() as failure:
+                    result = self._result(StopReason.START_FAILED, None, None)
+                    return CompletedSearch(dataclasses.replace(result, start_failure=failure.message), None)
+                case ProofState() as started_state:
+                    root_state, start_seconds = started_state, start.elapsed_seconds
+        else:
+            root_state, start_seconds = self.start_state, 0.0
+        root_state, naming_seconds = await self._named(root_state)
+        self.accounting.lean_seconds += naming_seconds
+        tree = SearchTree(self.problem.name, root_state, start_seconds + naming_seconds)
         self.tree = tree
         await self._prepare_identifier_check()
         self.context = SearchContext(self.problem, tree, self.repl)

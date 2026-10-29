@@ -54,6 +54,12 @@ class SystemUsage:
 
 
 @dataclass(frozen=True)
+class BandOutcome:
+    attempts: int
+    solved: int
+
+
+@dataclass(frozen=True)
 class FixedTargets:
     family: ClassVar[str] = "fixed_targets"
     minif2f_valid_solved: int | None = None
@@ -64,6 +70,13 @@ class FixedTargets:
     held_out_states: int | None = None
     math500_visible: float | None = None
     math500_thinking: float | None = None
+    # The probe set (held-out pool statements, stratified by difficulty) at its small budget.
+    probe_solved: int | None = None
+    probe_problems: int | None = None
+    probe_expansion_budget: int | None = None
+    probe_by_difficulty: dict[str, BandOutcome] = field(default_factory=dict)
+    # Wall time of the evaluation this line reports.
+    evaluation_seconds: float | None = None
 
 
 @dataclass(frozen=True)
@@ -142,12 +155,6 @@ class SearchPhase:
 
 
 @dataclass(frozen=True)
-class BandOutcome:
-    attempts: int
-    solved: int
-
-
-@dataclass(frozen=True)
 class CurriculumPhase:
     family: ClassVar[str] = "curriculum"
     band_low: float
@@ -158,4 +165,28 @@ class CurriculumPhase:
     by_stage: dict[str, BandOutcome] = field(default_factory=dict)
 
 
-FAMILIES = (LoopStatus, SystemUsage, FixedTargets, GrpoPhase, ValueBenchmarkResult, SearchPhase, CurriculumPhase)
+@dataclass(frozen=True)
+class PhaseTiming:
+    """Where a phase's wall time went: sampling between pauses, then the pause's training, publish and evaluations."""
+
+    family: ClassVar[str] = "timing"
+    sampling_seconds: float
+    # The training job as a whole (model loading, policy and value training, the value gate).
+    training_seconds: float
+    publishing_seconds: float
+    evaluation_seconds: float
+    # Trees the phase trained on and the searches still paused in place.
+    trees: int
+    searches_paused: int
+
+
+FAMILIES = (
+    LoopStatus,
+    SystemUsage,
+    FixedTargets,
+    GrpoPhase,
+    ValueBenchmarkResult,
+    SearchPhase,
+    CurriculumPhase,
+    PhaseTiming,
+)
