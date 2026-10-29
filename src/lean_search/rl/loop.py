@@ -11,17 +11,19 @@ training    the paused searches' REPL processes stop to free host memory and the
             the training job (grpo_phase.py, data-parallel over those GPUs) labels the phase's trees, trains the
             policy (GRPO) with the μ set for the run (`set_value_share`, 0 until set) and, every
             `value_every_phases`, the value model on the window of recent phases' trees, and merges the new adapters on
-            the GPUs; meanwhile the loop labels the phase's trees for the search, curriculum and value metrics
+            the main rank's GPU; meanwhile the loop labels the phase's trees for the search, curriculum and value
+            metrics
 publishing  version k + 1 (the new policy adapter and a new value adapter): with the persistent job's merges in host
             memory the sleeping servers wake with them (the others swap in place), the searches resume unless
             evaluations are due, and the version is recorded once the merges are on disk; otherwise it is recorded
             with the job's merges (or merged on the CPU) first, then served
 evaluating  the fixed targets that are due (by loop hours, at the start, or requested) run as separate jobs while
             the searches stay paused, after the paused searches' REPL processes stopped to free host memory; the value
-            servers serve the evaluations' fixed value model meanwhile. The probe runs one part of its set per slot;
-            every other slot also runs its part with the published value model (the value arm), paired with the slot's
-            run, which only reports (and alerts when the published model is worse than the reference); then the
-            phase's budget signals and health checks (`health_checks.py`), whose hard stop ends the loop here
+            servers serve the evaluations' fixed value model meanwhile. The probe runs one part of its set per slot,
+            the held-out states with it; the first slot after a value model is published also runs its part with that
+            model (the value arm), paired with the slot's run, which only reports (and alerts when the published model
+            is worse than the reference); then the phase's budget signals and health checks (`health_checks.py`): a
+            held-out collapse publishes the last good version's policy again, a second one soon after ends the loop
 resume      the searches continue with the new weights; a newly served value model scores the value benchmark through
             the value servers meanwhile, a trend against v0 and the value model before it
 
