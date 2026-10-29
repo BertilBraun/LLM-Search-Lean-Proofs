@@ -149,10 +149,12 @@ def write_premerged(
     directory: Path,
 ) -> None:
     """The merged weights (`state_dict`, else the model's own) as a servable checkpoint, written beside the directory
-    and renamed into place with the marker inside, so a directory with a marker is always complete."""
+    and renamed into place with the marker inside, so a directory with a marker is always complete. Only on
+    distributed rank 0, where transformers writes the weights."""
     temporary = directory.with_name(directory.name + ".tmp")
     shutil.rmtree(temporary, ignore_errors=True)
     model.save_pretrained(temporary, state_dict=state_dict)
+    assert any(temporary.glob("*.safetensors")), f"{temporary} holds no weights (written on a rank other than 0?)"
     copy_tokenizer_and_processor_files(marker.base_model, temporary)
     (temporary / PREMERGED_MARKER).write_text(json.dumps(dataclasses.asdict(marker)), encoding="utf-8")
     shutil.rmtree(directory, ignore_errors=True)

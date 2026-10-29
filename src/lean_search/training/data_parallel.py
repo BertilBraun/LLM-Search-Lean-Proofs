@@ -10,7 +10,7 @@ from dataclasses import dataclass
 import torch
 import torch.distributed
 
-# Ranks wait at collectives while one rank runs the value gate or merges an adapter.
+# Ranks wait at collectives while the main rank prepares the data or merges the adapters.
 COLLECTIVE_TIMEOUT = datetime.timedelta(hours=1)
 # 256 MiB of fp32 gradients per all-reduce.
 GRADIENT_BUCKET_ELEMENTS = 2**26

@@ -8,7 +8,7 @@ Started by the loop with `[training] persistent = true` (loop_services.Persisten
 through the channel directory (rl/trainer_channel.py). The ranks build the policy and value models once, keep them
 parked in host memory between phases and train each phase the loop asks for (rl/resident_trainer.py); a phase's
 adapters, steps and phase.json go where grpo_phase.py writes them, its merged weights to <host-directory>/handoff for
-the servers. The ranks stop on the loop's `stop` command or once the loop's process is gone.
+the servers. The ranks stop on the loop's `stop` command or, between commands, once the loop's process is gone.
 """
 
 import argparse

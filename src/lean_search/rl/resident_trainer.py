@@ -4,9 +4,10 @@ Each rank builds the policy and value models once (`training/resident.py`), park
 then follows the loop's commands (`trainer_channel.py`). A `prepare` at the start of a phase's sampling builds the
 models the phase needs and starts the main rank reading and labelling the phase's trees as they arrive, one thread on
 the background CPUs; a `train` at the pause finishes that, sends the sequences to the other ranks and runs the phase as
-`training_phase.run_training_phase` does, with the resident models: the policy, the value model with its gate, and the
-merges of the new adapters, which go to host memory (`HostDirectories.handoff`) for the servers to load. Between
-commands the ranks only poll, so no collective waits; they exit when the loop's process is gone.
+`training_phase.run_training_phase` does, with the resident models: the policy, the value model when due, and the
+merges of the new adapters on the main rank, which go to host memory (`HostDirectories.handoff`) for the servers to
+load. Between commands the ranks only poll, so no collective waits; between commands they exit once the loop's process
+is gone (a command in progress finishes first).
 """
 
 import dataclasses
@@ -270,11 +271,11 @@ class TrainerRank:
         return window
 
     def merge(self, merges: Sequence[Merge]) -> tuple[float, float]:
-        """Each new adapter merged on one rank's GPU (in turn) into host memory; the slowest rank's merging and
-        writing seconds."""
+        """Each new adapter merged on the main rank's GPU, one after another, into host memory (transformers'
+        `save_pretrained` writes the weights only on distributed rank 0); its merging and writing seconds."""
         merge_seconds = handoff_seconds = 0.0
-        for index, merge in enumerate(merges):
-            if index % self.ranks.world_size == self.ranks.rank:
+        if self.ranks.is_main:
+            for merge in merges:
                 directory = handoff_directory(self.host.handoff, merge.weights.adapter)
                 merging, writing = self.models[merge.kind].write_merged(merge.weights, directory)
                 merge_seconds += merging
