@@ -9,6 +9,7 @@ close the root. The proofs never train anything: they certify provability and es
 """
 
 import json
+import random
 import re
 import time
 import tomllib
@@ -253,9 +254,16 @@ def length_buckets(path: Path, minimum_tactics: int, last_bucket: int) -> list[l
     return buckets
 
 
-def stratified_candidates(path: Path, minimum_tactics: int, last_bucket: int) -> Iterator[KnownProofStatement]:
-    """Round-robin over proof-length buckets, each easiest first, so verified statements span every difficulty."""
-    queues = [iter(bucket) for bucket in length_buckets(path, minimum_tactics, last_bucket) if bucket]
+def stratified_candidates(
+    path: Path, minimum_tactics: int, last_bucket: int, shuffle_seed: str = ""
+) -> Iterator[KnownProofStatement]:
+    """Round-robin over proof-length buckets, so verified statements span every difficulty; each bucket easiest first,
+    or in a seeded random order when `shuffle_seed` is set."""
+    buckets = length_buckets(path, minimum_tactics, last_bucket)
+    if shuffle_seed:
+        for index, bucket in enumerate(buckets):
+            random.Random(f"{shuffle_seed}/{index}").shuffle(bucket)
+    queues = [iter(bucket) for bucket in buckets if bucket]
     with path.open("rb") as lines:
         while queues:
             remaining = []
@@ -305,6 +313,9 @@ class VerificationConfig:
     # Candidates in round-robin over proof-length buckets (min_proof_tactics up to this, the last open-ended), so
     # verified statements span every difficulty and the curriculum's band can rise; 0 verifies easiest first.
     stratified_last_bucket: int = 12
+    # Each bucket in a seeded random order instead of easiest first: within a proof length, "easiest" sorts by proof
+    # characters, which put one corpus's terse proofs first (93% of the first 12k verified were leanabell_sft).
+    bucket_shuffle_seed: str = ""
     check_seconds: float = 300.0
     command_timeout_seconds: float = 60.0
     # The automation probe: the loop search template's automation tactics, each with this time limit.

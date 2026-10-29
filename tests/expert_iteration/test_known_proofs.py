@@ -91,3 +91,17 @@ def test_stratified_candidates_take_turns_across_proof_lengths(tmp_path: Path) -
     write_records(path, easiest_first(groups))
     order = [candidate.statement_key for candidate in stratified_candidates(path, 2, 4)]
     assert order == ["a", "c", "d", "b"]
+
+
+def test_shuffled_buckets_keep_every_candidate_of_each_length(tmp_path: Path) -> None:
+    groups: dict[str, StatementProofs] = {}
+    for index in range(20):
+        tactics = 2 + index % 2
+        add_proof(
+            groups, f"k{index}", proof("\n".join(["simp"] * tactics), statement=f"theorem k{index} : True := by"), 3
+        )
+    path = tmp_path / "candidates.jsonl"
+    write_records(path, easiest_first(groups))
+    plain = [candidate.statement_key for candidate in stratified_candidates(path, 2, 4)]
+    shuffled = [candidate.statement_key for candidate in stratified_candidates(path, 2, 4, "seed")]
+    assert (sorted(shuffled), shuffled != plain) == (sorted(plain), True)

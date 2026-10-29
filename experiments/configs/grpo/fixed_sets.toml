@@ -5,8 +5,10 @@
 # the overfit test's 300 statements outside both.
 #   python experiments/grpo_fixed_sets.py --config experiments/configs/grpo/fixed_sets.toml select
 #   python experiments/grpo_fixed_sets.py --config experiments/configs/grpo/fixed_sets.toml select-overfit
-medium_from = 2.0
-hard_from = 4.0
+# Verified statements have known proofs of 2 to 12+ top-level tactics, about evenly (pool v3 verifies round-robin
+# over proof lengths, nothing under 2): easy 2-3, medium 4-6, hard 7+.
+medium_from = 4.0
+hard_from = 7.0
 probe_per_stratum = 167
 gate_per_stratum = 134
 overfit_per_stratum = 100
