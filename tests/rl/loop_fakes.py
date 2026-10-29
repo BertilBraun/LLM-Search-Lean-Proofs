@@ -165,6 +165,7 @@ class FakeSearcher:
         self.open.set()
         self.searched: list[str] = []
         self.pauses = 0
+        self.policy_versions: list[int] = []
 
     async def search(self, problem: Problem) -> CompletedSearch:
         await self.open.wait()
@@ -182,6 +183,9 @@ class FakeSearcher:
 
     def resume(self) -> None:
         self.open.set()
+
+    def serving(self, policy_version: int) -> None:
+        self.policy_versions.append(policy_version)
 
 
 @dataclass

@@ -2,7 +2,7 @@
 # The search-tree GRPO loop on a 4x RTX 3090 node, one step at a time (deployment/README.md, "GRPO loop").
 #
 #   deployment/grpo_loop.sh sets                 # once: probe, value gate and overfit statement sets (CPU)
-#   deployment/grpo_loop.sh init                 # once: version 0 (merges the value adapter)
+#   deployment/grpo_loop.sh init                 # once: version 0 (merges the policy and value [initial] adapters)
 #   deployment/grpo_loop.sh servers              # start every vLLM server on the current version (~2-5 min each)
 #   deployment/grpo_loop.sh check                # one live request per policy server: what the search parses
 #   deployment/grpo_loop.sh gate                 # once, ~1-2 h: the value gate's benchmark (no value model)

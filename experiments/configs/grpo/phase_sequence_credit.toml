@@ -40,8 +40,9 @@ proof_over_never_expanded_weight = 0.0
 half_weight_expanded_nodes = 4.0
 
 [policy]
-model = "/workspace/checkpoints/grpo_start/merged"
-initial_adapter = ""
+model = "Qwen/Qwen3.5-4B"
+initial_adapter = "/workspace/checkpoints/data_rewrite_sft_numbered/adapter"
+reference_adapter = "/workspace/checkpoints/data_rewrite_sft_numbered/adapter"
 sequences_per_step = 64
 # Two passes if training time allows (the dashboard's training vs sampling time); 1 is allowed.
 passes_per_phase = 2
@@ -62,6 +63,7 @@ credit = "sequence"
 # For records written before the sampling temperature was kept.
 default_temperature = 0.8
 
+# Unused with initial_adapter: the continued adapter keeps its own rank and alpha (the SFT stage's, from v2's).
 [policy.lora]
 rank = 64
 alpha = 64

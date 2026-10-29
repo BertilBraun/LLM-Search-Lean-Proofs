@@ -1,13 +1,20 @@
 import asyncio
 from collections.abc import Sequence
 
-from lean_search.expert_iteration.loop_search import GatedValueEstimator, PauseGate
-from lean_search.search import Node, ValueEstimates
+from lean_search.data import Problem, Split
+from lean_search.expert_iteration.loop_search import GatedExpander, GatedValueEstimator, PauseGate
+from lean_search.lean import LeanRepl, ProofState
+from lean_search.search import CandidateBatch, CandidateBatches, Node, SearchContext, SearchTree, ValueEstimates
 
 
 class OneStepEstimator:
     async def estimate(self, nodes: Sequence[Node]) -> ValueEstimates:
         return ValueEstimates(tuple(1.0 for _ in nodes))
+
+
+class OneBatchExpander:
+    async def expand(self, node: Node, context: SearchContext) -> CandidateBatches:
+        yield CandidateBatch(())
 
 
 async def settle() -> None:
@@ -35,6 +42,16 @@ async def test_requests_wait_while_paused() -> None:
     gate.resume()
     await asyncio.wait_for(estimate, 1.0)
     assert not finished_early
+
+
+async def test_batches_carry_the_policy_version_served_when_the_request_entered() -> None:
+    gate = PauseGate()
+    gate.policy_version = 4
+    state = ProofState("", "theorem t : True := by", (), ("⊢ True",), repl_proof_state=0, session=0)
+    tree = SearchTree("t", state, 0.0)
+    context = SearchContext(Problem("t", Split.VALID, "", state.statement, "", ""), tree, LeanRepl())
+    batches = [batch async for batch in GatedExpander(OneBatchExpander(), gate).expand(tree.root, context)]
+    assert [batch.policy_version for batch in batches] == [4]
 
 
 async def test_paused_time_accumulates_over_pauses() -> None:

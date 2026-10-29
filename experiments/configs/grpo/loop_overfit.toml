@@ -8,12 +8,12 @@
 name = "grpo_overfit_300"
 
 [initial]
-# "": version 0 serves the starting policy itself (serving.policy_base_model); GRPO adapters apply to it.
-policy_adapter = ""
+# As in loop.toml: the starting policy's own adapter, continued by every phase on serving.policy_base_model.
+policy_adapter = "/workspace/checkpoints/data_rewrite_sft_numbered/adapter"
 value_adapter = "/workspace/checkpoints/phase3_value_v0/adapter"
 
 [serving]
-policy_base_model = "/workspace/checkpoints/grpo_start/merged"
+policy_base_model = "Qwen/Qwen3.5-4B"
 value_base_model = "Qwen/Qwen3.5-2B"
 policy_model = "policy-merged"
 value_model = "value-merged"
@@ -77,9 +77,9 @@ value_every_phases = 0
 value_share_after_gate = 0.15
 # grpo_fixed_sets.py gate-benchmark; under $LEAN_SEARCH_RUNS.
 value_benchmark = "grpo_gate/benchmark.json.gz"
-# Under $LEAN_SEARCH_DATA: the visible student v2's SFT data and its math solutions (phase.toml [policy_replay]).
-lean_replay = "reasoning/visible_student_v2/train.jsonl"
-math_replay = "reasoning/visible_student_v2/math.jsonl"
+# Under $LEAN_SEARCH_DATA: the starting policy's flat SFT data (data_rewrite.py build) and its math solutions.
+lean_replay = "reasoning/visible_student_v3_numbered/train.jsonl"
+math_replay = "reasoning/visible_student_v3_numbered/math.jsonl"
 # The v0 value examples (10% replay in the value phase); empty until their path on the node is checked.
 value_replay = ""
 

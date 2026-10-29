@@ -16,6 +16,7 @@ with what the loop needs; it belongs in the core once its owner adds it there:
 
 import asyncio
 import contextlib
+import dataclasses
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -52,6 +53,8 @@ class PauseGate:
         self.in_flight = 0
         self.paused_total = 0.0
         self.paused_since: float | None = None
+        # The published policy version the servers answer with; it changes only while paused.
+        self.policy_version: int | None = None
 
     async def enter(self) -> None:
         await self.opened.wait()
@@ -88,6 +91,7 @@ class GatedExpander:
 
     async def expand(self, node: Node, context: SearchContext) -> CandidateBatches:
         await self.gate.enter()
+        policy_version = self.gate.policy_version
         released = False
         try:
             async with contextlib.aclosing(self.inner.expand(node, context)) as batches:
@@ -95,7 +99,7 @@ class GatedExpander:
                     if not released:
                         self.gate.leave()
                         released = True
-                    yield batch
+                    yield dataclasses.replace(batch, policy_version=policy_version)
         finally:
             if not released:
                 self.gate.leave()

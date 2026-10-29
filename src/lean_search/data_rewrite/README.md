@@ -30,6 +30,10 @@ torchrun --nproc-per-node 2 experiments/phase5_reasoning_sft.py \
     --config experiments/configs/data_rewrite/sft_named.toml --run-name data_rewrite_sft_named
 ```
 
+The winning arm is the GRPO loop's start: its adapter (`$LEAN_SEARCH_CHECKPOINTS/data_rewrite_sft_<arm>/adapter`, on
+raw Qwen3.5-4B) is version 0 and keeps training in every phase, and its `train.jsonl` and `math.jsonl` are the phases'
+NLL replay (`loop.toml`; deployment/README.md, "GRPO loop").
+
 `--max-proofs`, `--max-examples` and `--pool-size` override the config for a pilot (use a new run name: the shard plan
 is fixed per run). Lean cost: one flat replay and one renamed replay per item, a replay of the original for flat
 replays that fail, and a full verification of 10% of the renamed proofs.

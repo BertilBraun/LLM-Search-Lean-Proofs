@@ -11,7 +11,7 @@ import torch
 import torch.utils.checkpoint
 import transformers
 
-from lean_search.rl.policy_data import PolicyDataConfig, PolicySequence
+from lean_search.rl.policy_data import PolicyDataConfig, PolicySequence, SamplerAgreement, VersionSamplerAgreement
 from lean_search.training.dpo import packed_item_micro_batches, token_micro_batches
 from lean_search.training.packing import packed_hidden_states
 from lean_search.training.sft import (
@@ -28,10 +28,13 @@ from lean_search.training.sft_data import IGNORE_INDEX, TokenizedExample
 
 # Smaller than the SFT loss chunks: the entropy needs the full log-softmax next to the logits.
 SCORE_CHUNK_POSITIONS = 512
+# PEFT's name of the adapter that trains, and of the starting policy's adapter while it scores the reference.
+TRAINED_ADAPTER_NAME = "default"
+REFERENCE_ADAPTER_NAME = "reference"
 
 
 class ReferencePolicy(StrEnum):
-    # The weights in `model` without the adapter: the GRPO starting policy when `model` holds its merged weights.
+    # The GRPO starting policy: `model` with `reference_adapter` (without any adapter when that is empty).
     STARTING_WEIGHTS = "starting_weights"
     # The policy at the phase's start, which collected most of the data.
     PHASE_START = "phase_start"
@@ -39,10 +42,12 @@ class ReferencePolicy(StrEnum):
 
 @dataclass(frozen=True)
 class GrpoConfig:
-    # The weights the LoRA adapter applies to, e.g. the merged starting policy.
+    # The weights the LoRA adapter applies to: those the starting policy's own (SFT) adapter was trained on.
     model: str
     # The adapter to continue (the published one); empty starts a fresh adapter on `model`.
     initial_adapter: str = ""
+    # The starting policy's adapter on `model` (the KL reference); empty: `model` itself is the starting policy.
+    reference_adapter: str = ""
     lora: LoraSettings = field(default_factory=LoraSettings)
     # micro_batch_tokens: padded tokens (real ones when packing); epochs is unused (passes_per_phase).
     optimization: OptimizationConfig = field(
@@ -107,17 +112,6 @@ class GrpoStepRecord:
 
 
 @dataclass(frozen=True)
-class SamplerAgreement:
-    """The trainer's log-probabilities before the first update against the sampler's recorded ones."""
-
-    tokens: int
-    # Means over the tokens of trainer minus sampler, of its absolute value, and the k3 KL(sampler || trainer).
-    mean_difference: float
-    mean_absolute_difference: float
-    kl_sampler_to_trainer: float
-
-
-@dataclass(frozen=True)
 class GrpoTrainingResult:
     steps: int
     sequences: int
@@ -133,6 +127,8 @@ class GrpoTrainingResult:
     final_entropy: float
     final_policy_loss: float
     sampler_agreement: SamplerAgreement
+    # The same per sampling version: trees spanning phases hold samples of earlier versions.
+    sampler_agreement_by_version: tuple[VersionSamplerAgreement, ...] = ()
 
 
 def clipped_policy_losses(
@@ -155,9 +151,12 @@ def kl_estimate(log_ratio: torch.Tensor) -> torch.Tensor:
 
 
 def chunk_scores(
-    lm_head: torch.nn.Module, hidden: torch.Tensor, targets: torch.Tensor, temperatures: torch.Tensor
+    output_weight: torch.Tensor, hidden: torch.Tensor, targets: torch.Tensor, temperatures: torch.Tensor
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    log_probabilities = torch.log_softmax(lm_head(hidden).float() / temperatures[:, None], dim=-1)
+    # fp32 logits: one bf16 logit step (0.125 at |logit| 16-32) would move a PPO ratio by ~x1.17 at T = 0.8.
+    with torch.autocast(hidden.device.type, enabled=False):
+        logits = hidden.float() @ output_weight.float().T
+    log_probabilities = torch.log_softmax(logits / temperatures[:, None], dim=-1)
     with torch.no_grad():
         entropies = -(log_probabilities.exp() * log_probabilities).sum(dim=-1)
     return log_probabilities.gather(-1, targets[:, None])[:, 0], entropies
@@ -169,6 +168,7 @@ class CompletionTokenScores(torch.nn.Module):
     def __init__(self, causal_model: transformers.PreTrainedModel) -> None:
         super().__init__()
         self.causal_model = causal_model
+        assert causal_model.lm_head.bias is None
 
     def forward(self, batch: Batch, temperatures: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """`temperatures`: per completion position, what its logits are divided by."""
@@ -187,7 +187,7 @@ class CompletionTokenScores(torch.nn.Module):
         chunks = [
             torch.utils.checkpoint.checkpoint(
                 chunk_scores,
-                self.causal_model.lm_head,
+                self.causal_model.lm_head.weight,
                 selected_hidden[start : start + SCORE_CHUNK_POSITIONS],
                 selected_targets[start : start + SCORE_CHUNK_POSITIONS],
                 temperatures[start : start + SCORE_CHUNK_POSITIONS],
@@ -288,6 +288,21 @@ def sampler_agreement(sequences: Sequence[PolicySequence], old: Sequence[torch.T
     )
 
 
+def sampler_agreement_by_version(
+    sequences: Sequence[PolicySequence], old: Sequence[torch.Tensor]
+) -> tuple[VersionSamplerAgreement, ...]:
+    """`sampler_agreement` per sampling version, unrecorded versions first."""
+    indices_by_version: dict[int | None, list[int]] = {}
+    for index, sequence in enumerate(sequences):
+        indices_by_version.setdefault(sequence.policy_version, []).append(index)
+    return tuple(
+        VersionSamplerAgreement(
+            version, sampler_agreement([sequences[index] for index in indices], [old[index] for index in indices])
+        )
+        for version, indices in sorted(indices_by_version.items(), key=lambda item: -1 if item[0] is None else item[0])
+    )
+
+
 def reference_log_probabilities(
     config: GrpoConfig,
     saved_module: torch.nn.Module,
@@ -298,9 +313,10 @@ def reference_log_probabilities(
     pad_token_id: int,
     device: torch.device,
 ) -> list[torch.Tensor]:
-    if config.reference == ReferencePolicy.PHASE_START or not config.initial_adapter:
+    if config.reference == ReferencePolicy.PHASE_START or config.initial_adapter == config.reference_adapter:
         return old
-    with saved_module.disable_adapter():
+
+    def scored() -> list[torch.Tensor]:
         return completion_log_probabilities(
             scorer,
             examples,
@@ -310,6 +326,18 @@ def reference_log_probabilities(
             pad_token_id,
             device,
         )
+
+    if not config.reference_adapter:
+        with saved_module.disable_adapter():
+            return scored()
+    saved_module.load_adapter(config.reference_adapter, adapter_name=REFERENCE_ADAPTER_NAME)
+    saved_module.set_adapter(REFERENCE_ADAPTER_NAME)
+    try:
+        return scored()
+    finally:
+        # Setting the trained adapter active also makes it the only one requiring gradients again.
+        saved_module.set_adapter(TRAINED_ADAPTER_NAME)
+        saved_module.delete_adapter(REFERENCE_ADAPTER_NAME)
 
 
 class ReplayCycle:
@@ -359,6 +387,7 @@ def train_grpo(
         scorer, examples, temperatures, config.scoring_micro_batch_tokens, optimization.packing, pad_token_id, device
     )
     agreement = sampler_agreement(sequences, old)
+    agreement_by_version = sampler_agreement_by_version(sequences, old)
     reference = reference_log_probabilities(
         config, saved_module, scorer, examples, temperatures, old, pad_token_id, device
     )
@@ -473,6 +502,7 @@ def train_grpo(
         final_entropy=mean([record.entropy for record in last_pass]),
         final_policy_loss=mean([record.policy_loss for record in last_pass]),
         sampler_agreement=agreement,
+        sampler_agreement_by_version=agreement_by_version,
     )
 
 

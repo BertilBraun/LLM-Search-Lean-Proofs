@@ -69,25 +69,46 @@ stop string; positions after such a span shift past it. Tokens that do not decod
 sequence credit and counted (`token_mismatch_sequences`). Records written before tokens were kept are tokenized again
 from the text (`retokenized_sequences`, no sampler log-probabilities): only for old trees and offline tests.
 
+Groups and texts are matched per tree (`PolicyTree`: a tree's groups with its `TreeRecord.expansions`), by node id and
+edge id, which identify them only within their tree: the same statement is often searched twice in a phase (always
+in the overfit test). Each expansion's texts record the published policy version that sampled them
+(`ExpansionTexts.policy_version`, from the pause gate the loop sets when it serves a version; None outside the loop
+and in older records), carried to every sequence (`PolicySequence.policy_version`).
+
 ## Trainer (`policy_trainer.py`)
 
 PPO-clipped objective per token, clip [1 − 0.2, 1 + 0.28], loss Σ token loss / (sequences in the step × 256), KL (k3)
-to the data-collecting policy and to the starting weights reported, NLL replay. Log-probabilities divide the logits by
+to the data-collecting policy and to the starting policy reported, NLL replay. Log-probabilities divide the logits by
 each sample's recorded temperature (`ExpansionTexts.temperature`; `PolicyDataConfig.default_temperature` for old
-records). Old log-probabilities are the trainer's own before the phase's first update; the recorded vLLM
-log-probabilities are compared with them (`GrpoTrainingResult.sampler_agreement`: mean and mean absolute difference,
-k3 KL), which compares like with like only when the policy servers run with `--logprobs-mode processed_logprobs`
-(vLLM's default reports the raw distribution before temperature; `deployment/README.md`). No length filter: length
-only sizes micro-batches, and a sequence beyond `max_sequence_tokens` (the servers' context) is an assertion.
-`passes_per_phase` (default 2) passes over the phase's sequences.
+records). The output layer runs in fp32 per chunk of 512 positions (hidden states and weight upcast, autocast off),
+in the scoring and the training forward alike: bf16 logits step by 0.125 at |logit| 16–32, and one step moves a PPO
+ratio by ×1.17 at T = 0.8. The upcast weight is transient: 4 bytes per vocabulary entry and hidden unit (~2.5 GB at
+248k × 2,560). Old
+log-probabilities are the trainer's own before the phase's first update; the recorded vLLM log-probabilities are
+compared with them (`GrpoTrainingResult.sampler_agreement`: mean and mean absolute difference, k3 KL; and the same per
+sampling version, `sampler_agreement_by_version`, since trees spanning phases hold samples of earlier versions; no
+importance correction), which compares like with like only when the policy servers run with `--logprobs-mode
+processed_logprobs` (vLLM's default reports the raw distribution before temperature; `deployment/README.md`). No
+length filter: length only sizes micro-batches, and a sequence beyond `max_sequence_tokens` (the servers' context) is
+an assertion. `passes_per_phase` (default 2) passes over the phase's sequences.
+
+The adapter that trains is the starting policy's own (SFT) adapter, continued phase by phase on the weights it was
+trained on (`model`, raw Qwen3.5-4B; `initial_adapter` the published one), as the value model's adapter continues on
+raw Qwen3.5-2B. Publishing merges it into those weights, which then lie between bf16 grid points, so the rounding of
+small updates is unbiased; a fresh adapter on already-merged bf16 weights would lose most of them (at a per-element
+update of 1e-5, 88% of elements unchanged, 28% of the update kept). Its rank and alpha are the adapter's own
+(`[policy.lora]` is unused). The KL reference (`reference = "starting_weights"`) is `model` with `reference_adapter`,
+the starting policy's adapter: equal to the old log-probabilities while the phase continues that adapter (version 0),
+else scored with it loaded next to the trained adapter, which alone trains again afterwards.
 
 ## Metrics
 
 `tree_statistics.graph_statistics` adds per tree: tactics by label over every policy sample and over the groups,
 groups with a signal, groups left out without a policy proof, the global and local reward parts, proofs with their
-tactics and blocks, harvest expansions with the proofs and proof-graph nodes they created, and ε-picks. `training_phase.grpo_phase_record` turns a policy outcome
-into the dashboard's `grpo` line (trained groups, tactics by label, local share of the advantages, sampler mismatch,
-forced answers kept, training and sampling time).
+tactics and blocks, harvest expansions with the proofs and proof-graph nodes they created, and ε-picks.
+`training_phase.grpo_phase_record` turns a policy outcome into the dashboard's `grpo` line (trained groups, tactics
+by label, local share of the advantages, sampler mismatch overall and by sampling age, i.e. the version trained from
+minus the version that sampled, forced answers kept, training and sampling time).
 
 ## The loop (`loop.py`, `loop_services.py`, `experiments/grpo_loop.py`, `experiments/configs/grpo/loop.toml`)
 
@@ -101,7 +122,7 @@ sampling produced `min_solved_trees` solved trees (or after `max_sampling_minute
 |---|---|
 | pause | every policy and value request waits at the pause gate; searches keep their trees and REPL states in place, and trees finishing now belong to the next phase |
 | training | servers on the training GPU sleep; `grpo_phase.py` runs on that GPU (`SubprocessTrainer`, log in `training/phase_<k>.log`): labels the phase's trees, trains the policy (two passes) and, every `value_every_phases` with a gate benchmark, the value model plus its gate; the loop labels the same trees meanwhile for the `search` and `curriculum` metrics |
-| publishing | `training_phase.publish_phase`: version k + 1 with the new policy adapter and the new value adapter only if it passed the gate, merged on the CPU (`MergedPublisher`); every server swaps to it in place (`publish_weights`), sleeping ones wake with it (`restore_gpu`); the first accepted value model turns μ on (`value_share_after_gate`) for later phases |
+| publishing | `training_phase.publish_phase`: version k + 1 with the new policy adapter and the new value adapter only if it passed the gate, merged on the CPU into `serving.policy_base_model` and `value_base_model` (`MergedPublisher`); every server swaps to it in place (`publish_weights`), sleeping ones wake with it (`restore_gpu`), and the searches' pause gate records the version for the samples to come; the first accepted value model turns μ on (`value_share_after_gate`) for later phases |
 | evaluating | due fixed targets run as their own jobs (`grpo_evaluate.py`) while the searches stay paused: by loop hours (`every_hours`), once before the first phase (`at_start`), or when requested (`grpo_loop.py request-evaluation`) |
 | resume | the searches continue with the new weights |
 

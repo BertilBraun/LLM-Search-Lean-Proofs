@@ -75,6 +75,8 @@ class ExpansionTexts:
     # The sampling settings behind the log-probabilities; None in records written before they were kept.
     temperature: float | None = None
     top_p: float | None = None
+    # The published policy version that sampled them; None outside the GRPO loop and in older records.
+    policy_version: int | None = None
 
 
 @dataclass(frozen=True)

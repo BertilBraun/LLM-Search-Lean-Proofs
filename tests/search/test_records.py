@@ -95,6 +95,11 @@ def test_expansion_texts_written_before_sampling_settings_read_as_unknown() -> N
     assert (loaded.temperature, loaded.top_p) == (None, None)
 
 
+def test_expansion_texts_written_before_the_policy_version_read_without_it() -> None:
+    texts = ExpansionTexts("t", 0, "<prompt>", (), 0.8, 1.0, 2)
+    assert from_json_object(ExpansionTexts, without(texts, "policy_version")).policy_version is None
+
+
 def test_results_written_before_harvesting_read_with_zero_counts() -> None:
     data = json.loads(to_json(RESULT))
     for key in ("proofs", "harvest_expansions", "exploration_expansions"):

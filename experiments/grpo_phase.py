@@ -1,13 +1,12 @@
 """One search-tree GRPO training phase on one GPU: GRPO of the policy and/or the value model on labelled trees.
 
     python experiments/grpo_phase.py --config experiments/configs/grpo/phase.toml --trees runs/<run>/trees \
-        --texts runs/<run>/expansion_texts.jsonl --run-name grpo_phase_0001 [--part policy|value] \
-        [--metrics-run runs/<loop> --phase 12 --sampling-seconds 1500]
+        --run-name grpo_phase_0001 [--part policy|value] [--metrics-run runs/<loop> --phase 12 --sampling-seconds 1500]
 
 Writes the adapters to $LEAN_SEARCH_CHECKPOINTS/<run-name>/{policy,value}/adapter, the step records next to them and
 the phase's outcome (data metrics, training results, the value gate) to phase.json there. The policy texts come from
-the tree records (`TreeRecord.expansions`) and any --texts files. The replay files and the value benchmark are
-optional. With --metrics-run the policy outcome is appended to that run's dashboard metrics (the grpo family).
+the tree records (`TreeRecord.expansions`). The replay files and the value benchmark are optional. With --metrics-run
+the policy outcome is appended to that run's dashboard metrics (the grpo family).
 """
 
 import argparse
@@ -21,7 +20,6 @@ import transformers
 
 from lean_search.monitoring.store import LoopContext, MetricsWriter
 from lean_search.reasoning.dataset import read_examples as read_reasoning_examples
-from lean_search.rl.policy_data import read_expansion_texts
 from lean_search.rl.training_phase import PhaseInputs, TrainingPhaseConfig, grpo_phase_record, run_training_phase
 from lean_search.search import read_tree
 from lean_search.search.records import from_json_object
@@ -36,7 +34,6 @@ def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--trees", nargs="+", type=Path, required=True)
-    parser.add_argument("--texts", nargs="*", type=Path, default=[])
     parser.add_argument("--lean-replay", type=Path, help="reasoning data set JSON lines (Lean SFT replay)")
     parser.add_argument("--math-replay", type=Path, help="math solutions JSON lines")
     parser.add_argument("--value-replay", type=Path, help="v0 value examples JSON lines")
@@ -67,9 +64,6 @@ def main() -> None:
     records = [read_tree(path) for directory in arguments.trees for path in sorted(directory.glob("*.json.gz"))]
     inputs = PhaseInputs(
         records=records,
-        # Tree records written by the search carry their expansions' texts; --texts adds texts kept apart.
-        texts=[expansion for record in records for expansion in record.expansions]
-        + [expansion for path in arguments.texts for expansion in read_expansion_texts(path)],
         lean_replay=list(read_reasoning_examples(arguments.lean_replay)) if arguments.lean_replay else [],
         math_replay=list(read_solutions(arguments.math_replay)) if arguments.math_replay else [],
         value_replay=list(read_value_examples(arguments.value_replay)) if arguments.value_replay else [],

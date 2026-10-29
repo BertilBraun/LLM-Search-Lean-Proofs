@@ -67,3 +67,33 @@ def test_single_step_arms_load_their_phase_configs() -> None:
         for arm in config.arms
     ]
     assert credits == ["per_tactic", "sequence"]
+
+
+@pytest.mark.parametrize("name", LOOPS)
+def test_loop_continues_the_starting_policys_own_adapter(name: str) -> None:
+    assert loop(name).initial.policy_adapter.endswith("/adapter")
+
+
+@pytest.mark.parametrize("name", LOOPS)
+def test_loop_replays_the_flattened_sft_data(name: str) -> None:
+    training = loop(name).training
+    assert (training.lean_replay, training.math_replay) == (
+        "reasoning/visible_student_v3_numbered/train.jsonl",
+        "reasoning/visible_student_v3_numbered/math.jsonl",
+    )
+
+
+@pytest.mark.parametrize("phase", ["grpo/phase.toml", "grpo/phase_sequence_credit.toml"])
+def test_phase_config_starts_where_the_loop_starts(phase: str) -> None:
+    policy = tomllib.loads((CONFIGS / phase).read_text(encoding="utf-8"))["policy"]
+    starting = loop("grpo/loop.toml")
+    expected = (starting.serving.policy_base_model, starting.initial.policy_adapter, starting.initial.policy_adapter)
+    assert (policy["model"], policy["initial_adapter"], policy["reference_adapter"]) == expected
+
+
+def test_single_step_starts_where_the_loop_starts() -> None:
+    text = (CONFIGS / "grpo/single_step.toml").read_text(encoding="utf-8")
+    config = from_json_object(SingleStepConfig, tomllib.loads(text))
+    starting = loop("grpo/loop.toml")
+    expected = (starting.serving.policy_base_model, starting.initial.policy_adapter)
+    assert (config.policy_base_model, config.policy_adapter) == expected

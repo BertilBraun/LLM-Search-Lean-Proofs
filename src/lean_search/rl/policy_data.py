@@ -1,9 +1,7 @@
 """GRPO training sequences: each recorded completion of a group sample, as sampled, with its per-token advantages."""
 
-import json
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Protocol
 
 from lean_search.policy.prompts import END_OF_TURN, ChatTemplate
@@ -21,7 +19,6 @@ from lean_search.rl.token_credit import (
     sampled_token_offsets,
     token_credits,
 )
-from lean_search.search.records import from_json_object, to_json
 from lean_search.search.tactic_labels import TacticLabelCounts
 from lean_search.search.texts import ExpansionTexts, SampledCompletion
 from lean_search.training.sft_data import SftExample, TokenizedExample
@@ -58,6 +55,8 @@ class PolicySequence:
     # The sampler's log-probability per completion token (None where inserted); empty when re-tokenized.
     sampler_log_probabilities: tuple[float | None, ...]
     temperature: float
+    # The published policy version that sampled it; None outside the loop and in older records.
+    policy_version: int | None
     # The answer was forced at the token cap (the harness inserted the opening).
     forced: bool
     # Records without token ids: the text tokenized again.
@@ -104,21 +103,30 @@ class PolicyData:
     metrics: PolicyDataMetrics
 
 
-def write_expansion_texts(path: Path, expansions: Iterable[ExpansionTexts]) -> int:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    count = 0
-    with path.open("w", encoding="utf-8") as handle:
-        for expansion in expansions:
-            handle.write(to_json(expansion) + "\n")
-            count += 1
-    return count
+@dataclass(frozen=True)
+class SamplerAgreement:
+    """The trainer's log-probabilities before the first update against the sampler's recorded ones."""
+
+    tokens: int
+    # Means over the tokens of trainer minus sampler, of its absolute value, and the k3 KL(sampler || trainer).
+    mean_difference: float
+    mean_absolute_difference: float
+    kl_sampler_to_trainer: float
 
 
-def read_expansion_texts(path: Path) -> Iterator[ExpansionTexts]:
-    with path.open(encoding="utf-8") as handle:
-        for line in handle:
-            if line.strip():
-                yield from_json_object(ExpansionTexts, json.loads(line))
+@dataclass(frozen=True)
+class VersionSamplerAgreement:
+    # The published policy version that sampled the tokens; None where it was not recorded.
+    policy_version: int | None
+    agreement: SamplerAgreement
+
+
+@dataclass(frozen=True)
+class PolicyTree:
+    """One tree's groups and its expansions' texts: node and edge ids identify them only within the tree."""
+
+    groups: tuple[PolicyGroup, ...]
+    texts: tuple[ExpansionTexts, ...]
 
 
 @dataclass(frozen=True)
@@ -153,6 +161,7 @@ def completion_tokens(tokenizer: PolicyTokenizer, completion: SampledCompletion)
 def policy_sequence(
     tokenizer: PolicyTokenizer,
     group: PolicyGroup,
+    expansion: ExpansionTexts,
     prompt_ids: Sequence[int],
     completion: SampledCompletion,
     temperature: float,
@@ -177,6 +186,7 @@ def policy_sequence(
         trained=credits.trained,
         sampler_log_probabilities=tokens.sampler_log_probabilities,
         temperature=temperature,
+        policy_version=expansion.policy_version,
         forced=bool(tokens.inserted),
         retokenized=tokens.retokenized,
         segments=credits.segments,
@@ -184,39 +194,43 @@ def policy_sequence(
     return sequence, mismatch
 
 
-def build_policy_data(
-    groups: Sequence[PolicyGroup],
-    texts: Sequence[ExpansionTexts],
-    tokenizer: PolicyTokenizer,
-    config: PolicyDataConfig,
-) -> PolicyData:
+def build_policy_data(trees: Sequence[PolicyTree], tokenizer: PolicyTokenizer, config: PolicyDataConfig) -> PolicyData:
     """Every recorded completion of a group with a signal is one sequence; groups whose advantages are all 0 drop."""
-    texts_by_node = {(expansion.problem_name, expansion.node_id): expansion for expansion in texts}
-    all_advantages = [group_advantages(group) for group in groups]
     sequences: list[PolicySequence] = []
     trained_groups: list[tuple[PolicyGroup, GroupAdvantages]] = []
     without_text = 0
     mismatches = 0
-    for group, advantages in zip(groups, all_advantages, strict=True):
-        if not advantages.has_signal(config.credit):
-            continue
-        trained_groups.append((group, advantages))
-        expansion = texts_by_node.get((group.problem_name, group.node_id))
-        completions = () if expansion is None else expansion.completions
-        prompt_ids = [] if expansion is None else tokenizer.encode(expansion.prompt, add_special_tokens=False)
-        temperature = config.default_temperature
-        if expansion is not None and expansion.temperature is not None:
-            temperature = expansion.temperature
-        for sample, sample_advantages in zip(group.samples, advantages.samples, strict=True):
-            sample_completions = [completion for completion in completions if completion.edge_id in sample.edge_ids]
-            if not sample_completions:
-                without_text += sample.multiplicity
-            for completion in sample_completions:
-                sequence, mismatch = policy_sequence(
-                    tokenizer, group, prompt_ids, completion, temperature, sample_advantages, config.credit
-                )
-                sequences.append(sequence)
-                mismatches += mismatch
+    for tree in trees:
+        texts_by_node = {expansion.node_id: expansion for expansion in tree.texts}
+        for group in tree.groups:
+            advantages = group_advantages(group)
+            if not advantages.has_signal(config.credit):
+                continue
+            trained_groups.append((group, advantages))
+            expansion = texts_by_node.get(group.node_id)
+            if expansion is None:
+                without_text += group.sample_count
+                continue
+            prompt_ids = tokenizer.encode(expansion.prompt, add_special_tokens=False)
+            temperature = config.default_temperature if expansion.temperature is None else expansion.temperature
+            for sample, sample_advantages in zip(group.samples, advantages.samples, strict=True):
+                completions = [item for item in expansion.completions if item.edge_id in sample.edge_ids]
+                if not completions:
+                    without_text += sample.multiplicity
+                for completion in completions:
+                    sequence, mismatch = policy_sequence(
+                        tokenizer,
+                        group,
+                        expansion,
+                        prompt_ids,
+                        completion,
+                        temperature,
+                        sample_advantages,
+                        config.credit,
+                    )
+                    sequences.append(sequence)
+                    mismatches += mismatch
+    groups = [group for tree in trees for group in tree.groups]
     metrics = data_metrics(groups, trained_groups, sequences, without_text, mismatches)
     return PolicyData(tuple(sequences), metrics)
 

@@ -520,6 +520,7 @@ class _TheoremSearch:
                         tuple(completions),
                         batch.temperature,
                         batch.top_p,
+                        batch.policy_version,
                     )
                 )
 

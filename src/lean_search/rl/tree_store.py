@@ -28,7 +28,7 @@ class TreeEntry:
     proved: bool
     proofs: int
     expansions: int
-    # The published version when the search finished (it may have started under an earlier one).
+    # The published version when the search finished; each expansion's texts record the version that sampled them.
     policy_version: int
     difficulty: float | None
     wall_seconds: float

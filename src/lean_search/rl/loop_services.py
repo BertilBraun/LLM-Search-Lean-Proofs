@@ -69,6 +69,9 @@ class LeanTreeSearcher:
     def resume(self) -> None:
         self.gate.resume()
 
+    def serving(self, policy_version: int) -> None:
+        self.gate.policy_version = policy_version
+
 
 @contextlib.asynccontextmanager
 async def open_tree_searcher(

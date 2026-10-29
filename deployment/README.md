@@ -293,13 +293,25 @@ The loop process holds one Lean REPL per concurrent search (`[sampling] concurre
 evaluation jobs as child processes. Servers on the training GPU (none by default) would sleep during each phase.
 
 Bring-up on a fresh node, after the rebuild (`setup_remote.sh`, pool v3 verified statements under
-`$LEAN_SEARCH_DATA/expert_iteration/pool_v3/`, from `node_backup/` the merged starting policy at
-`$LEAN_SEARCH_CHECKPOINTS/grpo_start/merged`, the value v0 adapter at `phase3_value_v0/adapter`, and the per-step
-evaluation's states at `$LEAN_SEARCH_RUNS/phase5_eval_visible_student_v2_visible/states.jsonl`):
+`$LEAN_SEARCH_DATA/expert_iteration/pool_v3/`, the value v0 adapter at `phase3_value_v0/adapter` from `node_backup/`,
+and the per-step evaluation's states at `$LEAN_SEARCH_RUNS/phase5_eval_visible_student_v2_visible/states.jsonl`) and
+after the SFT stage (`src/lean_search/data_rewrite/README.md`, steps 1-4), whose outputs the loop starts from:
+
+- the starting policy's own LoRA adapter, `$LEAN_SEARCH_CHECKPOINTS/data_rewrite_sft_<arm>/adapter` (it continues
+  visible student v2's adapter, with its rank, on raw `Qwen/Qwen3.5-4B`; `merge = false` is fine): `loop.toml` `[initial] policy_adapter`, on
+  `[serving] policy_base_model = "Qwen/Qwen3.5-4B"`. Version 0 is that adapter merged (by `init`); every phase keeps
+  training the same adapter on the raw base, and it stays the KL reference. Not merged weights with a fresh adapter:
+  small updates would round away when merged into bf16 weights that already lie on the grid.
+- its flattened SFT data, `$LEAN_SEARCH_DATA/reasoning/visible_student_v3_<arm>/{train,math}.jsonl` (`data_rewrite.py
+  build`): `[training] lean_replay` and `math_replay`, the GRPO phases' NLL replay.
+
+The configs name the numbered arm. If the naming A/B picks the named arm, change `policy_adapter`, `lean_replay` and
+`math_replay` to `..._named` and set `[renaming] enabled = true` (`loop.toml`, `loop_overfit.toml`; the phase configs'
+and `single_step.toml`'s defaults likewise, though the loop fills in its own).
 
 ```bash
 deployment/grpo_loop.sh sets         # probe (501), gate (402) and overfit (300) sets under $LEAN_SEARCH_DATA/grpo/
-deployment/grpo_loop.sh init         # version 0: the starting policy as is, the value v0 adapter merged (~20 s)
+deployment/grpo_loop.sh init         # version 0: the starting policy's and the value v0 adapter merged into their bases
 deployment/grpo_loop.sh servers      # six vLLM servers on GPUs 1-3 (each waits until healthy)
 deployment/grpo_loop.sh check        # one live request per policy server (below)
 python experiments/heartbeat_replay.py ...   # the heartbeat caps (DESIGN.md "Lean execution and harness")
@@ -322,7 +334,12 @@ First-hour checks:
   (the token ids decode to the text, plus the end of turn), `usable_blocks` > 0 and the finish reasons; it fails if any
   is missing. `serve-commands` starts policy servers with `--logprobs-mode processed_logprobs`; after the first phase the dashboard's sampler-vs-trainer
   difference (`grpo` family, `sampler_absolute_log_probability_difference`) must be small (bf16 resolution, ~0.01-0.05
-  nats); a raw-mode server shows a systematic offset from the 1/0.8 temperature scaling.
+  nats); a raw-mode server shows a systematic offset from the 1/0.8 temperature scaling. The same by sampling age
+  (`sampler_by_age`, the Policy page): age 0 is that number, ages 1+ are samples from earlier versions in trees that
+  spanned a phase, with the staleness on top. The first step of phase 1 should show `mean_ratio` 1 and
+  `clip_fraction` 0 (`steps.jsonl` of the phase's policy output).
+- Publishing keeps the update: after phase 1, `weights/v0001/policy` should differ from `v0000/policy` in a large
+  share of the adapted layers' elements (merging the continued SFT adapter into the raw base, not into merged weights).
 - Timings: the version-0 probe and held-out-states runs before the first phase give the probe's wall time
   (`fixed_targets.evaluation_seconds`; target 40-60 min, else lower `probe_per_stratum` to 100 and re-select before the
   loop starts); the first phase's `timing` line gives sampling vs training (two passes if training stays well below

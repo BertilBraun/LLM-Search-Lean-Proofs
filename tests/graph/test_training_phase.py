@@ -12,6 +12,7 @@ pytest.importorskip("peft")
 
 from lean_search.expert_iteration.serving import LoopPaths, ModelVersion, record_published  # noqa: E402
 from lean_search.rl.advantages import CreditMode  # noqa: E402
+from lean_search.rl.policy_data import VersionSamplerAgreement  # noqa: E402
 from lean_search.rl.policy_trainer import GrpoConfig  # noqa: E402
 from lean_search.rl.training_phase import (  # noqa: E402
     PhaseInputs,
@@ -76,6 +77,7 @@ def phase_tree() -> TreeRecord:
 def phase(tmp_path_factory: pytest.TempPathFactory) -> tuple[PhaseOutcome, Path]:
     model = save_tiny_model(tmp_path_factory.mktemp("tiny") / "model")
     record = phase_tree()
+    record = dataclasses.replace(record, expansions=tuple(expansion_texts(record)))
     config = TrainingPhaseConfig(
         policy=GrpoConfig(
             model=str(model), lora=LORA, optimization=OPTIMIZATION, passes_per_phase=1, scoring_micro_batch_tokens=65536
@@ -84,7 +86,7 @@ def phase(tmp_path_factory: pytest.TempPathFactory) -> tuple[PhaseOutcome, Path]
     )
     provenance = TreeProvenance("benchmark", SearchGuidance.VALUE_FREE, None, "")
     benchmark = build_benchmark([TreeSource(provenance, label_phase_data([record], config).trees)], BenchmarkConfig())
-    inputs = PhaseInputs(records=[record], texts=expansion_texts(record), value_benchmark=benchmark)
+    inputs = PhaseInputs(records=[record], value_benchmark=benchmark)
     output = tmp_path_factory.mktemp("phase")
     tokenizer = CharacterTokenizer()
     return run_training_phase(config, inputs, tokenizer, tokenizer, CPU, output), output
@@ -110,6 +112,16 @@ def test_phase_record_for_the_dashboard(phase: tuple[PhaseOutcome, Path]) -> Non
     assert outcome.policy is not None
     record = grpo_phase_record(outcome.policy, sampling_seconds=600.0)
     assert (record.groups_trained, record.tactics.proof_graph, record.tactics.failing) == (1, 1, 1)
+
+
+def test_phase_record_keys_the_sampler_agreement_by_sampling_age(phase: tuple[PhaseOutcome, Path]) -> None:
+    outcome, _ = phase
+    assert outcome.policy is not None
+    agreement = outcome.policy.result.sampler_agreement
+    by_version = (VersionSamplerAgreement(None, agreement), VersionSamplerAgreement(2, agreement))
+    result = dataclasses.replace(outcome.policy.result, sampler_agreement_by_version=by_version)
+    policy = dataclasses.replace(outcome.policy, result=result)
+    assert grpo_phase_record(policy, sampling_seconds=600.0, trained_version=3).sampler_by_age == {"1": agreement}
 
 
 class RecordingPublisher:

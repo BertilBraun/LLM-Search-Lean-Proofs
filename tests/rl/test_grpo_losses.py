@@ -4,7 +4,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from lean_search.rl.policy_trainer import clipped_policy_losses, kl_estimate  # noqa: E402
+from lean_search.rl.policy_trainer import chunk_scores, clipped_policy_losses, kl_estimate  # noqa: E402
 
 
 def gradient(ratio: float, advantage: float) -> float:
@@ -54,3 +54,14 @@ def test_kl_estimate_is_exact_in_expectation() -> None:
     q = torch.tensor([0.2, 0.2, 0.6])
     expected = (p * kl_estimate(q.log() - p.log())).sum()
     assert expected.item() == pytest.approx((p * (p.log() - q.log())).sum().item())
+
+
+def test_scores_use_fp32_logits_under_bf16_autocast() -> None:
+    generator = torch.Generator().manual_seed(0)
+    hidden = (8 * torch.randn(4, 64, generator=generator)).to(torch.bfloat16)
+    weight = torch.randn(1000, 64, generator=generator).to(torch.bfloat16)
+    targets = torch.tensor([3, 30, 300, 999])
+    with torch.autocast("cpu", dtype=torch.bfloat16):
+        scores, _ = chunk_scores(weight, hidden, targets, torch.full((4,), 0.8))
+    exact = torch.log_softmax(hidden.double() @ weight.double().T / 0.8, dim=-1)[torch.arange(4), targets]
+    assert torch.allclose(scores.double(), exact, atol=1e-4)
