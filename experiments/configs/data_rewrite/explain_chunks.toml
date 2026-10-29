@@ -1,0 +1,47 @@
+# Visible-mode explanations for the chunk examples (data_rewrite/README.md): the namer model of the rewrite pass
+# (Qwen3.5-9B, still served) writes the plan a prover states before each chunk planned for the visible mode, in the
+# style of four real visible explanations of the reasoning data (few-shot). Written on the named chunk and renamed back
+# for the numbered arm. Run after `rewrite`, before stopping the namer; resumable by shard.
+#   deployment/serve_model.sh teacher-1 Qwen/Qwen3.5-9B 1 8121   # optional replicas on the free GPUs, see the README
+#   python experiments/data_rewrite.py explain --config experiments/configs/data_rewrite/explain_chunks.toml \
+#       --build-config experiments/configs/data_rewrite/build_named.toml
+# A server listed here must be running; drop the replicas when only the namer is up.
+attempts = 2
+shard_size = 1000
+shards_in_flight = 2
+seed = "chunk-explanations-v1"
+
+[teacher]
+max_tokens = 384
+temperature = 0.7
+top_p = 0.95
+requests_in_flight = 64
+request_timeout_seconds = 600.0
+enable_thinking = false
+
+[[teacher.servers]]
+model = "namer"
+base_url = "http://127.0.0.1:8120/v1"
+
+[[teacher.servers]]
+model = "teacher-1"
+base_url = "http://127.0.0.1:8121/v1"
+
+[[teacher.servers]]
+model = "teacher-2"
+base_url = "http://127.0.0.1:8122/v1"
+
+[[teacher.servers]]
+model = "teacher-3"
+base_url = "http://127.0.0.1:8123/v1"
+
+# The visible explanations of the reasoning data: p1 38, p50 199, p99 ~1,000 characters; inline code p99 44.
+[bounds]
+min_characters = 30
+max_characters = 1000
+max_inline_code_characters = 80
+
+[few_shot]
+examples = 4
+max_goal_characters = 600
+max_explanation_characters = 500

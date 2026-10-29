@@ -5,7 +5,7 @@ import hashlib
 import json
 import time
 from collections import Counter
-from collections.abc import Awaitable, Callable, Collection, Iterable, Sequence
+from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -24,6 +24,7 @@ from lean_search.data_rewrite.naming import (
     renamed_text,
 )
 from lean_search.data_rewrite.records import (
+    ChunkExplanation,
     ExampleStatus,
     NamedExample,
     NamedProof,
@@ -100,6 +101,24 @@ class RewriteDirectory:
 
     def examples(self, shard: int) -> Path:
         return self.path / "examples" / f"{shard:05d}.jsonl"
+
+    @property
+    def explanation_directory(self) -> Path:
+        return self.path / "explanations"
+
+    @property
+    def explanation_plan(self) -> Path:
+        return self.explanation_directory / "plan.json"
+
+    def explanations(self, shard: int) -> Path:
+        return self.explanation_directory / f"{shard:05d}.jsonl"
+
+    def read_explanations(self) -> list[ChunkExplanation]:
+        return [
+            record
+            for path in sorted(self.explanation_directory.glob("*.jsonl"))
+            for record in read_records(path, ChunkExplanation)
+        ]
 
     def read_proofs(self) -> list[RewrittenProof]:
         return [
@@ -435,18 +454,23 @@ class RewriteRun:
         )
 
 
+def ensure_plan(path: Path, plan: Mapping[str, object]) -> None:
+    """Writes the shard plan of a new run; a resumed run must have the same one."""
+    if path.exists():
+        if json.loads(path.read_text(encoding="utf-8")) != plan:
+            raise ValueError(f"The shard plan differs from {path}; use the original inputs or a new run.")
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(plan, indent=1), encoding="utf-8")
+
+
 def check_plan(directory: RewriteDirectory, proof_keys: Sequence[str], example_keys: Sequence[str], size: int) -> None:
     plan = {
         "shard_size": size,
         "proofs": [shard_digest(keys) for keys in shards(proof_keys, size)],
         "examples": [shard_digest(keys) for keys in shards(example_keys, size)],
     }
-    if directory.plan.exists():
-        if json.loads(directory.plan.read_text(encoding="utf-8")) != plan:
-            raise ValueError(f"The shard plan differs from {directory.plan}; use the original inputs or a new run.")
-        return
-    directory.plan.parent.mkdir(parents=True, exist_ok=True)
-    directory.plan.write_text(json.dumps(plan, indent=1), encoding="utf-8")
+    ensure_plan(directory.plan, plan)
 
 
 def example_key(item: ReasoningItem) -> str:

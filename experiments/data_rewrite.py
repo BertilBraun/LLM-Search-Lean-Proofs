@@ -4,6 +4,8 @@ examples, numbered and descriptive hypothesis names (the naming A/B).
     python experiments/data_rewrite.py rewrite \
         --config experiments/configs/data_rewrite/rewrite_visible_student_v2.toml \
         --run-name data_rewrite_v1            # the Lean pass, resumable by shard; ends with the summary
+    python experiments/data_rewrite.py explain --config experiments/configs/data_rewrite/explain_chunks.toml \
+        --build-config experiments/configs/data_rewrite/build_named.toml   # the teacher, resumable by shard
     python experiments/data_rewrite.py summary --run-name data_rewrite_v1
     python experiments/data_rewrite.py build --config experiments/configs/data_rewrite/build_numbered.toml \
         --name visible_student_v3_numbered    # and build_named.toml --name visible_student_v3_named
@@ -12,8 +14,11 @@ examples, numbered and descriptive hypothesis names (the naming A/B).
 goal), renames its numbered hypotheses (namer: the configured model, rule-based fallback) and replays the renamed
 proof; the reasoning examples' blocks get the same treatment on their rebuilt states. Records in
 $LEAN_SEARCH_RUNS/<run>/{proofs,examples}/<shard>.jsonl, the summary (kept and dropped per reason) in
-$LEAN_SEARCH_RUNS/<run>/summary/. `build` writes $LEAN_SEARCH_DATA/reasoning/<name>/{train,validation,math}.jsonl (the
-format phase5_reasoning_sft.py trains on) plus chunks_{train,validation}.jsonl with the chunks' end states.
+$LEAN_SEARCH_RUNS/<run>/summary/. `explain` plans the build's chunks (either build config: both plan the same) and has
+the served namer model write a visible-mode explanation for each chunk planned for the visible mode, into
+$LEAN_SEARCH_RUNS/<run>/explanations/<shard>.jsonl. `build` writes
+$LEAN_SEARCH_DATA/reasoning/<name>/{train,validation,math}.jsonl (the format phase5_reasoning_sft.py trains on) plus
+chunks_{train,validation}.jsonl with the chunks' end states and explanations.
 """
 
 import argparse
@@ -25,13 +30,30 @@ import shutil
 import time
 import tomllib
 from collections import Counter
+from collections.abc import Sequence
 from pathlib import Path
 
 import transformers
 
 from lean_search.corpora.records import read_proof_records
-from lean_search.data_rewrite.dataset import BuildConfig, BuiltData, TokenCounts, build_data
+from lean_search.data_rewrite.dataset import (
+    BuildConfig,
+    BuiltData,
+    ChunkPosition,
+    TokenCounts,
+    build_data,
+    chunk_training_example,
+    plan_chunks,
+)
+from lean_search.data_rewrite.explanations import (
+    ExplainConfig,
+    explain_chunks,
+    explanation_request,
+    few_shot_explanations,
+    open_teacher,
+)
 from lean_search.data_rewrite.model_namer import open_namer
+from lean_search.data_rewrite.records import ChunkExplanation, ExplanationOutcome
 from lean_search.data_rewrite.rewrite import (
     RewriteConfig,
     RewriteDirectory,
@@ -75,6 +97,10 @@ def load_rewrite_config(path: Path) -> RewriteConfig:
     return from_json_object(RewriteConfig, tomllib.loads(path.read_text(encoding="utf-8")))
 
 
+def load_build_config(path: Path) -> BuildConfig:
+    return from_json_object(BuildConfig, tomllib.loads(path.read_text(encoding="utf-8")))
+
+
 def reasoning_examples(name: str, split: str) -> list[ReasoningExample]:
     path = DATA_DIRECTORY / "reasoning" / name / f"{split}.jsonl"
     return list(read_examples(path)) if path.exists() else []
@@ -82,6 +108,20 @@ def reasoning_examples(name: str, split: str) -> list[ReasoningExample]:
 
 def most_common_header(headers: list[str]) -> str:
     return Counter(headers).most_common(1)[0][0]
+
+
+def token_counts(tokenizer: transformers.PreTrainedTokenizerBase) -> TokenCounts:
+    prompt_tokens: dict[tuple[str, ...], int] = {}
+
+    def count_prompt(goals: tuple[str, ...]) -> int:
+        if goals not in prompt_tokens:
+            prompt_tokens[goals] = len(tokenizer.encode(render_prompt(tokenizer, goals), add_special_tokens=False))
+        return prompt_tokens[goals]
+
+    def count_completion(block: str) -> int:
+        return len(tokenizer.encode(render_completion(block), add_special_tokens=False))
+
+    return TokenCounts(count_prompt, count_completion)
 
 
 async def rewrite(arguments: argparse.Namespace, config: RewriteConfig, directory: RewriteDirectory) -> None:
@@ -143,18 +183,59 @@ def command_rewrite(arguments: argparse.Namespace) -> None:
     directory = RewriteDirectory(RUNS_DIRECTORY / arguments.run_name)
     keep_config(arguments.config, directory.path)
     asyncio.run(rewrite(arguments, config, directory))
-    command_summary(arguments)
+    write_rewrite_summary(arguments.run_name)
+
+
+def command_explain(arguments: argparse.Namespace) -> None:
+    config = from_json_object(ExplainConfig, tomllib.loads(arguments.config.read_text(encoding="utf-8")))
+    build_config = load_build_config(arguments.build_config)
+    directory = RewriteDirectory(RUNS_DIRECTORY / build_config.rewrite_run)
+    # The shard plan holds the chunks, so a rerun with the other arm's build config resumes the same work.
+    keep_config(arguments.config, directory.explanation_directory)
+    tokenizer = transformers.AutoTokenizer.from_pretrained(build_config.tokenizer)
+    examples = directory.read_examples()
+    plan = plan_chunks(directory.read_proofs(), examples, build_config, token_counts(tokenizer))
+    requests = [explanation_request(planned) for planned in plan.visible]
+    few_shots = few_shot_explanations(examples, config)
+    print(
+        f"{len(requests):,} chunks to explain ({sum(p.visible for p in plan.train):,} train), "
+        f"{len(few_shots)} few-shot examples",
+        flush=True,
+    )
+    started = time.monotonic()
+    explained: Counter[ExplanationOutcome] = Counter()
+
+    def on_shard(index: int, records: Sequence[ChunkExplanation]) -> None:
+        explained.update(record.outcome for record in records)
+        print(
+            f"shard {index} done after {time.monotonic() - started:.0f} s: "
+            + ", ".join(f"{outcome} {count:,}" for outcome, count in explained.most_common()),
+            flush=True,
+        )
+
+    async def explain() -> None:
+        async with open_teacher(config, few_shots) as teacher:
+            await explain_chunks(teacher, requests, directory, on_shard)
+
+    asyncio.run(explain())
+    write_rewrite_summary(build_config.rewrite_run)
 
 
 def command_summary(arguments: argparse.Namespace) -> None:
-    directory = RewriteDirectory(RUNS_DIRECTORY / arguments.run_name)
+    write_rewrite_summary(arguments.run_name)
+
+
+def write_rewrite_summary(run_name: str) -> None:
+    directory = RewriteDirectory(RUNS_DIRECTORY / run_name)
     config = load_rewrite_config(directory.path / "config.toml")
     replaced = sum(
         example.reasoning is None
         for split in ("train", "validation")
         for example in reasoning_examples(config.reasoning_data, split)
     )
-    summary = rewrite_summary(arguments.run_name, directory.read_proofs(), directory.read_examples(), replaced)
+    summary = rewrite_summary(
+        run_name, directory.read_proofs(), directory.read_examples(), replaced, directory.read_explanations()
+    )
     directory.summary.mkdir(parents=True, exist_ok=True)
     (directory.summary / "summary.json").write_text(
         json.dumps(dataclasses.asdict(summary), indent=1, ensure_ascii=False), encoding="utf-8"
@@ -165,7 +246,7 @@ def command_summary(arguments: argparse.Namespace) -> None:
 
 
 def token_statistics(
-    tokenizer: transformers.PreTrainedTokenizerBase, part: str, examples: tuple[ReasoningExample, ...]
+    tokenizer: transformers.PreTrainedTokenizerBase, part: str, examples: Sequence[ReasoningExample]
 ) -> TokenStatistics:
     tokenized = [tokenize_reasoning_example(tokenizer, example) for example in examples]
     return TokenStatistics(
@@ -176,25 +257,19 @@ def token_statistics(
 
 
 def command_build(arguments: argparse.Namespace) -> None:
-    config = from_json_object(BuildConfig, tomllib.loads(arguments.config.read_text(encoding="utf-8")))
+    config = load_build_config(arguments.config)
     output = DATA_DIRECTORY / "reasoning" / arguments.name
     if output.exists():
         raise ValueError(f"{output} exists; data sets are built once.")
     directory = RewriteDirectory(RUNS_DIRECTORY / config.rewrite_run)
     rewrite_config = load_rewrite_config(directory.path / "config.toml")
     tokenizer = transformers.AutoTokenizer.from_pretrained(config.tokenizer)
-    prompt_tokens: dict[tuple[str, ...], int] = {}
-
-    def count_prompt(goals: tuple[str, ...]) -> int:
-        if goals not in prompt_tokens:
-            prompt_tokens[goals] = len(tokenizer.encode(render_prompt(tokenizer, goals), add_special_tokens=False))
-        return prompt_tokens[goals]
-
-    def count_completion(block: str) -> int:
-        return len(tokenizer.encode(render_completion(block), add_special_tokens=False))
-
+    explanations = {
+        ChunkPosition(record.proof_identifier, record.start, record.tactics): record
+        for record in directory.read_explanations()
+    }
     data: BuiltData = build_data(
-        directory.read_proofs(), directory.read_examples(), config, TokenCounts(count_prompt, count_completion)
+        directory.read_proofs(), directory.read_examples(), config, token_counts(tokenizer), explanations
     )
     write_examples(output / "train.jsonl", data.train)
     write_examples(output / "validation.jsonl", data.validation)
@@ -203,11 +278,12 @@ def command_build(arguments: argparse.Namespace) -> None:
     math = DATA_DIRECTORY / "reasoning" / rewrite_config.reasoning_data / "math.jsonl"
     if math.exists():
         shutil.copyfile(math, output / "math.jsonl")
-    train_chunks = tuple(example for example in data.train if example.reasoning is None)
-    train_reasoning = tuple(example for example in data.train if example.reasoning is not None)
+    non_visible = [chunk_training_example(chunk) for chunk in data.train_chunks if not chunk.explanation]
+    visible = [chunk_training_example(chunk) for chunk in data.train_chunks if chunk.explanation]
     tokens = [
-        token_statistics(tokenizer, "train chunks", train_chunks),
-        token_statistics(tokenizer, "train reasoning", train_reasoning),
+        token_statistics(tokenizer, "train chunks, non-visible", non_visible),
+        token_statistics(tokenizer, "train chunks, visible", visible),
+        token_statistics(tokenizer, "train reasoning", data.train_reasoning),
         token_statistics(tokenizer, "validation", data.validation),
     ]
     summary = build_summary(arguments.name, config, data, tokens)
@@ -231,6 +307,9 @@ def parse_arguments() -> argparse.Namespace:
     rewrite_command.add_argument("--max-proofs", type=int)
     rewrite_command.add_argument("--max-examples", type=int)
     rewrite_command.add_argument("--pool-size", type=int)
+    explain_command = commands.add_parser("explain", help="the teacher's chunk explanations (resumable by shard)")
+    explain_command.add_argument("--config", type=Path, required=True, help="ExplainConfig")
+    explain_command.add_argument("--build-config", type=Path, required=True, help="BuildConfig of either arm")
     summary_command = commands.add_parser("summary", help="kept and dropped per reason")
     summary_command.add_argument("--run-name", required=True)
     build_command = commands.add_parser("build", help="one naming variant's data set (config: BuildConfig)")
@@ -244,6 +323,8 @@ def main() -> None:
     match arguments.command:
         case "rewrite":
             command_rewrite(arguments)
+        case "explain":
+            command_explain(arguments)
         case "summary":
             command_summary(arguments)
         case "build":

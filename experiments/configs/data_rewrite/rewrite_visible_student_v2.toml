@@ -5,9 +5,10 @@
 #   deployment/serve_model.sh namer Qwen/Qwen3.5-9B 0 8120     # the namer; without it set `model = ""` (rules only)
 #   python experiments/data_rewrite.py rewrite \
 #       --config experiments/configs/data_rewrite/rewrite_visible_student_v2.toml --run-name data_rewrite_v1
+# Keep the namer running for the chunk explanations that follow (explain_chunks.toml: the same model).
 proof_records = "normalized/proofs/selected_for_tracing.jsonl"
 proof_data = ["4b"]
-# Far more chunk examples than the build takes (one per start state; ~9k are used), for variety across proofs.
+# Far more chunk examples than the build takes (~250k, one per start state; ~28k are used), for variety across proofs.
 max_proofs = 20000
 reasoning_data = "visible_student_v2"
 # The states of the visible teacher, the visible 4B and the thinking teacher (the 10% thinking traces).

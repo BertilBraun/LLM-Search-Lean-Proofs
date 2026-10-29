@@ -1,4 +1,4 @@
-"""Records of the rewrite pass: each proof and reasoning example with its flat version, named version and fate."""
+"""Records of the rewrite pass: proofs and reasoning examples (flat, named, their fate) and the chunks' explanations."""
 
 from dataclasses import dataclass
 from enum import StrEnum
@@ -93,6 +93,58 @@ class NamedExample:
     reasoning: str = ""
     goals_after: tuple[str, ...] = ()
     message: str = ""
+
+
+class ExplanationOutcome(StrEnum):
+    EXPLAINED = "explained"
+    # Every attempt was rejected by the checks on the teacher's output.
+    REJECTED = "rejected"
+    REQUEST_FAILED = "request_failed"
+    # (build) No explanation record for the chunk: the explain pass did not run or chose other chunks.
+    NOT_REQUESTED = "not_requested"
+
+
+class ExplanationRejection(StrEnum):
+    TRUNCATED = "truncated"
+    EMPTY = "empty"
+    TOO_SHORT = "too_short"
+    TOO_LONG = "too_long"
+    # Chat or thinking markup (`<think>`, `<|im_end|>`).
+    MARKUP = "markup"
+    LABEL = "label"
+    CODE_BLOCK = "code_block"
+    LONG_INLINE_CODE = "long_inline_code"
+    FORBIDDEN_TOKEN = "forbidden_token"
+    NOT_ENGLISH = "not_english"
+    COPIES_BLOCK = "copies_block"
+    LINE_BY_LINE = "line_by_line"
+    # Says that the tactics were given ("the provided tactics", "the code above").
+    MENTIONS_GIVEN_BLOCK = "mentions_given_block"
+    # The named explanation mentions a numbered name that the renaming replaced.
+    STALE_NAME = "stale_name"
+    # A descriptive name survives the renaming back (e.g. LaTeX-escaped `hx\_pos`).
+    UNRENAMED_NAME = "unrenamed_name"
+
+
+@dataclass(frozen=True)
+class RejectedExplanation:
+    rejection: ExplanationRejection
+    text: str
+
+
+@dataclass(frozen=True)
+class ChunkExplanation:
+    """The teacher's explanation for one chunk, written before its block, in both naming variants."""
+
+    proof_identifier: str
+    start: int
+    tactics: int
+    outcome: ExplanationOutcome
+    # Written on the named chunk (the numbered one when nothing is renamed); "" unless explained.
+    named: str
+    # The named explanation with the descriptive names renamed back.
+    numbered: str
+    rejected: tuple[RejectedExplanation, ...]
 
 
 @dataclass(frozen=True)
