@@ -123,7 +123,7 @@ baseline_runs = 2
 problems = 12
 
 [evaluation.value_arm]
-every_slots = 1
+enabled = true
 confidence = 0.95
 significance = 0.05
 

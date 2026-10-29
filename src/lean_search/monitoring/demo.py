@@ -81,8 +81,7 @@ class DemoSchedule:
     evaluation_every_phases: int = 15
     # A probe slot about every 2 hours.
     probe_every_phases: int = 5
-    value_every_phases: int = 4
-    value_arm_every_slots: int = 2
+    value_every_phases: int = 2
     # The owner turns μ on after this many hours (never in the control).
     value_share_after_hours: float = 30.0
 
@@ -288,7 +287,7 @@ class DemoRun:
         if self.phase % self.schedule.probe_every_phases == 0:
             slot = len(self.probe_slots)
             self.write_probe_slot(moment + 290)
-            if slot % self.schedule.value_arm_every_slots == 0 and self.value_version:
+            if self.value_version and self.value_version not in self.value_arms:
                 self.write_value_arm(moment + 295, slot)
         if self.phase % self.schedule.evaluation_every_phases == 0:
             self.write_fixed_targets(moment + 300)

@@ -167,6 +167,8 @@ class LoopProgress:
     held_out_states_at: float | None = None
     # Probe slots run so far: the next slot's number (its part: slot % probe_parts).
     probe_slots: int = 0
+    # The published value version whose value arm ran last (0: none yet; v0 is the reference and gets none).
+    value_arm_version: int = 0
 
 
 @dataclass(frozen=True)
@@ -1343,15 +1345,16 @@ class GrpoLoop:
         await self.serve_value_model(value_model)
         return await self.evaluations.evaluate(run, phase)
 
-    def value_arm_due(self, slot: int) -> bool:
-        """Every `every_slots`-th slot, while the published value model is not the evaluations' fixed reference."""
+    def value_arm_due(self) -> bool:
+        """Once per published value model other than the evaluations' fixed reference: at the first slot after it was
+        published."""
         evaluation = self.config.evaluation
-        every = evaluation.value_arm.every_slots
+        versions = read_versions(self.paths.models)
         return (
-            every > 0
-            and slot % every == 0
+            evaluation.value_arm.enabled
             and evaluation.value_model == EvaluationValueModel.INITIAL
-            and read_current(self.paths.models).value_adapter != self.config.initial.value_adapter
+            and versions[-1].value_adapter != self.config.initial.value_adapter
+            and value_version(versions) != self.progress.value_arm_version
         )
 
     async def run_probe(self, phase: int, baseline: bool) -> None:
@@ -1370,8 +1373,9 @@ class GrpoLoop:
             ]
             self.log_summaries(f"probe slot {slot} (part {slot % evaluation.probe_parts})", summaries)
             solved_by_run = [total + summary.solved for total, summary in zip(solved_by_run, summaries, strict=True)]
-            if self.value_arm_due(slot):
+            if self.value_arm_due():
                 await self.run_value_arm(slot, phase)
+                self.save_progress(value_arm_version=value_version(read_versions(self.paths.models)))
             self.save_progress(probe_slots=slot + 1)
         if runs > 1 and self.progress.probe_slots > first:
             self.log(f"Probe baseline run to run over slots {first}-{last}: solved {solved_by_run}")

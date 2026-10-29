@@ -395,11 +395,22 @@ async def test_the_next_probe_slot_survives_a_restart(tmp_path: Path) -> None:
     assert world.evaluations.slots()[:2] == [(0, 0), (1, 0)]
 
 
-async def test_every_other_probe_slot_runs_a_value_arm(tmp_path: Path) -> None:
-    world = loop_world(tmp_path, PROBE_EVERY_PHASE)
+PROBE_AND_VALUE_EVERY_SECOND_PHASE = PROBE_EVERY_PHASE.replace("value_every_phases = 1\n", "value_every_phases = 2\n")
+
+
+async def test_each_published_value_model_gets_one_value_arm_at_the_next_slot(tmp_path: Path) -> None:
+    world = loop_world(tmp_path, PROBE_AND_VALUE_EVERY_SECOND_PHASE)
     record_version_zero(world)
+    await run_until(world, world.loop(), phases=4)
+    assert world.evaluations.slots(value_arm=True) == [(1, 0), (3, 0)]
+
+
+async def test_a_value_arm_survives_a_restart_once(tmp_path: Path) -> None:
+    world = loop_world(tmp_path, PROBE_AND_VALUE_EVERY_SECOND_PHASE)
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=2)
     await run_until(world, world.loop(), phases=3)
-    assert world.evaluations.slots(value_arm=True)[:2] == [(0, 0), (2, 0)]
+    assert world.evaluations.slots(value_arm=True) == [(1, 0)]
 
 
 async def test_a_value_arm_follows_its_slots_run(tmp_path: Path) -> None:

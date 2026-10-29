@@ -169,12 +169,12 @@ every_hours = 2.0
 at_start = true
 baseline_runs = 2
 
-# Every other probe slot also searches its part with the published value model (same policy), paired per problem with
-# the slot's run with v0: the paired difference per slot and pooled (exact McNemar interval), and an alert (dashboard,
-# loop.log) when the published value model is worse than v0 at `significance` pooled over its value arms. No automatic
-# action. Only while a value model other than v0 is published.
+# Once per published value model other than v0, the first probe slot after its publish searches its part again with it
+# (same policy), paired per problem with the slot's run with v0: the paired difference per value model and pooled over
+# all (exact McNemar interval), and an alert (dashboard, loop.log) when the published value model is worse than v0 at
+# `significance`; it clears once a newer value model is published. No automatic action.
 [evaluation.value_arm]
-every_slots = 2
+enabled = true
 confidence = 0.95
 significance = 0.05
 

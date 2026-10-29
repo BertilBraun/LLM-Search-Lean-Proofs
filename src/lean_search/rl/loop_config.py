@@ -124,9 +124,9 @@ class EvaluationValueModel(StrEnum):
 
 @dataclass(frozen=True)
 class ValueArmConfig:
-    # Every probe slot whose number is a multiple of this (0: never) searches its part again with the published value
-    # model (while that is not the reference), paired per problem with the slot's run with the reference.
-    every_slots: int = 2
+    # Once per published value model other than the reference, at the first probe slot after it was published, the
+    # slot's part is searched again with it, paired per problem with the slot's run with the reference; false: never.
+    enabled: bool = True
     # The exact interval of the paired solve-rate difference.
     confidence: float = 0.95
     # Alert (dashboard and loop.log, nothing else) when a one-sided exact McNemar test, pooled over the value arms of
@@ -271,8 +271,8 @@ def parse_loop_config(text: str) -> GrpoLoopConfig:
     targets = (evaluation.probe, evaluation.minif2f, evaluation.held_out_states)
     if any(target.baseline_runs < 1 for target in targets):
         raise ValueError("evaluation targets need baseline_runs >= 1.")
-    if evaluation.probe_parts < 1 or evaluation.value_arm.every_slots < 0:
-        raise ValueError("evaluation needs probe_parts >= 1 and value_arm.every_slots >= 0.")
+    if evaluation.probe_parts < 1:
+        raise ValueError("evaluation needs probe_parts >= 1.")
     return config
 
 

@@ -171,8 +171,9 @@ def test_the_loop_probes_a_third_every_two_hours() -> None:
     assert (evaluation.probe_parts, evaluation.probe.every_hours) == (3, 2.0)
 
 
-def test_the_loop_runs_a_value_arm_every_other_probe_slot() -> None:
-    assert loop("grpo/loop.toml").evaluation.value_arm.every_slots == 2
+@pytest.mark.parametrize("name", ["grpo/loop.toml", "grpo/loop_smoke.toml"])
+def test_the_loop_runs_a_value_arm_per_published_value_model(name: str) -> None:
+    assert loop(name).evaluation.value_arm.enabled
 
 
 def test_the_overfit_loop_probes_the_whole_set_when_requested() -> None:
