@@ -23,7 +23,7 @@ from lean_search.monitoring.families import (
 )
 from lean_search.monitoring.store import LoopContext, MetricsWriter
 from lean_search.rl.policy_data import SamplerAgreement
-from lean_search.rl.tree_statistics import EdgeKindCounts, GraphStatistics, SizeHistogram
+from lean_search.rl.tree_statistics import BlockCounts, EdgeKindCounts, GraphStatistics, SizeHistogram
 from lean_search.search.tactic_labels import TacticLabelCounts
 from lean_search.value.benchmark import (
     BenchmarkMetrics,
@@ -389,6 +389,7 @@ class DemoRun:
             harvest_proofs=proofs - solved,
             harvest_proof_graph_nodes=round(harvest * (0.6 + 0.2 * learned)),
             exploration_expansions=round(expanded * 0.1 + self.noise(2)),
+            blocks=self.block_counts(samples, learned),
         )
         policy_total = policy_samples.total
         forced = round(policy_total * 0.004)
@@ -409,6 +410,18 @@ class DemoRun:
                 mean_block_tactics=2.1 + 0.5 * learned + self.noise(0.05),
             ),
             record_time=moment,
+        )
+
+    def block_counts(self, samples: int, learned: float) -> BlockCounts:
+        valid = round(samples * (0.47 + 0.05 * learned))
+        continued = round(valid * (0.49 + 0.08 * learned + self.noise(0.01)))
+        return BlockCounts(
+            samples=samples,
+            tactics=round(samples * (1.7 + 0.3 * learned + self.noise(0.03))),
+            valid_tactics=valid,
+            continued_tactics=continued,
+            later_failing=round(continued * (0.37 - 0.05 * learned + self.noise(0.01))),
+            later_no_progress=round(continued * 0.04),
         )
 
     def write_curriculum(self, moment: float) -> None:

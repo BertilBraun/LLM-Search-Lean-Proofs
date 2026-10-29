@@ -75,7 +75,7 @@ const GRPO = {
   },
   rewards: {
     title: "Mean reward per known tactic, local vs global", family: "grpo", unit: "number",
-    series: [{ label: "local (λ·L)", field: "mean_local_reward" }, { label: "global ((1 − λ)·G)", field: "mean_global_reward" }],
+    series: [{ label: "local (λ·L)", field: "mean_local_reward" }, { label: "global ((1 − λ)·G + δ·progress)", field: "mean_global_reward" }],
   },
   tactics: {
     title: "Trained tactics by credit label", subtitle: "share of the trained groups' tactics", family: "grpo", kind: "stacked",
@@ -109,6 +109,23 @@ const SEARCH = {
     title: "No-progress share", subtitle: "policy samples; a rise hints at reward hacking", family: "search",
     unit: "share", compare: true, thresholds: [{ key: "max_no_progress_share", label: "max" }],
     series: [{ label: "no progress", fields: [`${SAMPLES}no_progress`, `${SAMPLES}back_to_ancestor`], over: SAMPLES }],
+  },
+  blocks: {
+    title: "Block length", subtitle: "tactics per policy sample: written, and accepted by Lean", family: "search", unit: "number",
+    compare: true,
+    series: [
+      { label: "tactics", field: "graph.blocks.tactics", over: "graph.blocks.samples" },
+      { label: "valid tactics", field: "graph.blocks.valid_tactics", over: "graph.blocks.samples" },
+    ],
+  },
+  continuation: {
+    title: "Continuing after a valid tactic", subtitle: "a steady fall in continuing means shrinking blocks", family: "search",
+    unit: "share", compare: true,
+    series: [
+      { label: "continues", field: "graph.blocks.continued_tactics", over: "graph.blocks.valid_tactics" },
+      { label: "next tactic fails", field: "graph.blocks.later_failing", over: "graph.blocks.continued_tactics" },
+      { label: "next tactic without progress", field: "graph.blocks.later_no_progress", over: "graph.blocks.continued_tactics" },
+    ],
   },
   loops: {
     title: "Forced answers and repetition loops", subtitle: "per policy sample", family: "search", unit: "share",
@@ -150,7 +167,7 @@ export const PAGES = [
       { title: "Fixed targets", charts: [FIXED.probe, FIXED.minif2f, FIXED.heldOut, FIXED.math] },
       { title: "RL health", charts: [GRPO.kl, GRPO.clip, GRPO.mixed, GRPO.rewards] },
       { title: "Value health", charts: [VALUE.ranking, VALUE.calibration] },
-      { title: "Search behaviour", charts: [SEARCH.samples, SEARCH.noProgress, SEARCH.loops] },
+      { title: "Search behaviour", charts: [SEARCH.samples, SEARCH.noProgress, SEARCH.continuation, SEARCH.loops] },
     ],
   },
   {
@@ -304,7 +321,8 @@ export const PAGES = [
             title: "Searches solved", family: "search", unit: "share", compare: true,
             series: [{ label: "solved", field: "graph.solved_trees", over: "graph.trees" }],
           },
-          { title: "Block length", subtitle: "top-level tactics per block", family: "search", unit: "number", series: [{ label: "tactics", field: "mean_block_tactics" }] },
+          SEARCH.blocks,
+          SEARCH.continuation,
           {
             title: "Proof graph beyond the found proofs", subtitle: "per solved search", family: "search", unit: "number",
             series: [

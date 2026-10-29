@@ -70,6 +70,24 @@ def test_closing_tactic_closes_the_goal() -> None:
     assert outcomes(example_tree(), PROOF)[-1].goals_closed == 1
 
 
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [(PROOF, (2, 1, 0)), (FIRST_THEN_FAILING, (2, None, None)), (THROUGH_SECOND_HAVE, (2, 1, None))],
+    ids=["proof", "same first have", "intermediate state"],
+)
+def test_proof_graph_tactics_know_their_remaining_steps(text: str, expected: tuple[int | None, ...]) -> None:
+    assert tuple(outcome.remaining_steps for outcome in outcomes(example_tree(), text)) == expected
+
+
+def test_state_on_two_routes_to_the_proof_takes_the_shorter() -> None:
+    builder = GraphBuilder("⊢ p")
+    long_route = builder.child(builder.root, text="long", tactics=3, tactic_goals=(("⊢ q",), ("⊢ r",), ()))
+    builder.tree.mark_proof_path(long_route)
+    proof = builder.child(builder.root, text="short", tactics=2, tactic_goals=(("⊢ q",), ()))
+    builder.child(builder.root, "⊢ s", text="detour", tactics=2, tactic_goals=(("⊢ q",), ("⊢ s",)))
+    assert outcomes(builder.record(proof), "detour")[0].remaining_steps == 1
+
+
 def test_node_reached_by_an_intermediate_proof_state_joins_the_proof_graph() -> None:
     record = example_tree()
     (node,) = [node for node in record.nodes if node.goals == (AFTER_FIRST_HAVE,)]

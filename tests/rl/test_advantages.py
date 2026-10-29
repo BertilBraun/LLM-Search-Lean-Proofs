@@ -3,7 +3,10 @@ from rl_samples import FAILING, MASKED, NO_PROGRESS, OFF_GRAPH, PROOF_GRAPH, RED
 
 from lean_search.rl.advantages import CreditMode, group_advantages, local_share_of_advantages
 
-PROOF_REWARD = 0.85
+STEP = 0.2
+COST = 0.1
+ON_GRAPH_REWARD = 0.85
+ONE_STEP_REWARD = ON_GRAPH_REWARD + STEP
 OFF_GRAPH_REWARD = 0.0
 NO_PROGRESS_REWARD = -0.15
 FAILING_REWARD = -0.15
@@ -34,17 +37,33 @@ def test_design_example_leaves_the_unknown_and_masked_tactics_untrained() -> Non
 @pytest.mark.parametrize(
     ("labels", "score"),
     [
-        ((PROOF_GRAPH,), PROOF_REWARD),
+        ((PROOF_GRAPH,), ONE_STEP_REWARD),
         ((OFF_GRAPH,), OFF_GRAPH_REWARD),
         ((NO_PROGRESS,), NO_PROGRESS_REWARD),
         ((REDUNDANT,), NO_PROGRESS_REWARD),
         ((FAILING,), FAILING_REWARD),
-        ((PROOF_GRAPH, FAILING, MASKED), (PROOF_REWARD + FAILING_REWARD) / 2),
-        ((UNKNOWN, PROOF_GRAPH), PROOF_REWARD),
+        ((PROOF_GRAPH, PROOF_GRAPH), ONE_STEP_REWARD + STEP),
+        ((PROOF_GRAPH, FAILING, MASKED), ONE_STEP_REWARD - COST),
+        ((PROOF_GRAPH, NO_PROGRESS, PROOF_GRAPH), ONE_STEP_REWARD + STEP - COST),
+        ((PROOF_GRAPH, UNKNOWN), ONE_STEP_REWARD),
+        ((UNKNOWN, PROOF_GRAPH), ONE_STEP_REWARD),
+        ((NO_PROGRESS, PROOF_GRAPH), ONE_STEP_REWARD),
     ],
-    ids=["proof graph", "off graph", "no progress", "redundant", "failing", "partial", "unknown left out"],
+    ids=[
+        "proof graph",
+        "off graph",
+        "no progress",
+        "redundant",
+        "failing",
+        "two steps",
+        "partial",
+        "wasted tactic between",
+        "unknown last state",
+        "unknown first state",
+        "no-op first",
+    ],
 )
-def test_sample_score_is_the_mean_of_its_known_tactics(labels: tuple, score: float) -> None:
+def test_sample_score_is_the_final_known_state_minus_the_wasted_tactics(labels: tuple, score: float) -> None:
     assert sample("s", *labels).score == pytest.approx(score)
 
 
@@ -55,21 +74,22 @@ def test_a_no_op_does_not_beat_a_failure(no_op: object) -> None:
 
 
 def test_closing_a_goal_earns_the_bonus() -> None:
-    assert sample("s", PROOF_GRAPH, closed=2).score == pytest.approx(PROOF_REWARD + 0.15 * 0.2)
+    assert sample("s", PROOF_GRAPH, closed=2).score == pytest.approx(ONE_STEP_REWARD + 0.15 * 0.2)
 
 
-def test_sample_with_only_unknown_tactics_has_no_score() -> None:
-    assert sample("s", UNKNOWN, UNKNOWN).score is None
+@pytest.mark.parametrize("labels", [(UNKNOWN, UNKNOWN), (UNKNOWN, FAILING, MASKED)], ids=["unknown", "then failing"])
+def test_sample_without_a_known_state_or_first_failure_has_no_score(labels: tuple) -> None:
+    assert sample("s", *labels).score is None
 
 
 def test_baseline_is_the_multiplicity_weighted_mean_score() -> None:
     advantages = group_advantages(group(sample("a", PROOF_GRAPH, multiplicity=3), sample("b", FAILING)))
-    assert advantages.baseline == pytest.approx((3 * PROOF_REWARD + FAILING_REWARD) / 4)
+    assert advantages.baseline == pytest.approx((3 * ONE_STEP_REWARD + FAILING_REWARD) / 4)
 
 
 def test_unknown_sample_stays_out_of_the_baseline() -> None:
     advantages = group_advantages(group(sample("a", PROOF_GRAPH), sample("b", FAILING), sample("c", UNKNOWN)))
-    assert advantages.baseline == pytest.approx((PROOF_REWARD + FAILING_REWARD) / 2)
+    assert advantages.baseline == pytest.approx((ONE_STEP_REWARD + FAILING_REWARD) / 2)
 
 
 def test_unknown_sample_gets_no_sequence_advantage() -> None:
@@ -77,19 +97,67 @@ def test_unknown_sample_gets_no_sequence_advantage() -> None:
     assert advantages.samples[2].sequence is None
 
 
-def test_tactic_advantage_is_its_reward_minus_the_baseline() -> None:
-    advantages = group_advantages(group(sample("a", PROOF_GRAPH, FAILING, MASKED), sample("b", PROOF_GRAPH)))
-    baseline = ((PROOF_REWARD + FAILING_REWARD) / 2 + PROOF_REWARD) / 2
-    assert advantages.samples[0].tactics[1] == pytest.approx(FAILING_REWARD - baseline)
+@pytest.mark.parametrize(
+    ("first", "reward"), [(PROOF_GRAPH, ONE_STEP_REWARD), (FAILING, FAILING_REWARD)], ids=["proof graph", "failing"]
+)
+def test_first_tactic_advantage_is_its_reward_minus_the_baseline(first: object, reward: float) -> None:
+    advantages = group_advantages(group(sample("a", first), sample("b", PROOF_GRAPH, PROOF_GRAPH)))
+    baseline = (reward + ONE_STEP_REWARD + STEP) / 2
+    assert advantages.samples[0].tactics[0] == pytest.approx(reward - baseline)
+
+
+@pytest.mark.parametrize(("steps", "gained"), [((3, 2), 1), ((3, 1), 2), ((3, 3), 0)])
+def test_later_proof_graph_tactic_gains_progress_per_step(steps: tuple[int, int], gained: int) -> None:
+    advantages = group_advantages(group(sample("a", PROOF_GRAPH, PROOF_GRAPH, steps=steps), sample("b", FAILING)))
+    assert advantages.samples[0].tactics[1] == pytest.approx(STEP * gained)
+
+
+def test_later_tactic_closing_a_goal_also_earns_the_bonus() -> None:
+    advantages = group_advantages(group(sample("a", PROOF_GRAPH, PROOF_GRAPH, closed=1), sample("b", FAILING)))
+    assert advantages.samples[0].tactics[1] == pytest.approx(STEP + 0.15 * 0.1)
+
+
+@pytest.mark.parametrize("wasted", [FAILING, NO_PROGRESS, REDUNDANT])
+def test_wasted_later_tactic_costs_its_tokens_only(wasted: object) -> None:
+    advantages = group_advantages(group(sample("a", PROOF_GRAPH, wasted), sample("b", FAILING)))
+    assert advantages.samples[0].tactics[1] == pytest.approx(-COST)
+
+
+def test_wasted_later_tactic_after_an_unknown_state_costs_its_tokens_only() -> None:
+    advantages = group_advantages(group(sample("a", UNKNOWN, FAILING, MASKED), sample("b", PROOF_GRAPH)))
+    assert advantages.samples[0].tactics[1] == pytest.approx(-COST)
+
+
+def test_later_tactic_leaving_the_proof_graph_loses_the_state_it_left() -> None:
+    advantages = group_advantages(group(sample("a", PROOF_GRAPH, OFF_GRAPH), sample("b", FAILING)))
+    assert advantages.samples[0].tactics[1] == pytest.approx(OFF_GRAPH_REWARD - ONE_STEP_REWARD)
+
+
+def test_tactic_after_an_unknown_state_is_judged_against_the_last_known_one() -> None:
+    advantages = group_advantages(group(sample("a", PROOF_GRAPH, UNKNOWN, PROOF_GRAPH), sample("b", FAILING)))
+    assert advantages.samples[0].tactics[2] == pytest.approx(STEP)
+
+
+def test_tactic_without_a_known_earlier_state_falls_back_to_the_baseline() -> None:
+    advantages = group_advantages(group(sample("a", UNKNOWN, PROOF_GRAPH), sample("b", FAILING)))
+    baseline = (ONE_STEP_REWARD + FAILING_REWARD) / 2
+    assert advantages.samples[0].tactics[1] == pytest.approx(ONE_STEP_REWARD - baseline)
+
+
+def test_continuing_correctly_beats_stopping_in_the_explanation() -> None:
+    advantages = group_advantages(group(sample("stop", PROOF_GRAPH), sample("continue", PROOF_GRAPH, PROOF_GRAPH)))
+    stop, go_on = (sample_advantages.sequence for sample_advantages in advantages.samples)
+    assert go_on > stop
 
 
 @pytest.mark.parametrize(
-    ("labels", "has_closing"),
-    [((PROOF_GRAPH, PROOF_GRAPH), True), ((PROOF_GRAPH, FAILING, MASKED), False), ((PROOF_GRAPH, UNKNOWN), False)],
+    ("labels", "closing"),
+    [((PROOF_GRAPH, PROOF_GRAPH), 0.0), ((PROOF_GRAPH, UNKNOWN), 0.0), ((PROOF_GRAPH, FAILING, MASKED), None)],
+    ids=["complete", "unknown last state", "failed"],
 )
-def test_closing_tokens_take_the_last_tactic_of_a_complete_block(labels: tuple, has_closing: bool) -> None:
+def test_closing_tokens_get_zero_after_a_complete_block(labels: tuple, closing: float | None) -> None:
     advantages = group_advantages(group(sample("a", *labels), sample("b", FAILING)))
-    assert (advantages.samples[0].closing is not None) is has_closing
+    assert advantages.samples[0].closing == closing
 
 
 @pytest.mark.parametrize(
@@ -102,7 +170,9 @@ def test_group_signal(second: object, signal: bool) -> None:
 
 
 def test_equal_scores_with_different_tactics_carry_a_per_tactic_signal_only() -> None:
-    advantages = group_advantages(group(sample("a", PROOF_GRAPH, FAILING), sample("b", FAILING, PROOF_GRAPH)))
+    advantages = group_advantages(
+        group(sample("a", PROOF_GRAPH, PROOF_GRAPH, steps=(3, 2)), sample("b", PROOF_GRAPH, steps=(2,)))
+    )
     assert (advantages.has_signal(CreditMode.PER_TACTIC), advantages.has_signal(CreditMode.SEQUENCE)) == (True, False)
 
 

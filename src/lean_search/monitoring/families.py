@@ -88,7 +88,7 @@ class GrpoPhase:
     group_samples: int
     # Groups with a non-zero advantage (the trained ones), as a share of all groups.
     mixed_reward_group_share: float
-    # Means of λ · L and (1 − λ) · G over the known tactics.
+    # Means of λ · L and (1 − λ) · G plus the progress over the known tactics.
     mean_local_reward: float
     mean_global_reward: float
     kl_to_behaviour_policy: float

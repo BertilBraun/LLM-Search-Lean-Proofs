@@ -11,7 +11,7 @@ from lean_search.monitoring.families import (
     SystemUsage,
     ValueBenchmarkResult,
 )
-from lean_search.rl.tree_statistics import EdgeKindCounts, GraphStatistics, SizeHistogram
+from lean_search.rl.tree_statistics import BlockCounts, EdgeKindCounts, GraphStatistics, SizeHistogram
 from lean_search.search.tactic_labels import TacticLabelCounts
 from lean_search.value.benchmark import (
     BenchmarkMetrics,
@@ -29,6 +29,7 @@ ZERO_BY_TYPE = {
     EdgeKindCounts: EdgeKindCounts(),
     TacticLabelCounts: TacticLabelCounts(),
     SizeHistogram: SizeHistogram(),
+    BlockCounts: BlockCounts(),
 }
 
 

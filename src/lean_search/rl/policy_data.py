@@ -80,7 +80,7 @@ class PolicyDataMetrics:
     samples: int
     # Tactics of the trained groups' samples by credit label, sample-weighted.
     tactics: TacticLabelCounts
-    # Sample-weighted means of (1 − λ) · G and λ · L over the known tactics of all groups.
+    # Sample-weighted means of (1 − λ) · G plus the progress, and λ · L, over the known tactics of all groups.
     mean_global_reward: float
     mean_local_reward: float
     # Of the summed |tactic advantage| of the trained groups, the share from the local term.

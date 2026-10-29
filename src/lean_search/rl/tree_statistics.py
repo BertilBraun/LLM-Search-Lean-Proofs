@@ -9,7 +9,7 @@ from lean_search.rl.advantages import CreditMode, group_advantages
 from lean_search.rl.grpo_groups import TreeGroups
 from lean_search.search.graph_labels import EdgeKind, EdgeLabel, GraphLabels, NodeClass, is_verified_proof
 from lean_search.search.records import NodeRecord, TreeRecord
-from lean_search.search.tactic_labels import TacticLabelCounts, TacticOutcome
+from lean_search.search.tactic_labels import TacticLabel, TacticLabelCounts, TacticOutcome
 from lean_search.search.tree import NodeStatus, StepSource
 from lean_search.value.graph_targets import TargetSource, ValueTarget
 
@@ -66,6 +66,38 @@ class SizeHistogram:
 
 
 @dataclass(frozen=True)
+class BlockCounts:
+    """The blocks of every policy sample (infrastructure failures left out), sample-weighted."""
+
+    samples: int = 0
+    tactics: int = 0
+    # Tactics Lean accepted, and those of them another tactic of the block follows (which Lean then evaluated).
+    valid_tactics: int = 0
+    continued_tactics: int = 0
+    # Of the tactics after a valid one: those that failed, and those that changed nothing or added only redundant
+    # hypotheses.
+    later_failing: int = 0
+    later_no_progress: int = 0
+
+    @staticmethod
+    def of(outcomes: Sequence[TacticOutcome], weight: int) -> "BlockCounts":
+        labels = [outcome.label for outcome in outcomes]
+        valid = [index for index, label in enumerate(labels) if label not in (TacticLabel.FAILING, TacticLabel.MASKED)]
+        later = [label for label in labels[1:] if label != TacticLabel.MASKED]
+        return BlockCounts(
+            samples=weight,
+            tactics=len(labels) * weight,
+            valid_tactics=len(valid) * weight,
+            continued_tactics=sum(index + 1 < len(labels) for index in valid) * weight,
+            later_failing=later.count(TacticLabel.FAILING) * weight,
+            later_no_progress=sum(
+                label in (TacticLabel.NO_PROGRESS, TacticLabel.REDUNDANT_HYPOTHESIS) for label in later
+            )
+            * weight,
+        )
+
+
+@dataclass(frozen=True)
 class GraphStatistics:
     trees: int
     solved_trees: int
@@ -111,7 +143,7 @@ class GraphStatistics:
     groups_with_signal: int
     # Groups at proof-graph nodes left out because no policy sample reached the proof graph (not in `groups`).
     groups_without_policy_proof: int
-    # Sums of (1 − λ) · G and λ · L over the groups' known tactics, sample-weighted.
+    # Sums of (1 − λ) · G plus the progress, and λ · L, over the groups' known tactics, sample-weighted.
     global_reward: float
     local_reward: float
     # Verified proofs, and their tactics and blocks along the tree path that found them.
@@ -123,6 +155,8 @@ class GraphStatistics:
     harvest_proofs: int
     harvest_proof_graph_nodes: int
     exploration_expansions: int
+    # Block lengths, continuing after a valid tactic, and the outcomes of the tactics after the first.
+    blocks: BlockCounts = dataclasses.field(default_factory=BlockCounts)
 
 
 @dataclass(frozen=True)
@@ -248,12 +282,17 @@ def graph_statistics(
             for node, node_class in zip(record.nodes, labels.node_classes, strict=True)
         ),
         exploration_expansions=accounting.exploration_expansions,
+        blocks=total_blocks(
+            BlockCounts.of(tactics[edge.executed_edge_id], edge.sample_count)
+            for edge in policy
+            if edge.effective_kind != EdgeKind.INFRASTRUCTURE_FAILURE
+        ),
     )
 
 
 def summed(first: object, second: object) -> object:
     match first:
-        case EdgeKindCounts() | TacticLabelCounts() | SizeHistogram() | GraphStatistics():
+        case EdgeKindCounts() | TacticLabelCounts() | SizeHistogram() | BlockCounts() | GraphStatistics():
             return type(first)(
                 **{
                     field.name: summed(getattr(first, field.name), getattr(second, field.name))
@@ -268,6 +307,14 @@ def summed(first: object, second: object) -> object:
             return first + second
         case _:
             raise AssertionError(f"cannot sum {first!r}")
+
+
+def total_blocks(blocks: Iterable[BlockCounts]) -> BlockCounts:
+    total = BlockCounts()
+    for current in blocks:
+        total = summed(total, current)
+        assert isinstance(total, BlockCounts)
+    return total
 
 
 def total_statistics(statistics: Sequence[GraphStatistics]) -> GraphStatistics:
