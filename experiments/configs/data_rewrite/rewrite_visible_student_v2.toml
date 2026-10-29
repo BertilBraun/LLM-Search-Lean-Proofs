@@ -1,0 +1,36 @@
+# Lean pass of the data rewrite before GRPO (DESIGN.md, "Starting policy and the SFT stage before GRPO"): the
+# proofs of the `4b` Lean SFT data re-traced flat (no nested `have … := by`), the reasoning examples of
+# `visible_student_v2` with flattened blocks, and both renamed with descriptive hypothesis names. Both naming
+# variants are built from this one run (build_numbered.toml, build_named.toml).
+#   deployment/serve_model.sh namer Qwen/Qwen3.5-9B 0 8120     # the namer; without it set `model = ""` (rules only)
+#   python experiments/data_rewrite.py rewrite \
+#       --config experiments/configs/data_rewrite/rewrite_visible_student_v2.toml --run-name data_rewrite_v1
+proof_records = "normalized/proofs/selected_for_tracing.jsonl"
+proof_data = ["4b"]
+# Far more chunk examples than the build takes (one per start state; ~9k are used), for variety across proofs.
+max_proofs = 20000
+reasoning_data = "visible_student_v2"
+# The states of the visible teacher, the visible 4B and the thinking teacher (the 10% thinking traces).
+state_runs = ["phase5_visible_teacher_9b", "phase5_visible_self_4b", "phase5_teacher_9b"]
+max_examples = 0
+shard_size = 200
+shards_in_flight = 4
+pool_size = 48
+# The tracing's limits: each flattened tactic gets its own budget.
+heartbeats = 200000
+timeout_seconds = 60.0
+original_check_fraction = 0.1
+seed = "data-rewrite-v1"
+
+[naming]
+renamed_pattern = "h[0-9₀-₉]*"
+max_name_length = 20
+
+[namer]
+model = "namer"
+base_url = "http://127.0.0.1:8120/v1"
+max_tokens = 512
+temperature = 0.0
+requests_in_flight = 64
+request_timeout_seconds = 600.0
+enable_thinking = false

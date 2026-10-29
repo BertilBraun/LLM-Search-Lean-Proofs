@@ -1,0 +1,36 @@
+# Naming A/B, named arm: the same gentle fine-tune as sft_numbered.toml on the descriptive-names data.
+#   torchrun --nproc-per-node 2 experiments/phase5_reasoning_sft.py \
+#       --config experiments/configs/data_rewrite/sft_named.toml --run-name data_rewrite_sft_named
+model = "Qwen/Qwen3.5-4B"
+data = "visible_student_v3_named"
+merge = false
+initial_adapter = "/workspace/checkpoints/phase5_sft_visible_student_v2/adapter"
+
+[lora]
+rank = 64
+alpha = 64
+dropout = 0.0
+
+[optimization]
+method = "lora"
+learning_rate = 1e-4
+warmup_fraction = 0.03
+minimum_learning_rate_ratio = 0.1
+weight_decay = 0.0
+max_gradient_norm = 1.0
+epochs = 1
+micro_batch_tokens = 16384
+micro_batches_per_step = 2
+length_group_examples = 4096
+gradient_checkpointing = true
+packing = true
+compile_layers = true
+seed = 0
+
+[evaluation]
+interval_steps = 50
+validation_examples = 2000
+micro_batch_tokens = 16384
+generation_examples = 256
+generation_batch_size = 16
+max_new_tokens = 512
