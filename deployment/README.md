@@ -234,6 +234,43 @@ per step (`MAX_NUM_BATCHED_TOKENS=16384`) did not change the rate. At 120 search
 an estimated 5k states (half the trees' final frontiers, 61 on average), about 35 s; re-score larger frontiers
 best-first or lazily.
 
+## Serving precision
+
+`experiments/serving_precision.py` (DESIGN.md "Precision"; a first-hour check, run with the loop's servers stopped)
+measures how far each way of serving the policy is from the exact model, on the same tokens. It draws 200 visible-mode
+prompts (as the search builds them) from the per-step evaluation's states, samples 4 completions each from the
+bf16-merged policy (T 0.8, the search's max tokens, no budget forcing) and scores exactly those tokens under: an fp32
+transformers reference (fp32 base + fp32 LoRA, unmerged, IEEE fp32 throughout, PyTorch Gated DeltaNet); the trainer's
+own precision (`trainer_bf16`: bf16 base, fp32 LoRA, bf16 autocast, fp32 output layer); and three vLLM servers
+(`bf16_merged`, `fp16_merged` merged in fp32 and cast, served with `--dtype float16`; `lora_bf16`, the adapter at
+runtime on the bf16 base) through `prompt_logprobs` on prompt + completion (token ids checked against the server's).
+Each server also generates a fixed workload (64 prompts x 8 samples x 512 tokens, ignore_eos, all in flight) for
+tokens/s, and scores the base twice (its run-to-run noise). Update visibility: perturbed adapters (every LoRA
+parameter ± lr x steps, Adam's first-step size; 1e-5 x 1, 3e-5 x 1, 3e-5 x 10) are served the same way (merged ones
+swapped in place, runtime adapters loaded) and the served change in log-probability is regressed on the reference's.
+
+```bash
+mkdir -p $LEAN_SEARCH_RUNS/serving_precision
+setsid nohup python experiments/serving_precision.py run --config experiments/configs/grpo/serving_precision.toml \
+    --gpus 1 2 3 > $LEAN_SEARCH_RUNS/serving_precision/visible_student_v2.log 2>&1 &
+deployment/fetch_results.sh serving_precision/visible_student_v2   # locally, afterwards
+```
+
+One vLLM mode per GPU (ports 8950-8952, servers `precision-<mode>`), then the reference passes spread over the same
+GPUs (fp32 ~18 GiB per GPU); merged weights live under `/dev/shm/serving_precision/` until their mode is done. A rerun
+with the same `--name` keeps every score already written (`scores/<source>__<adapter>.npz`); a failing mode is noted
+under `failures/` and in the summary, the others go on. `summary --run-directory <run>` rebuilds the summary.
+
+Reading `summary/README.md`: per source, the per-token |served - reference| (mean, p95, max, nats), the mean signed
+difference (an offset means a temperature or scaling mismatch), k3 KL (mean of e^r - r - 1, r = served - reference;
+tokens come from the bf16-merged sampler, so it approximates KL(reference || served)), and the per-sequence sum; at
+T = 1 exactly, at T = 0.8 from the top 20 log-probabilities on both sides (vLLM's prompt log-probabilities are raw
+whatever `--logprobs-mode` says; the estimate's own error on the reference is printed). The sampler rows compare the
+generation's recorded log-probabilities with the reference's exact tempered ones (the dashboard's sampler-vs-trainer
+number) and with the same server's rescoring (alignment: should be within the estimate's error). Update visibility:
+slope of the served change on the reference change, per token and per sequence, ~1 when the update survives, ~0 when
+it rounds away; the correlation says how much of the served change is the update rather than rounding.
+
 ## Dashboard
 
 `experiments/dashboard.py` serves a run's metrics (`$LEAN_SEARCH_RUNS/<run>/metrics/*.jsonl`, see
