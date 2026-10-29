@@ -1,5 +1,6 @@
 """GRPO groups at proof-graph nodes: each policy sample's tactics with their rewards R = (1 − λ) · G + λ · L."""
 
+import dataclasses
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
@@ -20,6 +21,11 @@ class RewardConfig:
     no_progress_local: float = -1.0
     # L per goal a tactic on the proof graph closes.
     goal_closed_bonus: float = 0.1
+    # δ: a proof-graph state earns this per remaining step it is closer to a proof than the group's node.
+    progress_per_step: float = 0.2
+    # c: the advantage of a failing, no-progress or redundant tactic after the first; its block's prefix is kept, so
+    # only its tokens are wasted. Continuing pays when P(next tactic correct) > c / (c + δ).
+    wasted_tactic_cost: float = 0.1
     # μ: an expanded off-graph state earns G = μ · q, q its value part; 0 until a value model passed the gate.
     value_share: float = 0.0
     # An off-graph state with live children and fewer expanded nodes in its subtree (itself included) is unknown.
@@ -30,7 +36,7 @@ class RewardConfig:
 
 @dataclass(frozen=True)
 class RewardParts:
-    # (1 − λ) · G and λ · L.
+    # (1 − λ) · G plus δ per step of progress on the proof graph, and λ · L.
     global_part: float
     local_part: float
 
@@ -38,12 +44,21 @@ class RewardParts:
     def total(self) -> float:
         return self.global_part + self.local_part
 
+    def __add__(self, other: "RewardParts") -> "RewardParts":
+        return RewardParts(self.global_part + other.global_part, self.local_part + other.local_part)
+
+    def __sub__(self, other: "RewardParts") -> "RewardParts":
+        return RewardParts(self.global_part - other.global_part, self.local_part - other.local_part)
+
 
 @dataclass(frozen=True)
 class TacticReward:
     label: TacticLabel
-    # None for unknown and masked tactics, which earn nothing and stay out of the score.
+    # R of the state reached; None for unknown and masked tactics, which earn nothing.
     parts: RewardParts | None
+    # After the first tactic, judged within the block: R minus the most recent earlier state's R, or −c for a wasted
+    # tactic. None: judged against the group's baseline (the first tactic, or no earlier state of the block known).
+    gain: RewardParts | None = None
 
 
 @dataclass(frozen=True)
@@ -60,10 +75,21 @@ class GroupSample:
         return [tactic.parts for tactic in self.tactics if tactic.parts is not None]
 
     @property
+    def score_parts(self) -> RewardParts | None:
+        """The last tactic judged against the baseline plus every gain: the final state's R minus the wasted costs."""
+        anchors = [tactic.parts for tactic in self.tactics if tactic.parts is not None and tactic.gain is None]
+        if not anchors:
+            return None
+        score = anchors[-1]
+        for tactic in self.tactics:
+            if tactic.gain is not None:
+                score += tactic.gain
+        return score
+
+    @property
     def score(self) -> float | None:
-        """The mean reward of the tactics with a known reward."""
-        known = self.known
-        return sum(parts.total for parts in known) / len(known) if known else None
+        parts = self.score_parts
+        return None if parts is None else parts.total
 
     @property
     def complete(self) -> bool:
@@ -108,11 +134,15 @@ def reward_parts(global_value: float, local_value: float, config: RewardConfig) 
     return RewardParts((1 - config.local_share) * global_value, config.local_share * local)
 
 
-def tactic_reward(outcome: TacticOutcome, config: RewardConfig, off_graph_global: float = 0.0) -> TacticReward:
-    """`off_graph_global`: G of an off-graph tactic's state (`off_graph_value`)."""
+def tactic_reward(
+    outcome: TacticOutcome, config: RewardConfig, node_steps: int, off_graph_global: float = 0.0
+) -> TacticReward:
+    """`node_steps`: the group node's remaining steps; `off_graph_global`: an off-graph state's G, `off_graph_value`."""
     match outcome.label:
         case TacticLabel.PROOF_GRAPH:
-            parts = reward_parts(1.0, config.goal_closed_bonus * outcome.goals_closed, config)
+            assert outcome.remaining_steps is not None
+            progress = RewardParts(config.progress_per_step * (node_steps - outcome.remaining_steps), 0.0)
+            parts = reward_parts(1.0, config.goal_closed_bonus * outcome.goals_closed, config) + progress
         case TacticLabel.OFF_GRAPH:
             parts = reward_parts(off_graph_global, 0.0, config)
         case TacticLabel.NO_PROGRESS | TacticLabel.REDUNDANT_HYPOTHESIS:
@@ -124,6 +154,23 @@ def tactic_reward(outcome: TacticOutcome, config: RewardConfig, off_graph_global
     return TacticReward(outcome.label, parts)
 
 
+def judged_in_block(rewards: Sequence[TacticReward], config: RewardConfig) -> tuple[TacticReward, ...]:
+    """Each tactic after the first with its gain over the most recent earlier state of the block with a reward."""
+    judged = []
+    state: RewardParts | None = None
+    for index, reward in enumerate(rewards):
+        gain = None
+        match reward.label:
+            case TacticLabel.FAILING | TacticLabel.NO_PROGRESS | TacticLabel.REDUNDANT_HYPOTHESIS if index > 0:
+                gain = RewardParts(0.0, -config.wasted_tactic_cost)
+            case TacticLabel.PROOF_GRAPH | TacticLabel.OFF_GRAPH:
+                assert reward.parts is not None
+                gain = None if state is None else reward.parts - state
+                state = reward.parts
+        judged.append(dataclasses.replace(reward, gain=gain))
+    return tuple(judged)
+
+
 def group_sample(
     edges: Sequence[EdgeLabel],
     outcomes: Sequence[TacticOutcome],
@@ -131,21 +178,25 @@ def group_sample(
     estimates: Sequence[ValueEstimate | None],
     config: RewardConfig,
 ) -> GroupSample:
+    node_steps = labels.remaining_steps[edges[0].parent_id]
+    assert node_steps is not None
+    rewards = [
+        tactic_reward(
+            outcome,
+            config,
+            node_steps,
+            off_graph_value(outcome.node_id, labels, estimates, config)
+            if outcome.label == TacticLabel.OFF_GRAPH
+            else 0.0,
+        )
+        for outcome in outcomes
+    ]
     return GroupSample(
         text=edges[0].text.strip(),
         edge_ids=tuple(edge.edge_id for edge in edges),
         multiplicity=sum(edge.sample_count for edge in edges),
         kind=edges[0].effective_kind,
-        tactics=tuple(
-            tactic_reward(
-                outcome,
-                config,
-                off_graph_value(outcome.node_id, labels, estimates, config)
-                if outcome.label == TacticLabel.OFF_GRAPH
-                else 0.0,
-            )
-            for outcome in outcomes
-        ),
+        tactics=judged_in_block(rewards, config),
     )
 
 

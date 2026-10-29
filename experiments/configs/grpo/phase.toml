@@ -1,11 +1,13 @@
 # A search-tree GRPO phase (experiments/grpo_phase.py, DESIGN.md "Policy update: GRPO over sibling groups"). Groups
 # are the policy samples of expanded proof-graph nodes; every tactic earns R = (1 - 0.15) * G + 0.15 * L from the
-# state it reaches, a sample's score is the mean R of its known tactics, and advantages are R (tactic tokens) or the
-# score (explanation) minus the group's mean score, without dividing by a standard deviation. Every recorded sample
-# trains on its sampled tokens at the sampling temperature, two passes per phase. The policy adapter is the starting
-# policy's own SFT adapter, continued phase by phase on the weights it was trained on (`model`); the starting policy
-# (`model` with `reference_adapter`) is the KL reference. The loop fills in model, initial_adapter (the published one)
-# and reference_adapter from loop.toml ([serving] policy_base_model, [initial] policy_adapter).
+# state it reaches, plus delta per step of progress on the proof graph. A sample's score is its final state's R minus
+# c per wasted tactic after the first; the first tactic and the explanation get R or the score minus the group's mean
+# score (no division by a standard deviation), later tactics their gain over the state before them, the closing fence
+# 0. Every recorded sample trains on its sampled tokens at the sampling temperature, two passes per phase. The policy
+# adapter is the starting policy's own SFT adapter, continued phase by phase on the weights it was trained on
+# (`model`); the starting policy (`model` with `reference_adapter`) is the KL reference. The loop fills in model,
+# initial_adapter (the published one) and reference_adapter from loop.toml ([serving] policy_base_model, [initial]
+# policy_adapter).
 
 [reward]
 local_share = 0.15
@@ -17,6 +19,13 @@ failure_local = -1.0
 no_progress_local = -1.0
 # L per goal a proof-graph tactic closes.
 goal_closed_bonus = 0.1
+# delta: a proof-graph state earns this per remaining proof-graph step it is closer to a proof than the group's node,
+# so a correct further step raises the reward (and the sample's score, its final state's reward) by delta.
+progress_per_step = 0.2
+# c: the advantage of a failing, no-progress or redundant tactic after the first; the search keeps the block's valid
+# prefix, so only its tokens are wasted. Tactics after the first are judged against the state before them, so
+# continuing pays when P(next tactic correct) > c / (c + delta) = 1/3; keep delta clearly above c.
+wasted_tactic_cost = 0.1
 # mu: expanded off-graph states earn G = mu * q; 0.15 once a value model passed the gate.
 value_share = 0.0
 # An expanded off-graph state with live children and fewer expanded nodes in its subtree (itself included: the

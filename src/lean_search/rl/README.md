@@ -27,6 +27,11 @@ state that is another node's state, so that node routes to the proof too (and ge
 written before `tactic_goals` was kept know only the final state of each edge: its earlier tactics are `proof_graph` on
 a route to a proof and `unknown` otherwise; the last one is judged as above against the parent (redundancy included).
 
+A `proof_graph` tactic also carries its state's remaining steps (`TacticOutcome.remaining_steps`, top-level tactics
+to a verified proof, 0 once proved): its node's `GraphLabels.remaining_steps`, or for an intermediate state the
+target's plus the tactics left in the edge; a state with several (several nodes or routes with its goal key) takes the
+shortest.
+
 ## Groups and rewards (`grpo_groups.py`)
 
 One group per expanded proof-graph node with policy samples; no groups off the proof graph or in unsolved trees.
@@ -34,11 +39,13 @@ With `require_policy_proof` (default) a group also needs a policy sample with a 
 automation sweep's children reach the proof graph, the group is left out (`TreeGroups.without_policy_proof`, the
 search metrics' `graph.groups_without_policy_proof`); a policy sample repeating the sweep's tactic counts as the
 policy's. Identical texts are merged (multiplicity = the samples behind them). Each tactic gets
-`R = (1 − λ) · G + λ · L` (`RewardConfig`, λ = `local_share` = 0.15, L clipped to [−1, 1]):
+`R = (1 − λ) · G + λ · L` (`RewardConfig`, λ = `local_share` = 0.15, L clipped to [−1, 1]), and a proof-graph state
+δ (`progress_per_step` = 0.2) per remaining step it is closer to a proof than the group's node, `δ · (d(node) − d(s))`
+(part of the global part; negative for a proof-graph state farther away):
 
 | Label | G | L | R |
 |---|---|---|---|
-| proof graph | 1 | `goal_closed_bonus` (0.1) per goal closed | 0.85 + 0.015 per goal |
+| proof graph | 1 | `goal_closed_bonus` (0.1) per goal closed | 0.85 + 0.2 per step of progress + 0.015 per goal |
 | off graph | μ · q (`value_share`, 0 until a value model passed the gate; q averages the state's expanded descendants, else its own estimate) | 0 | 0 before the gate |
 | no progress, redundant hypothesis | 0 | `no_progress_local` (−1, as a failure: a no-op wastes the sample too) | −0.15 |
 | failing | 0 | `failure_local` (−1) | −0.15 |
@@ -46,19 +53,41 @@ policy's. Identical texts are merged (multiplicity = the samples behind them). E
 
 ## Advantages (`advantages.py`) and tokens (`token_credit.py`, `policy_data.py`)
 
-A sample's score is the mean R of its tactics with a reward; the baseline b is the multiplicity-weighted mean score of
-the group's samples with a score (all-unknown samples stay out). No division by a standard deviation. Groups whose
-advantages are all zero are dropped (`GroupAdvantages.has_signal`).
+A block t1..tk is credited the way the search uses it: the longest valid prefix becomes the child, so a tactic after
+the first decides only whether the block gets further than the state before it (`grpo_groups.judged_in_block`,
+`TacticReward.gain`):
+
+| Tactic | Advantage |
+|---|---|
+| the first (its failure or no-op included) | R − b |
+| a later one reaching a state with a reward (proof graph, off graph) | R(s_i) − R(s_j), s_j the most recent earlier state of the block with a reward: δ per step gained on the proof graph (plus its goal bonus), the whole drop when it leaves the proof graph |
+| a later one with no earlier state with a reward | R − b, as the first |
+| a later failing, no-progress or redundant one | −c (`wasted_tactic_cost` = 0.1, a local part in the local share): the prefix is kept, only its tokens are wasted |
+| unknown, masked | untrained |
+
+A sample's score is its final state's R minus c per wasted later tactic (`GroupSample.score_parts`: the last tactic
+judged against b plus every gain, so the advantages of a block's tactics add up to score − b); a sample whose first
+tactic fails scores that tactic's R, one without a state with a reward or a first-tactic failure has no score. The
+baseline b is the multiplicity-weighted mean score of the group's samples with a score. No division by a standard
+deviation. Groups whose advantages are all zero are dropped (`GroupAdvantages.has_signal`).
+
+Stopping after t_i keeps s_i, the reference point of t_{i+1}, so the closing tokens get 0; continuing gets
+δ · steps gained when t_{i+1} is correct and −c when it fails, and pays when P(correct) > c / (c + δ) = 1/3. The
+closing tokens are trained with advantage 0 rather than masked: the loss divides by a fixed sequences × 256 tokens,
+so a zero-advantage token adds no gradient and changes no other token's weight; it only keeps the stop decision
+under the KL term (`kl_coefficient`, 0 by default) and in the per-token metrics, as a decision with a known neutral
+value. After a failure the closing follows masked tactics and stays untrained.
 
 | Tokens | `per_tactic` credit (default) | `sequence` credit |
 |---|---|---|
 | explanation and opening fence (before the first tactic's span) | score − b | score − b |
-| a tactic's span, and the gap before it (newlines, comments) | R − b; untrained when unknown or masked | score − b |
-| after the last tactic (closing fence, end of turn) | the last tactic's R − b after a complete block; untrained after a failure | score − b |
+| a tactic's span, and the gap before it (newlines, comments) | the tactic's advantage above; untrained when unknown or masked | score − b |
+| after the last tactic (closing fence, end of turn) | 0 after a complete block; untrained after a failure | score − b |
 | inserted by the harness (`SampledTokens.inserted`) | untrained | untrained |
 
 Unknown scores train nothing. A sample without a span per executed tactic (no usable block, spans not recorded) gets
 score − b on every sampled token, so an unparsed sample scores like a failing tactic over its whole completion.
+Sequence credit sees the progress and the wasted-tactic costs through the score.
 
 Tokens are the recorded ones (`SampledCompletion.tokens.token_ids`, no re-tokenization; the prompt is the recorded
 prompt encoded without special tokens, as vLLM does). Their characters come from decoding them one by one with the
@@ -105,7 +134,11 @@ else scored with it loaded next to the trained adapter, which alone trains again
 
 `tree_statistics.graph_statistics` adds per tree: tactics by label over every policy sample and over the groups,
 groups with a signal, groups left out without a policy proof, the global and local reward parts, proofs with their
-tactics and blocks, harvest expansions with the proofs and proof-graph nodes they created, and ε-picks.
+tactics and blocks, harvest expansions with the proofs and proof-graph nodes they created, ε-picks, and the policy
+samples' blocks (`BlockCounts`: tactics and valid tactics per sample, valid tactics another tactic follows, and the
+tactics after the first that failed or made no progress). The dashboard's search family charts block length and the
+continue rate after a valid tactic next to the later tactics' failure rate; a steady fall in either length means the
+stop credit pushes blocks short.
 `training_phase.grpo_phase_record` turns a policy outcome into the dashboard's `grpo` line (trained groups, tactics
 by label, local share of the advantages, sampler mismatch overall and by sampling age, i.e. the version trained from
 minus the version that sampled, forced answers kept, training and sampling time).
@@ -219,7 +252,8 @@ trees.
 - **Single-step GRPO** (`single_step.py`, `experiments/grpo_single_step.py`, `grpo/single_step.toml`): one policy
   request per held-out state, executed from the state rebuilt by replay (`search_theorem(..., start_state=...)`).
   Proof graph: the state's traced proof proves it and every later state of it, so a tactic that closes the goals or
-  reaches one of those states (by goal key) is on the proof graph; other new states are unknown (neutral). The root
+  reaches one of those states (by goal key) is on the proof graph, at the traced proof's remaining steps (the root's
+  are the traced proof's, or a found proof's if fewer); other new states are unknown (neutral). The root
   forms a group when a sample reaches the proof graph (states no sample solves train nothing). No extra search per
   state. Success per sample = the block runs completely and ends there (the per-step evaluation's criterion). Each arm (per-tactic, sequence credit) runs 3 rounds of sample, measure
   (training and 512 disjoint states), train (one phase, two passes), then a last measurement; `report` writes both

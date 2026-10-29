@@ -91,6 +91,22 @@ def test_phase_config_starts_where_the_loop_starts(phase: str) -> None:
     assert (policy["model"], policy["initial_adapter"], policy["reference_adapter"]) == expected
 
 
+def test_sequence_credit_phase_differs_from_the_phase_only_in_its_credit() -> None:
+    phase, sequence = (
+        tomllib.loads((CONFIGS / name).read_text(encoding="utf-8"))
+        for name in ("grpo/phase.toml", "grpo/phase_sequence_credit.toml")
+    )
+    sequence["policy"]["data"]["credit"] = phase["policy"]["data"]["credit"]
+    assert sequence == phase
+
+
+def test_progress_per_step_outweighs_the_wasted_tactic_cost() -> None:
+    reward = from_json_object(
+        TrainingPhaseConfig, tomllib.loads((CONFIGS / "grpo/phase.toml").read_text(encoding="utf-8"))
+    ).reward
+    assert reward.progress_per_step > reward.wasted_tactic_cost
+
+
 def test_single_step_starts_where_the_loop_starts() -> None:
     text = (CONFIGS / "grpo/single_step.toml").read_text(encoding="utf-8")
     config = from_json_object(SingleStepConfig, tomllib.loads(text))
