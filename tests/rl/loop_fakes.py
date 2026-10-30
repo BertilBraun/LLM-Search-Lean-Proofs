@@ -280,6 +280,7 @@ class FakeTrainer:
     handoff: Path | None = None
     policy_base_model: str = "start-policy"
     value_base_model: str = "value-base"
+    train_seconds: float = 0.0
 
     def earlier_jobs(self) -> str | None:
         return self.earlier_job
@@ -292,6 +293,7 @@ class FakeTrainer:
         self.events.append(f"train {request.phase}")
         if request.phase in self.fail_phases:
             raise RuntimeError(f"training of phase {request.phase} failed")
+        await asyncio.sleep(self.train_seconds)
         policy = dataclasses.replace(zero(PolicyOutcome), adapter=str(request.output_directory / "policy/adapter"))
         value = None
         if request.train_value:

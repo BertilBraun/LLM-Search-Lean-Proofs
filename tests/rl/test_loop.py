@@ -895,6 +895,20 @@ async def test_a_restart_finishes_the_interrupted_training(tmp_path: Path) -> No
     assert [request.phase for request in world.trainer.requests] == [1, 1]
 
 
+async def test_a_restart_keeps_its_heartbeat_while_it_finishes_the_interrupted_training(tmp_path: Path) -> None:
+    world = loop_world(tmp_path, trainer=FakeTrainer(fail_phases={1}))
+    record_version_zero(world)
+    with pytest.raises(RuntimeError):
+        await run_until(world, world.loop(), phases=1)
+    status = world.paths.directory / "metrics" / "status.jsonl"
+    before = len(status.read_text(encoding="utf-8").splitlines())
+    world.trainer.fail_phases.clear()
+    world.trainer.train_seconds = 0.2
+    await run_until(world, world.loop(), phases=1)
+    states = [json.loads(line)["fields"]["state"] for line in status.read_text(encoding="utf-8").splitlines()[before:]]
+    assert states.count("training") > 1
+
+
 async def test_a_restart_wakes_no_server_while_an_earlier_loops_job_runs(tmp_path: Path) -> None:
     world = loop_world(tmp_path, trainer=FakeTrainer(earlier_job="torchrun grpo_phase.py"))
     record_version_zero(world)

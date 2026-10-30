@@ -652,6 +652,8 @@ class GrpoLoop:
         self.value_benchmark = value_benchmark
         # The value benchmark's scoring in flight, during sampling.
         self.scoring: asyncio.Task[None] | None = None
+        # The status heartbeat, from the session's start: a phase finished after a restart trains for minutes first.
+        self.heartbeat: asyncio.Task[None] | None = None
         # The probe and miniF2F in flight beside sampling (`evaluation.beside_sampling`), and what they did this phase.
         self.evaluations_beside_sampling: asyncio.Task[None] | None = None
         self.beside_sampling = BesideSampling()
@@ -748,7 +750,9 @@ class GrpoLoop:
         finally:
             # Cancelling also stops a training or evaluation job in flight (`loop_services.run_logged`).
             session.cancel()
-            background = [task for task in (self.scoring, self.evaluations_beside_sampling) if task is not None]
+            background = [
+                task for task in (self.scoring, self.evaluations_beside_sampling, self.heartbeat) if task is not None
+            ]
             for task in background:
                 task.cancel()
             await asyncio.gather(session, *background, return_exceptions=True)
@@ -768,6 +772,7 @@ class GrpoLoop:
         health_stop = read_health_stop(self.paths.health_stop)
         if health_stop is not None:
             raise RuntimeError(health_stop_text(health_stop))
+        self.heartbeat = asyncio.create_task(self.stopping_on_failure(self.report_status(stop), stop))
         await asyncio.to_thread(self.clear_stale_handoff)
         await self.servers.check()
         current = read_current(self.paths.models)
@@ -791,7 +796,7 @@ class GrpoLoop:
         coroutines: list[Coroutine[None, None, None]] = [
             self.work(stop, index) for index in range(self.config.sampling.concurrency)
         ]
-        coroutines += [self.watch(stop), self.report_status(stop)]
+        coroutines.append(self.watch(stop))
         await asyncio.gather(*(self.stopping_on_failure(coroutine, stop) for coroutine in coroutines))
 
     async def stopping_on_failure(self, coroutine: Coroutine[None, None, None], stop: asyncio.Event) -> None:
