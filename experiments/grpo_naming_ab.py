@@ -28,7 +28,7 @@ from pathlib import Path
 
 from lean_search.policy.adapters import merge_adapter
 from lean_search.policy.server_control import publish_weights
-from lean_search.rl.evaluation import EvaluationKind, EvaluationSummary, read_summary
+from lean_search.rl.evaluation import EvaluationKind, EvaluationRun, EvaluationSummary, read_summary
 from lean_search.rl.fixed_targets import evaluate_target
 from lean_search.rl.loop_config import load_loop_config
 from lean_search.rl.phase_metrics import unknown_names
@@ -100,7 +100,7 @@ async def probe(config: NamingAbConfig, arm: NamingArm) -> None:
     directory = arm_directory(config, arm) / "probe"
     directory.mkdir(parents=True, exist_ok=True)
     summary = await evaluate_target(
-        EvaluationKind.PROBE,
+        EvaluationRun(EvaluationKind.PROBE),
         loop.evaluation,
         template,
         directory,
