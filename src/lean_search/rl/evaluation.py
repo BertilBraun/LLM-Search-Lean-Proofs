@@ -127,10 +127,17 @@ class SearchProgress:
     concurrency: int
     # Every problem had its last policy batch, so only Lean checks remain (the held-out states report it).
     generation_finished: bool = False
+    # The held-out states finished so far: their samples, and those whose block ran completely in Lean.
+    samples: int = 0
+    valid_samples: int = 0
 
     @property
     def searches_in_flight(self) -> int:
         return min(self.unfinished, self.concurrency)
+
+    @property
+    def valid_rate(self) -> float | None:
+        return self.valid_samples / self.samples if self.samples else None
 
 
 @dataclass(frozen=True)

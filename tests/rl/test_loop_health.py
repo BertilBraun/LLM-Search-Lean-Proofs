@@ -451,3 +451,59 @@ async def test_a_rollback_beside_sampling_pauses_the_searches_before_its_merge(t
     await through_a_held_out_tail(world, lean_checks, loop=loop)
     events = world.searcher.events
     assert events[events.index("prepare v2") - 1] == "pause"
+
+
+async def resumed_beside_the_tail(world: LoopWorld, lean_checks: asyncio.Event) -> bool:
+    """Whether the searches resume while the first held-out run after a phase waits on its Lean checks."""
+    stop = asyncio.Event()
+    task = asyncio.create_task(world.loop().run(stop))
+    await until(lambda: bool(world.evaluations.generated), task)
+    await until(world.searcher.open.is_set, task, seconds=0.5)
+    resumed = world.searcher.open.is_set()
+    lean_checks.set()
+    stop.set()
+    await task
+    return resumed
+
+
+@pytest.mark.parametrize(("valid_rate", "resumed"), [(0.5, False), (0.6, True)])
+async def test_the_searches_resume_beside_the_tail_only_while_the_finished_states_are_above_the_collapse_line(
+    tmp_path: Path, valid_rate: float, resumed: bool
+) -> None:
+    lean_checks = asyncio.Event()
+    world = collapsing_world(tmp_path, HEALTHY, lean_checks=lean_checks)
+    world.evaluations.finished_valid_rate = valid_rate
+    assert await resumed_beside_the_tail(world, lean_checks) == resumed
+
+
+# Two searches, at least one taking statements beside an evaluation.
+HELD_OUT_WITH_A_FLOOR = HELD_OUT_EVERY_PHASE.replace(
+    "concurrency = 2\n", "concurrency = 2\nmin_concurrency_beside_evaluations = 1\n", 1
+)
+
+
+async def most_searches_beside_the_tail(world: LoopWorld, lean_checks: asyncio.Event) -> int:
+    """The most searches in flight at once beside the held-out states' Lean checks, once the searches the pause held
+    finished."""
+    stop = asyncio.Event()
+    task = asyncio.create_task(world.loop().run(stop))
+    await until(lambda: bool(world.evaluations.generated) and world.searcher.open.is_set(), task)
+    started = len(world.searcher.searched)
+    await until(lambda: len(world.searcher.searched) >= started + SEARCHES_BESIDE, task)
+    world.searcher.most_in_flight = world.searcher.in_flight
+    await until(lambda: len(world.searcher.searched) >= started + 3 * SEARCHES_BESIDE, task)
+    most = world.searcher.most_in_flight
+    lean_checks.set()
+    stop.set()
+    await task
+    return most
+
+
+@pytest.mark.parametrize(("held_out_in_flight", "searches"), [(None, 1), (0, 2)])
+async def test_beside_the_held_out_tail_new_statements_fill_what_its_searches_in_flight_leave(
+    tmp_path: Path, held_out_in_flight: int | None, searches: int
+) -> None:
+    lean_checks = asyncio.Event()
+    world = collapsing_world(tmp_path, HEALTHY, HELD_OUT_WITH_A_FLOOR, lean_checks)
+    world.evaluations.searches_reported = held_out_in_flight
+    assert await most_searches_beside_the_tail(world, lean_checks) == searches

@@ -1,20 +1,29 @@
-from collections.abc import Mapping
+import asyncio
+import contextlib
+import dataclasses
+from collections.abc import AsyncIterator, Mapping
 from pathlib import Path
 from typing import cast
 
 import pytest
 
 from lean_search.corpora.records import DataSplit, TracedStep
-from lean_search.lean import ProofState
+from lean_search.data import Problem, Split
+from lean_search.lean import LeanReplPool, ProofState
 from lean_search.reasoning.states import ReasoningState
 from lean_search.rl.evaluation import read_search_progress
 from lean_search.rl.grpo_groups import PolicyGroup, RewardConfig
+from lean_search.rl.search_models import SearchModels
 from lean_search.rl.single_step import (
     GenerationWatch,
+    SampleSuccess,
+    StateProblem,
     StatesProgress,
     reference_labels,
     sample_success,
+    search_pending,
     single_step_groups,
+    single_step_run_config,
     state_problem,
 )
 from lean_search.search import (
@@ -22,16 +31,19 @@ from lean_search.search import (
     Candidate,
     CandidateBatch,
     CandidateBatches,
+    DepthPlusGoals,
     EdgeOutcome,
     Failure,
     FailureKind,
     Node,
+    RunConfig,
     SearchContext,
     SearchResult,
     SearchTree,
     StepSource,
     StopReason,
     TreeRecord,
+    load_run_config,
     tree_record,
 )
 from lean_search.search.graph_labels import GoalKey, goal_key
@@ -43,6 +55,8 @@ REFERENCE_NEXT = "a b : ℕ\nh₀ : a = b\n⊢ a = b"
 REFERENCE_STEPS = {goal_key((REFERENCE_NEXT,)): 1, (): 0}
 REFERENCE_KEYS = frozenset(REFERENCE_STEPS)
 REWARDS = RewardConfig()
+NO_SAMPLES = SampleSuccess(1, 0, 0)
+REPOSITORY = Path(__file__).resolve().parents[2]
 
 
 def state(*goals: str) -> ProofState:
@@ -241,12 +255,75 @@ def test_the_progress_reports_generation_unfinished_while_a_state_awaits_its_sam
 def test_the_progress_reports_generation_finished_once_every_state_sampled(tmp_path: Path) -> None:
     progress = StatesProgress(tmp_path / "progress.json", ["a", "b"], 4)
     progress.sampled("a")
-    progress.finished("b")
+    progress.finished("b", NO_SAMPLES)
     report = read_search_progress(tmp_path / "progress.json")
     assert report is not None and report.generation_finished
 
 
 def test_the_progress_counts_the_states_left_in_flight(tmp_path: Path) -> None:
     progress = StatesProgress(tmp_path / "progress.json", ["a", "b", "c"], 4)
-    progress.finished("a")
+    progress.finished("a", NO_SAMPLES)
     assert progress.progress.searches_in_flight == 2
+
+
+def test_the_progress_reports_the_finished_states_valid_rate(tmp_path: Path) -> None:
+    progress = StatesProgress(tmp_path / "progress.json", ["a", "b", "c"], 4)
+    progress.finished("a", SampleSuccess(1, 8, 2, 6))
+    progress.finished("b", SampleSuccess(1, 8, 0, 2))
+    report = read_search_progress(tmp_path / "progress.json")
+    assert report is not None and report.valid_rate == 0.5
+
+
+class HoldingExpander:
+    """One policy batch without candidates per state; the batches of `held` states wait for `release`."""
+
+    def __init__(self, held: set[str], release: asyncio.Event) -> None:
+        self.held = held
+        self.release = release
+
+    async def expand(self, node: Node, context: SearchContext) -> CandidateBatches:
+        if context.problem.name in self.held:
+            await self.release.wait()
+        yield CandidateBatch((), prompt="prompt")
+
+
+class ReplPool:
+    @contextlib.asynccontextmanager
+    async def acquire(self) -> AsyncIterator[None]:
+        yield None
+
+    async def stop_idle_processes(self, keep_running: int) -> list[object]:
+        return []
+
+
+def start_state_problem(name: str) -> StateProblem:
+    problem = Problem(name, Split.VALID, "", STATEMENT, "", "")
+    return StateProblem(problem, state(ROOT), REFERENCE_STEPS)
+
+
+def states_run_config() -> RunConfig:
+    template = single_step_run_config(
+        load_run_config(REPOSITORY / "experiments" / "configs" / "grpo" / "search" / "visible_student_v2.toml")
+    )
+    search = dataclasses.replace(template.search, check_identifiers=False, name_inaccessible_hypotheses=False)
+    return dataclasses.replace(template, search=search)
+
+
+async def test_the_states_progress_keeps_generation_unfinished_while_a_state_waits_for_its_batch(
+    tmp_path: Path,
+) -> None:
+    release = asyncio.Event()
+    states = [start_state_problem("a"), start_state_problem("b")]
+    models = SearchModels(HoldingExpander({"b"}, release), DepthPlusGoals(), None)
+    path = tmp_path / "progress.json"
+    progress = StatesProgress(path, [state.problem.name for state in states], 4)
+    config = states_run_config()
+    trees = tmp_path / "trees"
+    pool = cast(LeanReplPool, ReplPool())
+    task = asyncio.create_task(search_pending(states, models, pool, config, trees, progress, print))
+    while progress.progress.unfinished > 1 and not task.done():
+        await asyncio.sleep(0.001)
+    report = read_search_progress(path)
+    release.set()
+    await task
+    assert report is not None and (report.unfinished, report.generation_finished) == (1, False)

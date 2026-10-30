@@ -313,6 +313,11 @@ class Evaluations(Protocol):
         """The running run's job reported every policy request answered: only its Lean checks remain."""
         ...
 
+    def valid_rate_so_far(self, run: EvaluationRun) -> float | None:
+        """The running held-out run's valid-Lean rate over the states it finished, as its job last reported it; None
+        before it finished one."""
+        ...
+
 
 class ValueScorer(Protocol):
     async def score(self, benchmark: ValueBenchmark) -> BenchmarkScores:
@@ -1675,20 +1680,48 @@ class GrpoLoop:
     async def start_held_out_states(self, phase: int) -> None:
         """After a phase (the last of the paused evaluations): the value servers serve the published value model
         first (the held-out states use none). Returns once the job ended, or once it sampled every state while the
-        searches are paused: they then resume beside its last Lean checks. `finish_held_out_states` takes the result."""
+        searches are paused and the states it finished are not collapsing (`early_resume_floor`): the searches then
+        resume beside its last Lean checks. `finish_held_out_states` takes the result."""
         await self.serve_value_model(EvaluationValueModel.PUBLISHED)
         run = EvaluationRun(EvaluationKind.HELD_OUT_STATES)
         task = asyncio.create_task(self.evaluate_as_served(run, phase))
         self.held_out_evaluation = task
         check_seconds = min(self.config.training.check_seconds, GENERATION_CHECK_SECONDS)
-        while not task.done() and not (self.paused and self.evaluations.generation_finished(run)):
+        floor = await asyncio.to_thread(self.early_resume_floor)
+        held_back = False
+        valid_rate: float | None = None
+        while not task.done():
+            if self.paused and self.evaluations.generation_finished(run):
+                valid_rate = self.evaluations.valid_rate_so_far(run)
+                if valid_rate is not None and valid_rate >= floor:
+                    break
+                if not held_back:
+                    held_back = True
+                    self.log(
+                        f"The held-out states' job sampled every state, but those finished are "
+                        f"{'not measured' if valid_rate is None else f'{valid_rate:.1%}'} valid (resume at "
+                        f"{floor:.1%}): the searches stay paused until its result"
+                    )
             await asyncio.wait({task}, timeout=check_seconds)
         if task.done():
             return
+        assert valid_rate is not None
         self.held_out_beside_sampling = True
-        self.log("The held-out states' job sampled every state: the searches resume beside its last Lean checks")
+        self.log(
+            f"The held-out states' job sampled every state, {valid_rate:.1%} of the finished ones' samples valid: the "
+            "searches resume beside its last Lean checks"
+        )
         self.resume_searches()
         await self.log_host_memory("as the searches resume beside the held-out states")
+
+    def early_resume_floor(self) -> float:
+        """The held-out valid-Lean rate the states finished so far need for the searches to resume beside the rest:
+        the collapse line, so that a collapsing version samples nothing more (0 without version 0's evaluation, which
+        turns the collapse check off)."""
+        version_zero = self.held_out_rates(0)
+        if version_zero is None:
+            return 0.0
+        return version_zero.valid_rate * self.config.health.stop_held_out_valid_fraction
 
     async def finish_held_out_states(self) -> None:
         """The held-out states' result, which the phase's health checks read."""

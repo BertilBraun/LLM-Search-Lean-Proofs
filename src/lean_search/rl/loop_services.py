@@ -679,6 +679,10 @@ class SubprocessEvaluations:
         progress = self.progress(run)
         return progress is not None and progress.generation_finished
 
+    def valid_rate_so_far(self, run: EvaluationRun) -> float | None:
+        progress = self.progress(run)
+        return None if progress is None else progress.valid_rate
+
     async def evaluate(self, run: EvaluationRun, phase: int) -> EvaluationSummary:
         directory = self.paths.evaluation_directory(run, self.current_version())
         arguments = [

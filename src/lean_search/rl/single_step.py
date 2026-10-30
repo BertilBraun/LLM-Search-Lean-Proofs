@@ -271,14 +271,15 @@ class GenerationWatch:
 
 
 class StatesProgress:
-    """`search_states`' progress (`SearchProgress`): the states without a tree, and whether every one of them had its
-    last policy batch, after which only Lean checks remain and the GPUs are free."""
+    """`search_states`' progress (`SearchProgress`): the states without a tree, whether every one of them had its last
+    policy batch, after which only Lean checks remain and the GPUs are free, and the finished states' samples."""
 
     def __init__(self, path: Path | None, names: Iterable[str], concurrency: int) -> None:
         self.path = path
         self.unfinished = set(names)
         self.sampling = set(self.unfinished)
         self.concurrency = concurrency
+        self.success = SampleSuccess(0, 0, 0)
         self.write()
 
     def sampled(self, name: str) -> None:
@@ -286,14 +287,21 @@ class StatesProgress:
             self.sampling.remove(name)
             self.write()
 
-    def finished(self, name: str) -> None:
+    def finished(self, name: str, success: SampleSuccess) -> None:
         self.unfinished.discard(name)
         self.sampling.discard(name)
+        self.success = total_success([self.success, success])
         self.write()
 
     @property
     def progress(self) -> SearchProgress:
-        return SearchProgress(len(self.unfinished), self.concurrency, generation_finished=not self.sampling)
+        return SearchProgress(
+            len(self.unfinished),
+            self.concurrency,
+            generation_finished=not self.sampling,
+            samples=self.success.samples,
+            valid_samples=self.success.valid,
+        )
 
     def write(self) -> None:
         if self.path is not None:
@@ -326,42 +334,53 @@ async def search_states(
                 LeanReplPool(config.lean.pool_size, LeanReplConfig(), config.lean.restart_fraction)
             )
             await pool.start(sorted({state.problem.header for state in pending}))
-            semaphore = asyncio.Semaphore(config.lean.concurrency)
-            finished = 0
-            not_started = len(pending)
-            searching = 0
-
-            async def search_one(state: StateProblem) -> None:
-                nonlocal finished, not_started, searching
-                name = state.problem.name
-                generated = functools.partial(progress.sampled, name)
-                expander = GenerationWatch(models.expander, config.policy.feedback.enabled, generated)
-                async with semaphore:
-                    not_started -= 1
-                    searching += 1
-                    async with pool.acquire() as repl:
-                        record = await search_state(
-                            state, repl, dataclasses.replace(models, expander=expander), config.search
-                        )
-                    searching -= 1
-                    # In the tail the loop's searches may run beside the Lean checks left, so the freed REPLs go.
-                    if not not_started:
-                        await pool.stop_idle_processes(searching)
-                await asyncio.to_thread(write_tree, state_tree_path(trees_directory, state), record)
-                progress.finished(name)
-                finished += 1
-                if finished % 64 == 0 or finished == len(pending):
-                    log(f"{finished}/{len(pending)} states sampled")
-
-            searches = [asyncio.create_task(search_one(state)) for state in pending]
-            try:
-                await asyncio.gather(*searches)
-            finally:
-                # After a failure the other searches must stop before the pool closes under them.
-                for search in searches:
-                    search.cancel()
-                await asyncio.gather(*searches, return_exceptions=True)
+            await search_pending(pending, models, pool, config, trees_directory, progress, log)
     return [read_tree(state_tree_path(trees_directory, state)) for state in states]
+
+
+async def search_pending(
+    pending: Sequence[StateProblem],
+    models: SearchModels,
+    pool: LeanReplPool,
+    config: RunConfig,
+    trees_directory: Path,
+    progress: StatesProgress,
+    log: Callable[[str], None],
+) -> None:
+    """`search_states`' searches of the states without a tree, with the models and the pool open."""
+    semaphore = asyncio.Semaphore(config.lean.concurrency)
+    finished = 0
+    not_started = len(pending)
+    searching = 0
+
+    async def search_one(state: StateProblem) -> None:
+        nonlocal finished, not_started, searching
+        name = state.problem.name
+        generated = functools.partial(progress.sampled, name)
+        expander = GenerationWatch(models.expander, config.policy.feedback.enabled, generated)
+        async with semaphore:
+            not_started -= 1
+            searching += 1
+            async with pool.acquire() as repl:
+                record = await search_state(state, repl, dataclasses.replace(models, expander=expander), config.search)
+            searching -= 1
+            # In the tail the loop's searches may run beside the Lean checks left, so the freed REPLs go.
+            if not not_started:
+                await pool.stop_idle_processes(searching)
+        await asyncio.to_thread(write_tree, state_tree_path(trees_directory, state), record)
+        progress.finished(name, await asyncio.to_thread(sample_success, record, state.reference_keys))
+        finished += 1
+        if finished % 64 == 0 or finished == len(pending):
+            log(f"{finished}/{len(pending)} states sampled")
+
+    searches = [asyncio.create_task(search_one(state)) for state in pending]
+    try:
+        await asyncio.gather(*searches)
+    finally:
+        # After a failure the other searches must stop before the pool closes under them.
+        for search in searches:
+            search.cancel()
+        await asyncio.gather(*searches, return_exceptions=True)
 
 
 def single_step_phase_data(
