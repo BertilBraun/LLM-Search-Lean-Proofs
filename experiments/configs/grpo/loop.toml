@@ -160,14 +160,15 @@ paused_repl_memory_gib = 0.0
 # One part of the probe set per slot, the parts in turn (a stratified third, ~167 problems): every ~2 hours of loop
 # time (sampling and training), so the whole set every ~6 hours; the dashboard draws each slot against version 0's runs
 # of the same third, the last three together, and the raw rates. Before the first phase every part twice (version 0's
-# baseline and its run-to-run noise). The wall cap is an emergency stop: the expansions are the budget
-# (wall_clock_stops ~ 0). Every evaluation runs 112 REPLs, as many as the sampling: the paused searches' REPLs stop
-# first.
+# baseline and its run-to-run noise). The wall cap cuts the Lean-bound tail (~3% of the searches, below). Every
+# evaluation runs 112 REPLs, as many as the sampling: the paused searches' REPLs stop first.
 probe_parts = 3
 
 [evaluation.probe]
 max_expansions = 16
-max_wall_seconds = 3600.0
+# The searches still running decide how long the GPUs idle: in the naming A/B's numbered probe (501 problems, 16
+# expansions) p90 16 min, p99 38 min, Lean 88-99% of the tail's wall; no solve came after 30 min.
+max_wall_seconds = 1800.0
 concurrency = 112
 every_hours = 2.0
 at_start = true
