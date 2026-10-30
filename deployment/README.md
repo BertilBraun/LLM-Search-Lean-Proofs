@@ -439,10 +439,12 @@ error if a restarted server stays down.
 Restart after a crash: `deployment/grpo_loop.sh loop` again (servers still up; otherwise `servers` first: they start on
 the current version). The loop finishes an interrupted phase before sampling again. When the held-out valid-Lean rate
 falls below 0.7 × version 0's, the loop rolls back by itself (`loop.log`: "Alert: the held-out valid Lean collapsed
-after phase <k>: rolled back to version <N>'s policy ...", a warning on the dashboard) and keeps sampling. A second
+after phase <k>: rolled back to version <N>'s policy ...", a warning on the dashboard) and keeps sampling; the
+collapsed version is rejected (`rejected_versions.jsonl`), so no later phase trains on what it sampled. A second
 collapse within 4 phases of that rollback stops it (`loop.log`: "The loop stopped after phase <k> on its health check",
 `$LEAN_SEARCH_RUNS/<loop>/health_stop.json`); it then refuses to start until `python experiments/grpo_loop.py --config
-<loop.toml> rollback` (the last good version's policy as a new version; lower the learning rate first) or
+<loop.toml> rollback` (the last good version's policy as a new version, the version rolled back from rejected;
+lower the learning rate first) or
 `clear-health-stop` (keep the current version) ran (`src/lean_search/rl/README.md`, "Health checks and budget signals").
 The search budget (`[sampling] max_expansions`, 32) and the `[health]` thresholds change the same way: edit the loop
 config, `stop`, `loop`. Milestones: `python experiments/grpo_loop.py --config experiments/configs/grpo/loop.toml
@@ -510,7 +512,9 @@ First-hour checks:
   while training (four ranks with the phase's sequences, after the paused searches' REPLs stopped) and once during a
   probe beside sampling (~112 REPLs: the searches above the limit stop their idle REPLs; right after the resume up to
   168 while the resumed searches finish); in a value phase (every second phase with the defaults, every phase in the
-  smoke cycle) the main rank holds the window's labelled trees from the start of that phase's sampling. `loop.log`'s
+  smoke cycle) the main rank holds the window's labelled trees from the start of that phase's sampling. Beside the
+  held-out states' last Lean checks every search the pause held continues at once, so up to 112 + ~110 REPLs run
+  (`Host memory as the searches resume beside the held-out states`). `loop.log`'s
   `Host memory after the early resume` is the sampling condition's peak (searches running, handoff in host memory),
   `Host memory as the evaluations beside sampling start` and `after the evaluations beside sampling` bracket each
   evaluation beside sampling (its end line counts the idle REPL processes stopped). `loop.log` reports the paused REPL

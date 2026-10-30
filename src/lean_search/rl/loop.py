@@ -23,9 +23,10 @@ evaluating  the fixed targets that are due (by loop hours, at the start, or requ
             the held-out states with it; the first slot after a value model is published also runs its part with that
             model (the value arm), paired with the slot's run, which only reports (and alerts when the published model
             is worse than the reference). With `evaluation.beside_sampling` only the held-out states run here. The
-            held-out states run last: once their job sampled every state the searches resume beside its last Lean
-            checks. Then, with its result, the phase's budget signals and health checks (`health_checks.py`): a
-            held-out collapse publishes the last good version's policy again (the searches pause around the swap), a
+            held-out states run last: once their job sampled every state, and the states it finished are above the
+            collapse line, the searches resume beside its last Lean checks. Then, with its result, the phase's budget
+            signals and health checks (`health_checks.py`): a held-out collapse rejects the version (later phases
+            drop its samples) and publishes the last good version's policy again (the searches pause first), a
             second one soon after ends the loop
 resume      the searches continue with the new weights; a newly served value model scores the value benchmark through
             the value servers meanwhile, a trend against v0 and the value model before it (an alert when worse). With

@@ -1041,11 +1041,20 @@ Paper names in the last three rows are from memory and still need checking befor
   edge. The loop's evaluations always search with every option off. An in-loop A/B (`sampling.options_arm`, by
   sha256 of the statement name) is ready, off. Stage 0 (no GPU): `search_options_stage0.py`, `name_repair_replay.py`.
 - Owner decision 2026-10-30, after review N: the in-loop A/B runs the feedback round (`min_children` 2,
-  `max_attempts` 2, 4 samples) on half the statements for 2 phases, judged on solves per generated token and
-  trainable groups; per arm per phase also tree-hours, Lean hours and tokens to the first proof, and for both rates a
-  95% bootstrap interval over trees of the difference to the control arm. The health checks count first-round samples
+  `max_attempts` 2, 4 samples) on half the statements for 2 phases (superseded by the rule below), judged on
+  solves per generated token and trainable groups; per arm per phase also tree-hours, Lean hours and tokens to the
+  first proof, and for both rates a 95% bootstrap interval over trees of the difference to the control arm. The health checks count first-round samples
   only. At a pause the searches resume once the held-out states' job sampled every state, beside its last Lean checks;
   the health checks wait for its result, and a rollback pauses the searches around the swap.
+- After reviews O and P (2026-10-30): the A/B runs 6 phases (`max_phases`, then the arm switches off by itself) and is
+  judged by a fixed rule (`rl/options_ab.py`) on the trees started in its phases: R = solves per generated token, the
+  feedback arm over the control, pooled with a bootstrap stratified by start phase and arm; looks after A/B phases 2,
+  4 and 6 (99%, 99%, 95%); adopt if R's lower bound > 1 and R >= 1.05 while weighted trainable groups per token keep a
+  lower 95% bound >= 0.95; drop if R's upper bound < 1, for futility at look 4 (upper 95% bound < 1.05), or at look 6.
+  Tree-hours (active, pauses left out) are a guardrail. A version rolled back from (by a collapse, a hard stop or by
+  hand) is rejected: later phases drop the groups it sampled and the value window its trees. The early resume beside
+  the held-out states needs the states finished so far above the collapse line, and a rollback pauses the searches
+  before its CPU merge. KL and clip fraction in the health checks count first-round sequences only.
 - Serving precision: fp16-merged vs bf16-merged vs unmerged LoRA, decided by the node test against fp32.
 - Whether the four-GPU pause with the persistent trainer meets its ~1 min fixed part on the node (smoke cycle: pause
   segments, `compiled_graphs` 0 after the first phase, the wake's memory next to the parked ranks' CUDA contexts, the
