@@ -349,7 +349,10 @@ def load_trainable_model(
         model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
     match optimization.method:
         case FineTuningMethod.LORA if initial_adapter:
-            saved: torch.nn.Module = peft.PeftModel.from_pretrained(model, initial_adapter, is_trainable=True)
+            # PEFT otherwise loads the adapter onto cuda:0, which the servers fill while a resident trainer starts.
+            saved: torch.nn.Module = peft.PeftModel.from_pretrained(
+                model, initial_adapter, is_trainable=True, torch_device=str(device)
+            )
             saved.train()
             causal_model = saved.get_base_model()
         case FineTuningMethod.LORA:

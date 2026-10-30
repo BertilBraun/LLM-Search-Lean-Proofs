@@ -69,7 +69,8 @@ def create_zero_adapter(model: str, output_directory: Path, rank: int) -> None:
 
 
 def merge_adapter(model: str, adapter_directory: Path, output_directory: Path, device: str = "cpu") -> None:
-    merged = peft.PeftModel.from_pretrained(load_base_model(model, device), adapter_directory).merge_and_unload()
+    base = load_base_model(model, device)
+    merged = peft.PeftModel.from_pretrained(base, adapter_directory, torch_device=device).merge_and_unload()
     merged.save_pretrained(output_directory)
     copy_tokenizer_and_processor_files(model, output_directory)
 
@@ -77,7 +78,8 @@ def merge_adapter(model: str, adapter_directory: Path, output_directory: Path, d
 def merge_adapter_fp16(model: str, adapter_directory: Path, output_directory: Path) -> None:
     """Merged in fp32 on the CPU, then cast: one rounding, to the fp16 grid (served with --dtype float16)."""
     base = load_base_model(model).float()
-    merged = peft.PeftModel.from_pretrained(base, adapter_directory).merge_and_unload().to(torch.float16)
+    merged = peft.PeftModel.from_pretrained(base, adapter_directory, torch_device="cpu").merge_and_unload()
+    merged = merged.to(torch.float16)
     merged.config.dtype = torch.float16
     merged.save_pretrained(output_directory)
     copy_tokenizer_and_processor_files(model, output_directory)
@@ -145,7 +147,8 @@ def read_premerged(directory: Path) -> PremergedWeights | None:
 def premerge_adapter(model: str, adapter_directory: Path, device: torch.device) -> MergeSeconds:
     """`merge_adapter` on the device into `premerged_directory`; the marker, written last, names base and adapter."""
     started = time.perf_counter()
-    merged = peft.PeftModel.from_pretrained(load_base_model(model, str(device)), adapter_directory).merge_and_unload()
+    base = load_base_model(model, str(device))
+    merged = peft.PeftModel.from_pretrained(base, adapter_directory, torch_device=str(device)).merge_and_unload()
     if device.type == "cuda":
         torch.cuda.synchronize(device)
     merged_at = time.perf_counter()
