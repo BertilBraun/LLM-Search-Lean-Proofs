@@ -137,6 +137,11 @@ class GrpoStepRecord:
     ratios: SignedRatios
     # Trained tokens of the sequences with a reference score, which the KL to the reference averages over.
     reference_tokens: int
+    # The same over the first round's sequences alone (feedback rounds left out), for the health checks.
+    first_round_kl_to_reference: float = 0.0
+    first_round_clip_fraction: float = 0.0
+    first_round_reference_tokens: int = 0
+    first_round_trained_tokens: int = 0
 
 
 @dataclass(frozen=True)
@@ -166,6 +171,10 @@ class GrpoTrainingResult:
     compile_seconds: float = 0.0
     save_seconds: float = 0.0
     ranks: int = 1
+    # The KL to the reference and the clip fraction of the first round's sequences, as the final values; None without
+    # first-round tokens (and in older outcomes).
+    final_first_round_kl_to_reference: float | None = None
+    final_first_round_clip_fraction: float | None = None
 
 
 def clipped_policy_losses(
@@ -330,6 +339,13 @@ def sequence_tensors(sequences: Sequence[PolicySequence], device: torch.device) 
     advantages = torch.tensor([value for sequence in sequences for value in sequence.advantages])
     weights = torch.tensor([trained for sequence in sequences for trained in sequence.trained], dtype=torch.float32)
     return advantages.to(device), weights.to(device)
+
+
+def first_round_tensor(sequences: Sequence[PolicySequence], device: torch.device) -> torch.Tensor:
+    """Per completion token of the sequences in order: whether its sequence is of a first round (not feedback)."""
+    return torch.tensor(
+        [not sequence.feedback for sequence in sequences for _ in sequence.advantages], dtype=torch.bool
+    ).to(device)
 
 
 def sampler_agreement(sequences: Sequence[PolicySequence], old: Sequence[torch.Tensor]) -> SamplerAgreement:
@@ -584,7 +600,7 @@ def train_grpo(
     training_seconds = 0.0
     for step_index, step in enumerate(steps):
         step_started = time.perf_counter()
-        totals = torch.zeros(16, dtype=torch.float64, device=device)
+        totals = torch.zeros(20, dtype=torch.float64, device=device)
         # The whole step's sequences on every rank, so that the ranks' gradients sum to the single-process gradient.
         normalizer = len(step.sequences) * config.normalization_tokens
         for indices in step.rank_micro_batches[ranks.rank]:
@@ -615,6 +631,7 @@ def train_grpo(
             loss = policy_loss + config.kl_coefficient * (weights * kl_to_reference).sum() / normalizer
             loss.backward()
             trained = weights > 0
+            first_round = trained & first_round_tensor(batch_sequences, device)
             with torch.no_grad():
                 ratio = torch.exp(log_probabilities - old_log_probabilities)
                 positive = trained & (advantages > 0)
@@ -631,7 +648,7 @@ def train_grpo(
                         trained.sum().double(),
                     ]
                 )
-                totals[9:] += torch.stack(
+                totals[9:16] += torch.stack(
                     [
                         (trained & reference_scored).sum().double(),
                         ratio[positive].sum().double(),
@@ -640,6 +657,14 @@ def train_grpo(
                         ratio[negative].sum().double(),
                         token_losses.clipped[negative].sum().double(),
                         negative.sum().double(),
+                    ]
+                )
+                totals[16:] += torch.stack(
+                    [
+                        kl_to_reference[first_round].sum().double(),
+                        (first_round & reference_scored).sum().double(),
+                        token_losses.clipped[first_round].sum().double(),
+                        first_round.sum().double(),
                     ]
                 )
             totals[8] += batch.input_ids.numel()
@@ -660,6 +685,7 @@ def train_grpo(
         values = totals.tolist()
         loss, policy_loss, kl_old, kl_reference, clipped, entropy, ratio, trained_tokens, tokens = values[:9]
         reference_tokens = values[9]
+        first_round_kl, first_round_reference_tokens, first_round_clipped, first_round_tokens = values[16:]
         per_token = max(1.0, trained_tokens)
         record = GrpoStepRecord(
             step=step_index + 1,
@@ -678,8 +704,12 @@ def train_grpo(
             trained_tokens=int(trained_tokens),
             tokens=int(tokens),
             training_seconds=training_seconds,
-            ratios=signed_ratios(values[10:]),
+            ratios=signed_ratios(values[10:16]),
             reference_tokens=int(reference_tokens),
+            first_round_kl_to_reference=first_round_kl / max(1.0, first_round_reference_tokens),
+            first_round_clip_fraction=first_round_clipped / max(1.0, first_round_tokens),
+            first_round_reference_tokens=int(first_round_reference_tokens),
+            first_round_trained_tokens=int(first_round_tokens),
         )
         records.append(record)
         if ranks.is_main:
@@ -691,6 +721,8 @@ def train_grpo(
     save_seconds = time.perf_counter() - save_started
     peak_memory = torch.cuda.max_memory_allocated(device) / 2**30 if device.type == "cuda" else 0.0
     last_pass = [record for record in records if record.pass_index == records[-1].pass_index] if records else []
+    first_round_kl = [record.first_round_kl_to_reference for record in last_pass if record.first_round_reference_tokens]
+    first_round_clip = [record.first_round_clip_fraction for record in last_pass if record.first_round_trained_tokens]
     return GrpoTrainingResult(
         steps=len(steps),
         sequences=len(sequences),
@@ -714,6 +746,8 @@ def train_grpo(
         compile_seconds=compile_seconds,
         save_seconds=save_seconds,
         ranks=ranks.world_size,
+        final_first_round_kl_to_reference=median(first_round_kl) if first_round_kl else None,
+        final_first_round_clip_fraction=mean(first_round_clip) if first_round_clip else None,
     )
 
 

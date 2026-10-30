@@ -244,14 +244,29 @@ def test_the_cut_off_share_is_per_policy_sample() -> None:
     assert measurements(None, entries, None).cut_off_share == 0.02
 
 
-def trained_outcome(sequences: int) -> PhaseOutcome:
+def trained_outcome(sequences: int, **result: float) -> PhaseOutcome:
     policy = zero(PolicyOutcome)
     policy = dataclasses.replace(
         policy,
         data=dataclasses.replace(policy.data, sequences=sequences),
-        result=dataclasses.replace(policy.result, final_kl_to_reference=0.01),
+        result=dataclasses.replace(policy.result, final_kl_to_reference=0.01, final_clip_fraction=0.2, **result),
     )
     return PhaseOutcome(trees=1, groups=1, policy=policy, value=None)
+
+
+@pytest.mark.parametrize(
+    ("field", "result", "value"),
+    [
+        ("kl_to_starting_policy", {"final_first_round_kl_to_reference": 0.003}, 0.003),
+        ("clip_fraction", {"final_first_round_clip_fraction": 0.05}, 0.05),
+        ("clip_fraction", {}, 0.2),
+    ],
+    ids=["first-round kl", "first-round clip", "older outcome: every sequence"],
+)
+def test_the_kl_and_clip_health_fields_count_the_first_rounds_sequences(
+    field: str, result: dict[str, float], value: float
+) -> None:
+    assert getattr(measurements(trained_outcome(5, **result), [], None), field) == value
 
 
 def test_the_kl_to_the_starting_policy_comes_from_the_trained_policy() -> None:

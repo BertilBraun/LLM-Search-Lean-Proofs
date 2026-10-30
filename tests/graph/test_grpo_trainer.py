@@ -140,6 +140,24 @@ def test_kl_to_the_starting_weights_measures_the_published_adapter(
     assert train(config, tmp_path / "adapter")[0].kl_to_reference > 1e-3
 
 
+def test_without_feedback_sequences_the_first_rounds_kl_is_the_whole_kl(
+    tiny_model: Path, perturbed_adapter: Path, tmp_path: Path
+) -> None:
+    config = grpo_config(tiny_model, passes=1, initial_adapter=str(perturbed_adapter))
+    first = train(config, tmp_path / "adapter")[0]
+    assert first.first_round_kl_to_reference == pytest.approx(first.kl_to_reference)
+
+
+def test_the_first_rounds_kl_leaves_out_feedback_sequences(
+    tiny_model: Path, perturbed_adapter: Path, tmp_path: Path
+) -> None:
+    config = grpo_config(tiny_model, passes=1, initial_adapter=str(perturbed_adapter))
+    feedback = tuple(dataclasses.replace(sequence, feedback=True) for sequence in sequences())
+    records: list[GrpoStepRecord] = []
+    train_grpo(config, 0, feedback, [], CPU, tmp_path / "adapter", records.append)
+    assert records[0].first_round_trained_tokens == 0
+
+
 def test_kl_to_the_phase_start_is_zero_before_the_first_update(
     tiny_model: Path, perturbed_adapter: Path, tmp_path: Path
 ) -> None:

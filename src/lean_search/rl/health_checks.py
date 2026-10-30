@@ -64,19 +64,32 @@ def share(part: int, total: int) -> float | None:
     return part / total if total else None
 
 
+def first_round_or_all(first_round: float | None, every_sequence: float) -> float:
+    """A phase trained before the trainer measured the first round apart has only the value over every sequence."""
+    return every_sequence if first_round is None else first_round
+
+
 def measurements(
     outcome: PhaseOutcome | None, entries: Sequence[TreeEntry], held_out: HeldOutRates | None
 ) -> HealthMeasurements:
     """`entries`: the phase's trees (their first-round samples, `tree_summary.py`); `held_out`: the held-out evaluation
-    after the phase, if one ran."""
+    after the phase, if one ran. The KL and the clip fraction are the first round's sequences' too."""
     summaries = [entry.summary for entry in entries]
     expansions = sum(summary.policy_expansions for summary in summaries)
     samples = sum(summary.policy_samples for summary in summaries)
     policy = None if outcome is None else outcome.policy
     trained = policy is not None and policy.data.sequences > 0
     return HealthMeasurements(
-        kl_to_starting_policy=policy.result.final_kl_to_reference if trained else None,
-        clip_fraction=policy.result.final_clip_fraction if trained else None,
+        kl_to_starting_policy=first_round_or_all(
+            policy.result.final_first_round_kl_to_reference, policy.result.final_kl_to_reference
+        )
+        if trained
+        else None,
+        clip_fraction=first_round_or_all(
+            policy.result.final_first_round_clip_fraction, policy.result.final_clip_fraction
+        )
+        if trained
+        else None,
         distinct_samples_per_expansion=share(sum(summary.distinct_blocks for summary in summaries), expansions),
         distinct_texts_per_expansion=share(sum(summary.distinct_texts for summary in summaries), expansions),
         mean_explanation_tokens=policy.data.mean_explanation_tokens if trained else None,
