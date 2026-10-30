@@ -16,24 +16,31 @@ completely and ends on the proof graph.
 import asyncio
 import contextlib
 import dataclasses
-from collections.abc import Callable, Mapping, Sequence
+import functools
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 from lean_search.corpora.tracing import state_before
 from lean_search.data import Problem, Split
+from lean_search.expert_iteration.serving import write_json_atomically
 from lean_search.lean import LeanRepl, LeanReplConfig, LeanReplPool, ProofState
 from lean_search.reasoning.states import ReasoningState
+from lean_search.rl.evaluation import SearchProgress
 from lean_search.rl.grpo_groups import RewardConfig, TreeGroups, policy_groups
 from lean_search.rl.policy_data import PolicyTree
 from lean_search.rl.search_models import SearchModels, open_search_models
 from lean_search.rl.training_phase import LabelledPhaseData
 from lean_search.rl.tree_statistics import graph_statistics, total_statistics
 from lean_search.search import (
+    CandidateBatches,
+    Expander,
     ExpanderKind,
+    Node,
     PriorityKind,
     RunConfig,
     SearchConfig,
+    SearchContext,
     TreeRecord,
     search_theorem,
     tree_record,
@@ -246,6 +253,53 @@ def state_tree_path(trees_directory: Path, state: StateProblem) -> Path:
     return trees_directory / f"{state.problem.name}.json.gz"
 
 
+class GenerationWatch:
+    """The expander, calling `generated` at the state's last policy batch: the first round's, or with the feedback
+    round on the feedback round's (a search that ends without one calls nothing)."""
+
+    def __init__(self, inner: Expander, feedback: bool, generated: Callable[[], None]) -> None:
+        self.inner = inner
+        self.feedback = feedback
+        self.generated = generated
+
+    async def expand(self, node: Node, context: SearchContext) -> CandidateBatches:
+        async with contextlib.aclosing(self.inner.expand(node, context)) as batches:
+            async for batch in batches:
+                if batch.prompt and (batch.feedback or not self.feedback):
+                    self.generated()
+                yield batch
+
+
+class StatesProgress:
+    """`search_states`' progress (`SearchProgress`): the states without a tree, and whether every one of them had its
+    last policy batch, after which only Lean checks remain and the GPUs are free."""
+
+    def __init__(self, path: Path | None, names: Iterable[str], concurrency: int) -> None:
+        self.path = path
+        self.unfinished = set(names)
+        self.sampling = set(self.unfinished)
+        self.concurrency = concurrency
+        self.write()
+
+    def sampled(self, name: str) -> None:
+        if name in self.sampling:
+            self.sampling.remove(name)
+            self.write()
+
+    def finished(self, name: str) -> None:
+        self.unfinished.discard(name)
+        self.sampling.discard(name)
+        self.write()
+
+    @property
+    def progress(self) -> SearchProgress:
+        return SearchProgress(len(self.unfinished), self.concurrency, generation_finished=not self.sampling)
+
+    def write(self) -> None:
+        if self.path is not None:
+            write_json_atomically(self.path, self.progress)
+
+
 async def search_state(state: StateProblem, repl: LeanRepl, models: SearchModels, config: SearchConfig) -> TreeRecord:
     completed = await search_theorem(
         state.problem, repl, models.expander, models.priority_function, config, state.start
@@ -255,10 +309,16 @@ async def search_state(state: StateProblem, repl: LeanRepl, models: SearchModels
 
 
 async def search_states(
-    states: Sequence[StateProblem], config: RunConfig, trees_directory: Path, log: Callable[[str], None]
+    states: Sequence[StateProblem],
+    config: RunConfig,
+    trees_directory: Path,
+    log: Callable[[str], None],
+    progress_path: Path | None = None,
 ) -> list[TreeRecord]:
-    """One single-step search per state (trees already written are read back); the records in the states' order."""
+    """One single-step search per state (trees already written are read back); the records in the states' order. With
+    `progress_path`, the progress goes there (`StatesProgress`)."""
     pending = [state for state in states if not state_tree_path(trees_directory, state).exists()]
+    progress = StatesProgress(progress_path, [state.problem.name for state in pending], config.lean.concurrency)
     if pending:
         async with contextlib.AsyncExitStack() as stack:
             models = await stack.enter_async_context(open_search_models(config))
@@ -268,12 +328,27 @@ async def search_states(
             await pool.start(sorted({state.problem.header for state in pending}))
             semaphore = asyncio.Semaphore(config.lean.concurrency)
             finished = 0
+            not_started = len(pending)
+            searching = 0
 
             async def search_one(state: StateProblem) -> None:
-                nonlocal finished
-                async with semaphore, pool.acquire() as repl:
-                    record = await search_state(state, repl, models, config.search)
+                nonlocal finished, not_started, searching
+                name = state.problem.name
+                generated = functools.partial(progress.sampled, name)
+                expander = GenerationWatch(models.expander, config.policy.feedback.enabled, generated)
+                async with semaphore:
+                    not_started -= 1
+                    searching += 1
+                    async with pool.acquire() as repl:
+                        record = await search_state(
+                            state, repl, dataclasses.replace(models, expander=expander), config.search
+                        )
+                    searching -= 1
+                    # In the tail the loop's searches may run beside the Lean checks left, so the freed REPLs go.
+                    if not not_started:
+                        await pool.stop_idle_processes(searching)
                 await asyncio.to_thread(write_tree, state_tree_path(trees_directory, state), record)
+                progress.finished(name)
                 finished += 1
                 if finished % 64 == 0 or finished == len(pending):
                     log(f"{finished}/{len(pending)} states sampled")

@@ -116,7 +116,7 @@ async def evaluate_held_out_states(
     states = [state_problem(state) for state in read_records(states_path, ReasoningState)]
     states = states[: target.problems] if target.problems else states
     config = single_step_run_config(evaluation_run_config(template, target))
-    records = await search_states(states, config, directory / "trees", log)
+    records = await search_states(states, config, directory / "trees", log, EvaluationPaths(directory).progress)
     success = total_success(
         [sample_success(record, state.reference_keys) for record, state in zip(records, states, strict=True)]
     )

@@ -1,17 +1,32 @@
 from collections.abc import Mapping
+from pathlib import Path
+from typing import cast
 
 import pytest
 
 from lean_search.corpora.records import DataSplit, TracedStep
 from lean_search.lean import ProofState
 from lean_search.reasoning.states import ReasoningState
+from lean_search.rl.evaluation import read_search_progress
 from lean_search.rl.grpo_groups import PolicyGroup, RewardConfig
-from lean_search.rl.single_step import reference_labels, sample_success, single_step_groups, state_problem
+from lean_search.rl.single_step import (
+    GenerationWatch,
+    StatesProgress,
+    reference_labels,
+    sample_success,
+    single_step_groups,
+    state_problem,
+)
 from lean_search.search import (
     Accounting,
+    Candidate,
+    CandidateBatch,
+    CandidateBatches,
     EdgeOutcome,
     Failure,
     FailureKind,
+    Node,
+    SearchContext,
     SearchResult,
     SearchTree,
     StepSource,
@@ -174,3 +189,64 @@ def test_a_traced_state_knows_the_later_states_of_its_proof() -> None:
     )
     problem = state_problem(ReasoningState("s/1#1", step, ((),), False))
     assert problem.reference_steps == REFERENCE_STEPS
+
+
+class Batches:
+    def __init__(self, *batches: CandidateBatch) -> None:
+        self.batches = batches
+
+    async def expand(self, node: Node, context: SearchContext) -> CandidateBatches:
+        for batch in self.batches:
+            yield batch
+
+
+def policy_batch(feedback: bool = False) -> CandidateBatch:
+    candidate = Candidate("simp", StepSource.POLICY, -1.0, feedback=feedback)
+    return CandidateBatch((candidate,), prompt="prompt", feedback=feedback)
+
+
+AUTOMATION_BATCH = CandidateBatch((Candidate("omega", StepSource.AUTOMATION),))
+
+
+async def generated_after(batches: Batches, feedback: bool) -> list[int]:
+    """For each batch the expander yields, the generation reports made by then."""
+    reports: list[int] = []
+    seen: list[int] = []
+    watch = GenerationWatch(batches, feedback, lambda: reports.append(1))
+    async for _ in watch.expand(cast(Node, None), cast(SearchContext, None)):
+        seen.append(len(reports))
+    return seen
+
+
+async def test_a_state_is_generated_with_its_first_rounds_batch() -> None:
+    assert await generated_after(Batches(policy_batch()), feedback=False) == [1]
+
+
+async def test_automation_batches_generate_nothing() -> None:
+    assert await generated_after(Batches(AUTOMATION_BATCH, policy_batch()), feedback=False) == [0, 1]
+
+
+async def test_with_the_feedback_round_on_a_state_is_generated_with_its_feedback_batch() -> None:
+    batches = Batches(policy_batch(), policy_batch(feedback=True))
+    assert await generated_after(batches, feedback=True) == [0, 1]
+
+
+def test_the_progress_reports_generation_unfinished_while_a_state_awaits_its_samples(tmp_path: Path) -> None:
+    progress = StatesProgress(tmp_path / "progress.json", ["a", "b"], 4)
+    progress.sampled("a")
+    report = read_search_progress(tmp_path / "progress.json")
+    assert report is not None and not report.generation_finished
+
+
+def test_the_progress_reports_generation_finished_once_every_state_sampled(tmp_path: Path) -> None:
+    progress = StatesProgress(tmp_path / "progress.json", ["a", "b"], 4)
+    progress.sampled("a")
+    progress.finished("b")
+    report = read_search_progress(tmp_path / "progress.json")
+    assert report is not None and report.generation_finished
+
+
+def test_the_progress_counts_the_states_left_in_flight(tmp_path: Path) -> None:
+    progress = StatesProgress(tmp_path / "progress.json", ["a", "b", "c"], 4)
+    progress.finished("a")
+    assert progress.progress.searches_in_flight == 2

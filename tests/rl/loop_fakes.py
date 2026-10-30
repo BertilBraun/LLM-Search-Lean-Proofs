@@ -388,7 +388,9 @@ class FakeEvaluations:
     """Each run with the phase it ran in and whether the searches were open meanwhile; value arms find the published
     value model worse when asked. Held-out runs report the rates in `held_out_rates` in order (later runs repeat the
     last), written where the loop's health check reads them. With `hold`, the probe and miniF2F runs end only once it
-    is set; the first `failures` of them fail as a failed job does. Each run reports `searches_reported` in flight."""
+    is set; the first `failures` of them fail as a failed job does. Each run reports `searches_reported` in flight.
+    With `lean_checks`, a held-out run after a phase (not version 0's) reports its samples generated, then ends only
+    once it is set."""
 
     runs: list[tuple[EvaluationRun, int]] = field(default_factory=list)
     value_arm_worse: bool = False
@@ -404,9 +406,14 @@ class FakeEvaluations:
     searches_reported: int | None = None
     in_flight: int = 0
     most_in_flight: int = 0
+    lean_checks: asyncio.Event | None = None
+    generated: set[EvaluationRun] = field(default_factory=set)
 
     def searches_in_flight(self, run: EvaluationRun) -> int | None:
         return self.searches_reported
+
+    def generation_finished(self, run: EvaluationRun) -> bool:
+        return run in self.generated
 
     async def evaluate(self, run: EvaluationRun, phase: int) -> EvaluationSummary:
         self.in_flight += 1
@@ -415,6 +422,7 @@ class FakeEvaluations:
             return await self.evaluated(run, phase)
         finally:
             self.in_flight -= 1
+            self.generated.discard(run)
 
     async def evaluated(self, run: EvaluationRun, phase: int) -> EvaluationSummary:
         self.runs.append((run, phase))
@@ -422,6 +430,9 @@ class FakeEvaluations:
         self.searches_open.append(self.searcher.open.is_set())
         self.searched_before.append(len(self.searcher.searched))
         await asyncio.sleep(0)
+        if run.kind == EvaluationKind.HELD_OUT_STATES and phase > 0 and self.lean_checks is not None:
+            self.generated.add(run)
+            await self.lean_checks.wait()
         if run.kind != EvaluationKind.HELD_OUT_STATES:
             if self.failures:
                 self.failures -= 1

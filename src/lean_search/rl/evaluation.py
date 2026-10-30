@@ -125,6 +125,8 @@ class SearchProgress:
 
     unfinished: int
     concurrency: int
+    # Every problem had its last policy batch, so only Lean checks remain (the held-out states report it).
+    generation_finished: bool = False
 
     @property
     def searches_in_flight(self) -> int:

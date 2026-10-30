@@ -11,11 +11,13 @@ from pathlib import Path
 import pytest
 
 from lean_search.expert_iteration.serving import write_json_atomically
+from lean_search.rl.evaluation import EvaluationKind, EvaluationPaths, EvaluationRun, SearchProgress
 from lean_search.rl.loop import GrpoLoopPaths
 from lean_search.rl.loop_config import LoopTrainingConfig, load_loop_config
 from lean_search.rl.loop_services import (
     JOB_MARKER_VARIABLE,
     ChildProcess,
+    SubprocessEvaluations,
     SubprocessTrainer,
     evaluation_repls,
     host_memory_text,
@@ -178,3 +180,21 @@ async def test_concurrent_evaluation_jobs_do_not_refuse_each_other(tmp_path: Pat
 def test_a_record_whose_process_id_was_reused_is_not_a_live_job(tmp_path: Path) -> None:
     write_json_atomically(tmp_path / "training.pid", ChildProcess(os.getpid(), own_start_ticks() + 1, "earlier"))
     assert live_children(tmp_path) == []
+
+
+@pytest.mark.parametrize("generation_finished", [False, True])
+def test_the_evaluation_job_reports_when_it_generated_everything(tmp_path: Path, generation_finished: bool) -> None:
+    paths = GrpoLoopPaths(tmp_path / "runs", tmp_path / "data", tmp_path / "checkpoints", "loop")
+    evaluations = SubprocessEvaluations(paths, "", lambda: 1)
+    run = EvaluationRun(EvaluationKind.HELD_OUT_STATES)
+    evaluations.running[run] = EvaluationPaths(tmp_path / "held_out")
+    write_json_atomically(tmp_path / "held_out" / "progress.json", SearchProgress(3, 4, generation_finished))
+    assert evaluations.generation_finished(run) == generation_finished
+
+
+def test_an_evaluation_job_that_has_not_reported_has_not_generated_everything(tmp_path: Path) -> None:
+    paths = GrpoLoopPaths(tmp_path / "runs", tmp_path / "data", tmp_path / "checkpoints", "loop")
+    evaluations = SubprocessEvaluations(paths, "", lambda: 1)
+    run = EvaluationRun(EvaluationKind.HELD_OUT_STATES)
+    evaluations.running[run] = EvaluationPaths(tmp_path / "held_out")
+    assert not evaluations.generation_finished(run)

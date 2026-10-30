@@ -22,9 +22,11 @@ evaluating  the fixed targets that are due (by loop hours, at the start, or requ
             servers serve the evaluations' fixed value model meanwhile. The probe runs one part of its set per slot,
             the held-out states with it; the first slot after a value model is published also runs its part with that
             model (the value arm), paired with the slot's run, which only reports (and alerts when the published model
-            is worse than the reference). With `evaluation.beside_sampling` only the held-out states run here; then the
-            phase's budget signals and health checks (`health_checks.py`): a held-out collapse publishes the last good
-            version's policy again, a second one soon after ends the loop
+            is worse than the reference). With `evaluation.beside_sampling` only the held-out states run here. The
+            held-out states run last: once their job sampled every state the searches resume beside its last Lean
+            checks. Then, with its result, the phase's budget signals and health checks (`health_checks.py`): a
+            held-out collapse publishes the last good version's policy again (the searches pause around the swap), a
+            second one soon after ends the loop
 resume      the searches continue with the new weights; a newly served value model scores the value benchmark through
             the value servers meanwhile, a trend against v0 and the value model before it (an alert when worse). With
             `evaluation.beside_sampling` the probe and miniF2F due run now with the published value model, beside the
@@ -142,6 +144,8 @@ from lean_search.value.bins import Readout
 from lean_search.value.diagnostics import phase_value_metrics
 
 IDLE_SECONDS = 30.0
+# How often the loop asks whether the held-out states' job sampled every state, at most.
+GENERATION_CHECK_SECONDS = 5.0
 GIB = 2**30
 PHASE_OUTCOME_FILE = "phase.json"
 DEFAULT_READOUT = Readout()
@@ -300,6 +304,10 @@ class Evaluations(Protocol):
 
     def searches_in_flight(self, run: EvaluationRun) -> int | None:
         """The running run's searches holding a REPL, as its job last reported them; None before it did."""
+        ...
+
+    def generation_finished(self, run: EvaluationRun) -> bool:
+        """The running run's job reported every policy request answered: only its Lean checks remain."""
         ...
 
 
@@ -665,6 +673,9 @@ class GrpoLoop:
         # beside the one running.
         self.evaluation_failures = 0
         self.beside_sampling_stopped_repls = 0
+        # The held-out states' evaluation at a pause, and whether the searches resumed beside its last Lean checks.
+        self.held_out_evaluation: asyncio.Task[EvaluationSummary] | None = None
+        self.held_out_beside_sampling = False
         self.host_memory = host_memory
         self.gpu_memory = gpu_memory
         self.paths = paths
@@ -751,9 +762,8 @@ class GrpoLoop:
         finally:
             # Cancelling also stops a training or evaluation job in flight (`loop_services.run_logged`).
             session.cancel()
-            background = [
-                task for task in (self.scoring, self.evaluations_beside_sampling, self.heartbeat) if task is not None
-            ]
+            tasks = (self.scoring, self.evaluations_beside_sampling, self.heartbeat, self.held_out_evaluation)
+            background = [task for task in tasks if task is not None]
             for task in background:
                 task.cancel()
             await asyncio.gather(session, *background, return_exceptions=True)
@@ -1070,13 +1080,16 @@ class GrpoLoop:
         # Searches that resumed early leave a request made since then to the next pause.
         kinds = [] if resumed_early else self.paused_evaluations(at_start=False)
         await self.run_evaluations(kinds, phase)
+        # Until the searches resumed: the held-out states' last Lean checks may run on beside them.
         evaluation_seconds = self.clock() - started
+        searching = resumed_early or self.held_out_beside_sampling
+        await self.finish_held_out_states()
         if self.search_metrics is not None:
             await self.search_metrics
             self.search_metrics = None
         health = await asyncio.to_thread(self.check_health, phase)
         if health.rolled_back_to is not None:
-            await self.roll_back(phase, health.rolled_back_to)
+            await self.roll_back(phase, health.rolled_back_to, searching)
         self.close_phase(phase, kinds, evaluation_seconds)
         if health.hard_stop:
             assert self.stop is not None
@@ -1086,13 +1099,25 @@ class GrpoLoop:
         # Only now: the version is recorded, so the scoring is of the value version the servers serve.
         self.schedule_benchmark_scoring()
 
-    def resume_searches(self) -> None:
+    def resume_searches(self, sampled_seconds: float = 0.0) -> None:
+        """`sampled_seconds`: what the searches sampled before `pause_searches` paused them."""
         if self.paused:
             self.searcher.resume()
             self.paused = False
-            self.sampling_since = self.clock()
+            self.sampling_since = self.clock() - sampled_seconds
         self.loop_state = LoopState.SEARCHING
         self.write_status()
+
+    async def pause_searches(self) -> float:
+        """Pauses the running searches; returns their sampling seconds since they resumed."""
+        assert self.sampling_since is not None
+        sampled = self.clock() - self.sampling_since
+        self.sampling_since = None
+        self.loop_state = LoopState.PAUSED
+        self.write_status()
+        await self.searcher.pause()
+        self.paused = True
+        return sampled
 
     def schedule_benchmark_scoring(self) -> None:
         """Scores the value benchmark through the value servers while the searches run, once per value version."""
@@ -1195,19 +1220,22 @@ class GrpoLoop:
             self.log(health_stop_text(write_health_stop(self.paths.health_stop, record)))
         return record
 
-    async def roll_back(self, phase: int, version: int) -> None:
+    async def roll_back(self, phase: int, version: int, searching: bool) -> None:
         """After a collapse: the version's policy adapter published again as a new version (merged on the CPU) and
         served; the searches continue with it and the next phase trains on from it. A restart that finds the
-        rollback recorded only serves it."""
+        rollback recorded only serves it. `searching`: the searches already resumed, so they pause around the swap."""
         trigger = rollback_trigger(version, phase)
         current = read_current(self.paths.models)
         if current.trigger != trigger:
             current = await asyncio.to_thread(publish_rollback, self.paths.models, self.publisher, version, trigger)
             await asyncio.to_thread(self.prune_adapters)
+        sampled = await self.pause_searches() if searching else 0.0
         await self.servers.serve(current)
         self.served_value_weights = current.value_weights
         self.served_version = current.version
         self.searcher.serving(current.version)
+        if searching:
+            self.resume_searches(sampled)
         self.log(
             f"Alert: the held-out valid Lean collapsed after phase {phase}: rolled back to version {version}'s policy "
             f"as version {current.version}, the searches continue; a second collapse within "
@@ -1455,9 +1483,16 @@ class GrpoLoop:
             self.due_beside_sampling_now = list(kinds)
             self.evaluations_beside_sampling = asyncio.create_task(self.evaluate_beside_sampling(kinds, phase))
 
-    def running_evaluations_beside_sampling(self) -> asyncio.Task[None] | None:
+    def running_evaluations_beside_sampling(self) -> asyncio.Task[object] | None:
+        """The evaluation the searches run beside: the probe and miniF2F after a pause, or the held-out states' last
+        Lean checks."""
         task = self.evaluations_beside_sampling
-        return task if task is not None and not task.done() else None
+        if task is not None and not task.done():
+            return task
+        held_out = self.held_out_evaluation
+        if self.held_out_beside_sampling and held_out is not None and not held_out.done():
+            return held_out
+        return None
 
     def sampling_limit(self) -> int:
         """Searches that take statements beside an evaluation: the concurrency its searches in flight leave, at least
@@ -1612,10 +1647,48 @@ class GrpoLoop:
         if baselines:
             await self.run_baselines(baselines, phase)
         for kind in kinds:
-            if kind not in baselines:
-                await self.run_evaluation(kind, phase)
-                self.mark_evaluated(kind)
+            if kind in baselines:
+                continue
+            if kind == EvaluationKind.HELD_OUT_STATES and not at_start:
+                await self.start_held_out_states(phase)
+                continue
+            await self.run_evaluation(kind, phase)
+            self.mark_evaluated(kind)
         await self.serve_value_model(EvaluationValueModel.PUBLISHED)
+
+    async def start_held_out_states(self, phase: int) -> None:
+        """After a phase (the last of the paused evaluations): the value servers serve the published value model
+        first (the held-out states use none). Returns once the job ended, or once it sampled every state while the
+        searches are paused: they then resume beside its last Lean checks. `finish_held_out_states` takes the result."""
+        await self.serve_value_model(EvaluationValueModel.PUBLISHED)
+        run = EvaluationRun(EvaluationKind.HELD_OUT_STATES)
+        task = asyncio.create_task(self.evaluate_as_served(run, phase))
+        self.held_out_evaluation = task
+        check_seconds = min(self.config.training.check_seconds, GENERATION_CHECK_SECONDS)
+        while not task.done() and not (self.paused and self.evaluations.generation_finished(run)):
+            await asyncio.wait({task}, timeout=check_seconds)
+        if task.done():
+            return
+        self.held_out_beside_sampling = True
+        self.log("The held-out states' job sampled every state: the searches resume beside its last Lean checks")
+        self.resume_searches()
+
+    async def finish_held_out_states(self) -> None:
+        """The held-out states' result, which the phase's health checks read."""
+        task = self.held_out_evaluation
+        if task is None:
+            return
+        started = self.clock()
+        beside = self.held_out_beside_sampling
+        try:
+            summary = await task
+        finally:
+            self.held_out_evaluation = None
+            self.held_out_beside_sampling = False
+        if beside:
+            self.log(f"The held-out states' last Lean checks took {self.clock() - started:.0f} s beside the searches")
+        self.log_summaries(str(EvaluationKind.HELD_OUT_STATES), [summary])
+        self.mark_evaluated(EvaluationKind.HELD_OUT_STATES)
 
     async def run_baselines(self, kinds: list[EvaluationKind], phase: int) -> None:
         """Every run of these baselines as its own job, all at once, sharing the concurrency (`baseline_concurrency`):

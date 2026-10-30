@@ -1,6 +1,9 @@
+import asyncio
 import dataclasses
 import time
 import tomllib
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -44,8 +47,14 @@ COLLAPSE_ONCE = [(0.8, 0.4), (0.5, 0.4), (0.8, 0.4)]
 COLLAPSE_TWICE = [(0.8, 0.4), (0.5, 0.4), (0.5, 0.4)]
 
 
-def collapsing_world(root: Path, rates: list[tuple[float, float]], toml: str = HELD_OUT_EVERY_PHASE) -> LoopWorld:
-    world = loop_world(root, toml, evaluations=FakeEvaluations(held_out_rates=list(rates)))
+def collapsing_world(
+    root: Path,
+    rates: list[tuple[float, float]],
+    toml: str = HELD_OUT_EVERY_PHASE,
+    lean_checks: asyncio.Event | None = None,
+) -> LoopWorld:
+    evaluations = FakeEvaluations(held_out_rates=list(rates), lean_checks=lean_checks)
+    world = loop_world(root, toml, evaluations=evaluations)
     record_version_zero(world)
     return world
 
@@ -244,3 +253,85 @@ async def test_the_last_good_versions_adapter_outlives_the_retention(tmp_path: P
         path.parent.parent.name for path in world.paths.checkpoints_root.glob("*_phase_*/policy/adapter")
     )
     assert remaining == ["test_loop_phase_0001", "test_loop_phase_0003", "test_loop_phase_0004"]
+
+
+HEALTHY = [(0.8, 0.4), (0.8, 0.4)]
+# Searches the loop finishes beside the held-out states' Lean checks before the test ends them.
+SEARCHES_BESIDE = 4
+
+
+async def until(condition: Callable[[], bool], task: asyncio.Task[None], seconds: float = 20.0) -> None:
+    deadline = time.monotonic() + seconds
+    while not condition() and not task.done() and time.monotonic() < deadline:
+        await asyncio.sleep(0.001)
+
+
+@dataclass(frozen=True)
+class HeldOutTail:
+    """What the first held-out run after a phase saw while it held its Lean checks."""
+
+    searched_beside: int
+    next_phase_trees: int
+    health_checked: bool
+    stopped_by_itself: bool
+
+
+async def through_a_held_out_tail(world: LoopWorld, lean_checks: asyncio.Event, phases: int = 1) -> HeldOutTail:
+    """Runs the loop until the first held-out run after a phase waits on its Lean checks and `SEARCHES_BESIDE` searches
+    finished since it started and as many trees landed in the next phase (or a timeout), ends the checks, and runs on
+    until `phases` phases closed."""
+    stop = asyncio.Event()
+    task = asyncio.create_task(world.loop().run(stop))
+    await until(lambda: bool(world.evaluations.generated), task)
+    started = len(world.searcher.searched)
+
+    def next_phase_trees() -> int:
+        return len(TreeStore(world.paths.trees).phase_entries(2))
+
+    await until(lambda: len(world.searcher.searched) >= started + SEARCHES_BESIDE, task)
+    searched_beside = len(world.searcher.searched) - started
+    await until(lambda: next_phase_trees() >= SEARCHES_BESIDE, task)
+    trees = next_phase_trees()
+    health_checked = world.paths.health.exists()
+    lean_checks.set()
+    await until(lambda: world.phases_done() >= phases, task)
+    stopped_by_itself = task.done()
+    stop.set()
+    await task
+    return HeldOutTail(searched_beside, trees, health_checked, stopped_by_itself)
+
+
+async def test_the_searches_resume_once_the_held_out_states_are_sampled(tmp_path: Path) -> None:
+    lean_checks = asyncio.Event()
+    tail = await through_a_held_out_tail(collapsing_world(tmp_path, HEALTHY, lean_checks=lean_checks), lean_checks)
+    assert tail.searched_beside >= SEARCHES_BESIDE
+
+
+async def test_the_searches_beside_the_held_out_states_count_toward_the_next_phase(tmp_path: Path) -> None:
+    lean_checks = asyncio.Event()
+    tail = await through_a_held_out_tail(collapsing_world(tmp_path, HEALTHY, lean_checks=lean_checks), lean_checks)
+    assert tail.next_phase_trees >= SEARCHES_BESIDE
+
+
+async def test_the_health_checks_wait_for_the_held_out_result(tmp_path: Path) -> None:
+    lean_checks = asyncio.Event()
+    tail = await through_a_held_out_tail(collapsing_world(tmp_path, HEALTHY, lean_checks=lean_checks), lean_checks)
+    assert not tail.health_checked
+
+
+async def test_a_rollback_beside_sampling_pauses_the_searches_around_the_swap(tmp_path: Path) -> None:
+    lean_checks = asyncio.Event()
+    world = collapsing_world(tmp_path, COLLAPSE_ONCE, lean_checks=lean_checks)
+    await through_a_held_out_tail(world, lean_checks)
+    events = world.searcher.events
+    swaps = [f"swap {name} v2" for name in world.servers.names]
+    start = events.index(swaps[0])
+    assert events[start - 1 : start + len(swaps) + 1] == ["pause", *swaps, "resume"]
+
+
+async def test_a_hard_stop_beside_sampling_still_stops_the_loop(tmp_path: Path) -> None:
+    lean_checks = asyncio.Event()
+    toml = HELD_OUT_EVERY_PHASE + "\n[health]\nrollback_window_phases = 0\n"
+    world = collapsing_world(tmp_path, COLLAPSE_ONCE, toml, lean_checks)
+    tail = await through_a_held_out_tail(world, lean_checks, phases=3)
+    assert tail.stopped_by_itself

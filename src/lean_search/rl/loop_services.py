@@ -46,6 +46,7 @@ from lean_search.rl.evaluation import (
     EvaluationPaths,
     EvaluationRun,
     EvaluationSummary,
+    SearchProgress,
     read_search_progress,
     read_summary,
 )
@@ -667,9 +668,16 @@ class SubprocessEvaluations:
         self.current_version = current_version
         self.running: dict[EvaluationRun, EvaluationPaths] = {}
 
+    def progress(self, run: EvaluationRun) -> SearchProgress | None:
+        return read_search_progress(self.running[run].progress) if run in self.running else None
+
     def searches_in_flight(self, run: EvaluationRun) -> int | None:
-        progress = read_search_progress(self.running[run].progress) if run in self.running else None
+        progress = self.progress(run)
         return None if progress is None else progress.searches_in_flight
+
+    def generation_finished(self, run: EvaluationRun) -> bool:
+        progress = self.progress(run)
+        return progress is not None and progress.generation_finished
 
     async def evaluate(self, run: EvaluationRun, phase: int) -> EvaluationSummary:
         directory = self.paths.evaluation_directory(run, self.current_version())
@@ -694,7 +702,10 @@ class SubprocessEvaluations:
             arguments += ["--concurrency", str(run.concurrency)]
         log_path = directory.with_name(directory.name + ".log")
         record_path = self.paths.children / "evaluations" / directory.name / "evaluation.pid"
-        self.running[run] = EvaluationPaths(directory)
+        paths = EvaluationPaths(directory)
+        # A run a stop cut off left its progress; until the job writes its own, that would report the old run's.
+        paths.progress.unlink(missing_ok=True)
+        self.running[run] = paths
         try:
             await run_logged(arguments, log_path, dict(os.environ), record_path)
         finally:
