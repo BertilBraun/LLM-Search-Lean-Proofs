@@ -33,7 +33,7 @@ class TreeSummary:
     cut_off_samples: int = 0
     repetition_loops: int = 0
     # Distinct policy blocks Lean judged (infrastructure failures left out), and those of them that ran completely:
-    # the held-out states' valid-Lean criterion.
+    # the held-out states' valid-Lean criterion. A block whose names the search repaired is judged by its own failure.
     judged_blocks: int = 0
     valid_blocks: int = 0
 
@@ -90,5 +90,5 @@ def tree_summary(record: TreeRecord, reward: RewardConfig, credit: CreditMode, e
         cut_off_samples=len(cut_off),
         repetition_loops=sum(repeats_itself(completion.text) for completion in cut_off),
         judged_blocks=len(judged),
-        valid_blocks=sum(ran_completely(edge) for edge in judged),
+        valid_blocks=sum(ran_completely(edge) and not edge.repaired for edge in judged),
     )

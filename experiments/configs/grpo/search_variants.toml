@@ -1,0 +1,42 @@
+# Search variants on the held-out states (experiments/search_variants.py), each the loop's held-out evaluation (one
+# policy request per state on the loop's servers, 120 s per state) with one change to the loop's search template.
+# Approved by the owner on 2026-10-30 to be measured before any of them is enabled in the loop (DESIGN.md, "Lean
+# execution and harness"). Phases 2-3: 31% of the policy's samples end in a Lean error, 15% reach an existing state.
+name = "grpo_search_variants"
+baseline = "baseline"
+bootstrap_samples = 2000
+confidence = 0.95
+seed = 0
+
+[[variants]]
+name = "baseline"
+
+# Fewer than 2 new states from the 8 samples: 4 more samples, the prompt showing up to 2 failed blocks with Lean's
+# errors.
+[[variants]]
+name = "feedback"
+feedback = { enabled = true, min_children = 2, max_attempts = 2, sample_count = 4 }
+
+# The sweep runs first (it does not in the loop's held-out evaluation) and the prompt names its failed tactics.
+[[variants]]
+name = "tried_context"
+failed_automation_in_prompt = true
+
+# An unknown dotted name replaced by its namespace's most similar constant (difflib ratio of the last component).
+[[variants]]
+name = "name_repair"
+name_repair = { enabled = true, min_similarity = 0.85 }
+
+[[variants]]
+name = "temperature_0.6"
+temperature = 0.6
+
+[[variants]]
+name = "temperature_0.7"
+temperature = 0.7
+
+[[variants]]
+name = "combined"
+feedback = { enabled = true, min_children = 2, max_attempts = 2, sample_count = 4 }
+failed_automation_in_prompt = true
+name_repair = { enabled = true, min_similarity = 0.85 }

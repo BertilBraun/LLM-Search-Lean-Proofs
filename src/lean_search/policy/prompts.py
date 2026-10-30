@@ -70,10 +70,34 @@ class ChatTemplate(Protocol):
     ) -> str: ...
 
 
-def user_message(goals: Sequence[str], lemmas: Sequence[str] = ()) -> str:
+@dataclass(frozen=True)
+class FailedAttempt:
+    """A block tried at the state and Lean's error, both already cut to the prompt's length."""
+
+    tactic_block: str
+    error: str
+
+
+def shortened(text: str, max_characters: int) -> str:
+    return text if len(text) <= max_characters else text[: max_characters - 1].rstrip() + "…"
+
+
+def user_message(
+    goals: Sequence[str],
+    lemmas: Sequence[str] = (),
+    *,
+    failed_tactics: Sequence[str] = (),
+    failed_attempts: Sequence[FailedAttempt] = (),
+) -> str:
     sections = ["Proof state:\n```lean\n" + "\n\n".join(goals) + "\n```"]
     if lemmas:
         sections.append("Lemmas that may help:\n```lean\n" + "\n".join(lemmas) + "\n```")
+    if failed_tactics:
+        sections.append("Already tried here without success: " + ", ".join(failed_tactics))
+    if failed_attempts:
+        attempts = [f"```lean\n{attempt.tactic_block}\n```\nError: {attempt.error}" for attempt in failed_attempts]
+        sections.append("These attempts failed here:\n\n" + "\n\n".join(attempts))
+        sections.append("Give a different tactic or tactics that avoid these errors.")
     return "\n\n".join(sections)
 
 
@@ -86,14 +110,21 @@ def system_prompt(instruction: str = "") -> str:
 
 
 def prompt_messages(
-    goals: Sequence[str], lemmas: Sequence[str] = (), *, few_shot: bool = False, system_instruction: str = ""
+    goals: Sequence[str],
+    lemmas: Sequence[str] = (),
+    *,
+    few_shot: bool = False,
+    system_instruction: str = "",
+    failed_tactics: Sequence[str] = (),
+    failed_attempts: Sequence[FailedAttempt] = (),
 ) -> list[ChatMessage]:
     messages = [ChatMessage("system", system_prompt(system_instruction))]
     if few_shot:
         for example in FEW_SHOT_EXAMPLES:
             messages.append(ChatMessage("user", user_message(example.goals)))
             messages.append(ChatMessage("assistant", assistant_message(example.tactic_block)))
-    messages.append(ChatMessage("user", user_message(goals, lemmas)))
+    content = user_message(goals, lemmas, failed_tactics=failed_tactics, failed_attempts=failed_attempts)
+    messages.append(ChatMessage("user", content))
     return messages
 
 
@@ -106,22 +137,31 @@ def render_prompt(
     thinking: bool = False,
     thinking_instruction: str = "",
     visible: bool = False,
+    failed_tactics: Sequence[str] = (),
+    failed_attempts: Sequence[FailedAttempt] = (),
 ) -> str:
-    """`thinking_instruction` extends the system prompt in thinking mode only."""
+    """`thinking_instruction` extends the system prompt in thinking mode only. `failed_tactics`: the automation that
+    failed at the state; `failed_attempts`: the policy's failed blocks there (the feedback round)."""
     if visible:
         assert not thinking and not few_shot
+        content = user_message(goals, lemmas, failed_tactics=failed_tactics, failed_attempts=failed_attempts)
         conversation = [
             {"role": "system", "content": VISIBLE_SYSTEM_PROMPT},
-            {"role": "user", "content": user_message(goals, lemmas)},
+            {"role": "user", "content": content},
         ]
         return template.apply_chat_template(
             conversation, tokenize=False, add_generation_prompt=True, enable_thinking=False
         )
     instruction = thinking_instruction if thinking else ""
-    conversation = [
-        {"role": message.role, "content": message.content}
-        for message in prompt_messages(goals, lemmas, few_shot=few_shot, system_instruction=instruction)
-    ]
+    messages = prompt_messages(
+        goals,
+        lemmas,
+        few_shot=few_shot,
+        system_instruction=instruction,
+        failed_tactics=failed_tactics,
+        failed_attempts=failed_attempts,
+    )
+    conversation = [{"role": message.role, "content": message.content} for message in messages]
     text = template.apply_chat_template(
         conversation, tokenize=False, add_generation_prompt=True, enable_thinking=thinking
     )

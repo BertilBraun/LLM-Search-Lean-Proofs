@@ -10,10 +10,19 @@ from lean_search.data import Problem, Split
 from lean_search.lean import LeanRepl, ProofState
 from lean_search.policy import PolicyClient, Sample
 from lean_search.policy.client import Generation
-from lean_search.policy.config import PolicyConfig
+from lean_search.policy.config import FeedbackConfig, PolicyConfig
 from lean_search.policy.expander import PolicyExpander, candidate_batch
 from lean_search.policy.prompts import BRIEF_THINKING_INSTRUCTION, parse_samples
-from lean_search.search import CandidateBatch, ExpanderKind, SearchContext, SearchTree
+from lean_search.search import (
+    CandidateBatch,
+    EdgeOutcome,
+    ExpanderKind,
+    Failure,
+    FailureKind,
+    SearchContext,
+    SearchTree,
+    StepSource,
+)
 from lean_search.search.config import parse_run_config
 from lean_search.search.texts import SampledTokens
 
@@ -142,13 +151,16 @@ class CompletionServer:
 
     choices: list[dict[str, object]]
     prompts: list[str] = field(default_factory=list)
+    sample_counts: list[int] = field(default_factory=list)
 
     async def handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         headers = await reader.readuntil(b"\r\n\r\n")
         length = next(
             int(line.split(b":")[1]) for line in headers.split(b"\r\n") if line.lower().startswith(b"content-length")
         )
-        self.prompts.append(json.loads(await reader.readexactly(length))["prompt"])
+        body = json.loads(await reader.readexactly(length))
+        self.prompts.append(body["prompt"])
+        self.sample_counts.append(body["n"])
         choices = [{"index": index, **choice} for index, choice in enumerate(self.choices)]
         completion_tokens = sum(len(choice["logprobs"]["token_logprobs"]) for choice in self.choices)
         usage = {"prompt_tokens": PROMPT_TOKENS, "completion_tokens": completion_tokens}
@@ -232,3 +244,127 @@ def test_policy_kinds_need_a_model(kind: ExpanderKind) -> None:
 def test_invalid_policy_section_is_rejected(policy: str) -> None:
     with pytest.raises(ValueError):
         parse_run_config(POLICY_SECTION + policy)
+
+
+LINARITH = Failure(FailureKind.ERROR, "linarith failed to find a contradiction")
+FEEDBACK = PolicyConfig(model="policy", sample_count=2, feedback=FeedbackConfig(enabled=True, sample_count=3))
+SWEEP_POLICY = '[policy]\nmodel = "m"\ntokenizer = "t"\nfailed_automation_in_prompt = true\n'
+
+
+def choice(text: str) -> dict[str, object]:
+    return {"text": text, "logprobs": {"tokens": ["token_id:3"], "token_logprobs": [-0.5]}, "finish_reason": "stop"}
+
+
+def root_context() -> SearchContext:
+    state = ProofState("", "theorem t : True := by\n", (), ("⊢ True",), 0, 0)
+    tree = SearchTree("t", state, 0.0)
+    tree.root.expansion_index = 0
+    return SearchContext(Problem("t", Split.VALID, "", state.statement, "", ""), tree, LeanRepl())
+
+
+async def expand_as_the_search(
+    server_url: str, config: PolicyConfig, outcome: EdgeOutcome, context: SearchContext | None = None
+) -> list[CandidateBatch]:
+    """Every batch's candidates enter the tree with `outcome` (failing with LINARITH) before the next is asked for."""
+    context = context or root_context()
+    tree = context.tree
+    batches = []
+    async with PolicyClient(server_url, config.model) as client:
+        expander = PolicyExpander(config, PlainTemplate(), [client], max_model_length=4096)
+        async with contextlib.aclosing(expander.expand(tree.root, context)) as generator:
+            async for batch in generator:
+                batches.append(batch)
+                for candidate in batch.candidates:
+                    tree.add_edge(
+                        tree.root,
+                        text=candidate.text,
+                        source=StepSource.POLICY,
+                        log_probability=candidate.log_probability,
+                        prompt_tokens=0,
+                        generated_tokens=0,
+                        outcome=outcome,
+                        target_id=tree.next_node_id() if outcome == EdgeOutcome.CHILD else None,
+                        failure=LINARITH if outcome == EdgeOutcome.FAILED else None,
+                        feedback=candidate.feedback,
+                    )
+    return batches
+
+
+async def test_samples_without_new_states_get_a_feedback_round() -> None:
+    async with completion_server([choice("nlinarith"), choice("simp")]) as (_, url):
+        batches = await expand_as_the_search(url, FEEDBACK, EdgeOutcome.FAILED)
+    assert [batch.feedback for batch in batches] == [False, True]
+
+
+async def test_feedback_candidates_are_marked() -> None:
+    async with completion_server([choice("nlinarith"), choice("simp")]) as (_, url):
+        batches = await expand_as_the_search(url, FEEDBACK, EdgeOutcome.FAILED)
+    assert all(candidate.feedback for candidate in batches[1].candidates)
+
+
+async def test_feedback_prompt_shows_the_failed_block_and_its_error() -> None:
+    async with completion_server([choice("nlinarith")]) as (server, url):
+        await expand_as_the_search(url, FEEDBACK, EdgeOutcome.FAILED)
+    assert "```lean\nnlinarith\n```\nError: linarith failed to find a contradiction" in server.prompts[1]
+
+
+async def test_feedback_round_samples_its_own_count() -> None:
+    async with completion_server([choice("nlinarith")]) as (server, url):
+        await expand_as_the_search(url, FEEDBACK, EdgeOutcome.FAILED)
+    assert server.sample_counts == [2, 3]
+
+
+async def test_enough_new_states_need_no_feedback_round() -> None:
+    async with completion_server([choice("nlinarith"), choice("simp")]) as (_, url):
+        batches = await expand_as_the_search(url, FEEDBACK, EdgeOutcome.CHILD)
+    assert len(batches) == 1
+
+
+async def test_samples_reaching_existing_states_give_no_errors_to_show() -> None:
+    async with completion_server([choice("nlinarith"), choice("simp")]) as (_, url):
+        batches = await expand_as_the_search(url, FEEDBACK, EdgeOutcome.DUPLICATE)
+    assert len(batches) == 1
+
+
+async def test_feedback_is_off_by_default() -> None:
+    async with completion_server([choice("nlinarith")]) as (_, url):
+        batches = await expand_as_the_search(url, PolicyConfig(model="policy", sample_count=2), EdgeOutcome.FAILED)
+    assert len(batches) == 1
+
+
+async def test_prompt_names_the_automation_that_failed_at_the_node() -> None:
+    context = root_context()
+    sweep = [("omega", EdgeOutcome.FAILED), ("ring_nf", EdgeOutcome.DUPLICATE), ("simp_all", EdgeOutcome.FAILED)]
+    for tactic, outcome in sweep:
+        context.tree.add_edge(
+            context.tree.root,
+            text=tactic,
+            source=StepSource.AUTOMATION,
+            log_probability=None,
+            prompt_tokens=0,
+            generated_tokens=0,
+            outcome=outcome,
+        )
+    config = PolicyConfig(model="policy", sample_count=1, failed_automation_in_prompt=True)
+    async with completion_server([choice("nlinarith")]) as (server, url):
+        await expand_as_the_search(url, config, EdgeOutcome.CHILD, context)
+    assert "Already tried here without success: omega, simp_all" in server.prompts[0]
+
+
+@pytest.mark.parametrize(
+    "expander", ['[expander]\nkind = "automation_then_policy"\noverlap = true\n', '[expander]\nkind = "policy"\n']
+)
+def test_failed_automation_in_the_prompt_needs_the_sweep_to_finish_first(expander: str) -> None:
+    with pytest.raises(ValueError):
+        parse_run_config(expander + SWEEP_POLICY)
+
+
+def test_failed_automation_in_the_prompt_runs_after_a_finished_sweep() -> None:
+    config = parse_run_config('[expander]\nkind = "automation_then_policy"\n' + SWEEP_POLICY)
+    assert config.policy.failed_automation_in_prompt
+
+
+@pytest.mark.parametrize("feedback", ["min_children = 0", "sample_count = 0", "max_error_characters = 4"])
+def test_invalid_feedback_section_is_rejected(feedback: str) -> None:
+    with pytest.raises(ValueError):
+        parse_run_config(POLICY_SECTION + f"[policy.feedback]\nenabled = true\n{feedback}\n")

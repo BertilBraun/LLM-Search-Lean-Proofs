@@ -1,12 +1,14 @@
 """Names a tactic block refers to, checked against the pinned environment and the goal's context before Lean runs."""
 
 import asyncio
+import difflib
+import functools
 import gzip
 import hashlib
 import os
 import re
 import tempfile
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -438,7 +440,7 @@ class UnknownNames:
     @property
     def rejection(self) -> Rejection:
         quoted = ", ".join(f"'{name}'" for name in self.names)
-        return Rejection(self.tactic_index, f"unknown identifier {quoted} (checked before running Lean)")
+        return Rejection(self.tactic_index, f"unknown identifier {quoted} (checked before running Lean)", self.names)
 
 
 class IdentifierChecker:
@@ -588,3 +590,86 @@ def _set_builder(tokens: Sequence[Token], position: int) -> bool:
         if token.depth == depth and token.text in ("|", "//"):
             return True
     return False
+
+
+# A name may end in primes, so its closing quote is the one before a space or the end.
+LEAN_UNKNOWN_NAME = re.compile(r"unknown (?:identifier|constant) '(.+?)'(?=\s|$)")
+ROOT_PREFIX = "_root_."
+
+
+@dataclass(frozen=True)
+class NameRepair:
+    original: str
+    replacement: str
+
+
+@dataclass(frozen=True)
+class RepairedBlock:
+    text: str
+    repairs: tuple[NameRepair, ...]
+
+
+def lean_unknown_names(message: str) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(LEAN_UNKNOWN_NAME.findall(message)))
+
+
+@functools.cache
+def namespace_members(names: EnvironmentNames) -> dict[str, tuple[str, ...]]:
+    """Each namespace's constants by their last component."""
+    members: dict[str, list[str]] = {}
+    for constant in names.constants:
+        namespace, _, member = constant.rpartition(".")
+        if namespace:
+            members.setdefault(namespace, []).append(member)
+    return {namespace: tuple(sorted(found)) for namespace, found in members.items()}
+
+
+class NameRepairer:
+    """Unknown dotted names replaced by the most similar constant of the namespace they are written in."""
+
+    def __init__(self, members: Mapping[str, Sequence[str]], min_similarity: float) -> None:
+        self.members = members
+        self.min_similarity = min_similarity
+
+    def replacement(self, name: str, namespaces: Sequence[str]) -> str | None:
+        # Names without a namespace are mostly hypotheses, whose near neighbours (h₁ for h₂) mean something else.
+        root = name.startswith(ROOT_PREFIX)
+        components = name.removeprefix(ROOT_PREFIX).split(".")
+        # The longest written prefix that is a namespace decides; a shorter one would only rename a namespace.
+        for length in range(len(components) - 1, 0, -1):
+            written = ".".join(components[:length])
+            keys = (
+                [written] if root else [f"{namespace}.{written}" if namespace else written for namespace in namespaces]
+            )
+            members = next((self.members[key] for key in keys if key in self.members), None)
+            if members is None:
+                continue
+            member = components[length]
+            matches = difflib.get_close_matches(member, members, n=1, cutoff=self.min_similarity)
+            if not matches or matches[0] == member:
+                return None
+            repaired = ".".join([*components[:length], matches[0], *components[length + 1 :]])
+            return ROOT_PREFIX + repaired if root else repaired
+        return None
+
+    def repaired(self, block: str, unknown: Sequence[str], namespaces: Sequence[str]) -> RepairedBlock | None:
+        """The block with every unknown name replaced, or None when one has no close enough replacement."""
+        lexed = lex(block)
+        if not lexed.exact:
+            return None
+        repairs = []
+        for name in unknown:
+            replacement = self.replacement(name, namespaces)
+            if replacement is None:
+                return None
+            repairs.append(NameRepair(name, replacement))
+        replacements = {repair.original: repair.replacement for repair in repairs}
+        pieces = []
+        position = 0
+        for token in tokenize(lexed.masked(frozenset({LexicalKind.CODE}))):
+            if token.is_identifier and token.text in replacements:
+                pieces.extend([block[position : token.start], replacements[token.text]])
+                position = token.start + len(token.text)
+        if not pieces:
+            return None
+        return RepairedBlock("".join([*pieces, block[position:]]), tuple(repairs))

@@ -4,6 +4,19 @@ from lean_search.retrieval.config import RetrievalConfig
 
 
 @dataclass(frozen=True)
+class FeedbackConfig:
+    """After an expansion's samples ran: when they gave fewer than `min_children` new states, one more request at the
+    node whose prompt adds up to `max_attempts` of the samples' failed blocks with Lean's errors."""
+
+    enabled: bool = False
+    min_children: int = 2
+    max_attempts: int = 2
+    sample_count: int = 4
+    max_block_characters: int = 400
+    max_error_characters: int = 300
+
+
+@dataclass(frozen=True)
 class PolicyConfig:
     # The served model name, or a LoRA adapter's name when `adapter` is set.
     model: str = ""
@@ -28,6 +41,9 @@ class PolicyConfig:
     few_shot: bool = True
     request_timeout_seconds: float = 900.0
     retrieval: RetrievalConfig = field(default_factory=RetrievalConfig)
+    feedback: FeedbackConfig = field(default_factory=FeedbackConfig)
+    # One prompt line naming the automation tactics that failed at the node; the automation must finish first.
+    failed_automation_in_prompt: bool = False
 
     @property
     def reasons(self) -> bool:
@@ -39,4 +55,9 @@ def policy_config_problem(config: PolicyConfig) -> str | None:
         return "policy.thinking_instruction is only used with policy.thinking = true."
     if config.visible_reasoning and (config.thinking or config.few_shot):
         return "policy.visible_reasoning excludes policy.thinking and policy.few_shot."
+    feedback = config.feedback
+    if min(feedback.min_children, feedback.max_attempts, feedback.sample_count) < 1:
+        return "policy.feedback needs min_children, max_attempts and sample_count of at least 1."
+    if min(feedback.max_block_characters, feedback.max_error_characters) < 16:
+        return "policy.feedback needs max_block_characters and max_error_characters of at least 16."
     return None

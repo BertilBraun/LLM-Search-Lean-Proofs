@@ -6,6 +6,7 @@ from lean_search.policy import Sample
 from lean_search.policy.prompts import (
     FEW_SHOT_EXAMPLES,
     SYSTEM_PROMPT,
+    FailedAttempt,
     ParseFailure,
     normalize_tactic_block,
     normalized_block,
@@ -14,6 +15,7 @@ from lean_search.policy.prompts import (
     prompt_messages,
     render_completion,
     render_prompt,
+    shortened,
     stop_sequences,
     user_message,
 )
@@ -191,3 +193,21 @@ def test_failed_samples_are_counted_with_their_tokens() -> None:
 def test_samples_that_all_fail_yield_no_candidates() -> None:
     parsed = parse_samples([sample("sorry"), sample("", finish_reason="stop")], thinking=False)
     assert parsed.candidates == ()
+
+
+def test_user_message_names_the_failed_automation_after_the_state() -> None:
+    assert user_message(GOALS[:1], failed_tactics=["omega", "nlinarith"]).endswith(
+        "\n```\n\nAlready tried here without success: omega, nlinarith"
+    )
+
+
+def test_user_message_shows_failed_attempts_and_asks_for_another_tactic() -> None:
+    attempts = [FailedAttempt("nlinarith [sq_nonneg x]", "linarith failed"), FailedAttempt("omega", "omega failed")]
+    assert user_message(GOALS[:1], failed_attempts=attempts).endswith(
+        "These attempts failed here:\n\n```lean\nnlinarith [sq_nonneg x]\n```\nError: linarith failed\n\n"
+        "```lean\nomega\n```\nError: omega failed\n\nGive a different tactic or tactics that avoid these errors."
+    )
+
+
+def test_shortened_text_ends_in_an_ellipsis_within_the_limit() -> None:
+    assert shortened("linarith failed to find a contradiction", 12) == "linarith fa…"

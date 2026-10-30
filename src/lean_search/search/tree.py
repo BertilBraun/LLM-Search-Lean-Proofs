@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 from lean_search.lean import LeanError, LeanTimeout, ProofState, ReplFailure
+from lean_search.lean.identifiers import NameRepair
 from lean_search.lean.plans import Rejection
 from lean_search.lean.repl import BlockFailure
 from lean_search.lean.text import TacticPiece
@@ -135,6 +136,14 @@ class Edge:
     flattened: bool = False
     # The goals each applied executed tactic reached, as Lean printed them before the search's `rename_i` naming.
     tactic_goals: tuple[tuple[str, ...], ...] = ()
+    # Sampled in the node's feedback round (policy.feedback).
+    feedback: bool = False
+    # Unknown names the search replaced (search.name_repair): `text` is the repaired block, not what was sampled.
+    name_repairs: tuple[NameRepair, ...] = ()
+
+    @property
+    def repaired(self) -> bool:
+        return bool(self.name_repairs)
 
 
 class SearchTree:
@@ -197,6 +206,8 @@ class SearchTree:
         executed_tactics: tuple[TacticPiece, ...] = (),
         flattened: bool = False,
         tactic_goals: tuple[tuple[str, ...], ...] = (),
+        feedback: bool = False,
+        name_repairs: tuple[NameRepair, ...] = (),
     ) -> Edge:
         assert parent.expansion_index is not None, parent.node_id
         edge = Edge(
@@ -220,6 +231,8 @@ class SearchTree:
             executed_tactics=executed_tactics,
             flattened=flattened,
             tactic_goals=tactic_goals,
+            feedback=feedback,
+            name_repairs=name_repairs,
         )
         self.edges.append(edge)
         if failure is not None and failure.kind in (FailureKind.WALL_CLOCK_TIMEOUT, FailureKind.HEARTBEAT_TIMEOUT):

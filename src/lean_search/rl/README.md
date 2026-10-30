@@ -38,7 +38,10 @@ One group per expanded proof-graph node with policy samples; no groups off the p
 With `require_policy_proof` (default) a group also needs a policy sample with a `proof_graph` tactic: where only the
 automation sweep's children reach the proof graph, the group is left out (`TreeGroups.without_policy_proof`, the
 search metrics' `graph.groups_without_policy_proof`); a policy sample repeating the sweep's tactic counts as the
-policy's. Identical texts are merged (multiplicity = the samples behind them). Each tactic gets
+policy's. Identical texts are merged (multiplicity = the samples behind them). A node's feedback round
+(`policy.feedback`, `Edge.feedback`) has its own prompt and forms its own group, trained on that prompt
+(`ExpansionTexts.feedback`); samples whose names the search repaired (`Edge.name_repairs`) are in no group, their
+tokens not being what ran. Each tactic gets
 `R = (1 − λ) · G + λ · L` (`RewardConfig`, λ = `local_share` = 0.15, L clipped to [−1, 1]), and a proof-graph state
 δ (`progress_per_step` = 0.2) per remaining step it is closer to a proof than the group's node, `δ · (d(node) − d(s))`
 (part of the global part; negative for a proof-graph state farther away, but the global part never falls below the
@@ -688,6 +691,14 @@ trees.
 - **Overfit on 300 statements** (`grpo/loop_overfit.toml`): the loop on a fixed list (`grpo_fixed_sets.py
   select-overfit`: 100 per stratum outside the probe and gate), policy only; `grpo_loop.py report` gives the solve
   rate per phase, which must rise.
+- **Search variants** (2026-10-30, owner-approved, `search_variants.py`, `experiments/search_variants.py`,
+  `grpo/search_variants.toml`): the held-out evaluation with one change to the loop's search template per variant
+  (`baseline`, `feedback`, `tried_context`, `name_repair`, `temperature_0.6`, `temperature_0.7`, `combined`), on the
+  running loop's servers right after a pause; every variant of one run on the same served version (checked before
+  each tree is written), per-variant results and a bootstrap paired comparison with the baseline on common states
+  under `$LEAN_SEARCH_RUNS/grpo_search_variants/v<version>/`. To be measured before any option is enabled in the loop.
+  With the failed automation in the prompt the held-out evaluation runs the sweep first (`single_step_run_config`).
+  The held-out success and valid rates and the training trees' valid blocks count a repaired sample as failed.
 - **Naming A/B** (`experiments/grpo_naming_ab.py`, `grpo/naming_ab.toml`): the data rewrite's two short fine-tunes on
   the probe (the named arm on renamed statements, its value queries with the original names), the unknown-name error
   rate per policy sample of those searches (`phase_metrics.unknown_names`) and MATH-500

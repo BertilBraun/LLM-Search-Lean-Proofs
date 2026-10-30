@@ -65,6 +65,8 @@ class Rejection:
 
     index: int
     message: str
+    # The unknown names behind the rejection.
+    names: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -109,7 +111,7 @@ class TacticPlan:
         )
         rejection = self.rejection
         if rejection is not None and rejection.index > index:
-            rejection = Rejection(rejection.index - 1, rejection.message)
+            rejection = replace(rejection, index=rejection.index - 1)
         tactics = (*self.tactics[:index], combined, *self.tactics[index + 2 :])
         return TacticPlan(self.block, tactics, segments, rejection)
 

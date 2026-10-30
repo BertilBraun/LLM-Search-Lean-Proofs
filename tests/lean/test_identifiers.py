@@ -3,9 +3,12 @@ import pytest
 from lean_search.lean.identifiers import (
     EnvironmentNames,
     IdentifierChecker,
+    NameRepairer,
     NameScope,
     UnknownNames,
+    lean_unknown_names,
     name_scope,
+    namespace_members,
     parse_environment_names,
     tokenize,
 )
@@ -158,3 +161,60 @@ def test_parsed_names_keep_the_inductive_types_apart() -> None:
 
 def test_environment_names_hold_keywords_of_every_category() -> None:
     assert isinstance(NAMES, EnvironmentNames) and {"simp", "at", "ℝ"} <= NAMES.keywords
+
+
+REPAIRER = NameRepairer(namespace_members(NAMES), 0.85)
+
+
+def test_unknown_names_reach_the_rejection() -> None:
+    unknown = first_unknown("rw [Nat.succ_le_iff', Nat.foo]")
+    assert unknown is not None and unknown.rejection.names == ("Nat.succ_le_iff'", "Nat.foo")
+
+
+def test_close_name_of_the_same_namespace_replaces_an_unknown_one() -> None:
+    assert REPAIRER.replacement("Nat.succ_le_iff'", SCOPE.namespaces) == "Nat.succ_le_iff"
+
+
+def test_field_after_the_repaired_name_is_kept() -> None:
+    assert REPAIRER.replacement("Nat.prime_twoo.le", SCOPE.namespaces) == "Nat.prime_two.le"
+
+
+def test_namespace_opened_by_the_header_is_searched() -> None:
+    assert REPAIRER.replacement("Prime.two_lee", SCOPE.namespaces) == "Prime.two_le"
+
+
+def test_name_without_a_namespace_is_not_repaired() -> None:
+    assert REPAIRER.replacement("add_comn", SCOPE.namespaces) is None
+
+
+def test_name_far_from_every_constant_is_not_repaired() -> None:
+    assert REPAIRER.replacement("Nat.log_mul", SCOPE.namespaces) is None
+
+
+def test_repaired_block_replaces_every_occurrence() -> None:
+    repaired = REPAIRER.repaired("rw [Nat.prime_twoo]\nexact Nat.prime_twoo", ("Nat.prime_twoo",), SCOPE.namespaces)
+    assert repaired is not None and repaired.text == "rw [Nat.prime_two]\nexact Nat.prime_two"
+
+
+def test_block_with_one_unrepairable_name_is_not_repaired() -> None:
+    repaired = REPAIRER.repaired(
+        "rw [Nat.prime_twoo, Nat.log_mul]", ("Nat.prime_twoo", "Nat.log_mul"), SCOPE.namespaces
+    )
+    assert repaired is None
+
+
+def test_name_inside_a_comment_is_left_alone() -> None:
+    repaired = REPAIRER.repaired("simp [Nat.prime_twoo] -- Nat.prime_twoo", ("Nat.prime_twoo",), SCOPE.namespaces)
+    assert repaired is not None and repaired.text == "simp [Nat.prime_two] -- Nat.prime_twoo"
+
+
+@pytest.mark.parametrize(
+    ("message", "names"),
+    [
+        ("unknown identifier 'Finset.sum_Iio_succ'", ("Finset.sum_Iio_succ",)),
+        ("unknown constant 'pow_le_pow_left''\nmore", ("pow_le_pow_left'",)),
+        ("linarith failed to find a contradiction", ()),
+    ],
+)
+def test_lean_messages_name_their_unknown_constants(message: str, names: tuple[str, ...]) -> None:
+    assert lean_unknown_names(message) == names

@@ -26,7 +26,8 @@ class ExpanderKind(StrEnum):
 @dataclass(frozen=True)
 class ExpanderConfig:
     kind: ExpanderKind = ExpanderKind.AUTOMATION
-    # automation_then_policy: send the policy request when the expansion starts, while the sweep runs.
+    # automation_then_policy: send the policy request when the expansion starts, while the sweep runs. Later batches
+    # of an expander (the policy's feedback round) are requested only after the search ran the ones before.
     overlap: bool = False
 
 
@@ -65,6 +66,16 @@ def parse_run_config(text: str) -> RunConfig:
         raise ValueError("policy.sample_count must be positive and policy.server_urls not empty.")
     if (problem := policy_config_problem(config.policy)) is not None:
         raise ValueError(problem)
+    if config.policy.failed_automation_in_prompt and (
+        config.expander.kind != ExpanderKind.AUTOMATION_THEN_POLICY or config.expander.overlap
+    ):
+        raise ValueError(
+            'policy.failed_automation_in_prompt needs expander.kind = "automation_then_policy" and expander.overlap = '
+            "false: the prompt names the sweep's failures, so the sweep must finish before the request."
+        )
+    name_repair = config.search.name_repair
+    if name_repair.enabled and not (config.search.check_identifiers and 0 < name_repair.min_similarity <= 1):
+        raise ValueError("search.name_repair needs search.check_identifiers and min_similarity in (0, 1].")
     if config.value.model and not (config.priority.kind == PriorityKind.A_STAR and config.value.tokenizer):
         raise ValueError('A value model needs priority.kind = "a_star" and value.tokenizer.')
     if not config.value.server_urls or config.value.top_k < 1:

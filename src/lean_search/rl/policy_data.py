@@ -226,13 +226,14 @@ def tree_policy_data(tree: PolicyTree, tokenizer: PolicyTokenizer, config: Polic
     trained_groups: list[tuple[PolicyGroup, GroupAdvantages]] = []
     without_text = 0
     mismatches = 0
-    texts_by_node = {expansion.node_id: expansion for expansion in tree.texts}
+    # A node's feedback round has its own prompt: each group trains on the prompt its samples were drawn from.
+    texts_by_prompt = {(expansion.node_id, expansion.feedback): expansion for expansion in tree.texts}
     for group in tree.groups:
         advantages = group_advantages(group)
         if not advantages.has_signal(config.credit):
             continue
         trained_groups.append((group, advantages))
-        expansion = texts_by_node.get(group.node_id)
+        expansion = texts_by_prompt.get((group.node_id, group.feedback))
         if expansion is None:
             without_text += group.sample_count
             continue

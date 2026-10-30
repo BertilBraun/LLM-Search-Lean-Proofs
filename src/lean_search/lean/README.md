@@ -155,6 +155,13 @@ print `x✝` where the node prints `x_1`; intermediate states match nodes by `no
   1 false rejection in 18,227 accepted blocks and valid prefixes (0.0055%; `simpa using` with a name Lean never
   elaborated) and 71% of the 4,905 failures whose first error is an unknown identifier or constant caught
   (`experiments/identifier_check.py`).
+- **Name repair** (`identifiers.NameRepairer`, `SearchConfig.name_repair`, off; owner-approved 2026-10-30, to be
+  measured first): a policy block rejected by the identifier check or failing with Lean's `unknown identifier` /
+  `unknown constant` runs once more with every unknown dotted name replaced by the most similar constant of the
+  namespace it is written in (the longest written prefix that is a namespace, also under opened namespaces; difflib
+  ratio of the last component ≥ `min_similarity`, 0.85), or not at all when one name has no such constant. Names
+  without a namespace are left alone (mostly hypotheses, whose near neighbours mean something else). The edge records
+  the repaired text and `name_repairs`.
 
 ## Proof states and replay
 
