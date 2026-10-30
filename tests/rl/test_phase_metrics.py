@@ -1,3 +1,5 @@
+import dataclasses
+
 import pytest
 from loop_fakes import solved_tree
 
@@ -39,6 +41,19 @@ def record() -> TreeRecord:
     tree = solved_tree(PROBLEM)
     result = SearchResult(PROBLEM.name, True, StopReason.PROVED, None, (), (), Accounting(), None, 0, 1)
     return tree_record(tree, PROBLEM.formal_statement, result)
+
+
+def with_feedback_edge(tree: TreeRecord) -> TreeRecord:
+    edge = dataclasses.replace(tree.edges[0], edge_id=len(tree.edges), feedback=True, sample_count=4)
+    return dataclasses.replace(tree, edges=(*tree.edges, edge))
+
+
+def test_failure_tiers_leave_out_the_feedback_round() -> None:
+    assert failure_tiers([with_feedback_edge(record())]) == FailureTiers(malformed=1)
+
+
+def test_unknown_names_leave_out_the_feedback_round() -> None:
+    assert unknown_names([with_feedback_edge(record())]).samples == 2
 
 
 def test_failure_tiers_count_policy_samples() -> None:

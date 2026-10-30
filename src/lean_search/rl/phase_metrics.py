@@ -4,7 +4,8 @@ Failure tiers follow the error analysis (DESIGN.md, "Lean execution and harness"
 kind and Lean's message, approximately: `malformed` is a sample without a usable block, a forbidden step, a parse error
 or an unknown constant in Lean's message; `invalid_in_state` is the identifier check's rejection (it mixes unknown
 hypothesis names with unknown constants) and ill-typed terms; `timeout` are heartbeat and wall-clock limits; every
-other Lean error is `valid_but_failing`. Infrastructure failures count in none.
+other Lean error is `valid_but_failing`. Infrastructure failures count in none. Like the health fields
+(`tree_summary.py`), the per-sample counts leave out the feedback round's samples.
 """
 
 import re
@@ -62,9 +63,10 @@ def executed_edge(record: TreeRecord, edge: Edge) -> Edge:
 
 
 def policy_edges(records: Sequence[TreeRecord]) -> Iterator[tuple[TreeRecord, Edge]]:
+    """The first round's policy edges."""
     for record in records:
         for edge in record.edges:
-            if edge.source == StepSource.POLICY:
+            if edge.source == StepSource.POLICY and not edge.feedback:
                 yield record, edge
 
 
@@ -133,6 +135,7 @@ def forced_completions(records: Sequence[TreeRecord]) -> list[SampledCompletion]
         completion
         for record in records
         for expansion in record.expansions
+        if not expansion.feedback
         for completion in expansion.completions
         if is_forced(completion)
     ]

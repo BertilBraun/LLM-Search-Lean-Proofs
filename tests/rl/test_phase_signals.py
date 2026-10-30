@@ -123,6 +123,47 @@ def test_repetition_loops_are_counted_among_the_cut_off_samples() -> None:
     assert summary_of(tree).repetition_loops == 1
 
 
+def with_feedback_round(tree: TreeRecord) -> TreeRecord:
+    """A feedback round at the root: 4 samples of one failed block, cut off at the token cap."""
+    edge = dataclasses.replace(tree.edges[0], edge_id=len(tree.edges), feedback=True, sample_count=4)
+    texts = ExpansionTexts(tree.problem_name, 0, "feedback prompt", (completion("x", cut_off=True),), feedback=True)
+    return dataclasses.replace(tree, edges=(*tree.edges, edge), expansions=(*tree.expansions, texts))
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "policy_expansions",
+        "policy_samples",
+        "distinct_blocks",
+        "distinct_texts",
+        "cut_off_samples",
+        "judged_blocks",
+        "valid_blocks",
+    ],
+)
+def test_the_feedback_rounds_samples_stay_out_of_the_health_fields(field: str) -> None:
+    tree = with_completions(record(), completion("a"))
+    assert getattr(summary_of(with_feedback_round(tree)), field) == getattr(summary_of(tree), field)
+
+
+def test_the_feedback_rounds_samples_are_counted_apart() -> None:
+    summary = summary_of(with_feedback_round(record()))
+    assert (summary.feedback_expansions, summary.feedback_samples) == (1, 4)
+
+
+def test_a_solved_tree_records_its_tokens_up_to_the_first_proof() -> None:
+    tree = record()
+    result = dataclasses.replace(tree.result, solved_at=Accounting(expansions=3, generated_tokens=700))
+    assert summary_of(dataclasses.replace(tree, result=result)).generated_tokens_to_first_proof == 700
+
+
+def test_an_unsolved_tree_spends_all_its_tokens_before_a_first_proof() -> None:
+    tree = record(proved=False, solved_at=None)
+    result = dataclasses.replace(tree.result, accounting=Accounting(expansions=5, generated_tokens=900))
+    assert summary_of(dataclasses.replace(tree, result=result)).generated_tokens_to_first_proof == 900
+
+
 def entry(
     phase: int = 1,
     solved_at: int | None = None,

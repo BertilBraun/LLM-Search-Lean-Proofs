@@ -1,5 +1,7 @@
 """What the loop keeps of every finished search in the tree index: computed once per tree as it finishes, so the
-phase trigger (trainable groups) and the per-phase budget and health signals never re-read the trees."""
+phase trigger (trainable groups), the per-phase budget and health signals and the search options A/B never re-read the
+trees. The per-sample health fields count the first round's samples only: the feedback round (`policy.feedback`) runs
+where the first round failed, so its samples would shift thresholds taken from phases without it."""
 
 from collections import defaultdict
 from dataclasses import dataclass
@@ -23,8 +25,8 @@ class TreeSummary:
     proof_steps: int | None = None
     # Groups the policy trains on: at proof-graph nodes, with a policy proof, with a non-zero advantage.
     trainable_groups: int = 0
-    # Policy expansions, their samples, and per expansion the distinct blocks (identical blocks run once) and the
-    # distinct sample texts, summed.
+    # First-round policy expansions, their samples, and per expansion the distinct blocks (identical blocks run once)
+    # and the distinct sample texts, summed.
     policy_expansions: int = 0
     policy_samples: int = 0
     distinct_blocks: int = 0
@@ -38,7 +40,16 @@ class TreeSummary:
     valid_blocks: int = 0
     # The search options A/B arm the statement fell into (`sampling.options_arm`); "" with the A/B off.
     arm: str = ""
+    # Generated tokens of the whole tree (both rounds, harvesting included), and of those up to the first proof (all of
+    # them when unsolved).
     generated_tokens: int = 0
+    generated_tokens_to_first_proof: int = 0
+    # Of `trainable_groups`, those of a node's feedback round.
+    feedback_trainable_groups: int = 0
+    lean_seconds: float = 0.0
+    # Feedback rounds and their samples.
+    feedback_expansions: int = 0
+    feedback_samples: int = 0
 
 
 def executed_edge(record: TreeRecord, edge: Edge) -> Edge:
@@ -56,13 +67,22 @@ def judged_by_lean(edge: Edge) -> bool:
     return edge.failure is None or edge.failure.kind != FailureKind.REPL_FAILURE
 
 
-def trainable_groups(record: TreeRecord, reward: RewardConfig, credit: CreditMode) -> tuple[int, int | None]:
-    """The groups the trainer would train and the root's remaining steps. μ is left out: it only adds μ · q to
-    off-graph states, which hardly decides whether a group has a signal."""
+@dataclass(frozen=True)
+class TrainableGroups:
+    groups: int
+    feedback_groups: int
+    # The root's remaining steps.
+    proof_steps: int | None
+
+
+def trainable_groups(record: TreeRecord, reward: RewardConfig, credit: CreditMode) -> TrainableGroups:
+    """The groups the trainer would train. μ is left out: it only adds μ · q to off-graph states, which hardly decides
+    whether a group has a signal."""
     labels = label_graph(record)
     tactics = policy_tactics(record, labels, reward.off_graph_min_expanded_nodes)
     groups = policy_groups(record, labels, tactics, [None] * len(record.nodes), reward).groups
-    return sum(group_advantages(group).has_signal(credit) for group in groups), labels.remaining_steps[0]
+    trained = [group for group in groups if group_advantages(group).has_signal(credit)]
+    return TrainableGroups(len(trained), sum(group.feedback for group in trained), labels.remaining_steps[0])
 
 
 def tree_summary(
@@ -71,31 +91,45 @@ def tree_summary(
     blocks_by_expansion: defaultdict[int, int] = defaultdict(int)
     samples = 0
     executed = []
+    feedback_rounds: set[int] = set()
+    feedback_samples = 0
     for edge in record.edges:
-        if edge.source == StepSource.POLICY:
-            blocks_by_expansion[edge.expansion_index] += 1
-            samples += edge.sample_count
-            executed.append(executed_edge(record, edge))
+        if edge.source != StepSource.POLICY:
+            continue
+        if edge.feedback:
+            feedback_rounds.add(edge.expansion_index)
+            feedback_samples += edge.sample_count
+            continue
+        blocks_by_expansion[edge.expansion_index] += 1
+        samples += edge.sample_count
+        executed.append(executed_edge(record, edge))
     judged = [edge for edge in executed if judged_by_lean(edge)]
-    completions = [completion for expansion in record.expansions for completion in expansion.completions]
+    first_round = [expansion for expansion in record.expansions if not expansion.feedback]
+    completions = [completion for expansion in first_round for completion in expansion.completions]
     cut_off = [completion for completion in completions if is_forced(completion)]
-    groups, proof_steps = trainable_groups(record, reward, credit) if record.result.proved else (0, None)
+    groups = trainable_groups(record, reward, credit) if record.result.proved else TrainableGroups(0, 0, None)
+    accounting = record.result.accounting
     solved_at = record.result.solved_at
     return TreeSummary(
         expansion_budget=expansion_budget,
         solved_at_expansion=None if solved_at is None else solved_at.expansions,
-        proof_steps=proof_steps,
-        trainable_groups=groups,
+        proof_steps=groups.proof_steps,
+        trainable_groups=groups.groups,
         policy_expansions=len(blocks_by_expansion),
         policy_samples=samples,
         distinct_blocks=sum(blocks_by_expansion.values()),
-        distinct_texts=sum(
-            len({completion.text for completion in expansion.completions}) for expansion in record.expansions
-        ),
+        distinct_texts=sum(len({completion.text for completion in expansion.completions}) for expansion in first_round),
         cut_off_samples=len(cut_off),
         repetition_loops=sum(repeats_itself(completion.text) for completion in cut_off),
         judged_blocks=len(judged),
         valid_blocks=sum(ran_completely(edge) for edge in judged),
         arm=arm,
-        generated_tokens=record.result.accounting.generated_tokens,
+        generated_tokens=accounting.generated_tokens,
+        feedback_trainable_groups=groups.feedback_groups,
+        generated_tokens_to_first_proof=accounting.generated_tokens
+        if solved_at is None
+        else solved_at.generated_tokens,
+        lean_seconds=accounting.lean_seconds,
+        feedback_expansions=len(feedback_rounds),
+        feedback_samples=feedback_samples,
     )

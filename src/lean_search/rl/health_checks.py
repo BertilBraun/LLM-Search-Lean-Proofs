@@ -66,7 +66,8 @@ def share(part: int, total: int) -> float | None:
 def measurements(
     outcome: PhaseOutcome | None, entries: Sequence[TreeEntry], held_out: HeldOutRates | None
 ) -> HealthMeasurements:
-    """`entries`: the phase's trees; `held_out`: the held-out evaluation after the phase, if one ran."""
+    """`entries`: the phase's trees (their first-round samples, `tree_summary.py`); `held_out`: the held-out evaluation
+    after the phase, if one ran."""
     summaries = [entry.summary for entry in entries]
     expansions = sum(summary.policy_expansions for summary in summaries)
     samples = sum(summary.policy_samples for summary in summaries)
