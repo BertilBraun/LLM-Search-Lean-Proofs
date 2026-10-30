@@ -86,6 +86,8 @@ max_expansions = 32
 # One REPL per search; most searches wait on the GPUs. Tune by the first hour (Lean cores and memory on the
 # dashboard's system page; a REPL holds 0.25-2 GiB of private memory; budget in src/lean_search/rl/README.md).
 concurrency = 112
+# While the probe or miniF2F runs beside sampling (its own 56 REPLs), only the first 56 searches take statements.
+concurrency_beside_evaluations = 56
 status_seconds = 30.0
 # A search a policy or value server failed feeds its statement again, up to this many times.
 server_failure_retries = 3
@@ -104,9 +106,9 @@ max_sampling_minutes = 90.0
 min_trainable_groups = 300
 check_seconds = 30.0
 # The value model every 2 phases on the last 4 phases' trees (with 45-90-minute phases a retrain every 1.5-3 h on 3-6 h
-# of trees), continuing the last value adapter trained; every one is published and searched with (no gate; the value
-# benchmark and the value arms are trends on the dashboard). The persistent trainer labels the window while the value
-# phase samples. μ is 0 until set by hand: deployment/grpo_loop.sh value-share 0.15 (read when each phase starts
+# of trees), continuing the last value adapter trained; every one is published and searched with, the evaluations'
+# too (no gate; the value benchmark is a trend on the dashboard). The persistent trainer labels the window while the
+# value phase samples. μ is 0 until set by hand: deployment/grpo_loop.sh value-share 0.15 (read when each phase starts
 # training).
 value_every_phases = 2
 value_window_phases = 4
@@ -149,37 +151,39 @@ seed = "grpo-curriculum"
 
 [evaluation]
 probe_set = "grpo/fixed_sets/probe.jsonl"
-# The probe and miniF2F search with value v0 (the starting value adapter), so they measure the policy alone; the value
-# servers swap to it for the evaluations and back.
-value_model = "initial"
+# The probe and miniF2F search with the published value model, so they measure policy and value together (the value
+# benchmark is the value model's own trend), and run beside sampling after the pause: nothing swaps, and their
+# Lean-bound tails do not idle the GPUs. The held-out states stay at the pause (the health checks read them).
+value_model = "published"
+beside_sampling = true
 held_out_states_file = "phase5_eval_visible_student_v2_visible/states.jsonl"
-# Before evaluating, the paused searches' REPL processes above this private memory stop (0: all); they restart and
-# replay their proof states on the next request. Memory budget: src/lean_search/rl/README.md, "Host memory".
+# Before evaluating at the pause, the paused searches' REPL processes above this private memory stop (0: all); they
+# restart and replay their proof states on the next request. Memory budget: src/lean_search/rl/README.md, "Host memory".
 paused_repl_memory_gib = 0.0
 
 # One part of the probe set per slot, the parts in turn (a stratified third, ~167 problems): every ~2 hours of loop
 # time (sampling and training), so the whole set every ~6 hours; the dashboard draws each slot against version 0's runs
 # of the same third, the last three together, and the raw rates. Before the first phase every part twice (version 0's
-# baseline and its run-to-run noise). The wall cap cuts the Lean-bound tail (~3% of the searches, below). Every
-# evaluation runs 112 REPLs, as many as the sampling: the paused searches' REPLs stop first.
+# baseline and its run-to-run noise). The wall cap cuts the Lean-bound tail (~3% of the searches, below). The probe
+# and miniF2F run 56 REPLs beside the 56 searches still taking statements (the others' REPLs stay); the held-out states
+# 112, as many as the sampling: the paused searches' REPLs stop first.
 probe_parts = 3
 
 [evaluation.probe]
 max_expansions = 16
-# The searches still running decide how long the GPUs idle: in the naming A/B's numbered probe (501 problems, 16
-# expansions) p90 16 min, p99 38 min, Lean 88-99% of the tail's wall; no solve came after 30 min.
+# The Lean-bound tail: in the naming A/B's numbered probe (501 problems, 16 expansions) p90 16 min, p99 38 min, Lean
+# 88-99% of the tail's wall; no solve came after 30 min.
 max_wall_seconds = 1800.0
-concurrency = 112
+concurrency = 56
 every_hours = 2.0
 at_start = true
 baseline_runs = 2
 
-# Once per published value model other than v0, the first probe slot after its publish searches its part again with it
-# (same policy), paired per problem with the slot's run with v0: the paired difference per value model and pooled over
-# all (exact McNemar interval), and an alert (dashboard, loop.log) when the published value model is worse than v0 at
-# `significance`; it clears once a newer value model is published. No automatic action.
+# Off: the probe already searches with the published value model. With value_model = "initial", once per published
+# value model other than v0 the first probe slot after its publish would search its part again with it, paired per
+# problem with the slot's run with v0 (an alert when worse at `significance`).
 [evaluation.value_arm]
-enabled = true
+enabled = false
 confidence = 0.95
 significance = 0.05
 
@@ -195,7 +199,7 @@ path = "grpo_gate/benchmark.json.gz"
 [evaluation.minif2f]
 max_expansions = 64
 max_wall_seconds = 7200.0
-concurrency = 112
+concurrency = 56
 every_hours = 0.0
 at_start = true
 

@@ -669,6 +669,15 @@ def directory_bytes(directory: Path) -> int:
     return sum(path.stat().st_size for path in directory.rglob("*") if path.is_file())
 
 
+def evaluation_repls(config: GrpoLoopConfig) -> int:
+    """The most Lean REPLs while evaluating: beside sampling the searches' REPL processes stay."""
+    evaluation = config.evaluation
+    if not evaluation.beside_sampling:
+        return max(target.concurrency for target in (evaluation.probe, evaluation.minif2f, evaluation.held_out_states))
+    beside = config.sampling.concurrency + max(evaluation.probe.concurrency, evaluation.minif2f.concurrency)
+    return max(evaluation.held_out_states.concurrency, beside)
+
+
 def host_memory_text(config: GrpoLoopConfig | None = None) -> str:
     """The node's memory as the system sampler reads it (cgroup limit, available, Lean REPLs, vLLM); with the loop's
     config also what the persistent trainer keeps in its host directory (a tmpfs: parked weights, merges handed to the
@@ -689,12 +698,8 @@ def host_memory_text(config: GrpoLoopConfig | None = None) -> str:
         parked=directory_bytes(host.parked) / GIB,
         handoff=directory_bytes(host.handoff) / GIB,
     )
-    evaluation = config.evaluation
-    evaluation_concurrency = max(
-        target.concurrency for target in (evaluation.probe, evaluation.minif2f, evaluation.held_out_states)
-    )
     conditions = budget_conditions(
-        terms, config.sampling.concurrency, evaluation_concurrency, len(config.training.gpus)
+        terms, config.sampling.concurrency, evaluation_repls(config), len(config.training.gpus)
     )
     return (
         f"{text}; persistent trainer {terms.parked:.1f} GiB parked, {terms.handoff:.1f} GiB handed off; "

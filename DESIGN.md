@@ -808,7 +808,8 @@ foundation of everything above, so it comes first.
     and ECE on expanded states, pair accuracy by kind, Spearman and MAE of the steps, the predicted distributions). Any
     error of the scoring or the trend is logged as an alert, never stops the loop, and the version is scored again after
     the next phase; the phase's pause waits for a scoring in flight.
-  - **Value arm** (replacing the 250-problem A/B every 12 h): once per published value model, the first probe slot after
+  - **Value arm** (replacing the 250-problem A/B every 12 h; off since 2026-10-30, when the probe moved to the
+    published value model): once per published value model, the first probe slot after
     its publish ("Fixed targets"; decided 2026-10-29 after review G: every other slot left some value models unchecked
     and checked others twice) searches its third again with the published value model and the same policy version,
     paired per problem with the slot's run with v0. Per slot and pooled (over the slots of the same published value
@@ -828,9 +829,12 @@ foundation of everything above, so it comes first.
   probability against z on expanded states (reliability bins, ECE, Brier), and the remaining-steps MAE and Spearman on
   proof-graph states, whose exact steps (the shortest route to a proof) do not depend on the order the search found
   them in. Each retrain also records the label distribution of its window (smoothed as trained) and the v0 replay.
-- **Evaluations with a fixed value model** (decided 2026-10-29): the probe and miniF2F always search with v0 as the
-  value model (the value servers swap to v0's kept merged weights and back), so they measure the policy alone; the
-  held-out states use no value model. The value arm is the one exception, by design.
+- **Evaluations with the published value model** (decided 2026-10-30, replacing the fixed v0 of 2026-10-29, whose
+  value-server swap kept every search paused through the evaluations' Lean-bound tails): the probe and miniF2F search
+  with the published value model, so the probe measures policy and value together and the value benchmark remains the
+  value model's own trend; with no swap they run beside sampling (`evaluation.beside_sampling`), the held-out states
+  (no value model) stay at the pause. The value arm is off (`evaluation.value_arm`; it remains for `value_model =
+  "initial"`).
 - **Measured weakness of the pair statistic**: on the value-free row-2 trees (miniF2F-valid, 244 trees) the
   benchmark gives only ~52 labelled pairs over 13 problems; in simulations on that structure the 95% half-width is
   0.08–0.17, and a gain of +0.10 lies above zero in only 22–61% of retrains. The gate set's 402 problems give about 1.6
@@ -840,11 +844,11 @@ foundation of everything above, so it comes first.
 ### Fixed targets
 
 - **Probe set** (decided 2026-10-28): about 500 held-out pool problems, stratified easy / medium / hard by the
-  curriculum's difficulty estimate (not mostly easy; 501 problems), searched at a small budget (16 expansions) with v0
-  as the value model. Small budgets because RL improves efficiency first (126 of 166 miniF2F solves came at the first
+  curriculum's difficulty estimate (not mostly easy; 501 problems), searched at a small budget (16 expansions) with the
+  published value model (v0 until 2026-10-30). Small budgets because RL improves efficiency first (126 of 166 miniF2F solves came at the first
   expansion). **Rhythm** (decided 2026-10-29, for a smoother trend at the same cost): the set is split into three
   stratified parts (every third problem of each stratum, ~167 problems each), and every ~2 hours of loop time a **slot**
-  searches the next part, attached to the phase pause as before; the whole set is covered every ~6 hours, ~1,670
+  searches the next part, after the phase pause (beside sampling since 2026-10-30); the whole set is covered every ~6 hours, ~1,670
   expansions per slot, estimated 13–20 min on 4× 3090 at n = 8 and 64 REPLs (the whole set: about 5,000 expansions,
   40–60 min, from the old 2× 3090 node's 4,577 expansions at n = 16 in 124 min; GPUs were the bottleneck). The parts
   differ in difficulty by about the run-to-run noise, so the dashboard draws each slot against version 0's two runs of
@@ -855,7 +859,8 @@ foundation of everything above, so it comes first.
   and the probe does not measure load; wall-clock stops are counted and reported and should be zero. **Evaluation
   concurrency is 112** (decided 2026-10-29 after review G; was 64): the paused searches' REPLs stop before every
   evaluation, so the evaluations get the loop's REPL count within the host-memory budget, and a 167-problem slot is 1.5
-  waves instead of 2.6, an estimated 8–13 min. **Evaluation share** (estimate, per ~2 h of loop time, which excludes
+  waves instead of 2.6, an estimated 8–13 min. Since 2026-10-30 the probe and miniF2F run at 56 beside 56 sampling
+  searches, and only the held-out states (112) pause the loop. **Evaluation share** (estimate, per ~2 h of loop time, which excludes
   evaluations and publishing): the probe slot 8–13 min, the held-out states ~2 min, the value arm 6–17 min (one per
   value model, a value model every 2 phases, i.e. 0.7–1.3 per slot): ~16–32 min, about 11–19% of wall time with the
   pauses (review G estimated 15–21% for the earlier settings, against the 10–15% planned). To be measured on the node.
@@ -864,7 +869,8 @@ foundation of everything above, so it comes first.
   the dashboard and their sums in `loop.log`. **Value arm**: the first slot after each newly published value model also
   searches its part with that model ("Benchmark and value trends").
 - **miniF2F-valid** at the full budget (64 expansions, n = 8; ~1–1.5 h) at the start, at milestones and at the end
-  (the baseline before phase 1 automatically, the others on request; not on a clock), also with v0 as the value model.
+  (the baseline before phase 1 automatically, the others on request; not on a clock), also with the published value
+  model.
 - Per-sample success and valid Lean on the 512 held-out states with every probe slot (no value model; the hard stop's
   signal). MATH-500 retention (visible and thinking) at milestones, run separately (`reasoning_retention.py`; not in the
   loop). Curves over training, not just a final score. Baselines are re-measured on the new node with the new settings
@@ -995,6 +1001,10 @@ Paper names in the last three rows are from memory and still need checking befor
   within 45–90 min; 32 expansions per loop search with budget signals; per-phase health checks (alerts, an automatic
   rollback on a held-out valid-Lean collapse and a stop on a second one), their thresholds calibrated in the first
   phases; a persistent trainer with in-memory weight handoff (built, not yet run on a GPU).
+- Owner decision 2026-10-30: evaluations with the published value model beside sampling (the probe measures policy
+  and value together; the value benchmark remains the value model's own trend), so the evaluations' Lean-bound tails do
+  not idle the GPUs. Implemented: `evaluation.beside_sampling`, the held-out states still at the pause, the value arm
+  off.
 - **Single-step test** (2026-10-29, `grpo_single_step_v2` on the node, starting from the rebuilt visible student v2,
   three rounds, per-sample success on the 512 trained states / 140 disjoint states, start 0.369 / 0.364):
   per-tactic credit at lr 1e-5 0.407 / 0.379 (84 steps), sequence credit at 1e-5 0.390 / 0.390 (66 steps), per-tactic

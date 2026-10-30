@@ -1,6 +1,7 @@
 import asyncio
 import dataclasses
 import tomllib
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -561,6 +562,127 @@ async def test_evaluations_need_no_value_swap_while_the_reference_is_published(t
     request_evaluation(world.paths, EvaluationKind.PROBE)
     await run_until(world, world.loop(), phases=1)
     assert world.servers.value_weights == []
+
+
+BESIDE_SAMPLING = """
+[evaluation]
+value_model = "published"
+beside_sampling = true
+
+[evaluation.value_arm]
+enabled = false
+"""
+# The probe after every phase beside sampling, the held-out states at every pause from version 0's run on.
+BESIDE_EVERY_PHASE = (
+    PROBE_EVERY_PHASE.replace("every_hours = 0.0\nat_start = false\n", "every_hours = 0.001\nat_start = true\n")
+    + BESIDE_SAMPLING
+)
+# Version 0's probe baseline beside sampling, one search taking statements meanwhile.
+BESIDE_AT_START = (
+    LOOP_TOML.replace(
+        "every_hours = 0.0\nat_start = false\n\n[evaluation.held_out_states]",
+        "every_hours = 0.0\nat_start = true\n\n[evaluation.held_out_states]",
+    ).replace("concurrency = 2\n", "concurrency = 2\nconcurrency_beside_evaluations = 1\n")
+    + BESIDE_SAMPLING
+)
+
+
+async def run_until_condition(loop: GrpoLoop, condition: Callable[[], bool]) -> None:
+    stop = asyncio.Event()
+    task = asyncio.create_task(loop.run(stop))
+    while not condition() and not task.done():
+        await asyncio.sleep(0)
+    stop.set()
+    await task
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        'value_model = "initial"\nbeside_sampling = true\n\n[evaluation.value_arm]\nenabled = false\n',
+        'value_model = "published"\nbeside_sampling = true\n',
+    ],
+    ids=["initial value model", "value arm"],
+)
+def test_evaluations_beside_sampling_need_the_published_value_model_and_no_value_arm(settings: str) -> None:
+    with pytest.raises(ValueError):
+        parse_loop_config(LOOP_TOML + "\n[evaluation]\n" + settings)
+
+
+async def test_the_probe_runs_beside_sampling_while_the_searches_are_open(tmp_path: Path) -> None:
+    world = loop_world(tmp_path, BESIDE_EVERY_PHASE)
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=2)
+    assert world.evaluations.searches_open_during(EvaluationKind.PROBE)[:1] == [True]
+
+
+async def test_the_held_out_states_still_run_at_the_pause(tmp_path: Path) -> None:
+    world = loop_world(tmp_path, BESIDE_EVERY_PHASE)
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=2)
+    assert world.evaluations.searches_open_during(EvaluationKind.HELD_OUT_STATES)[1:3] == [False, False]
+
+
+async def test_evaluations_beside_sampling_swap_no_value_model(tmp_path: Path) -> None:
+    world = loop_world(tmp_path, BESIDE_EVERY_PHASE)
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=2)
+    assert world.servers.value_weights == []
+
+
+async def test_searches_above_the_limit_take_no_statement_while_an_evaluation_runs(tmp_path: Path) -> None:
+    world = loop_world(tmp_path, BESIDE_AT_START, evaluations=FakeEvaluations(hold=asyncio.Event()))
+    record_version_zero(world)
+    await run_until_condition(world.loop(), lambda: len(world.searcher.searched) >= 20)
+    assert world.searcher.most_in_flight == 1
+
+
+async def test_the_phase_pause_waits_for_the_evaluation_beside_sampling(tmp_path: Path) -> None:
+    world = loop_world(tmp_path, BESIDE_AT_START, evaluations=FakeEvaluations(hold=asyncio.Event()))
+    record_version_zero(world)
+    loop = world.loop()
+    searched_when_waiting: list[int] = []
+
+    def log(message: str) -> None:
+        if message.startswith("The phase's pause waits"):
+            searched_when_waiting.append(len(world.searcher.searched))
+
+    loop.log = log
+    await run_until_condition(
+        loop,
+        lambda: (
+            world.searcher.pauses > 0
+            or (bool(searched_when_waiting) and len(world.searcher.searched) >= searched_when_waiting[0] + 10)
+        ),
+    )
+    assert world.searcher.pauses == 0
+
+
+async def test_the_phase_pauses_after_the_whole_evaluation_beside_sampling(tmp_path: Path) -> None:
+    world = loop_world(tmp_path, BESIDE_AT_START, evaluations=FakeEvaluations(hold=asyncio.Event()))
+    record_version_zero(world)
+    loop = world.loop()
+    probe_runs_at_the_pause: list[int] = []
+
+    def log(message: str) -> None:
+        if message.startswith("The phase's pause waits"):
+            assert world.evaluations.hold is not None
+            world.evaluations.hold.set()
+        if message.startswith("Phase 1: "):
+            probe_runs_at_the_pause.append(len(world.evaluations.slots()))
+
+    loop.log = log
+    await run_until(world, loop, phases=1)
+    assert probe_runs_at_the_pause == [3]
+
+
+async def test_an_evaluation_a_stop_cut_off_runs_beside_sampling_at_the_next_start(tmp_path: Path) -> None:
+    world = loop_world(tmp_path, BESIDE_EVERY_PHASE, evaluations=FakeEvaluations(hold=asyncio.Event()))
+    record_version_zero(world)
+    await run_until_condition(world.loop(), lambda: bool(world.evaluations.slots()))
+    world.evaluations.hold = None
+    await run_until(world, world.loop(), phases=2)
+    assert world.evaluations.slots()[:2] == [(0, 0), (0, 0)]
 
 
 async def test_value_training_continues_the_last_trained_adapter(tmp_path: Path) -> None:

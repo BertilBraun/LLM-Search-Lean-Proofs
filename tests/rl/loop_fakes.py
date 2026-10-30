@@ -204,8 +204,18 @@ class FakeSearcher:
         self.events: list[str] = []
         # Shared with the servers: while one is down, every search fails.
         self.servers_down: set[str] = set()
+        self.in_flight = 0
+        self.most_in_flight = 0
 
     async def search(self, problem: Problem) -> CompletedSearch:
+        self.in_flight += 1
+        self.most_in_flight = max(self.most_in_flight, self.in_flight)
+        try:
+            return await self.proving_search(problem)
+        finally:
+            self.in_flight -= 1
+
+    async def proving_search(self, problem: Problem) -> CompletedSearch:
         await self.open.wait()
         await asyncio.sleep(0.001)
         self.searched.append(problem.name)
@@ -357,18 +367,26 @@ class FakeServers:
 
 @dataclass
 class FakeEvaluations:
-    """Each run with the phase it ran in; value arms find the published value model worse when asked. Held-out
-    runs report the rates in `held_out_rates` in order (later runs repeat the last), written where the loop's health
-    check reads them."""
+    """Each run with the phase it ran in and whether the searches were open meanwhile; value arms find the published
+    value model worse when asked. Held-out runs report the rates in `held_out_rates` in order (later runs repeat the
+    last), written where the loop's health check reads them. With `hold`, the probe and miniF2F runs end only once it
+    is set."""
 
     runs: list[tuple[EvaluationRun, int]] = field(default_factory=list)
     value_arm_worse: bool = False
     # (valid-Lean rate, per-sample success) per held-out run.
     held_out_rates: list[tuple[float, float]] = field(default_factory=lambda: [(0.8, 0.4)])
     paths: GrpoLoopPaths | None = None
+    searcher: FakeSearcher | None = None
+    searches_open: list[bool] = field(default_factory=list)
+    hold: asyncio.Event | None = None
 
     async def evaluate(self, run: EvaluationRun, phase: int) -> EvaluationSummary:
         self.runs.append((run, phase))
+        assert self.searcher is not None
+        self.searches_open.append(self.searcher.open.is_set())
+        if self.hold is not None and run.kind != EvaluationKind.HELD_OUT_STATES:
+            await self.hold.wait()
         summary = dataclasses.replace(
             zero(EvaluationSummary), kind=run.kind, problems=10, solved=4 + run.repeat, slot=run.slot
         )
@@ -391,6 +409,11 @@ class FakeEvaluations:
             directory = self.paths.evaluation_directory(run, version)
             write_json_atomically(directory / "summary.json", summary)
         return summary
+
+    def searches_open_during(self, kind: EvaluationKind) -> list[bool]:
+        return [
+            searching for (run, _), searching in zip(self.runs, self.searches_open, strict=True) if run.kind == kind
+        ]
 
     def slots(self, value_arm: bool = False) -> list[tuple[int | None, int]]:
         """(slot, repeat) of the probe runs, or of the value arms."""
@@ -510,6 +533,7 @@ def loop_world(
     servers.down = searcher.servers_down
     evaluations = evaluations or FakeEvaluations()
     evaluations.paths = paths
+    evaluations.searcher = searcher
     return LoopWorld(config, paths, searcher, trainer, servers, evaluations, scorer=scorer)
 
 

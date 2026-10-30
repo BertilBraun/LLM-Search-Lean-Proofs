@@ -146,9 +146,14 @@ def test_loop_replays_the_v0_value_training_data() -> None:
     assert loop("grpo/loop.toml").training.value_replay == "value/v0/train.jsonl"
 
 
-@pytest.mark.parametrize("name", LOOPS)
-def test_loop_evaluations_search_with_the_starting_value_model(name: str) -> None:
-    assert loop(name).evaluation.value_model == EvaluationValueModel.INITIAL
+@pytest.mark.parametrize("name", ["grpo/loop.toml", "grpo/loop_smoke.toml"])
+def test_loop_evaluates_beside_sampling_with_the_published_value_model(name: str) -> None:
+    evaluation = loop(name).evaluation
+    assert (evaluation.beside_sampling, evaluation.value_model) == (True, EvaluationValueModel.PUBLISHED)
+
+
+def test_the_overfit_loop_evaluates_at_the_pause() -> None:
+    assert not loop("grpo/loop_overfit.toml").evaluation.beside_sampling
 
 
 @pytest.mark.parametrize("name", LOOPS)
@@ -171,9 +176,9 @@ def test_the_loop_probes_a_third_every_two_hours() -> None:
     assert (evaluation.probe_parts, evaluation.probe.every_hours) == (3, 2.0)
 
 
-@pytest.mark.parametrize("name", ["grpo/loop.toml", "grpo/loop_smoke.toml"])
-def test_the_loop_runs_a_value_arm_per_published_value_model(name: str) -> None:
-    assert loop(name).evaluation.value_arm.enabled
+def test_the_loop_probe_has_as_many_repls_as_the_searches_beside_it() -> None:
+    config = loop("grpo/loop.toml")
+    assert config.evaluation.probe.concurrency == config.sampling.concurrency_beside_evaluations
 
 
 def test_the_overfit_loop_probes_the_whole_set_when_requested() -> None:

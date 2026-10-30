@@ -11,15 +11,19 @@ from pathlib import Path
 import pytest
 
 from lean_search.expert_iteration.serving import write_json_atomically
+from lean_search.rl.loop_config import load_loop_config
 from lean_search.rl.loop_services import (
     JOB_MARKER_VARIABLE,
     ChildProcess,
+    evaluation_repls,
     host_memory_text,
     live_children,
     run_logged,
     running_start_ticks,
 )
 from lean_search.search.records import from_json_object
+
+REPOSITORY_DIRECTORY = Path(__file__).resolve().parents[2]
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="process groups and /proc are POSIX")
 
@@ -142,6 +146,11 @@ async def test_a_job_does_not_start_while_an_earlier_loops_job_runs(tmp_path: Pa
 
 def test_the_host_memory_text_reports_what_is_available() -> None:
     assert "GiB available" in host_memory_text()
+
+
+def test_beside_sampling_the_evaluation_repls_add_to_the_searches() -> None:
+    config = load_loop_config(REPOSITORY_DIRECTORY / "experiments/configs/grpo/loop.toml")
+    assert evaluation_repls(config) == config.sampling.concurrency + config.evaluation.probe.concurrency
 
 
 def test_a_record_whose_process_id_was_reused_is_not_a_live_job(tmp_path: Path) -> None:

@@ -40,6 +40,9 @@ class SamplingConfig:
     max_expansions: int = 32
     # Concurrent searches, each holding a Lean REPL; most wait on the GPUs, so this may exceed the core count.
     concurrency: int = 112
+    # While evaluations run beside sampling (`evaluation.beside_sampling`), only this many of the searches take new
+    # statements; the others finish their search and wait.
+    concurrency_beside_evaluations: int = 56
     status_seconds: float = 30.0
     # A search a server failed feeds its statement again up to this many times, each after the pause.
     server_failure_retries: int = 3
@@ -103,7 +106,7 @@ class EvaluationTarget:
     max_expansions: int
     # Per problem; an emergency cap, so that the expansions are the budget and the result does not measure load.
     max_wall_seconds: float
-    # Lean REPLs of the evaluation's own pool; the paused searches' REPL processes stop first
+    # Lean REPLs of the evaluation's own pool; at a pause the paused searches' REPL processes stop first
     # (`paused_repl_memory_gib`), so the loop's sampling concurrency fits (rl/README.md, "Host memory").
     concurrency: int
     # Hours of loop time (sampling and training, evaluations excluded) between runs; 0: only when requested.
@@ -160,9 +163,12 @@ class EvaluationConfig:
     held_out_states: EvaluationTarget = field(
         default_factory=lambda: EvaluationTarget(1, 600.0, 112, every_hours=2.0, at_start=True)
     )
-    # The value model the probe and miniF2F search with: fixed, so that they measure the policy alone. The servers
-    # swap to it for the evaluations and back afterwards.
+    # The value model the probe and miniF2F search with. INITIAL measures the policy alone: the servers swap to it for
+    # the evaluations and back afterwards.
     value_model: EvaluationValueModel = EvaluationValueModel.INITIAL
+    # The probe and miniF2F run after the pause, while the searches sample (`sampling.concurrency_beside_evaluations`);
+    # the held-out states stay at the pause. Needs the published value model and no value arm: nothing swaps.
+    beside_sampling: bool = False
     # Scored through the value servers by every newly served value model, during sampling.
     value_benchmark: ValueBenchmarkConfig = field(default_factory=ValueBenchmarkConfig)
     # Under $LEAN_SEARCH_DATA: the probe set, and the states (a phase5 run's states.jsonl, under $LEAN_SEARCH_RUNS).
@@ -278,6 +284,13 @@ def parse_loop_config(text: str) -> GrpoLoopConfig:
         raise ValueError("evaluation targets need baseline_runs >= 1.")
     if evaluation.probe_parts < 1:
         raise ValueError("evaluation needs probe_parts >= 1.")
+    if evaluation.beside_sampling and (
+        evaluation.value_model != EvaluationValueModel.PUBLISHED or evaluation.value_arm.enabled
+    ):
+        raise ValueError(
+            'evaluation.beside_sampling needs value_model = "published" and [evaluation.value_arm] enabled = false: '
+            "the value servers keep serving the searches' value model."
+        )
     return config
 
 

@@ -386,10 +386,10 @@ Order on a fresh node (each step catches what would otherwise surface hours late
 3. **Smoke cycle** (`experiments/configs/grpo/loop_smoke.toml`, about an hour): the whole loop on the overfit statements
    with visible student v2 as the starting policy, 5-10-minute phases, a value phase every phase (always published) and
    every evaluation at a tiny size (probe 12 problems, 4 per part, every part twice at the start; miniF2F 8; held-out
-   states 32 after every phase; a value arm per published value model, so every slot). It runs the at-start baselines,
-   v0 scoring the loop's value benchmark (step 5's, so step 5 runs first) through the value servers, a pause with policy and value training on four ranks,
-   both GPU merges, the publish and the wake, the new value model scoring the benchmark, the swap to the fixed v0 value
-   model for a probe slot and to the published one for its value arm, and the adapter pruning after the second phase. Go
+   states 32 after every phase at the pause, the probe and miniF2F beside sampling as in `loop.toml`). It runs the
+   at-start baselines, v0 scoring the loop's value benchmark (step 5's, so step 5 runs first) through the value servers, a pause with policy and value training on four ranks,
+   both GPU merges, the publish and the wake, the new value model scoring the benchmark, a probe slot with it beside
+   sampling (the next pause waits for it), and the adapter pruning after the second phase. Go
    through the first-hour checks below on it, stop it after two phases and delete `$LEAN_SEARCH_RUNS/grpo_smoke*` and
    `$LEAN_SEARCH_CHECKPOINTS/grpo_smoke*`.
 4. **Cheap tests** (below): single-step GRPO with both credits (go or no-go on the learning rate), then the SFT stage
@@ -425,9 +425,9 @@ value targets) stays 0 until set by hand with `value-share`, which writes `$LEAN
 the loop reads it when each phase starts training (`status` prints it, the Value page charts the μ in effect per phase).
 The value model retrains every 2 phases on the last 4 phases' trees. The value statistics are trends only: the value
 benchmark (Value page, per served value model, against v0 and the previous model; a scoring or trend that fails is
-logged as an alert and retried after the next phase), the value arms (one per published value model, at the next probe
-slot, paired with v0; an alert in `loop.log` and on the dashboard while the published value model is significantly worse
-than v0, nothing more) and the per-phase calibration and label/prediction distributions.
+logged as an alert and retried after the next phase) and the per-phase calibration and label/prediction distributions;
+the probe searches with the published value model, so it measures policy and value together (the value arms, which
+pair a value model's probe slot with a v0 run, are off in `loop.toml`).
 
 `servers` starts only the servers that do not answer, on the current version; the loop does the same by itself when
 searches keep failing on a server (`src/lean_search/rl/README.md`, "The loop", server failures) and stops with an
@@ -462,9 +462,9 @@ First-hour checks:
 - Publishing keeps the update: after phase 1, `weights/v0001/policy` should differ from `v0000/policy` in a large
   share of the adapted layers' elements (merging the continued SFT adapter into the raw base, not into merged weights).
 - Timings: version 0's probe (three parts, each twice) and the held-out-states run before the first phase give a probe
-  slot's wall time (`fixed_targets.evaluation_seconds` per part; estimated 9-13 min at concurrency 112, a slot and a
-  held-out run every ~2 h and a value arm per value model, every 2 phases: ~12-20% of wall time (DESIGN.md, "Fixed
-  targets"); if far more, lower `probe_per_stratum` to 100 and re-select before the loop starts); the first phase's
+  slot's wall time (`fixed_targets.evaluation_seconds` per part; at concurrency 56 beside sampling, a slot every ~2 h;
+  only the held-out run pauses the searches; DESIGN.md, "Fixed targets"; if a slot takes far longer than the 2 hours,
+  lower `probe_per_stratum` to 100 and re-select before the loop starts); the first phase's
   `timing` line gives sampling vs training (two passes if training stays well below sampling, else `passes_per_phase =
   1` in `phase.toml`) and publishing.
 - The pause, segment by segment (`loop.log`'s `Phase <k> pause:` line, the `timing` family's `pause.*`, the System
@@ -498,8 +498,7 @@ First-hour checks:
   discordant count's square root are noise.
 - Value statistics: `loop.log` has a `Value benchmark of value v0: ...` line soon after the start (v0 scoring the
   benchmark through the value servers while the searches run; seconds, not minutes) and one per published value model;
-  the Value page shows the per-phase `value_phase` charts from phase 1 on and the first value arm at the first probe
-  slot after the first value retrain (phase 2). Set μ only by hand (`value-share`).
+  the Value page shows the per-phase `value_phase` charts from phase 1 on. Set μ only by hand (`value-share`).
 - Memory (System page, budget in `src/lean_search/rl/README.md`, "Host memory"): `memory_total_gib`,
   `memory_available_gib`, `lean_private_memory_gib` and its p90, `vllm_private_memory_gib`, once while sampling, once
   while training (four ranks with the phase's sequences, after the paused searches' REPLs stopped) and once during the
