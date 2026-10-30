@@ -177,10 +177,10 @@ probe_parts = 3
 
 [evaluation.probe]
 max_expansions = 16
-# A cap on the Lean-bound tail, rarely binding: in the naming A/B's numbered probe (501 problems, 16 expansions) p90
-# 16 min, p99 38 min, no solve after 30 min. Beside sampling the tail no longer idles the GPUs, so the cap stays high
-# and the result depends little on the load; stops are reported per slot.
-max_wall_seconds = 3600.0
+# In the naming A/B's numbered probe (501 problems, 16 expansions) p90 16 min, p99 38 min, no solve after 30 min
+# (~3% stop on the cap). 30 min keeps a slot (~50 min at 56) within a phase plus the pause's 30-min wait: a slot cut
+# off at the pause starts over at the next version.
+max_wall_seconds = 1800.0
 concurrency = 56
 every_hours = 2.0
 at_start = true

@@ -510,13 +510,22 @@ async def search_problem_set(
             )
             await pool.start(common_headers(pending, PRELOADED_HEADER_SHARE))
             semaphore = asyncio.Semaphore(config.lean.concurrency)
+            not_started = len(pending)
+            searching = 0
 
             async def search_one(problem: Problem) -> None:
+                nonlocal not_started, searching
                 async with semaphore:
+                    not_started -= 1
+                    searching += 1
                     async with pool.acquire() as repl:
                         completed = await search_problem(
                             problem, repl, models.expander, models.priority_function, config.search, renamings
                         )
+                    searching -= 1
+                    # In the tail the loop's sampling takes the freed searches, so the freed REPLs go.
+                    if not not_started:
+                        await pool.stop_idle_processes(searching)
                     await on_completed(completed)
 
             await asyncio.gather(*(search_one(problem) for problem in pending))
@@ -548,7 +557,7 @@ async def run_problem_set_evaluation(
         kind, run_name, versions, problems, results, config, started_at, time.monotonic() - started
     )
     summary = dataclasses.replace(summary, slot=slot, part=part)
-    paths.summary.write_text(to_json(summary), encoding="utf-8")
+    write_json_atomically(paths.summary, summary)
     return summary
 
 

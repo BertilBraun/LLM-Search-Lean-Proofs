@@ -14,6 +14,7 @@ from itertools import zip_longest
 from pathlib import Path
 
 from lean_search.data import Split, load_minif2f
+from lean_search.expert_iteration.serving import write_json_atomically
 from lean_search.reasoning.records import read_records
 from lean_search.reasoning.states import ReasoningState
 from lean_search.rl.evaluation import (
@@ -37,7 +38,6 @@ from lean_search.rl.single_step import (
     total_success,
 )
 from lean_search.search import RunConfig
-from lean_search.search.records import to_json
 
 
 def target_config(evaluation: EvaluationConfig, kind: EvaluationKind) -> EvaluationTarget:
@@ -136,7 +136,7 @@ async def evaluate_held_out_states(
         samples=success.samples,
         valid_samples=success.valid,
     )
-    (directory / "summary.json").write_text(to_json(summary), encoding="utf-8")
+    write_json_atomically(directory / "summary.json", summary)
     return summary
 
 

@@ -380,6 +380,12 @@ def test_the_baseline_difference_of_the_last_slots_waits_for_every_part(tmp_path
     assert probe_baseline_differences(paths, EVALUATION, 5).last_slots is None
 
 
+def test_a_slot_still_running_counts_as_missing(tmp_path: Path) -> None:
+    paths = baseline_world(tmp_path, {4: 7, 5: 9})
+    paths.evaluation_directory(EvaluationRun(EvaluationKind.PROBE, 3), 3).mkdir(parents=True)
+    assert probe_baseline_differences(paths, EVALUATION, 5).last_slots is None
+
+
 PROBE_EVERY_PHASE = LOOP_TOML.replace(
     "every_hours = 0.0\nat_start = false\n\n[evaluation.held_out_states]",
     "every_hours = 0.001\nat_start = false\n\n[evaluation.held_out_states]",

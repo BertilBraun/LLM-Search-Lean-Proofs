@@ -183,8 +183,8 @@ def test_the_loop_probe_has_as_many_repls_as_the_searches_beside_it_at_least() -
     assert config.evaluation.probe.concurrency == config.sampling.min_concurrency_beside_evaluations
 
 
-def test_the_loop_probe_cap_binds_rarely() -> None:
-    assert loop("grpo/loop.toml").evaluation.probe.max_wall_seconds == 3600.0
+def test_a_loop_probe_slot_fits_a_phase_and_the_pause_wait() -> None:
+    assert loop("grpo/loop.toml").evaluation.probe.max_wall_seconds == 1800.0
 
 
 def test_version_zeros_baselines_share_the_sampling_concurrency() -> None:

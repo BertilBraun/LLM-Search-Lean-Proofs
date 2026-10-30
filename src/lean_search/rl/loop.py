@@ -415,9 +415,11 @@ class GrpoLoopPaths:
         return self.evaluations / f"{run.kind}{slot}_v{version:04d}{arm}{repeat}"
 
     def probe_slot_directory(self, slot: int) -> Path | None:
-        """The slot's run with the evaluations' value model (not a repeat or a value arm), whatever version ran it."""
+        """The slot's finished run with the evaluations' value model (not a repeat or a value arm), whatever version
+        ran it; version 0's baseline runs every slot at once."""
         found = sorted(self.evaluations.glob(f"{EvaluationKind.PROBE}_slot{slot:04d}_v[0-9][0-9][0-9][0-9]"))
-        return found[-1] if found else None
+        finished = [directory for directory in found if (directory / "summary.json").exists()]
+        return finished[-1] if finished else None
 
 
 def now() -> str:
