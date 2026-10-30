@@ -383,7 +383,43 @@ const BUDGET = {
   },
 };
 
-const DIFFICULTY_RATE = { label: "solve rate", sum: "by_difficulty.", suffix: ".solved", over: { sum: "by_difficulty.", suffix: ".attempts" } };
+// The search options A/B (sampling.options_arm) with the shipped arm's name, "feedback".
+const ARM = (field) => [
+  { label: "control", field: `by_search_arm.control.${field}` },
+  { label: "feedback", field: `by_search_arm.feedback.${field}` },
+];
+const ARM_DIFFERENCE = (field) => [
+  { label: "feedback - control", field: `by_search_arm.feedback.${field}.difference` },
+  { label: "95% low", field: `by_search_arm.feedback.${field}.low`, dashed: true },
+  { label: "95% high", field: `by_search_arm.feedback.${field}.high`, dashed: true },
+];
+const SEARCH_OPTIONS_AB = {
+  tokens: {
+    title: "Solves per 1k generated tokens", subtitle: "per arm, the phase's trees", family: "budget", x: "phase", unit: "number",
+    series: ARM("solved_per_thousand_tokens"),
+  },
+  tokensDifference: {
+    title: "Solves per 1k tokens, feedback minus control", subtitle: "dashed: 95% bootstrap interval over trees", family: "budget", x: "phase", unit: "number",
+    series: ARM_DIFFERENCE("solved_per_thousand_tokens_difference"),
+  },
+  hours: {
+    title: "Solves per tree-hour", subtitle: "per arm; a search's wall clock, a pause it waited through included", family: "budget", x: "phase", unit: "number",
+    series: ARM("solved_per_tree_hour"),
+  },
+  hoursDifference: {
+    title: "Solves per tree-hour, feedback minus control", subtitle: "dashed: 95% bootstrap interval over trees", family: "budget", x: "phase", unit: "number",
+    series: ARM_DIFFERENCE("solved_per_tree_hour_difference"),
+  },
+  groups: {
+    title: "Trainable groups per tree", subtitle: "per arm; the feedback arm's feedback-round groups apart", family: "budget", x: "phase", unit: "number",
+    series: [
+      ...ARM("trainable_groups_per_tree"),
+      { label: "feedback rounds", field: "by_search_arm.feedback.feedback_trainable_groups", over: "by_search_arm.feedback.trees" },
+    ],
+  },
+};
+
+const DIFFICULTY_RATE ={ label: "solve rate", sum: "by_difficulty.", suffix: ".solved", over: { sum: "by_difficulty.", suffix: ".attempts" } };
 
 export const PAGES = [
   {
@@ -647,6 +683,10 @@ export const PAGES = [
       {
         title: "Search budget",
         charts: [BUDGET.lateSolves, BUDGET.expansions, BUDGET.meanExpansions, BUDGET.proofSteps, BUDGET.meanProofSteps, BUDGET.difficulty, BUDGET.groups],
+      },
+      {
+        title: "Search options A/B",
+        charts: [SEARCH_OPTIONS_AB.tokens, SEARCH_OPTIONS_AB.tokensDifference, SEARCH_OPTIONS_AB.hours, SEARCH_OPTIONS_AB.hoursDifference, SEARCH_OPTIONS_AB.groups],
       },
     ],
   },

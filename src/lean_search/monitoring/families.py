@@ -88,6 +88,15 @@ class BandOutcome:
 
 
 @dataclass(frozen=True)
+class ArmDifference:
+    """The options arm's rate minus the control arm's, and its 95% bootstrap interval over the arms' trees."""
+
+    difference: float
+    low: float
+    high: float
+
+
+@dataclass(frozen=True)
 class ArmOutcome:
     """A search options A/B arm's trees of a phase (rl/README.md, "Search options A/B")."""
 
@@ -95,8 +104,19 @@ class ArmOutcome:
     solved: int
     trainable_groups: int
     generated_tokens: int
-    solved_per_million_tokens: float
+    solved_per_thousand_tokens: float
     trainable_groups_per_tree: float
+    # Of the trainable groups, those of a node's feedback round.
+    feedback_trainable_groups: int = 0
+    # Of the generated tokens, those up to each tree's first proof (an unsolved tree's all); the rest harvested.
+    generated_tokens_to_first_proof: int = 0
+    # Summed over the trees: a search's wall clock (a pause it waited through included) and its Lean time.
+    wall_seconds: float = 0.0
+    lean_seconds: float = 0.0
+    solved_per_tree_hour: float = 0.0
+    # The options arm's against the control arm; None for the control arm.
+    solved_per_thousand_tokens_difference: ArmDifference | None = None
+    solved_per_tree_hour_difference: ArmDifference | None = None
 
 
 @dataclass(frozen=True)
