@@ -1,8 +1,10 @@
+import dataclasses
 import tomllib
 from pathlib import Path
 
 import pytest
 
+from lean_search.policy.config import FeedbackConfig
 from lean_search.rl.evaluation import EvaluationKind
 from lean_search.rl.fixed_sets import FixedSetsConfig
 from lean_search.rl.fixed_targets import baseline_concurrency, baseline_jobs, target_config
@@ -13,6 +15,7 @@ from lean_search.rl.loop_config import (
     StatementSourceKind,
     load_loop_config,
 )
+from lean_search.rl.search_options import SearchOptions
 from lean_search.rl.single_step import SingleStepConfig
 from lean_search.rl.training_phase import TrainingPhaseConfig
 from lean_search.search import PriorityKind, RunConfig, load_run_config
@@ -258,3 +261,22 @@ def test_the_loop_rolls_back_on_a_first_collapse() -> None:
 def test_the_smoke_loop_runs_the_held_out_states_after_every_phase() -> None:
     evaluation = loop("grpo/loop_smoke.toml").evaluation
     assert evaluation.held_out_states.every_hours == evaluation.probe.every_hours
+
+
+def test_the_loop_runs_the_feedback_a_b() -> None:
+    assert loop("grpo/loop.toml").sampling.options_arm.name == "feedback"
+
+
+def test_the_loop_feedback_arm_asks_for_4_samples_with_2_failed_attempts_below_2_new_states() -> None:
+    feedback = loop("grpo/loop.toml").sampling.options_arm.options.feedback
+    assert (feedback.enabled, feedback.min_children, feedback.max_attempts, feedback.sample_count) == (True, 2, 2, 4)
+
+
+def test_the_loop_feedback_arm_changes_nothing_but_the_feedback_round() -> None:
+    options = loop("grpo/loop.toml").sampling.options_arm.options
+    assert dataclasses.replace(options, feedback=FeedbackConfig()) == SearchOptions()
+
+
+@pytest.mark.parametrize("name", ["grpo/loop_overfit.toml", "grpo/loop_smoke.toml"])
+def test_the_other_loops_run_no_a_b(name: str) -> None:
+    assert loop(name).sampling.options_arm.name == ""

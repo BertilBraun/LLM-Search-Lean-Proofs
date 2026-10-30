@@ -94,6 +94,17 @@ status_seconds = 30.0
 server_failure_retries = 3
 server_failure_pause_seconds = 5.0
 
+# Search options A/B (rl/README.md): statements with an odd sha256(name) search with the feedback round, the others as
+# the template. Owner decision 2026-10-30: 2 phases, judged on solves per generated token and trainable groups.
+[sampling.options_arm]
+name = "feedback"
+
+[sampling.options_arm.options.feedback]
+enabled = true
+min_children = 2
+max_attempts = 2
+sample_count = 4
+
 [training]
 phase_config = "experiments/configs/grpo/phase.toml"
 # One torchrun rank per GPU; each optimizer step equals the one-GPU step. Fallback if the pause costs too much: [0]
