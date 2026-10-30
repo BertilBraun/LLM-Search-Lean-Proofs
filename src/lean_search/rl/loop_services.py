@@ -42,7 +42,15 @@ from lean_search.policy.server_control import (
     release_gpu,
     restore_gpu,
 )
-from lean_search.rl.evaluation import EvaluationRun, EvaluationSummary, read_summary
+from lean_search.rl.evaluation import (
+    EvaluationKind,
+    EvaluationPaths,
+    EvaluationRun,
+    EvaluationSummary,
+    read_search_progress,
+    read_summary,
+)
+from lean_search.rl.fixed_targets import baseline_concurrency, baseline_jobs, target_config
 from lean_search.rl.host_memory import HostMemoryTerms, budget_conditions, budget_text
 from lean_search.rl.loop import (
     GIB,
@@ -72,6 +80,8 @@ CHECK_GOALS = ("x : ℝ\nh₀ : 3 * x + 2 = 11\n⊢ x = 3",)
 # A stopped job's process group gets SIGTERM, then SIGKILL after this long.
 CHILD_STOP_SECONDS = 30.0
 JOB_MARKER_VARIABLE = "LEAN_SEARCH_LOOP_JOB"
+# The job records under children/: the per-phase training job's, the persistent trainer's and the evaluations'.
+EVERY_RECORD = "**/*.pid"
 
 
 class LeanTreeSearcher:
@@ -113,6 +123,10 @@ class LeanTreeSearcher:
 
     async def release_lean_memory(self, above_bytes: int) -> ReleasedLeanMemory:
         stopped = await self.pool.stop_processes(above_bytes)
+        return ReleasedLeanMemory(len(stopped), sum(usage.anonymous_bytes for usage in stopped))
+
+    async def stop_idle_repls(self, keep_running: int) -> ReleasedLeanMemory:
+        stopped = await self.pool.stop_idle_processes(keep_running)
         return ReleasedLeanMemory(len(stopped), sum(usage.anonymous_bytes for usage in stopped))
 
 
@@ -172,9 +186,9 @@ def marked_processes(marker: str) -> list[int]:
     return process_ids
 
 
-def live_children(directory: Path) -> list[LiveJob]:
+def live_children(directory: Path, pattern: str = "*.pid") -> list[LiveJob]:
     """Recorded jobs that still run: the process the loop started, or any process carrying the job's marker."""
-    children = [from_json_object(ChildProcess, json.loads(path.read_text())) for path in directory.glob("*.pid")]
+    children = [from_json_object(ChildProcess, json.loads(path.read_text())) for path in directory.glob(pattern)]
     jobs = [LiveJob(child, tuple(marked_processes(child.marker))) for child in children]
     return [
         job for job in jobs if job.process_ids or running_start_ticks(job.record.process_id) == job.record.start_ticks
@@ -293,7 +307,7 @@ class SubprocessTrainer:
         self.config = config
 
     def earlier_jobs(self) -> str | None:
-        running = live_children(self.paths.children)
+        running = live_children(self.paths.children, EVERY_RECORD)
         return earlier_jobs_text(running) if running else None
 
     def arguments(self, request: TrainingRequest, config_path: Path) -> list[str]:
@@ -371,7 +385,7 @@ class PersistentTrainer:
         self.trained_in_job = False
 
     def earlier_jobs(self) -> str | None:
-        running = live_children(self.paths.children) + live_children(self.record_path.parent)
+        running = live_children(self.paths.children, EVERY_RECORD)
         return earlier_jobs_text(running) if running else None
 
     def running(self) -> bool:
@@ -623,12 +637,18 @@ class VllmServers:
 
 
 class SubprocessEvaluations:
-    """experiments/grpo_evaluate.py as its own process; it writes the fixed_targets line and the summary."""
+    """experiments/grpo_evaluate.py as its own process, each recorded apart (version 0's baselines run at once); it
+    writes the fixed_targets line, the summary and its progress."""
 
     def __init__(self, paths: GrpoLoopPaths, command_prefix: str, current_version: Callable[[], int]) -> None:
         self.paths = paths
         self.command_prefix = command_prefix
         self.current_version = current_version
+        self.running: dict[EvaluationRun, EvaluationPaths] = {}
+
+    def searches_in_flight(self, run: EvaluationRun) -> int | None:
+        progress = read_search_progress(self.running[run].progress) if run in self.running else None
+        return None if progress is None else progress.searches_in_flight
 
     async def evaluate(self, run: EvaluationRun, phase: int) -> EvaluationSummary:
         directory = self.paths.evaluation_directory(run, self.current_version())
@@ -649,8 +669,15 @@ class SubprocessEvaluations:
             arguments += ["--slot", str(run.slot)]
         if run.value_arm:
             arguments.append("--value-arm")
+        if run.concurrency:
+            arguments += ["--concurrency", str(run.concurrency)]
         log_path = directory.with_name(directory.name + ".log")
-        await run_logged(arguments, log_path, dict(os.environ), self.paths.children / "evaluation.pid")
+        record_path = self.paths.children / "evaluations" / directory.name / "evaluation.pid"
+        self.running[run] = EvaluationPaths(directory)
+        try:
+            await run_logged(arguments, log_path, dict(os.environ), record_path)
+        finally:
+            del self.running[run]
         return read_summary(directory / "summary.json")
 
 
@@ -670,12 +697,22 @@ def directory_bytes(directory: Path) -> int:
 
 
 def evaluation_repls(config: GrpoLoopConfig) -> int:
-    """The most Lean REPLs while evaluating: beside sampling the searches' REPL processes stay."""
+    """The most Lean REPLs while evaluating (the searches' in-flight REPLs above the limit aside, which stop once their
+    search ends): at a pause or before sampling the evaluations' own; beside sampling also the searches', at least
+    the floor's, the others' idle processes stopped."""
     evaluation = config.evaluation
+    targets = (evaluation.probe, evaluation.minif2f, evaluation.held_out_states)
+    paused = max(target.concurrency for target in targets)
+    baselines = sum(
+        baseline_concurrency(config, kind) * baseline_jobs(evaluation, kind)
+        for kind in EvaluationKind
+        if target_config(evaluation, kind).at_start
+    )
     if not evaluation.beside_sampling:
-        return max(target.concurrency for target in (evaluation.probe, evaluation.minif2f, evaluation.held_out_states))
-    beside = config.sampling.concurrency + max(evaluation.probe.concurrency, evaluation.minif2f.concurrency)
-    return max(evaluation.held_out_states.concurrency, beside)
+        return max(paused, baselines)
+    floor = config.sampling.min_concurrency_beside_evaluations
+    beside = max(config.sampling.concurrency, floor + max(evaluation.probe.concurrency, evaluation.minif2f.concurrency))
+    return max(evaluation.held_out_states.concurrency, baselines, beside)
 
 
 def host_memory_text(config: GrpoLoopConfig | None = None) -> str:

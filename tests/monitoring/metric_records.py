@@ -11,9 +11,17 @@ from lean_search.monitoring.families import (
     SearchPhase,
     SystemUsage,
     ValueArmResult,
+    ValueBenchmarkTrend,
 )
+from lean_search.rl.loop_config import ValueBenchmarkConfig
 from lean_search.rl.tree_statistics import BlockCounts, EdgeKindCounts, GraphStatistics, SizeHistogram
+from lean_search.rl.value_trends import VersionScores, benchmark_trend
 from lean_search.search.tactic_labels import TacticLabelCounts
+from lean_search.value.benchmark import BenchmarkScores, ValueBenchmark, benchmark_fingerprint
+from lean_search.value.bins import Readout
+from lean_search.value.pair_statistics import PairStatistic
+
+EMPTY_BENCHMARK = ValueBenchmark(provenance=(), states=(), groups=())
 
 ZERO_BY_TYPE = {
     int: 0,
@@ -50,6 +58,7 @@ def loop_status(
     heartbeat_seconds: float = 60.0,
     server_failures: int = 0,
     value_benchmark_failures: int = 0,
+    evaluation_failures: int = 0,
 ) -> LoopStatus:
     return LoopStatus(
         state=LoopState.SEARCHING,
@@ -63,6 +72,7 @@ def loop_status(
         last_publish_time=last_publish_time,
         server_failures=server_failures,
         value_benchmark_failures=value_benchmark_failures,
+        evaluation_failures=evaluation_failures,
     )
 
 
@@ -129,3 +139,13 @@ def value_arm(worse: bool) -> ValueArmResult:
         all_value_versions=difference,
         worse=worse,
     )
+
+
+def value_benchmark(upper: float, value_version: int = 4) -> ValueBenchmarkTrend:
+    """The benchmark trend of an empty benchmark, with an interval against v0 ending at `upper`."""
+    scores = BenchmarkScores("value-merged", benchmark_fingerprint(EMPTY_BENCHMARK), ())
+    trend = benchmark_trend(
+        EMPTY_BENCHMARK, VersionScores(value_version, scores), None, None, Readout(), ValueBenchmarkConfig(), 30.0
+    )
+    against = PairStatistic(10, 100, 10, 0.6, 0.65, upper - 0.05, upper - 0.1, upper, 50.0, 1000, 0.95)
+    return dataclasses.replace(trend, reference_value_version=0, against_reference=against)

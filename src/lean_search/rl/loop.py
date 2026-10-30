@@ -26,10 +26,13 @@ evaluating  the fixed targets that are due (by loop hours, at the start, or requ
             phase's budget signals and health checks (`health_checks.py`): a held-out collapse publishes the last good
             version's policy again, a second one soon after ends the loop
 resume      the searches continue with the new weights; a newly served value model scores the value benchmark through
-            the value servers meanwhile, a trend against v0 and the value model before it. With
+            the value servers meanwhile, a trend against v0 and the value model before it (an alert when worse). With
             `evaluation.beside_sampling` the probe and miniF2F due run now with the published value model, beside the
-            first `sampling.concurrency_beside_evaluations` searches, and the next pause waits for them
+            searches: those taking statements fill the concurrency the evaluation's searches in flight leave, at least
+            `sampling.min_concurrency_beside_evaluations`. A failure is an alert and runs again after the next pause;
+            the next pause waits for them at most `evaluation.max_pause_wait_minutes`, then cancels them alike
 
+Version 0's baselines (every at-start run) run all at once before sampling, sharing the concurrency.
 The boundaries to the outside (the searches with Lean and vLLM, the training job, the vLLM servers, the evaluation
 jobs) are protocols; `loop_services.py` holds the production implementations.
 """
@@ -90,7 +93,7 @@ from lean_search.rl.evaluation import (
     read_summary,
     value_arm_text,
 )
-from lean_search.rl.fixed_targets import target_config
+from lean_search.rl.fixed_targets import baseline_concurrency, run_target, target_config
 from lean_search.rl.health_checks import (
     HeldOutRates,
     append_health,
@@ -128,6 +131,7 @@ from lean_search.rl.value_trends import (
     keep_scores,
     scores_path,
     trend_text,
+    worse_than_reference,
 )
 from lean_search.search import CompletedSearch, tree_record
 from lean_search.search.records import from_json_object, to_json
@@ -177,6 +181,16 @@ class LoopProgress:
 
 
 @dataclass(frozen=True)
+class BesideSampling:
+    """The evaluations that ran beside a phase's sampling: those that finished, those that failed or were cut off at
+    the pause (each runs again after it), and their wall seconds."""
+
+    finished: tuple[EvaluationKind, ...] = ()
+    failed: tuple[EvaluationKind, ...] = ()
+    seconds: float = 0.0
+
+
+@dataclass(frozen=True)
 class PhaseRecord:
     phase: int
     trees: int
@@ -192,6 +206,7 @@ class PhaseRecord:
     finished_at: str
     pause: PauseSegments = field(default_factory=PauseSegments)
     value_share: float = 0.0
+    beside_sampling: BesideSampling = field(default_factory=BesideSampling)
 
 
 @dataclass(frozen=True)
@@ -227,6 +242,10 @@ class TreeSearcher(Protocol):
 
     async def release_lean_memory(self, above_bytes: int) -> ReleasedLeanMemory:
         """Stops the REPL processes above `above_bytes` of private memory; their proof states replay on next use."""
+        ...
+
+    async def stop_idle_repls(self, keep_running: int) -> ReleasedLeanMemory:
+        """Stops REPL processes no search uses until at most `keep_running` run; they start again on next use."""
         ...
 
 
@@ -276,6 +295,10 @@ class Evaluations(Protocol):
     async def evaluate(self, run: EvaluationRun, phase: int) -> EvaluationSummary:
         """The run with what the servers serve: the current version, and the evaluations' value model or, for a value
         arm, the published one."""
+        ...
+
+    def searches_in_flight(self, run: EvaluationRun) -> int | None:
+        """The running run's searches holding a REPL, as its job last reported them; None before it did."""
         ...
 
 
@@ -488,7 +511,7 @@ def evaluated(progress: LoopProgress, kind: EvaluationKind) -> LoopProgress:
 
 
 def request_evaluation(paths: GrpoLoopPaths, kind: EvaluationKind) -> None:
-    """The running loop evaluates `kind` at its next phase pause (a milestone)."""
+    """The running loop evaluates `kind` at its next phase pause, or after it beside sampling (a milestone)."""
     paths.requests.mkdir(parents=True, exist_ok=True)
     (paths.requests / kind.value).write_text(now(), encoding="utf-8")
 
@@ -627,8 +650,16 @@ class GrpoLoop:
         self.value_benchmark = value_benchmark
         # The value benchmark's scoring in flight, during sampling.
         self.scoring: asyncio.Task[None] | None = None
-        # The probe and miniF2F in flight beside sampling (`evaluation.beside_sampling`).
+        # The probe and miniF2F in flight beside sampling (`evaluation.beside_sampling`), and what they did this phase.
         self.evaluations_beside_sampling: asyncio.Task[None] | None = None
+        self.beside_sampling = BesideSampling()
+        # The evaluation runs in flight, beside sampling or not, and the kinds beside sampling still to run or running.
+        self.running_evaluations: list[EvaluationRun] = []
+        self.due_beside_sampling_now: list[EvaluationKind] = []
+        # This session's evaluations beside sampling that failed or were cut off, and the search REPL processes stopped
+        # beside the one running.
+        self.evaluation_failures = 0
+        self.beside_sampling_stopped_repls = 0
         self.host_memory = host_memory
         self.gpu_memory = gpu_memory
         self.paths = paths
@@ -754,9 +785,7 @@ class GrpoLoop:
         self.schedule_benchmark_scoring()
         self.loop_state = LoopState.SEARCHING
         self.sampling_since = self.clock()
-        self.start_evaluations_beside_sampling(
-            self.due_beside_sampling(at_start=True), self.progress.phase - 1, at_start=True
-        )
+        self.start_evaluations_beside_sampling(self.due_beside_sampling(at_start=True), self.progress.phase - 1)
         coroutines: list[Coroutine[None, None, None]] = [
             self.work(stop, index) for index in range(self.config.sampling.concurrency)
         ]
@@ -772,11 +801,18 @@ class GrpoLoop:
             stop.set()
 
     async def work(self, stop: asyncio.Event, index: int) -> None:
+        waiting = False
         while not stop.is_set():
             evaluating = self.running_evaluations_beside_sampling()
-            if evaluating is not None and index >= self.config.sampling.concurrency_beside_evaluations:
-                await asyncio.wait({evaluating}, timeout=IDLE_SECONDS)
-                continue
+            if evaluating is not None:
+                limit = self.sampling_limit()
+                if index >= limit:
+                    if not waiting:
+                        waiting = True
+                        await self.stop_idle_repls(limit)
+                    await asyncio.wait({evaluating}, timeout=self.config.training.check_seconds)
+                    continue
+            waiting = False
             fed = self.statements.next_statement()
             if fed is None:
                 await asyncio.sleep(IDLE_SECONDS)
@@ -851,8 +887,8 @@ class GrpoLoop:
 
     async def recover_servers(self) -> None:
         """Pauses the searches and checks the servers: restarts the dead ones, and stops the loop if any stays down
-        (stopped is better than idle GPUs until someone looks). An evaluation beside sampling goes on: only servers
-        that do not answer restart, and its requests to them fail either way."""
+        (stopped is better than idle GPUs until someone looks). An evaluation beside sampling is not paused: its
+        requests to a server that does not answer, or restarts, fail it, and it runs again after the next pause."""
         async with self.pause_lock:
             if not self.servers_failing():
                 return
@@ -884,19 +920,48 @@ class GrpoLoop:
             self.write_status()
 
     async def watch(self, stop: asyncio.Event) -> None:
+        """Pauses for a phase once it is due; an evaluation beside sampling holds the pause for at most
+        `evaluation.max_pause_wait_minutes` (the servers never sleep under it), the searches sampling meanwhile."""
+        waiting_since: float | None = None
         while not stop.is_set():
             await asyncio.sleep(self.config.training.check_seconds)
             for message in self.statements.refresh():
                 self.log(message)
-            if not stop.is_set() and self.phase_due():
-                # Outside the pause lock, so that a check of the servers can still pause the searches meanwhile.
-                await self.finish_evaluations_beside_sampling()
-                if not stop.is_set():
-                    async with self.pause_lock:
-                        await self.run_phase()
-            elif self.sampling_since is not None:
-                self.save_progress(sampling_seconds=self.sampling_seconds())
-                self.sampling_since = self.clock()
+            if stop.is_set():
+                return
+            if not self.phase_due():
+                self.save_sampling_progress()
+                continue
+            evaluating = self.running_evaluations_beside_sampling()
+            if evaluating is not None:
+                waited = 0.0 if waiting_since is None else self.clock() - waiting_since
+                if waiting_since is None:
+                    waiting_since = self.clock()
+                    self.log(
+                        "The phase's pause waits for the evaluations beside sampling, at most "
+                        f"{self.config.evaluation.max_pause_wait_minutes:.0f} min"
+                    )
+                if waited < self.config.evaluation.max_pause_wait_minutes * 60:
+                    self.save_sampling_progress()
+                    continue
+                self.log(
+                    f"Alert: the evaluations beside sampling did not finish within {waited / 60:.0f} min of the "
+                    "phase's being due: cancelled; what did not finish runs again after the pause"
+                )
+                self.evaluation_failures += 1
+                evaluating.cancel()
+            waiting_since = None
+            await self.finish_evaluations_beside_sampling()
+            if stop.is_set():
+                return
+            # Outside the pause lock until now, so that a check of the servers could still pause the searches.
+            async with self.pause_lock:
+                await self.run_phase()
+
+    def save_sampling_progress(self) -> None:
+        if self.sampling_since is not None:
+            self.save_progress(sampling_seconds=self.sampling_seconds())
+            self.sampling_since = self.clock()
 
     async def report_status(self, stop: asyncio.Event) -> None:
         while not stop.is_set():
@@ -921,6 +986,7 @@ class GrpoLoop:
                 statements_given_up=self.statements_given_up,
                 value_benchmark_failures=self.value_benchmark_failures,
                 trees_left_out=self.trees_left_out,
+                evaluation_failures=self.evaluation_failures,
             )
         )
 
@@ -951,7 +1017,7 @@ class GrpoLoop:
         await self.finish_phase()
         assert self.stop is not None
         if not self.stop.is_set():
-            self.start_evaluations_beside_sampling(self.due_beside_sampling(at_start=False), phase, at_start=False)
+            self.start_evaluations_beside_sampling(self.due_beside_sampling(at_start=False), phase)
             await self.prepare_training()
 
     async def finish_phase(self) -> None:
@@ -1051,6 +1117,11 @@ class GrpoLoop:
             return
         self.writer.write(trend)
         self.log(trend_text(trend))
+        if worse_than_reference(trend):
+            self.log(
+                f"Alert: value v{version} orders the value benchmark's sibling pairs worse than v0 (the paired "
+                "bootstrap interval lies wholly below 0); nothing changes on its own"
+            )
 
     def benchmark_trend(
         self, benchmark: ValueBenchmark, version: int, scores: BenchmarkScores, seconds: float
@@ -1353,50 +1424,94 @@ class GrpoLoop:
         """The held-out states always: the phase's health checks read them."""
         return kind == EvaluationKind.HELD_OUT_STATES or not self.config.evaluation.beside_sampling
 
-    def paused_evaluations(self, at_start: bool) -> list[EvaluationKind]:
-        return [kind for kind in self.due_evaluations(at_start) if self.at_the_pause(kind)]
-
-    def due_beside_sampling(self, at_start: bool) -> list[EvaluationKind]:
+    def due_now(self, at_start: bool) -> list[EvaluationKind]:
         """At a start after a phase also those due by the schedule since that phase's pause: a stop cut them off."""
         due = self.due_evaluations(at_start)
         if at_start and self.progress.phase > 1:
             due += self.due_evaluations(at_start=False)
-        return [kind for kind in EvaluationKind if kind in due and not self.at_the_pause(kind)]
+        return [kind for kind in EvaluationKind if kind in due]
 
-    def start_evaluations_beside_sampling(self, kinds: list[EvaluationKind], phase: int, at_start: bool) -> None:
-        if not kinds:
-            return
-        assert self.stop is not None
-        self.evaluations_beside_sampling = asyncio.create_task(
-            self.stopping_on_failure(self.evaluate_beside_sampling(kinds, phase, at_start), self.stop)
-        )
+    def paused_evaluations(self, at_start: bool) -> list[EvaluationKind]:
+        """At the pause or before sampling: the held-out states and version 0's baselines (all without
+        `beside_sampling`)."""
+        return [kind for kind in self.due_now(at_start) if self.at_the_pause(kind) or self.baseline(kind, at_start)]
+
+    def due_beside_sampling(self, at_start: bool) -> list[EvaluationKind]:
+        paused = self.paused_evaluations(at_start)
+        return [kind for kind in self.due_now(at_start) if kind not in paused]
+
+    def start_evaluations_beside_sampling(self, kinds: list[EvaluationKind], phase: int) -> None:
+        if kinds:
+            self.due_beside_sampling_now = list(kinds)
+            self.evaluations_beside_sampling = asyncio.create_task(self.evaluate_beside_sampling(kinds, phase))
 
     def running_evaluations_beside_sampling(self) -> asyncio.Task[None] | None:
         task = self.evaluations_beside_sampling
         return task if task is not None and not task.done() else None
 
-    async def evaluate_beside_sampling(self, kinds: list[EvaluationKind], phase: int, at_start: bool) -> None:
-        """Each kind as its own job with the published value model; the searches keep their REPL processes."""
+    def sampling_limit(self) -> int:
+        """Searches that take statements beside an evaluation: the concurrency its searches in flight leave, at least
+        the floor; a job that has not reported, or is about to start, counts its whole concurrency."""
+        sampling = self.config.sampling
+        in_flight = 0
+        for run in self.running_evaluations or [EvaluationRun(kind) for kind in self.due_beside_sampling_now[:1]]:
+            reported = self.evaluations.searches_in_flight(run)
+            in_flight += run_target(self.config.evaluation, run).concurrency if reported is None else reported
+        return max(sampling.min_concurrency_beside_evaluations, sampling.concurrency - in_flight)
+
+    async def stop_idle_repls(self, keep_running: int) -> None:
+        released = await self.searcher.stop_idle_repls(keep_running)
+        self.beside_sampling_stopped_repls += released.stopped_processes
+
+    async def evaluate_beside_sampling(self, kinds: list[EvaluationKind], phase: int) -> None:
+        """Each kind as its own job with the published value model. A failure is logged as an alert and the kind stays
+        due, so it runs again after the next pause; a cancellation (the pause's wait ran out, a stop) leaves it due
+        alike."""
         names = ", ".join(kinds)
-        self.log(
-            f"Evaluating {names} beside sampling; the first {self.config.sampling.concurrency_beside_evaluations} "
-            "searches take statements meanwhile"
-        )
+        self.log(f"Evaluating {names} beside sampling; the searches fill the concurrency its searches leave")
+        await self.log_host_memory("as the evaluations beside sampling start")
+        self.beside_sampling_stopped_repls = 0
         started = self.clock()
-        for kind in kinds:
-            await self.run_evaluation(kind, phase, self.baseline(kind, at_start))
-            self.mark_evaluated(kind)
-        self.log(f"Evaluations beside sampling ({names}) took {(self.clock() - started) / 60:.1f} min")
+        remaining = list(kinds)
+        try:
+            for kind in kinds:
+                try:
+                    await self.run_evaluation(kind, phase)
+                except Exception as error:
+                    self.evaluation_failures += 1
+                    self.log(
+                        f"Alert: the {kind} evaluation beside sampling failed ({type(error).__name__}: {error}); "
+                        f"it runs again after the next pause\n{traceback.format_exc()}"
+                    )
+                    continue
+                finally:
+                    self.due_beside_sampling_now.remove(kind)
+                self.mark_evaluated(kind)
+                remaining.remove(kind)
+        finally:
+            seconds = self.clock() - started
+            self.beside_sampling = BesideSampling(
+                finished=self.beside_sampling.finished + tuple(kind for kind in kinds if kind not in remaining),
+                failed=self.beside_sampling.failed + tuple(remaining),
+                seconds=self.beside_sampling.seconds + seconds,
+            )
+            self.log(
+                f"Evaluations beside sampling ({names}) took {seconds / 60:.1f} min"
+                + (f"; not finished: {', '.join(remaining)}" if remaining else "")
+                + f"; {self.beside_sampling_stopped_repls} idle search REPL processes stopped meanwhile"
+            )
+        await self.log_host_memory("after the evaluations beside sampling")
 
     async def finish_evaluations_beside_sampling(self) -> None:
-        """Before a pause: the servers never sleep under an evaluation job; the searches sample meanwhile."""
+        """Before a pause: the servers never sleep under an evaluation job. Waits without taking a cancellation of the
+        task (the pause's) as its own."""
         task = self.evaluations_beside_sampling
         if task is None:
             return
-        if not task.done():
-            self.log("The phase's pause waits for the evaluations beside sampling")
-        await task
+        await asyncio.wait({task})
         self.evaluations_beside_sampling = None
+        if not task.cancelled() and (error := task.exception()) is not None:
+            raise error
 
     def value_weights(self, value_model: EvaluationValueModel) -> str:
         current = read_current(self.paths.models)
@@ -1417,7 +1532,17 @@ class GrpoLoop:
     async def evaluate(self, run: EvaluationRun, phase: int) -> EvaluationSummary:
         value_model = EvaluationValueModel.PUBLISHED if run.value_arm else self.config.evaluation.value_model
         await self.serve_value_model(value_model)
-        return await self.evaluations.evaluate(run, phase)
+        return await self.evaluate_as_served(run, phase)
+
+    async def evaluate_as_served(self, run: EvaluationRun, phase: int) -> EvaluationSummary:
+        """Beside sampling, the searches' idle REPL processes above the sampling limit stop first."""
+        self.running_evaluations.append(run)
+        try:
+            if self.running_evaluations_beside_sampling() is not None:
+                await self.stop_idle_repls(self.sampling_limit())
+            return await self.evaluations.evaluate(run, phase)
+        finally:
+            self.running_evaluations.remove(run)
 
     def value_arm_due(self) -> bool:
         """Once per published value model other than the evaluations' fixed reference: at the first slot after it was
@@ -1431,28 +1556,16 @@ class GrpoLoop:
             and value_version(versions) != self.progress.value_arm_version
         )
 
-    async def run_probe(self, phase: int, baseline: bool) -> None:
-        """The next slot: its part of the probe set. Version 0's baseline runs every part not yet run, each
-        `baseline_runs` times (independent runs: the run-to-run noise). A slot due a value arm then searches its part
-        again with the published value model."""
-        evaluation = self.config.evaluation
-        runs = evaluation.probe.baseline_runs if baseline else 1
-        first = self.progress.probe_slots
-        last = evaluation.probe_parts - 1 if baseline else first
-        solved_by_run = [0] * runs
-        while self.progress.probe_slots <= last:
-            slot = self.progress.probe_slots
-            summaries = [
-                await self.evaluate(EvaluationRun(EvaluationKind.PROBE, slot, repeat), phase) for repeat in range(runs)
-            ]
-            self.log_summaries(f"probe slot {slot} (part {slot % evaluation.probe_parts})", summaries)
-            solved_by_run = [total + summary.solved for total, summary in zip(solved_by_run, summaries, strict=True)]
-            if self.value_arm_due():
-                await self.run_value_arm(slot, phase)
-                self.save_progress(value_arm_version=value_version(read_versions(self.paths.models)))
-            self.save_progress(probe_slots=slot + 1)
-        if runs > 1 and self.progress.probe_slots > first:
-            self.log(f"Probe baseline run to run over slots {first}-{last}: solved {solved_by_run}")
+    async def run_probe(self, phase: int) -> None:
+        """The next slot: its part of the probe set. A slot due a value arm then searches its part again with the
+        published value model."""
+        slot = self.progress.probe_slots
+        summary = await self.evaluate(EvaluationRun(EvaluationKind.PROBE, slot), phase)
+        self.log_summaries(f"probe slot {slot} (part {slot % self.config.evaluation.probe_parts})", [summary])
+        if self.value_arm_due():
+            await self.run_value_arm(slot, phase)
+            self.save_progress(value_arm_version=value_version(read_versions(self.paths.models)))
+        self.save_progress(probe_slots=slot + 1)
 
     async def run_value_arm(self, slot: int, phase: int) -> None:
         summary = await self.evaluate(EvaluationRun(EvaluationKind.PROBE, slot, value_arm=True), phase)
@@ -1485,19 +1598,58 @@ class GrpoLoop:
         self.write_status()
         await self.release_lean_memory(self.config.evaluation.paused_repl_memory_gib, "the evaluations")
         await self.log_host_memory("before the evaluations")
+        baselines = [kind for kind in kinds if self.baseline(kind, at_start)]
+        if baselines:
+            await self.run_baselines(baselines, phase)
         for kind in kinds:
-            await self.run_evaluation(kind, phase, self.baseline(kind, at_start))
-            self.mark_evaluated(kind)
+            if kind not in baselines:
+                await self.run_evaluation(kind, phase)
+                self.mark_evaluated(kind)
         await self.serve_value_model(EvaluationValueModel.PUBLISHED)
 
-    async def run_evaluation(self, kind: EvaluationKind, phase: int, baseline: bool) -> None:
+    async def run_baselines(self, kinds: list[EvaluationKind], phase: int) -> None:
+        """Every run of these baselines as its own job, all at once, sharing the concurrency (`baseline_concurrency`):
+        one tail for all of them before sampling starts. Version 0 serves the reference value model, so no value arm
+        is due and nothing swaps."""
+        evaluation = self.config.evaluation
+        await self.serve_value_model(evaluation.value_model)
+        runs = [run for kind in kinds for run in self.baseline_runs(kind)]
+        self.log(f"Baselines of {', '.join(kinds)}: {len(runs)} runs at once")
+        started = self.clock()
+        async with asyncio.TaskGroup() as group:
+            tasks = [group.create_task(self.evaluate_as_served(run, phase)) for run in runs]
+        summaries = dict(zip(runs, (task.result() for task in tasks), strict=True))
+        self.log(f"Baselines took {(self.clock() - started) / 60:.1f} min")
+        for kind in kinds:
+            if kind == EvaluationKind.PROBE:
+                slots = sorted({run.slot for run in summaries if run.kind == kind and run.slot is not None})
+                for slot in slots:
+                    slot_summaries = [summary for run, summary in summaries.items() if run.slot == slot]
+                    self.log_summaries(f"probe slot {slot} (part {slot % evaluation.probe_parts})", slot_summaries)
+                self.save_progress(probe_slots=evaluation.probe_parts)
+            else:
+                self.log_summaries(str(kind), [summary for run, summary in summaries.items() if run.kind == kind])
+            self.mark_evaluated(kind)
+
+    def baseline_runs(self, kind: EvaluationKind) -> list[EvaluationRun]:
+        """Every probe part not yet run, or the target, `baseline_runs` times each."""
+        evaluation = self.config.evaluation
+        runs = range(target_config(evaluation, kind).baseline_runs)
+        concurrency = baseline_concurrency(self.config, kind)
+        if kind == EvaluationKind.PROBE:
+            return [
+                EvaluationRun(kind, slot, repeat, concurrency=concurrency)
+                for slot in range(self.progress.probe_slots, evaluation.probe_parts)
+                for repeat in runs
+            ]
+        return [EvaluationRun(kind, repeat=repeat, concurrency=concurrency) for repeat in runs]
+
+    async def run_evaluation(self, kind: EvaluationKind, phase: int) -> None:
         match kind:
             case EvaluationKind.PROBE:
-                await self.run_probe(phase, baseline)
+                await self.run_probe(phase)
             case EvaluationKind.MINIF2F | EvaluationKind.HELD_OUT_STATES:
-                runs = target_config(self.config.evaluation, kind).baseline_runs if baseline else 1
-                summaries = [await self.evaluate(EvaluationRun(kind, repeat=repeat), phase) for repeat in range(runs)]
-                self.log_summaries(str(kind), summaries)
+                self.log_summaries(str(kind), [await self.evaluate(EvaluationRun(kind), phase)])
 
     def mark_evaluated(self, kind: EvaluationKind) -> None:
         self.progress = evaluated(self.progress, kind)
@@ -1505,7 +1657,7 @@ class GrpoLoop:
         (self.paths.requests / kind.value).unlink(missing_ok=True)
 
     def baseline(self, kind: EvaluationKind, at_start: bool) -> bool:
-        """Version 0's baseline before the first phase: `baseline_runs` independent runs (of every probe part)."""
+        """Version 0's baseline before sampling: `baseline_runs` independent runs (of every probe part)."""
         target = target_config(self.config.evaluation, kind)
         return at_start and target.at_start and last_evaluation(self.progress, kind) is None
 
@@ -1539,7 +1691,9 @@ class GrpoLoop:
             finished_at=now(),
             pause=progress.pause,
             value_share=progress.value_share,
+            beside_sampling=self.beside_sampling,
         )
+        self.beside_sampling = BesideSampling()
         with self.paths.phases.open("a", encoding="utf-8") as handle:
             handle.write(to_json(record) + "\n")
         self.save_progress(

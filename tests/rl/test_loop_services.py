@@ -11,10 +11,12 @@ from pathlib import Path
 import pytest
 
 from lean_search.expert_iteration.serving import write_json_atomically
-from lean_search.rl.loop_config import load_loop_config
+from lean_search.rl.loop import GrpoLoopPaths
+from lean_search.rl.loop_config import LoopTrainingConfig, load_loop_config
 from lean_search.rl.loop_services import (
     JOB_MARKER_VARIABLE,
     ChildProcess,
+    SubprocessTrainer,
     evaluation_repls,
     host_memory_text,
     live_children,
@@ -148,9 +150,29 @@ def test_the_host_memory_text_reports_what_is_available() -> None:
     assert "GiB available" in host_memory_text()
 
 
-def test_beside_sampling_the_evaluation_repls_add_to_the_searches() -> None:
+def test_beside_sampling_the_evaluation_repls_stay_within_the_sampling_concurrency() -> None:
     config = load_loop_config(REPOSITORY_DIRECTORY / "experiments/configs/grpo/loop.toml")
-    assert evaluation_repls(config) == config.sampling.concurrency + config.evaluation.probe.concurrency
+    assert evaluation_repls(config) == config.sampling.concurrency
+
+
+def test_an_evaluation_job_left_by_an_earlier_loop_is_reported(tmp_path: Path) -> None:
+    paths = GrpoLoopPaths(tmp_path, tmp_path, tmp_path, "loop")
+    record = paths.children / "evaluations" / "probe_slot0000_v0000" / "evaluation.pid"
+    write_json_atomically(record, ChildProcess(os.getpid(), own_start_ticks(), "earlier"))
+    assert SubprocessTrainer(paths, LoopTrainingConfig("unused.toml")).earlier_jobs() is not None
+
+
+async def test_concurrent_evaluation_jobs_do_not_refuse_each_other(tmp_path: Path) -> None:
+    children = tmp_path / "children" / "evaluations"
+    sleeper = asyncio.create_task(
+        run_logged([sys.executable, "-c", SLEEPER], tmp_path / "a.log", dict(os.environ), children / "a" / "e.pid")
+    )
+    while not (children / "a" / "e.pid").exists():
+        await asyncio.sleep(0.01)
+    await run_logged([sys.executable, "-c", "pass"], tmp_path / "b.log", dict(os.environ), children / "b" / "e.pid")
+    sleeper.cancel()
+    await asyncio.gather(sleeper, return_exceptions=True)
+    assert not (children / "b" / "e.pid").exists()
 
 
 def test_a_record_whose_process_id_was_reused_is_not_a_live_job(tmp_path: Path) -> None:

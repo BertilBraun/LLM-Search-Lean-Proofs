@@ -221,6 +221,25 @@ def worse_value_model(reader: RunReader, thresholds: AlertThresholds, now: float
     return Alert(Severity.WARNING, "Value model worse than v0", detail, "value")
 
 
+def worse_value_benchmark(reader: RunReader, thresholds: AlertThresholds, now: float) -> Alert | None:
+    """The served value model orders the benchmark's sibling pairs worse than v0, the paired bootstrap interval wholly
+    below; gone once the loop's status reports a newer value version."""
+    trend = reader.series("value_benchmark")
+    upper = latest(trend.columns.get("against_reference.upper", []))
+    if upper is None or upper >= 0:
+        return None
+    version = latest(trend.columns.get("value_version", [])) or 0.0
+    published = latest(reader.series("status").value_versions)
+    if published is not None and published != version:
+        return None
+    difference = latest(trend.columns.get("against_reference.difference", [])) or 0.0
+    detail = (
+        f"Value v{version:.0f} orders the value benchmark's sibling pairs worse than v0 ({difference:+.3f}, interval "
+        f"wholly below 0). Nothing changes on its own."
+    )
+    return Alert(Severity.WARNING, "Value benchmark below v0", detail, "value")
+
+
 def low_host_memory(reader: RunReader, thresholds: AlertThresholds, now: float) -> Alert | None:
     system = reader.series("system")
     total = latest(system.columns.get("memory_total_gib", []))
@@ -271,15 +290,18 @@ def rolled_back(reader: RunReader, thresholds: AlertThresholds, now: float) -> A
 
 
 def loop_errors(reader: RunReader, thresholds: AlertThresholds, now: float) -> Alert | None:
-    """Errors the loop logs and survives: a failed value benchmark scoring, a tree whose summary failed."""
+    """Errors the loop logs and survives: a failed value benchmark scoring, a tree whose summary failed, an evaluation
+    beside sampling that failed or was cut off at a pause."""
     status = reader.series("status")
     scorings = latest(status.columns.get("value_benchmark_failures", [])) or 0.0
     trees = latest(status.columns.get("trees_left_out", [])) or 0.0
-    if not scorings and not trees:
+    evaluations = latest(status.columns.get("evaluation_failures", [])) or 0.0
+    if not scorings and not trees and not evaluations:
         return None
     detail = (
-        f"This session {scorings:.0f} value benchmark scorings failed (retried after the next phase) and "
-        f"{trees:.0f} trees were left out because their summary failed; tracebacks in loop.log."
+        f"This session {scorings:.0f} value benchmark scorings and {evaluations:.0f} evaluations beside sampling "
+        f"failed (each retried after the next phase), and {trees:.0f} trees were left out because their summary "
+        "failed; tracebacks in loop.log."
     )
     return Alert(Severity.WARNING, "Loop errors", detail, "system")
 
@@ -295,6 +317,7 @@ RULES = (
     idle_gpus,
     solve_rate_off_target,
     worse_value_model,
+    worse_value_benchmark,
     low_host_memory,
     low_disk,
     server_failures,

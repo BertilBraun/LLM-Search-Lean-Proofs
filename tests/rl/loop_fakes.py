@@ -200,6 +200,8 @@ class FakeSearcher:
         self.server_failures = dict(server_failures or {})
         self.malformed = malformed
         self.memory_releases: list[int] = []
+        # The running REPL processes each stop of idle ones kept.
+        self.idle_repl_limits: list[int] = []
         # Shared with the trainer and the servers: the order of the pause's stages.
         self.events: list[str] = []
         # Shared with the servers: while one is down, every search fails.
@@ -257,6 +259,10 @@ class FakeSearcher:
         self.memory_releases.append(above_bytes)
         self.events.append(f"stop repls above {above_bytes}")
         return ReleasedLeanMemory(0, 0)
+
+    async def stop_idle_repls(self, keep_running: int) -> ReleasedLeanMemory:
+        self.idle_repl_limits.append(keep_running)
+        return ReleasedLeanMemory(1, 0)
 
 
 @dataclass
@@ -334,6 +340,13 @@ class FakeServers:
     down: set[str] = field(default_factory=set)
     restarts_fail: bool = False
     restarted: list[str] = field(default_factory=list)
+    # Whether an evaluation runs, and the sleeps, wakes and swaps under one.
+    evaluating: Callable[[], bool] = lambda: False
+    changed_under_evaluation: list[str] = field(default_factory=list)
+
+    def changing(self, change: str) -> None:
+        if self.evaluating():
+            self.changed_under_evaluation.append(change)
 
     async def check(self) -> None:
         pass
@@ -348,12 +361,14 @@ class FakeServers:
             self.down.difference_update(names)
 
     async def release(self) -> PhaseSeconds:
+        self.changing("release")
         self.releases += 1
         self.asleep |= set(self.released)
         self.events += [f"sleep {name}" for name in self.released]
         return RELEASE_SECONDS
 
     async def serve(self, version: ModelVersion) -> PhaseSeconds:
+        self.changing(f"serve v{version.version}")
         self.served.append(version.version)
         self.served_policy_weights.append(version.policy_weights)
         self.events += [f"{'wake' if name in self.asleep else 'swap'} {name} v{version.version}" for name in self.names]
@@ -361,6 +376,7 @@ class FakeServers:
         return SERVE_SECONDS
 
     async def serve_value(self, weights: str) -> None:
+        self.changing(f"value {weights}")
         self.value_weights.append(weights)
         self.events.append(f"value {Path(weights).name}")
 
@@ -370,7 +386,7 @@ class FakeEvaluations:
     """Each run with the phase it ran in and whether the searches were open meanwhile; value arms find the published
     value model worse when asked. Held-out runs report the rates in `held_out_rates` in order (later runs repeat the
     last), written where the loop's health check reads them. With `hold`, the probe and miniF2F runs end only once it
-    is set."""
+    is set; the first `failures` of them fail as a failed job does. Each run reports `searches_reported` in flight."""
 
     runs: list[tuple[EvaluationRun, int]] = field(default_factory=list)
     value_arm_worse: bool = False
@@ -379,14 +395,37 @@ class FakeEvaluations:
     paths: GrpoLoopPaths | None = None
     searcher: FakeSearcher | None = None
     searches_open: list[bool] = field(default_factory=list)
+    # The loop's searches finished when each run started.
+    searched_before: list[int] = field(default_factory=list)
     hold: asyncio.Event | None = None
+    failures: int = 0
+    searches_reported: int | None = None
+    in_flight: int = 0
+    most_in_flight: int = 0
+
+    def searches_in_flight(self, run: EvaluationRun) -> int | None:
+        return self.searches_reported
 
     async def evaluate(self, run: EvaluationRun, phase: int) -> EvaluationSummary:
+        self.in_flight += 1
+        self.most_in_flight = max(self.most_in_flight, self.in_flight)
+        try:
+            return await self.evaluated(run, phase)
+        finally:
+            self.in_flight -= 1
+
+    async def evaluated(self, run: EvaluationRun, phase: int) -> EvaluationSummary:
         self.runs.append((run, phase))
         assert self.searcher is not None
         self.searches_open.append(self.searcher.open.is_set())
-        if self.hold is not None and run.kind != EvaluationKind.HELD_OUT_STATES:
-            await self.hold.wait()
+        self.searched_before.append(len(self.searcher.searched))
+        await asyncio.sleep(0)
+        if run.kind != EvaluationKind.HELD_OUT_STATES:
+            if self.failures:
+                self.failures -= 1
+                raise RuntimeError("grpo_evaluate.py failed")
+            if self.hold is not None:
+                await self.hold.wait()
         summary = dataclasses.replace(
             zero(EvaluationSummary), kind=run.kind, problems=10, solved=4 + run.repeat, slot=run.slot
         )
@@ -534,6 +573,7 @@ def loop_world(
     evaluations = evaluations or FakeEvaluations()
     evaluations.paths = paths
     evaluations.searcher = searcher
+    servers.evaluating = lambda: evaluations.in_flight > 0
     return LoopWorld(config, paths, searcher, trainer, servers, evaluations, scorer=scorer)
 
 

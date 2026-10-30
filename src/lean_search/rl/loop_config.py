@@ -40,9 +40,10 @@ class SamplingConfig:
     max_expansions: int = 32
     # Concurrent searches, each holding a Lean REPL; most wait on the GPUs, so this may exceed the core count.
     concurrency: int = 112
-    # While evaluations run beside sampling (`evaluation.beside_sampling`), only this many of the searches take new
-    # statements; the others finish their search and wait.
-    concurrency_beside_evaluations: int = 56
+    # While an evaluation runs beside sampling (`evaluation.beside_sampling`), the searches taking new statements are
+    # `concurrency` minus the evaluation's searches in flight, at least this many; the others finish their search and
+    # wait, their idle REPL processes stopped.
+    min_concurrency_beside_evaluations: int = 56
     status_seconds: float = 30.0
     # A search a server failed feeds its statement again up to this many times, each after the pause.
     server_failure_retries: int = 3
@@ -104,7 +105,7 @@ class LoopTrainingConfig:
 @dataclass(frozen=True)
 class EvaluationTarget:
     max_expansions: int
-    # Per problem; an emergency cap, so that the expansions are the budget and the result does not measure load.
+    # Per problem; a cap on the Lean-bound tail, so that mostly the expansions are the budget (stops are reported).
     max_wall_seconds: float
     # Lean REPLs of the evaluation's own pool; at a pause the paused searches' REPL processes stop first
     # (`paused_repl_memory_gib`), so the loop's sampling concurrency fits (rl/README.md, "Host memory").
@@ -115,6 +116,9 @@ class EvaluationTarget:
     at_start: bool = False
     # Independent runs of that baseline; two measure the run-to-run noise.
     baseline_runs: int = 1
+    # REPLs of each of its baseline runs (every probe part's), which all run at once before sampling; 0: an equal
+    # share of `sampling.concurrency` over every at-start run.
+    baseline_concurrency: int = 0
     # Only the first this many problems (the probe's strata in turn; held-out states: states), 0 all: a smoke test's
     # tiny evaluations.
     problems: int = 0
@@ -166,9 +170,13 @@ class EvaluationConfig:
     # The value model the probe and miniF2F search with. INITIAL measures the policy alone: the servers swap to it for
     # the evaluations and back afterwards.
     value_model: EvaluationValueModel = EvaluationValueModel.INITIAL
-    # The probe and miniF2F run after the pause, while the searches sample (`sampling.concurrency_beside_evaluations`);
-    # the held-out states stay at the pause. Needs the published value model and no value arm: nothing swaps.
+    # The probe and miniF2F run after the pause, while the searches sample (`sampling.min_concurrency_beside_
+    # evaluations`); the held-out states and version 0's baselines stay before sampling. Needs the published value
+    # model and no value arm: nothing swaps. A failure is an alert and runs again after the next pause.
     beside_sampling: bool = False
+    # A phase due while an evaluation runs beside sampling waits this long for it, then cancels it (it runs again after
+    # the pause).
+    max_pause_wait_minutes: float = 30.0
     # Scored through the value servers by every newly served value model, during sampling.
     value_benchmark: ValueBenchmarkConfig = field(default_factory=ValueBenchmarkConfig)
     # Under $LEAN_SEARCH_DATA: the probe set, and the states (a phase5 run's states.jsonl, under $LEAN_SEARCH_RUNS).
@@ -274,14 +282,21 @@ def parse_loop_config(text: str) -> GrpoLoopConfig:
         )
     if sampling.max_expansions < 1:
         raise ValueError("sampling.max_expansions must be at least 1.")
+    if (
+        config.evaluation.beside_sampling
+        and not 1 <= sampling.min_concurrency_beside_evaluations <= sampling.concurrency
+    ):
+        raise ValueError(
+            "evaluation.beside_sampling needs 1 <= sampling.min_concurrency_beside_evaluations <= concurrency."
+        )
     if config.health.reference_phases < 1 or config.health.late_solve_phases < 1:
         raise ValueError("health needs reference_phases >= 1 and late_solve_phases >= 1.")
     if training.value_every_phases and training.value_window_phases < 1:
         raise ValueError("training.value_window_phases must be at least 1.")
     evaluation = config.evaluation
     targets = (evaluation.probe, evaluation.minif2f, evaluation.held_out_states)
-    if any(target.baseline_runs < 1 for target in targets):
-        raise ValueError("evaluation targets need baseline_runs >= 1.")
+    if any(target.baseline_runs < 1 or target.baseline_concurrency < 0 for target in targets):
+        raise ValueError("evaluation targets need baseline_runs >= 1 and baseline_concurrency >= 0.")
     if evaluation.probe_parts < 1:
         raise ValueError("evaluation needs probe_parts >= 1.")
     if evaluation.beside_sampling and (

@@ -3,11 +3,11 @@ states.
 
 Each runs against whatever the servers serve with the loop's search template, at the target's budget, without
 harvesting or ε-exploration, and with the loop's statement renaming when it is on (the held-out states are traced
-states with their original names and are never renamed). The loop serves its published policy and the fixed value
-model of `EvaluationConfig.value_model`, except for a probe slot's value arm: the same part with the published value
-model.
+states with their original names and are never renamed). The loop serves its published policy and the value model of
+`EvaluationConfig.value_model`, except for a probe slot's value arm: the same part with the published value model.
 """
 
+import dataclasses
 import time
 from collections.abc import Callable, Sequence
 from itertools import zip_longest
@@ -26,7 +26,7 @@ from lean_search.rl.evaluation import (
     run_problem_set_evaluation,
 )
 from lean_search.rl.fixed_sets import read_fixed_set
-from lean_search.rl.loop_config import EvaluationConfig, EvaluationTarget
+from lean_search.rl.loop_config import EvaluationConfig, EvaluationTarget, GrpoLoopConfig
 from lean_search.rl.renaming import StatementRenamings
 from lean_search.rl.search_models import evaluation_run_config
 from lean_search.rl.single_step import (
@@ -48,6 +48,31 @@ def target_config(evaluation: EvaluationConfig, kind: EvaluationKind) -> Evaluat
             return evaluation.minif2f
         case EvaluationKind.HELD_OUT_STATES:
             return evaluation.held_out_states
+
+
+def baseline_jobs(evaluation: EvaluationConfig, kind: EvaluationKind) -> int:
+    """Runs of the kind's baseline of version 0: every probe part `baseline_runs` times."""
+    runs = target_config(evaluation, kind).baseline_runs
+    return runs * evaluation.probe_parts if kind == EvaluationKind.PROBE else runs
+
+
+def baseline_concurrency(config: GrpoLoopConfig, kind: EvaluationKind) -> int:
+    """REPLs of each of the kind's baseline runs: its own setting, else an equal share of the sampling concurrency over
+    every at-start run. From the config alone, so that a restart resumes a run with the config it began with."""
+    evaluation = config.evaluation
+    own = target_config(evaluation, kind).baseline_concurrency
+    if own:
+        return own
+    jobs = sum(
+        baseline_jobs(evaluation, other) for other in EvaluationKind if target_config(evaluation, other).at_start
+    )
+    return max(1, config.sampling.concurrency // jobs)
+
+
+def run_target(evaluation: EvaluationConfig, run: EvaluationRun) -> EvaluationTarget:
+    """The run's target with the run's own concurrency, if it has one."""
+    target = target_config(evaluation, run.kind)
+    return dataclasses.replace(target, concurrency=run.concurrency) if run.concurrency else target
 
 
 def probe_problems(path: Path) -> list[EvaluationProblem]:
@@ -128,7 +153,7 @@ async def evaluate_target(
 ) -> EvaluationSummary:
     """`template`: the loop's search config on the served models; results under `directory` (resumable). A probe
     slot searches its part of the probe set, without a slot the whole set."""
-    target = target_config(evaluation, run.kind)
+    target = run_target(evaluation, run)
     part = None
     match run.kind:
         case EvaluationKind.PROBE:

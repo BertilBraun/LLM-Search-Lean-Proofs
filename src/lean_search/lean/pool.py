@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import itertools
 import logging
 from collections.abc import AsyncIterator, Sequence
 
@@ -11,7 +12,8 @@ logger = logging.getLogger(__name__)
 
 
 class LeanReplPool:
-    """Processes past `restart_fraction` of their limits, or whose user raised, are restarted before reuse."""
+    """Processes past `restart_fraction` of their limits, or whose user raised, are restarted before reuse. The most
+    recently released REPL is handed out first, so stopped idle processes start again only when demand needs them."""
 
     def __init__(
         self,
@@ -26,11 +28,15 @@ class LeanReplPool:
         self.restart_attempts = restart_attempts
         self.restart_backoff_seconds = restart_backoff_seconds
         self._headers: list[str] = []
-        self._idle: asyncio.Queue[LeanRepl] = asyncio.Queue()
+        self._idle: asyncio.LifoQueue[LeanRepl] = asyncio.LifoQueue()
+        # In use or restarting (the others wait in `_idle`); the release order, so the longest idle stop first.
+        self._busy: set[LeanRepl] = set()
+        self._releases = itertools.count()
+        self._released_at: dict[LeanRepl, int] = {}
         self._restarts: set[asyncio.Task[None]] = set()
         self._closed = False
         for repl in self.repls:
-            self._idle.put_nowait(repl)
+            self._release(repl)
 
     async def __aenter__(self) -> "LeanReplPool":
         await self.start()
@@ -46,6 +52,7 @@ class LeanReplPool:
     @contextlib.asynccontextmanager
     async def acquire(self) -> AsyncIterator[LeanRepl]:
         repl = await self._idle.get()
+        self._busy.add(repl)
         try:
             yield repl
         except BaseException:
@@ -55,12 +62,21 @@ class LeanReplPool:
         if repl.needs_restart or repl.exceeds_limits(self.restart_fraction):
             self._schedule_restart(repl)
         else:
-            self._idle.put_nowait(repl)
+            self._release(repl)
 
     async def stop_processes(self, above_anonymous_bytes: int) -> list[MemoryUsage]:
         """Stops every process (in use or idle) at or above the private memory; returns what each held."""
         usages = [(repl, repl.memory_usage()) for repl in self.repls if repl.process_id is not None]
         stopping = [(repl, usage) for repl, usage in usages if usage.anonymous_bytes >= above_anonymous_bytes]
+        await asyncio.gather(*(repl.stop() for repl, _ in stopping))
+        return [usage for _, usage in stopping]
+
+    async def stop_idle_processes(self, keep_running: int) -> list[MemoryUsage]:
+        """Stops idle processes, the longest idle first, until at most `keep_running` processes run (those in use are
+        never stopped); they start again on their next use. Returns what each held."""
+        running = [repl for repl in self.repls if repl.process_id is not None]
+        idle = sorted((repl for repl in running if repl not in self._busy), key=self._released_at.__getitem__)
+        stopping = [(repl, repl.memory_usage()) for repl in idle[: max(0, len(running) - keep_running)]]
         await asyncio.gather(*(repl.stop() for repl, _ in stopping))
         return [usage for _, usage in stopping]
 
@@ -76,6 +92,11 @@ class LeanReplPool:
         await repl.start()
         for header in self._headers:
             await repl.load_header(header)
+
+    def _release(self, repl: LeanRepl) -> None:
+        self._busy.discard(repl)
+        self._released_at[repl] = next(self._releases)
+        self._idle.put_nowait(repl)
 
     def _schedule_restart(self, repl: LeanRepl) -> None:
         # A task started after close would outlive the pool, and asyncio's shutdown can hang cancelling a process start.
@@ -98,4 +119,4 @@ class LeanReplPool:
                     logger.exception("Restarting a pooled Lean REPL failed (attempt %d)", attempt + 1)
         finally:
             # Even after failed attempts the slot returns: the REPL retries its start on use and reports ReplFailure.
-            self._idle.put_nowait(repl)
+            self._release(repl)

@@ -94,6 +94,12 @@ def benchmark_trend(
     )
 
 
+def worse_than_reference(trend: ValueBenchmarkTrend) -> bool:
+    """The share of correctly ordered sibling pairs below v0's, the paired bootstrap interval wholly below 0."""
+    statistic = trend.against_reference
+    return statistic is not None and statistic.upper is not None and statistic.upper < 0
+
+
 def difference_text(name: str, version: int | None, statistic: PairStatistic | None) -> str:
     if version is None or statistic is None or statistic.difference is None:
         return ""

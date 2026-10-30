@@ -1,5 +1,6 @@
 import asyncio
 import dataclasses
+import json
 import tomllib
 from collections.abc import Callable
 from pathlib import Path
@@ -25,10 +26,13 @@ from lean_search.expert_iteration.serving import ModelVersion, read_current, rea
 from lean_search.monitoring.families import PauseSegments, ValueArmResult
 from lean_search.monitoring.store import RunReader
 from lean_search.rl.evaluation import EvaluationKind, EvaluationRun, EvaluationSummary
+from lean_search.rl.fixed_targets import baseline_concurrency
 from lean_search.rl.loop import (
     GIB,
+    BesideSampling,
     GrpoLoop,
     GrpoLoopPaths,
+    PhaseRecord,
     PhaseStage,
     TrainingRequest,
     earlier_value_arm_results,
@@ -46,6 +50,7 @@ from lean_search.rl.loop_services import SubprocessTrainer
 from lean_search.rl.training_phase import TrainerTimings
 from lean_search.rl.tree_store import TreeStore
 from lean_search.rl.value_trends import scored_versions
+from lean_search.search.records import from_json_object, to_json
 
 TEMPLATE = (Path(__file__).resolve().parents[2] / "experiments/configs/grpo/phase.toml").read_text(encoding="utf-8")
 VERSION = ModelVersion(3, "phase-3/policy/adapter", "phase-2/value/adapter", "2026-10-29T10:00:00+00:00", "phase 3")
@@ -574,17 +579,36 @@ enabled = false
 """
 # The probe after every phase beside sampling, the held-out states at every pause from version 0's run on.
 BESIDE_EVERY_PHASE = (
-    PROBE_EVERY_PHASE.replace("every_hours = 0.0\nat_start = false\n", "every_hours = 0.001\nat_start = true\n")
+    PROBE_EVERY_PHASE.replace(
+        "every_hours = 0.0\nat_start = false\n", "every_hours = 0.001\nat_start = true\n"
+    ).replace("concurrency = 2\n", "concurrency = 2\nmin_concurrency_beside_evaluations = 1\n")
     + BESIDE_SAMPLING
 )
-# Version 0's probe baseline beside sampling, one search taking statements meanwhile.
-BESIDE_AT_START = (
-    LOOP_TOML.replace(
-        "every_hours = 0.0\nat_start = false\n\n[evaluation.held_out_states]",
-        "every_hours = 0.0\nat_start = true\n\n[evaluation.held_out_states]",
-    ).replace("concurrency = 2\n", "concurrency = 2\nconcurrency_beside_evaluations = 1\n")
-    + BESIDE_SAMPLING
-)
+# A requested miniF2F beside sampling from the start, at least one search taking statements meanwhile, and a phase
+# that waits for it as long as it takes.
+BESIDE_FROM_THE_START = LOOP_TOML.replace(
+    "concurrency = 2\n", "concurrency = 2\nmin_concurrency_beside_evaluations = 1\n"
+) + BESIDE_SAMPLING.replace("beside_sampling = true\n", "beside_sampling = true\nmax_pause_wait_minutes = 1e9\n")
+# The same with the default wait: the clock steps a minute per reading, so a pause gives up waiting quickly.
+BESIDE_WAITING_BRIEFLY = BESIDE_FROM_THE_START.replace("max_pause_wait_minutes = 1e9\n", "")
+
+
+def beside_world(
+    root: Path,
+    toml: str = BESIDE_FROM_THE_START,
+    evaluations: FakeEvaluations | None = None,
+    hold: asyncio.Event | None = None,
+    searches_reported: int | None = None,
+) -> LoopWorld:
+    evaluations = evaluations or FakeEvaluations(hold=hold, searches_reported=searches_reported)
+    world = loop_world(root, toml, evaluations=evaluations)
+    record_version_zero(world)
+    request_evaluation(world.paths, EvaluationKind.MINIF2F)
+    return world
+
+
+def minif2f_runs(world: LoopWorld) -> int:
+    return sum(run.kind == EvaluationKind.MINIF2F for run, _ in world.evaluations.runs)
 
 
 async def run_until_condition(loop: GrpoLoop, condition: Callable[[], bool]) -> None:
@@ -605,8 +629,9 @@ async def run_until_condition(loop: GrpoLoop, condition: Callable[[], bool]) -> 
     ids=["initial value model", "value arm"],
 )
 def test_evaluations_beside_sampling_need_the_published_value_model_and_no_value_arm(settings: str) -> None:
-    with pytest.raises(ValueError):
-        parse_loop_config(LOOP_TOML + "\n[evaluation]\n" + settings)
+    floor = LOOP_TOML.replace("concurrency = 2\n", "concurrency = 2\nmin_concurrency_beside_evaluations = 1\n")
+    with pytest.raises(ValueError, match="value_model"):
+        parse_loop_config(floor + "\n[evaluation]\n" + settings)
 
 
 async def test_the_probe_runs_beside_sampling_while_the_searches_are_open(tmp_path: Path) -> None:
@@ -623,23 +648,58 @@ async def test_the_held_out_states_still_run_at_the_pause(tmp_path: Path) -> Non
     assert world.evaluations.searches_open_during(EvaluationKind.HELD_OUT_STATES)[1:3] == [False, False]
 
 
-async def test_evaluations_beside_sampling_swap_no_value_model(tmp_path: Path) -> None:
-    world = loop_world(tmp_path, BESIDE_EVERY_PHASE)
-    record_version_zero(world)
-    await run_until(world, world.loop(), phases=2)
-    assert world.servers.value_weights == []
+def releasing_when_the_pause_waits(world: LoopWorld) -> GrpoLoop:
+    loop = world.loop()
+
+    def log(message: str) -> None:
+        if message.startswith("The phase's pause waits"):
+            assert world.evaluations.hold is not None
+            world.evaluations.hold.set()
+
+    loop.log = log
+    return loop
+
+
+async def test_no_server_sleeps_or_swaps_under_an_evaluation_beside_sampling(tmp_path: Path) -> None:
+    world = beside_world(tmp_path, hold=asyncio.Event())
+    await run_until(world, releasing_when_the_pause_waits(world), phases=2)
+    assert world.servers.changed_under_evaluation == []
 
 
 async def test_searches_above_the_limit_take_no_statement_while_an_evaluation_runs(tmp_path: Path) -> None:
-    world = loop_world(tmp_path, BESIDE_AT_START, evaluations=FakeEvaluations(hold=asyncio.Event()))
-    record_version_zero(world)
+    world = beside_world(tmp_path, hold=asyncio.Event())
     await run_until_condition(world.loop(), lambda: len(world.searcher.searched) >= 20)
     assert world.searcher.most_in_flight == 1
 
 
+async def test_searches_fill_the_concurrency_the_evaluation_leaves(tmp_path: Path) -> None:
+    world = beside_world(tmp_path, hold=asyncio.Event(), searches_reported=0)
+    await run_until_condition(world.loop(), lambda: len(world.searcher.searched) >= 20)
+    assert world.searcher.most_in_flight == 2
+
+
+async def test_searches_above_the_limit_stop_the_idle_repls_beyond_it(tmp_path: Path) -> None:
+    world = beside_world(tmp_path, hold=asyncio.Event())
+    await run_until_condition(world.loop(), lambda: len(world.searcher.searched) >= 20)
+    assert 1 in world.searcher.idle_repl_limits
+
+
+async def test_the_host_memory_is_logged_around_an_evaluation_beside_sampling(tmp_path: Path) -> None:
+    world = beside_world(tmp_path)
+    messages: list[str] = []
+    loop = world.loop()
+    loop.log = messages.append
+    await run_until(world, loop, phases=1)
+    assert [
+        message for message in messages if "beside sampling start" in message or "after the evaluations" in message
+    ] == [
+        "Host memory as the evaluations beside sampling start: not measured",
+        "Host memory after the evaluations beside sampling: not measured",
+    ]
+
+
 async def test_the_phase_pause_waits_for_the_evaluation_beside_sampling(tmp_path: Path) -> None:
-    world = loop_world(tmp_path, BESIDE_AT_START, evaluations=FakeEvaluations(hold=asyncio.Event()))
-    record_version_zero(world)
+    world = beside_world(tmp_path, hold=asyncio.Event())
     loop = world.loop()
     searched_when_waiting: list[int] = []
 
@@ -659,21 +719,120 @@ async def test_the_phase_pause_waits_for_the_evaluation_beside_sampling(tmp_path
 
 
 async def test_the_phase_pauses_after_the_whole_evaluation_beside_sampling(tmp_path: Path) -> None:
-    world = loop_world(tmp_path, BESIDE_AT_START, evaluations=FakeEvaluations(hold=asyncio.Event()))
-    record_version_zero(world)
-    loop = world.loop()
-    probe_runs_at_the_pause: list[int] = []
+    world = beside_world(tmp_path, hold=asyncio.Event())
+    loop = releasing_when_the_pause_waits(world)
+    released_log = loop.log
+    requested_at_the_pause: list[bool] = []
 
     def log(message: str) -> None:
-        if message.startswith("The phase's pause waits"):
-            assert world.evaluations.hold is not None
-            world.evaluations.hold.set()
+        released_log(message)
         if message.startswith("Phase 1: "):
-            probe_runs_at_the_pause.append(len(world.evaluations.slots()))
+            requested_at_the_pause.append((world.paths.requests / EvaluationKind.MINIF2F).exists())
 
     loop.log = log
     await run_until(world, loop, phases=1)
-    assert probe_runs_at_the_pause == [3]
+    assert requested_at_the_pause == [False]
+
+
+async def test_a_phase_waits_at_most_its_longest_wait_for_an_evaluation_beside_sampling(tmp_path: Path) -> None:
+    world = beside_world(tmp_path, BESIDE_WAITING_BRIEFLY, hold=asyncio.Event())
+    await run_until(world, world.loop(), phases=1)
+    assert world.phases_done() == 1
+
+
+async def test_an_evaluation_cut_off_by_the_pause_runs_again_after_it(tmp_path: Path) -> None:
+    world = beside_world(tmp_path, BESIDE_WAITING_BRIEFLY, hold=asyncio.Event())
+    await run_until_condition(world.loop(), lambda: minif2f_runs(world) == 2)
+    assert world.phases_done() == 1
+
+
+async def test_an_evaluation_cut_off_by_the_pause_is_recorded_with_the_phase(tmp_path: Path) -> None:
+    world = beside_world(tmp_path, BESIDE_WAITING_BRIEFLY, hold=asyncio.Event())
+    await run_until(world, world.loop(), phases=1)
+    record = json.loads(world.paths.phases.read_text(encoding="utf-8").splitlines()[0])
+    assert record["beside_sampling"]["failed"] == ["minif2f"]
+
+
+async def test_a_finished_evaluation_beside_sampling_is_recorded_with_the_phase(tmp_path: Path) -> None:
+    world = beside_world(tmp_path)
+    await run_until(world, world.loop(), phases=1)
+    record = json.loads(world.paths.phases.read_text(encoding="utf-8").splitlines()[0])
+    assert record["beside_sampling"]["finished"] == ["minif2f"]
+
+
+def test_a_phase_record_without_evaluations_beside_sampling_reads() -> None:
+    fields = json.loads(to_json(zero(PhaseRecord)))
+    del fields["beside_sampling"]
+    assert from_json_object(PhaseRecord, fields).beside_sampling == BesideSampling()
+
+
+async def test_a_failed_evaluation_beside_sampling_does_not_stop_the_loop(tmp_path: Path) -> None:
+    world = beside_world(tmp_path, evaluations=FakeEvaluations(failures=1))
+    await run_until(world, world.loop(), phases=1)
+    assert world.phases_done() == 1
+
+
+async def test_a_failed_evaluation_beside_sampling_runs_again_after_the_next_pause(tmp_path: Path) -> None:
+    world = beside_world(tmp_path, evaluations=FakeEvaluations(failures=1))
+    await run_until_condition(world.loop(), lambda: minif2f_runs(world) == 2)
+    assert world.phases_done() == 1
+
+
+async def test_a_failed_evaluation_beside_sampling_alerts_in_the_log(tmp_path: Path) -> None:
+    world = beside_world(tmp_path, evaluations=FakeEvaluations(failures=1))
+    messages: list[str] = []
+    loop = world.loop()
+    loop.log = messages.append
+    await run_until(world, loop, phases=1)
+    assert any(message.startswith("Alert: the minif2f evaluation beside sampling failed") for message in messages)
+
+
+async def test_a_failed_evaluation_beside_sampling_is_counted_in_the_status(tmp_path: Path) -> None:
+    world = beside_world(tmp_path, evaluations=FakeEvaluations(failures=1))
+    await run_until(world, world.loop(), phases=1)
+    assert RunReader(world.paths.directory).series("status").columns["evaluation_failures"][-1] == 1
+
+
+@dataclasses.dataclass
+class ServerSensitiveEvaluations(FakeEvaluations):
+    """Like the evaluation job: a server that stops answering fails the run."""
+
+    async def evaluated(self, run: EvaluationRun, phase: int) -> EvaluationSummary:
+        assert self.searcher is not None
+        for _ in range(200):
+            if self.searcher.servers_down:
+                raise RuntimeError("grpo_evaluate.py failed: ConnectError")
+            await asyncio.sleep(0.001)
+        return await super().evaluated(run, phase)
+
+
+async def run_with_a_server_dying_during_an_evaluation(root: Path, until: Callable[[LoopWorld], bool]) -> LoopWorld:
+    """The miniF2F beside sampling from the start; once the first search finished, a policy server dies."""
+    toml = BESIDE_FROM_THE_START.replace(
+        "status_seconds = 0.01\n",
+        "status_seconds = 0.01\nserver_failure_pause_seconds = 0.0\nserver_failure_window = 4\n",
+    )
+    world = beside_world(root, toml, evaluations=ServerSensitiveEvaluations())
+    stop = asyncio.Event()
+    task = asyncio.create_task(world.loop().run(stop))
+    while not world.searcher.searched and not task.done():
+        await asyncio.sleep(0)
+    world.searcher.servers_down.add("policy-gpu0")
+    while not until(world) and not task.done():
+        await asyncio.sleep(0)
+    stop.set()
+    await task
+    return world
+
+
+async def test_a_server_dying_during_an_evaluation_beside_sampling_is_restarted(tmp_path: Path) -> None:
+    world = await run_with_a_server_dying_during_an_evaluation(tmp_path, lambda world: bool(world.servers.restarted))
+    assert world.servers.restarted == ["policy-gpu0"]
+
+
+async def test_an_evaluation_failing_on_a_dying_server_does_not_stop_the_sampling(tmp_path: Path) -> None:
+    world = await run_with_a_server_dying_during_an_evaluation(tmp_path, lambda world: world.phases_done() == 1)
+    assert world.phases_done() == 1
 
 
 async def test_an_evaluation_a_stop_cut_off_runs_beside_sampling_at_the_next_start(tmp_path: Path) -> None:
@@ -793,6 +952,47 @@ async def test_the_baseline_probe_runs_every_part_twice(tmp_path: Path) -> None:
     record_version_zero(world)
     await run_until(world, world.loop(), phases=1)
     assert world.evaluations.slots() == [(0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (2, 1)]
+
+
+async def test_version_zeros_baseline_runs_all_at_once(tmp_path: Path) -> None:
+    world = loop_world(tmp_path, toml=BASELINE_TOML)
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=1)
+    assert world.evaluations.most_in_flight == 6
+
+
+async def test_sampling_starts_after_version_zeros_baselines(tmp_path: Path) -> None:
+    world = loop_world(tmp_path, toml=BASELINE_TOML)
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=1)
+    assert world.evaluations.searched_before[:6] == [0] * 6
+
+
+async def test_version_zeros_baseline_runs_share_the_concurrency(tmp_path: Path) -> None:
+    world = loop_world(tmp_path, toml=BASELINE_TOML.replace("concurrency = 2\n", "concurrency = 12\n"))
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=1)
+    assert {run.concurrency for run, _ in world.evaluations.runs} == {2}
+
+
+@pytest.mark.parametrize(
+    ("settings", "concurrency"),
+    [("", 16), ("baseline_concurrency = 11\n", 11)],
+    ids=["an equal share", "its own"],
+)
+def test_baseline_concurrency(settings: str, concurrency: int) -> None:
+    toml = BASELINE_TOML.replace("concurrency = 2\n", "concurrency = 112\n").replace(
+        "baseline_runs = 2\n", f"baseline_runs = 2\n{settings}"
+    )
+    toml = toml.replace("every_hours = 0.0\nat_start = false\n", "every_hours = 0.0\nat_start = true\n")
+    assert baseline_concurrency(parse_loop_config(toml), EvaluationKind.PROBE) == concurrency
+
+
+@pytest.mark.parametrize("floor", [0, 3])
+def test_a_floor_beside_evaluations_outside_the_concurrency_is_refused(floor: int) -> None:
+    setting = f"concurrency = 2\nmin_concurrency_beside_evaluations = {floor}\n"
+    with pytest.raises(ValueError):
+        parse_loop_config(LOOP_TOML.replace("concurrency = 2\n", setting) + BESIDE_SAMPLING)
 
 
 async def test_a_requested_probe_after_the_baseline_runs_the_next_slot_once(tmp_path: Path) -> None:

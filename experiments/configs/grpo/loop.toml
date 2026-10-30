@@ -86,8 +86,9 @@ max_expansions = 32
 # One REPL per search; most searches wait on the GPUs. Tune by the first hour (Lean cores and memory on the
 # dashboard's system page; a REPL holds 0.25-2 GiB of private memory; budget in src/lean_search/rl/README.md).
 concurrency = 112
-# While the probe or miniF2F runs beside sampling (its own 56 REPLs), only the first 56 searches take statements.
-concurrency_beside_evaluations = 56
+# While the probe or miniF2F runs beside sampling, the searches taking statements fill what its searches in flight
+# leave of the 112 (at least 56): 56 + 56 at its start, back toward 112 as its tail shrinks.
+min_concurrency_beside_evaluations = 56
 status_seconds = 30.0
 # A search a policy or value server failed feeds its statement again, up to this many times.
 server_failure_retries = 3
@@ -100,7 +101,8 @@ phase_config = "experiments/configs/grpo/phase.toml"
 gpus = [0, 1, 2, 3]
 # A phase ends once it has 300 trainable groups (proof-graph nodes of solved trees with a policy proof and a non-zero
 # advantage, counted as each tree finishes), after at least 45 and at most 90 min of sampling: the pause's fixed costs
-# (start, loads, compile, merges, wake) are paid per phase (review F, M4).
+# (start, loads, compile, merges, wake) are paid per phase (review F, M4). An evaluation beside sampling holds a due
+# pause up to [evaluation] max_pause_wait_minutes.
 min_sampling_minutes = 45.0
 max_sampling_minutes = 90.0
 min_trainable_groups = 300
@@ -152,10 +154,13 @@ seed = "grpo-curriculum"
 [evaluation]
 probe_set = "grpo/fixed_sets/probe.jsonl"
 # The probe and miniF2F search with the published value model, so they measure policy and value together (the value
-# benchmark is the value model's own trend), and run beside sampling after the pause: nothing swaps, and their
-# Lean-bound tails do not idle the GPUs. The held-out states stay at the pause (the health checks read them).
+# benchmark is the value model's own trend; an alert when a value model's interval lies below v0's), and run beside
+# sampling after the pause: nothing swaps, and the searches fill the GPUs their Lean-bound tails leave. A failure is an
+# alert and runs again after the next pause. The held-out states stay at the pause (the health checks read them).
 value_model = "published"
 beside_sampling = true
+# A phase due while they run waits at most this long, then cancels them (they run again after the pause).
+max_pause_wait_minutes = 30.0
 held_out_states_file = "phase5_eval_visible_student_v2_visible/states.jsonl"
 # Before evaluating at the pause, the paused searches' REPL processes above this private memory stop (0: all); they
 # restart and replay their proof states on the next request. Memory budget: src/lean_search/rl/README.md, "Host memory".
@@ -163,21 +168,24 @@ paused_repl_memory_gib = 0.0
 
 # One part of the probe set per slot, the parts in turn (a stratified third, ~167 problems): every ~2 hours of loop
 # time (sampling and training), so the whole set every ~6 hours; the dashboard draws each slot against version 0's runs
-# of the same third, the last three together, and the raw rates. Before the first phase every part twice (version 0's
-# baseline and its run-to-run noise). The wall cap cuts the Lean-bound tail (~3% of the searches, below). The probe
-# and miniF2F run 56 REPLs beside the 56 searches still taking statements (the others' REPLs stay); the held-out states
-# 112, as many as the sampling: the paused searches' REPLs stop first.
+# of the same third, the last three together, and the raw rates. Before sampling starts, version 0's baselines run
+# all at once, each run its own job sharing 112 REPLs (baseline_concurrency: 6 x 11 probe runs, 40 miniF2F, 6 held-out
+# states, by their estimated work): every part twice (the run-to-run noise), miniF2F and the held-out states. Later the
+# probe and miniF2F run 56 REPLs beside sampling; the held-out states 112 at the pause, the paused searches' REPLs
+# stopped first.
 probe_parts = 3
 
 [evaluation.probe]
 max_expansions = 16
-# The Lean-bound tail: in the naming A/B's numbered probe (501 problems, 16 expansions) p90 16 min, p99 38 min, Lean
-# 88-99% of the tail's wall; no solve came after 30 min.
-max_wall_seconds = 1800.0
+# A cap on the Lean-bound tail, rarely binding: in the naming A/B's numbered probe (501 problems, 16 expansions) p90
+# 16 min, p99 38 min, no solve after 30 min. Beside sampling the tail no longer idles the GPUs, so the cap stays high
+# and the result depends little on the load; stops are reported per slot.
+max_wall_seconds = 3600.0
 concurrency = 56
 every_hours = 2.0
 at_start = true
 baseline_runs = 2
+baseline_concurrency = 11
 
 # Off: the probe already searches with the published value model. With value_model = "initial", once per published
 # value model other than v0 the first probe slot after its publish would search its part again with it, paired per
@@ -194,23 +202,25 @@ significance = 0.05
 [evaluation.value_benchmark]
 path = "grpo_gate/benchmark.json.gz"
 
-# Version 0's baseline before the first phase (version 0's merged weights are never pruned), then milestones only:
-# grpo_loop.py request-evaluation --target minif2f (or grpo_evaluate.py with the loop stopped).
+# Version 0's baseline before sampling (version 0's merged weights are never pruned), then milestones only, beside
+# sampling: grpo_loop.py request-evaluation --target minif2f (or grpo_evaluate.py with the loop stopped).
 [evaluation.minif2f]
 max_expansions = 64
-max_wall_seconds = 7200.0
+max_wall_seconds = 3600.0
 concurrency = 56
 every_hours = 0.0
 at_start = true
+baseline_concurrency = 40
 
 # Per-sample success and valid Lean on the 512 held-out states with every probe slot (~2 hours, a few minutes each): the
-# hard stop's signal. Version 0's run before the first phase is its reference; the loop refuses to start without it.
+# hard stop's signal. Version 0's run before sampling is its reference; the loop refuses to start without it.
 [evaluation.held_out_states]
 max_expansions = 1
 max_wall_seconds = 600.0
 concurrency = 112
 every_hours = 2.0
 at_start = true
+baseline_concurrency = 6
 
 # After each publish, the phase adapters of versions older than the last 5 are deleted unless still used (the current
 # version's, the value adapter the next value training continues, the policy adapters of the last 3 versions whose

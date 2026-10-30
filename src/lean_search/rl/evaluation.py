@@ -1,7 +1,8 @@
 """Fixed-target evaluations: a problem set searched at a fixed budget with the served version, resumable.
 
 A run directory holds config.toml (the search's run config, which the value benchmark reads for provenance),
-results.jsonl (one SearchResult per problem), trees/<problem>.json.gz and, once complete, summary.json; a repeated run
+results.jsonl (one SearchResult per problem), trees/<problem>.json.gz, progress.json (the problems without a result,
+which the loop reads) and, once complete, summary.json; a repeated run
 of the same version holds comparison.json against the first, a probe slot's value arm comparison.json against the
 slot's run with the reference value model.
 """
@@ -21,6 +22,7 @@ from pathlib import Path
 
 from lean_search.data import Problem
 from lean_search.expert_iteration.pool_search import PRELOADED_HEADER_SHARE, common_headers
+from lean_search.expert_iteration.serving import write_json_atomically
 from lean_search.lean import LeanReplConfig, LeanReplPool
 from lean_search.monitoring.families import BandOutcome, FixedTargets, PairedDifference, ValueArmResult
 from lean_search.rl.loop_config import ValueArmConfig
@@ -45,6 +47,8 @@ class EvaluationRun:
     repeat: int = 0
     # The slot's part searched again with the published value model, paired with the slot's run.
     value_arm: bool = False
+    # REPLs of the run in place of the target's (0): version 0's baseline runs share the concurrency.
+    concurrency: int = 0
 
 
 @dataclass(frozen=True)
@@ -115,6 +119,18 @@ class RepeatComparison:
 
 
 @dataclass(frozen=True)
+class SearchProgress:
+    """A running evaluation's problems without a result, read by the loop to fill the GPUs beside it."""
+
+    unfinished: int
+    concurrency: int
+
+    @property
+    def searches_in_flight(self) -> int:
+        return min(self.unfinished, self.concurrency)
+
+
+@dataclass(frozen=True)
 class EvaluationPaths:
     directory: Path
 
@@ -137,6 +153,10 @@ class EvaluationPaths:
     @property
     def comparison(self) -> Path:
         return self.directory / "comparison.json"
+
+    @property
+    def progress(self) -> Path:
+        return self.directory / "progress.json"
 
 
 def now() -> str:
@@ -381,6 +401,19 @@ def band_outcomes(outcomes: Sequence[StratumOutcome]) -> dict[str, BandOutcome]:
     return {outcome.stratum: BandOutcome(outcome.problems, outcome.solved) for outcome in outcomes}
 
 
+def repeats_to_compare(first: EvaluationPaths, finished: EvaluationPaths, repeat: int) -> list[EvaluationPaths]:
+    """The repeats to compare with the first run now that `finished` (repeat `repeat`) is complete: a repeat itself once
+    the first run is; the first run every complete repeat not yet compared (the loop runs version 0's runs at once)."""
+    if repeat:
+        return [finished] if first.summary.exists() else []
+    repeats = sorted(first.directory.parent.glob(f"{first.directory.name}_repeat*"))
+    return [
+        EvaluationPaths(directory)
+        for directory in repeats
+        if (directory / "summary.json").exists() and not (directory / "comparison.json").exists()
+    ]
+
+
 def fixed_targets_record(
     summary: EvaluationSummary,
     comparison: RepeatComparison | None = None,
@@ -455,6 +488,7 @@ async def search_problem_set(
     finished = {result.problem_name for result in done}
     pending = [problem.problem for problem in problems if problem.problem.name not in finished]
     results = list(done)
+    write_json_atomically(paths.progress, SearchProgress(len(pending), config.lean.concurrency))
 
     async def on_completed(completed: CompletedSearch) -> None:
         result = completed.result
@@ -464,6 +498,7 @@ async def search_problem_set(
         with paths.results.open("a", encoding="utf-8") as handle:
             handle.write(to_json(result) + "\n")
         results.append(result)
+        write_json_atomically(paths.progress, SearchProgress(len(problems) - len(results), config.lean.concurrency))
         solved = sum(result.proved for result in results)
         log(f"[{len(results)}/{len(problems)}] {result.problem_name}: {result.stop_reason} | solved {solved}")
 
@@ -519,3 +554,10 @@ async def run_problem_set_evaluation(
 
 def read_summary(path: Path) -> EvaluationSummary:
     return from_json_object(EvaluationSummary, json.loads(path.read_text(encoding="utf-8")))
+
+
+def read_search_progress(path: Path) -> SearchProgress | None:
+    """None before the job wrote it."""
+    if not path.exists():
+        return None
+    return from_json_object(SearchProgress, json.loads(path.read_text(encoding="utf-8")))

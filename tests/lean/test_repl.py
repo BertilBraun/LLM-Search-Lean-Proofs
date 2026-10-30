@@ -511,6 +511,26 @@ async def test_pool_stops_processes_in_use_at_the_memory_threshold() -> None:
         assert (len(stopped), repl.process_id) == (1, None)
 
 
+async def test_pool_stops_the_idle_processes_beyond_those_kept_running() -> None:
+    async with LeanReplPool(3) as pool, pool.acquire():
+        stopped = await pool.stop_idle_processes(2)
+    assert len(stopped) == 1
+
+
+async def test_pool_never_stops_a_process_in_use_as_idle() -> None:
+    async with LeanReplPool(1) as pool, pool.acquire() as repl:
+        await pool.stop_idle_processes(0)
+        assert repl.process_id is not None
+
+
+async def test_pool_hands_out_a_running_process_before_a_stopped_one() -> None:
+    async with LeanReplPool(2) as pool:
+        await pool.stop_idle_processes(1)
+        async with pool.acquire() as repl:
+            running = repl.process_id is not None
+    assert running
+
+
 async def test_pool_restarts_a_process_whose_user_raised() -> None:
     async with LeanReplPool(1) as pool:
         with pytest.raises(RuntimeError):

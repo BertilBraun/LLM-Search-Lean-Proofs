@@ -368,8 +368,8 @@ and `single_step.toml`'s defaults likewise, though the loop fills in its own).
 
 Disk: plan on about 200 GB for the whole run and rent at least 300 GB (estimates): the Hugging Face cache (Qwen3.5-4B,
 -2B and the 9B teacher, ~32 GB), Mathlib's build, the datasets and the SFT checkpoints (~30-40 GB together), merged
-weights (the current version's and version 0's policy and value, the kept v0 value model and the next version's while
-publishing: ~50 GB at the peak), the last 5 versions' phase adapters (~4 GB; older ones are deleted,
+weights (the current version's and version 0's policy and value, and the next version's while publishing: ~50 GB at
+the peak), the last 5 versions' phase adapters (~4 GB; older ones are deleted,
 `src/lean_search/rl/README.md`, "Disk") and the trees, which grow by an estimated 150-250 MB per phase, 5-10 GB a day
 at 30-minute phases. `system.disk_free_gib` on the System page, alert below 50 GiB free.
 
@@ -383,24 +383,26 @@ Order on a fresh node (each step catches what would otherwise surface hours late
    PCIe: `NCCL_P2P_DISABLE=1` in the loop's environment). HF and GitHub reachability.
 2. **Rebuild**, then the heartbeat replay (`python experiments/heartbeat_replay.py ...`, DESIGN.md "Lean execution and
    harness"), which fixes the caps every later search uses.
-3. **Smoke cycle** (`experiments/configs/grpo/loop_smoke.toml`, about an hour): the whole loop on the overfit statements
-   with visible student v2 as the starting policy, 5-10-minute phases, a value phase every phase (always published) and
-   every evaluation at a tiny size (probe 12 problems, 4 per part, every part twice at the start; miniF2F 8; held-out
-   states 32 after every phase at the pause, the probe and miniF2F beside sampling as in `loop.toml`). It runs the
-   at-start baselines, v0 scoring the loop's value benchmark (step 5's, so step 5 runs first) through the value servers, a pause with policy and value training on four ranks,
-   both GPU merges, the publish and the wake, the new value model scoring the benchmark, a probe slot with it beside
-   sampling (the next pause waits for it), and the adapter pruning after the second phase. Go
-   through the first-hour checks below on it, stop it after two phases and delete `$LEAN_SEARCH_RUNS/grpo_smoke*` and
-   `$LEAN_SEARCH_CHECKPOINTS/grpo_smoke*`.
+3. **Smoke cycle** (`experiments/configs/grpo/loop_smoke.toml`, an hour or a little more): the whole loop on the
+   overfit statements with visible student v2 as the starting policy, 5-10-minute phases, a value phase every phase
+   (always published) and every evaluation at a tiny size with short wall caps (probe 12 problems, 4 per part, every
+   part twice at the start; miniF2F 4; held-out states 32 after every phase at the pause, the probe and miniF2F beside
+   sampling as in `loop.toml`). It runs version 0's baselines all at once before sampling, v0 scoring the loop's value
+   benchmark (step 5's, so step 5 runs first) through the value servers, a pause with policy and value training on
+   four ranks, both GPU merges, the publish and the wake, the new value model scoring the benchmark, a probe slot with
+   it beside sampling (the next pause waits for it, at most 30 minutes), and the adapter pruning after the second
+   phase. Go through the first-hour checks below on it, stop it after two phases and delete
+   `$LEAN_SEARCH_RUNS/grpo_smoke*` and `$LEAN_SEARCH_CHECKPOINTS/grpo_smoke*`.
 4. **Cheap tests** (below): single-step GRPO with both credits (go or no-go on the learning rate), then the SFT stage
    and the naming A/B (`src/lean_search/data_rewrite/README.md`).
 5. **Value benchmark** (the gate set) with the starting policy served (`gate`, ~1-2 h): every served value model
    scores it, a dashboard trend.
-6. **Main loop**: a fresh `init`, then `loop`. Version 0's baselines run before the first phase: every probe part twice,
-   the held-out states and miniF2F (`[evaluation.minif2f] at_start = true`; the loop evaluates only the version it
-   serves, so a baseline missed here needs version 0 served again: its merged weights stay under `weights/v0000/`, never
-   pruned). Without version 0's held-out evaluation the loop refuses to start: the rollback and the hard stop are judged
-   against it.
+6. **Main loop**: a fresh `init`, then `loop`. Version 0's baselines run all at once before sampling starts, each run
+   its own job sharing the 112 REPLs (`baseline_concurrency`): every probe part twice, the held-out states and miniF2F
+   (`[evaluation.minif2f] at_start = true`; an estimated 2-3 hours, one tail; the loop evaluates only the version it
+   serves, so a baseline missed here needs version 0 served again: its merged weights stay under `weights/v0000/`,
+   never pruned). Phase 1 then samples as long as any other phase. Without version 0's held-out evaluation the loop
+   refuses to start: the rollback and the hard stop are judged against it.
 
 ```bash
 deployment/grpo_loop.sh node-check   # step 1
@@ -415,7 +417,7 @@ deployment/grpo_loop.sh servers      # eight vLLM servers: a GPU's two one after
 deployment/grpo_loop.sh check        # one live request per policy server (below)
 deployment/grpo_loop.sh gate         # step 5: the value benchmark (gate set, no value model), ~1-2 h
 deployment/grpo_loop.sh dashboard    # http://<node>:8600 (open; tunnel or mapped port: "Dashboard" above)
-deployment/grpo_loop.sh loop         # version 0's probe (every part twice), held-out states, miniF2F, then sampling
+deployment/grpo_loop.sh loop         # version 0's probe (every part twice), held-out states, miniF2F at once, then sampling
 deployment/grpo_loop.sh status       # or the dashboard; `tail -f $LEAN_SEARCH_RUNS/grpo_loop_v1/loop.log`
 deployment/grpo_loop.sh value-share 0.15   # μ on from the next phase that trains (0: off again); starts at 0
 ```
@@ -425,9 +427,10 @@ value targets) stays 0 until set by hand with `value-share`, which writes `$LEAN
 the loop reads it when each phase starts training (`status` prints it, the Value page charts the μ in effect per phase).
 The value model retrains every 2 phases on the last 4 phases' trees. The value statistics are trends only: the value
 benchmark (Value page, per served value model, against v0 and the previous model; a scoring or trend that fails is
-logged as an alert and retried after the next phase) and the per-phase calibration and label/prediction distributions;
-the probe searches with the published value model, so it measures policy and value together (the value arms, which
-pair a value model's probe slot with a v0 run, are off in `loop.toml`).
+logged as an alert and retried after the next phase; a value model whose paired interval against v0 lies wholly below
+0 is an alert in `loop.log` and on the dashboard until a newer one is published, nothing more) and the per-phase
+calibration and label/prediction distributions; the probe searches with the published value model, so it measures
+policy and value together (the value arms, which pair a value model's probe slot with a v0 run, are off in `loop.toml`).
 
 `servers` starts only the servers that do not answer, on the current version; the loop does the same by itself when
 searches keep failing on a server (`src/lean_search/rl/README.md`, "The loop", server failures) and stops with an
@@ -443,7 +446,7 @@ collapse within 4 phases of that rollback stops it (`loop.log`: "The loop stoppe
 `clear-health-stop` (keep the current version) ran (`src/lean_search/rl/README.md`, "Health checks and budget signals").
 The search budget (`[sampling] max_expansions`, 32) and the `[health]` thresholds change the same way: edit the loop
 config, `stop`, `loop`. Milestones: `python experiments/grpo_loop.py --config experiments/configs/grpo/loop.toml
-request-evaluation --target minif2f` (run at the next pause); with the loop stopped, `python
+request-evaluation --target minif2f` (run after the next pause, beside sampling); with the loop stopped, `python
 experiments/grpo_evaluate.py --loop-directory $LEAN_SEARCH_RUNS/grpo_loop_v1 --target minif2f`. To end:
 `deployment/grpo_loop.sh stop`, then the final miniF2F and probe with grpo_evaluate.py.
 
@@ -461,10 +464,12 @@ First-hour checks:
   `clip_fraction` 0 (`steps.jsonl` of the phase's policy output).
 - Publishing keeps the update: after phase 1, `weights/v0001/policy` should differ from `v0000/policy` in a large
   share of the adapted layers' elements (merging the continued SFT adapter into the raw base, not into merged weights).
-- Timings: version 0's probe (three parts, each twice) and the held-out-states run before the first phase give a probe
-  slot's wall time (`fixed_targets.evaluation_seconds` per part; at concurrency 56 beside sampling, a slot every ~2 h;
-  only the held-out run pauses the searches; DESIGN.md, "Fixed targets"; if a slot takes far longer than the 2 hours,
-  lower `probe_per_stratum` to 100 and re-select before the loop starts); the first phase's
+- Timings: `Baselines took ... min` in `loop.log` (version 0's runs at once, before sampling) and the first slots'
+  `Evaluations beside sampling (probe) took ... min` (`fixed_targets.evaluation_seconds` per part; at concurrency 56
+  beside sampling, a slot every ~2 h; only the held-out run pauses the searches; DESIGN.md, "Fixed targets"). A slot
+  longer than the 45-minute minimum delays its pause (`The phase's pause waits ...`; past 30 minutes it is cancelled
+  and run again after the pause, an `Alert:` line and `phases.jsonl`'s `beside_sampling.failed`); if that happens
+  often, lower `probe_per_stratum` to 100 and re-select before the loop starts. The first phase's
   `timing` line gives sampling vs training (two passes if training stays well below sampling, else `passes_per_phase =
   1` in `phase.toml`) and publishing.
 - The pause, segment by segment (`loop.log`'s `Phase <k> pause:` line, the `timing` family's `pause.*`, the System
@@ -491,8 +496,9 @@ First-hour checks:
   one-GPU micro-batch size) or `scoring_micro_batch_tokens`. `training/phase_<k>.log` interleaves the ranks' output;
   a hang in the first all-reduce on a PCIe node without peer-to-peer access is fixed with `NCCL_P2P_DISABLE=1` in the
   loop's environment.
-- Probe validity: `fixed_targets.probe_wall_clock_stops` must be ~0 (the 1-hour cap is an emergency stop; if it binds,
-  the probe measures load). The second version-0 run of each part gives the noise: `probe_repeat_difference` and
+- Probe validity: `fixed_targets.probe_wall_clock_stops` should stay near version 0's (the 1-hour cap binds for under
+  1% of the searches; a rise means the load beside sampling slows the searches). The second version-0 run of each
+  part gives the noise: `probe_repeat_difference` and
   `probe_repeat_discordant` per part (Evaluations page; `evaluations/probe_slot000<k>_v0000_repeat1/comparison.json`,
   and the sum over the parts in `loop.log`); later differences of the whole set smaller than about twice the summed
   discordant count's square root are noise.
@@ -501,17 +507,21 @@ First-hour checks:
   the Value page shows the per-phase `value_phase` charts from phase 1 on. Set μ only by hand (`value-share`).
 - Memory (System page, budget in `src/lean_search/rl/README.md`, "Host memory"): `memory_total_gib`,
   `memory_available_gib`, `lean_private_memory_gib` and its p90, `vllm_private_memory_gib`, once while sampling, once
-  while training (four ranks with the phase's sequences, after the paused searches' REPLs stopped) and once during the
-  probe (112 REPLs); in a value phase (every second phase with the defaults, every phase in the smoke cycle) the main
-  rank holds the window's labelled trees from the start of that phase's sampling. `loop.log`'s `Host memory after the
-  early resume` is the sampling condition's peak (searches running, handoff in host memory). `loop.log` reports the
-  paused REPL processes stopped before training and before each evaluation and the host memory at each stage boundary of
-  the pause (`Host memory before training: ...`). Lower `[evaluation.probe] concurrency` or `[sampling] concurrency` if
+  while training (four ranks with the phase's sequences, after the paused searches' REPLs stopped) and once during a
+  probe beside sampling (~112 REPLs: the searches above the limit stop their idle REPLs; right after the resume up to
+  168 while the resumed searches finish); in a value phase (every second phase with the defaults, every phase in the
+  smoke cycle) the main rank holds the window's labelled trees from the start of that phase's sampling. `loop.log`'s
+  `Host memory after the early resume` is the sampling condition's peak (searches running, handoff in host memory),
+  `Host memory as the evaluations beside sampling start` and `after the evaluations beside sampling` bracket each
+  evaluation beside sampling (its end line counts the idle REPL processes stopped). `loop.log` reports the paused REPL
+  processes stopped before training and before each evaluation at the pause and the host memory at each stage boundary
+  of the pause (`Host memory before training: ...`). Lower `[evaluation.probe] concurrency` or `[sampling] concurrency` if
   available memory falls below ~15% of the limit. Lean cores near the thread count and GPU utilization above ~80% mean
   the concurrency fits.
 - Server failures: `status.server_failures` stays at 0 on a healthy run; failed searches feed their statement again
   (`[sampling] server_failure_retries`), `statements_given_up` counts the dropped ones; `loop.log` reports any check
-  and restart of the servers.
+  and restart of the servers. An evaluation beside sampling that fails (a restarted server fails it too) is an `Alert:`
+  line and `status.evaluation_failures`; it runs again after the next pause, the loop goes on.
 - Curriculum (main loop, after about 2 hours): the realized solve rate (Curriculum page) within the 30-70% band; each
   band is judged on the first 50 statements fed at it once all finished, so slow unsolved searches no longer pull it
   down. Also expansions and trees per hour and trainable groups per phase (Training page, "Trainable groups per

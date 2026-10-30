@@ -222,7 +222,10 @@ or the `lean_search_step.match_N` matchers of executed steps. A crash during ver
 - The pool restarts a process before reusing it if the `acquire` body raised (including cancellation), if the process
   needs a restart, or if it is past `restart_fraction` of its limits. Restarts run in the background with
   `restart_attempts` tries and exponential backoff; the slot always returns to the pool, and a REPL that still cannot
-  start reports `ReplFailure(RESTART_FAILED)` from its calls instead of hanging `acquire`.
+  start reports `ReplFailure(RESTART_FAILED)` from its calls instead of hanging `acquire`. `acquire` hands out the most
+  recently released REPL first, and `stop_idle_processes(keep_running)` stops the longest-idle processes no caller
+  holds until at most that many run (the GRPO loop beside an evaluation): they start again only when demand reaches
+  them.
 - Closing is final, so nothing the pool started outlives it: `LeanRepl.close()` stops the process and later calls raise
   `ReplClosedError` instead of starting a new one; `LeanReplPool.close()` cancels and awaits its restarts, schedules
   none afterwards and closes every REPL, so a task still using one fails on its next call. A REPL start left running

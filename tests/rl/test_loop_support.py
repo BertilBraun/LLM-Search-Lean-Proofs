@@ -11,19 +11,22 @@ from lean_search.data_rewrite.statement_renaming import StatementRenaming
 from lean_search.monitoring.families import BandOutcome, ValueArmResult
 from lean_search.rl.evaluation import (
     EvaluationKind,
+    EvaluationPaths,
     EvaluationProblem,
+    EvaluationRun,
     EvaluationSummary,
     StratumOutcome,
     clopper_pearson,
     compare_repeats,
     fixed_targets_record,
     paired_difference,
+    repeats_to_compare,
     rolling_probe,
     search_summary,
     value_arm_result,
 )
-from lean_search.rl.fixed_targets import first_problems_by_stratum, probe_part
-from lean_search.rl.loop_config import EvaluationTarget, SamplingConfig, ValueArmConfig
+from lean_search.rl.fixed_targets import first_problems_by_stratum, probe_part, run_target
+from lean_search.rl.loop_config import EvaluationConfig, EvaluationTarget, SamplingConfig, ValueArmConfig
 from lean_search.rl.renaming import (
     RenamedStatement,
     StatementRenamings,
@@ -321,3 +324,38 @@ def test_the_repeated_probe_line_keeps_out_of_the_slot_series() -> None:
     comparison = compare_repeats(FIRST_RUN, SECOND_RUN)
     record = fixed_targets_record(slot_summary(1, 2, ()), comparison)
     assert (record.probe_slot, record.probe_solved, record.probe_repeat_solved) == (None, None, 2)
+
+
+def finished_run(directory: Path, compared: bool = False) -> EvaluationPaths:
+    paths = EvaluationPaths(directory)
+    directory.mkdir(parents=True)
+    paths.summary.write_text("{}", encoding="utf-8")
+    if compared:
+        paths.comparison.write_text("{}", encoding="utf-8")
+    return paths
+
+
+def test_a_repeat_finishing_first_waits_for_the_first_run(tmp_path: Path) -> None:
+    repeat = finished_run(tmp_path / "probe_slot0000_v0000_repeat1")
+    assert repeats_to_compare(EvaluationPaths(tmp_path / "probe_slot0000_v0000"), repeat, 1) == []
+
+
+def test_a_first_run_finishing_last_compares_every_repeat_not_yet_compared(tmp_path: Path) -> None:
+    finished_run(tmp_path / "probe_slot0000_v0000_repeat1")
+    finished_run(tmp_path / "probe_slot0000_v0000_repeat2", compared=True)
+    first = finished_run(tmp_path / "probe_slot0000_v0000")
+    assert [paths.directory.name for paths in repeats_to_compare(first, first, 0)] == ["probe_slot0000_v0000_repeat1"]
+
+
+def test_a_repeat_finishing_last_compares_itself(tmp_path: Path) -> None:
+    first = finished_run(tmp_path / "minif2f_v0000")
+    repeat = finished_run(tmp_path / "minif2f_v0000_repeat1")
+    assert repeats_to_compare(first, repeat, 1) == [repeat]
+
+
+@pytest.mark.parametrize(("concurrency", "expected"), [(0, 56), (14, 14)])
+def test_a_run_has_its_own_concurrency_or_the_targets(concurrency: int, expected: int) -> None:
+    evaluation = EvaluationConfig(probe=EvaluationTarget(16, 3600.0, 56))
+    assert (
+        run_target(evaluation, EvaluationRun(EvaluationKind.PROBE, 0, concurrency=concurrency)).concurrency == expected
+    )

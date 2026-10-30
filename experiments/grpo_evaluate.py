@@ -8,17 +8,19 @@
     python experiments/grpo_evaluate.py --loop-directory ... --target held_out_states
 
 Targets (src/lean_search/rl/fixed_targets.py, budgets in the loop config's [evaluation]): `probe` (the held-out pool
-statements of grpo_fixed_sets.py select, 16 expansions, a 1-hour emergency cap per problem; with --slot only the part
+statements of grpo_fixed_sets.py select, 16 expansions and a per-problem wall cap; with --slot only the part
 slot % probe_parts of the set, stratified like it), `minif2f` (miniF2F-valid at the full budget, 64 expansions) and
 `held_out_states` (per-sample success on the 512 held-out states, one request each).
-The servers must serve the loop's current policy and the loop config's `evaluation.value_model` (value v0 unless
-changed, so the probe and miniF2F measure the policy alone), or for --value-arm the published value model: the running
-loop serves them and calls this inside its phase pauses (searches paused, GPUs free); without a running loop (before
-the first phase, after the last) serve them and run it directly.
+The servers must serve the loop's current policy and the loop config's `evaluation.value_model`, or for --value-arm the
+published value model: the running loop serves them and calls this before sampling (version 0's baselines, all at
+once), at its phase pauses (the held-out states) or beside sampling (`evaluation.beside_sampling`: the probe and
+miniF2F); without a running loop (before the first phase, after the last) serve them and run it directly.
+`--concurrency` overrides the target's REPLs.
 Results go to $LEAN_SEARCH_RUNS/<loop>/evaluations/<target>[_slot<slot>]_v<version>/ (resumable: rerun the same
-command), the fixed_targets line to the loop's metrics (a probe slot's with the rolling whole set of the last
-probe_parts slots) and a line to evaluations.jsonl. `--repeat k` searches the same version (and part) again into
-..._repeat<k>/ and compares it with the first run (comparison.json, the fixed_targets line). `--value-arm` searches a
+command; progress.json holds the problems still without a result), the fixed_targets line to the loop's metrics (a
+probe slot's with the rolling whole set of the last probe_parts slots) and a line to evaluations.jsonl. `--repeat k`
+searches the same version (and part) again into ..._repeat<k>/ and compares it with the first run (comparison.json, the
+fixed_targets line), once both are complete: whichever of the two finishes last compares them. `--value-arm` searches a
 slot's part with the published value model into ..._value_arm/ and pairs it per problem with the slot's run
 (comparison.json, pooled with the earlier value arms; the value_arm line).
 """
@@ -42,6 +44,7 @@ from lean_search.rl.evaluation import (
     compare_repeats,
     fixed_targets_record,
     read_summary,
+    repeats_to_compare,
     rolling_probe,
     value_arm_result,
     value_arm_text,
@@ -79,6 +82,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--value-arm", action="store_true", help="the slot's part with the published value model, paired with the slot"
     )
+    parser.add_argument("--concurrency", type=int, default=0, help="REPLs in place of the target's (default: those)")
     return parser.parse_args()
 
 
@@ -91,7 +95,9 @@ def evaluation_run(arguments: argparse.Namespace) -> EvaluationRun:
         raise SystemExit("--slot is a probe slot: use it with --target probe.")
     if arguments.value_arm and (arguments.slot is None or arguments.repeat):
         raise SystemExit("--value-arm pairs a probe slot's first run: give --slot, not --repeat.")
-    return EvaluationRun(arguments.target, arguments.slot, arguments.repeat, arguments.value_arm)
+    if arguments.concurrency < 0:
+        raise SystemExit("--concurrency must be at least 1 (0: the target's).")
+    return EvaluationRun(arguments.target, arguments.slot, arguments.repeat, arguments.value_arm, arguments.concurrency)
 
 
 def served_value_version(config: GrpoLoopConfig, paths: GrpoLoopPaths, value_model: EvaluationValueModel) -> int:
@@ -126,17 +132,20 @@ async def evaluate(arguments: argparse.Namespace) -> None:
         assert summary.value_arm is not None
         writer.write(summary.value_arm)
         log(value_arm_text(summary.value_arm))
+    elif run.kind == EvaluationKind.HELD_OUT_STATES:
+        writer.write(fixed_targets_record(summary))
     else:
-        comparison = None
-        if run.repeat and run.kind != EvaluationKind.HELD_OUT_STATES:
-            first = EvaluationPaths(paths.evaluation_directory(dataclasses.replace(run, repeat=0), current.version))
-            comparison = compare_repeats(read_results(first.results), read_results(EvaluationPaths(directory).results))
-            EvaluationPaths(directory).comparison.write_text(to_json(comparison), encoding="utf-8")
+        first = EvaluationPaths(paths.evaluation_directory(dataclasses.replace(run, repeat=0), current.version))
+        for repeat in repeats_to_compare(first, EvaluationPaths(directory), run.repeat):
+            comparison = compare_repeats(read_results(first.results), read_results(repeat.results))
+            repeat.comparison.write_text(to_json(comparison), encoding="utf-8")
+            writer.write(fixed_targets_record(read_summary(repeat.summary), comparison))
             log(repeat_text(comparison))
-        first_run_of_slot = run.slot is not None and not run.repeat
-        rolling = last_slots(config, paths, run.slot) if first_run_of_slot else None
-        baseline = probe_baseline_differences(paths, config.evaluation, run.slot) if first_run_of_slot else None
-        writer.write(fixed_targets_record(summary, comparison, rolling, baseline))
+        if not run.repeat:
+            first_run_of_slot = run.slot is not None
+            rolling = last_slots(config, paths, run.slot) if first_run_of_slot else None
+            baseline = probe_baseline_differences(paths, config.evaluation, run.slot) if first_run_of_slot else None
+            writer.write(fixed_targets_record(summary, None, rolling, baseline))
     with (paths.directory / "evaluations.jsonl").open("a", encoding="utf-8") as handle:
         handle.write(to_json(summary) + "\n")
     log(

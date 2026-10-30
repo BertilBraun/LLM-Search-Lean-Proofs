@@ -2,7 +2,15 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from metric_records import curriculum_phase, grpo_phase, loop_status, search_phase, system_usage, value_arm
+from metric_records import (
+    curriculum_phase,
+    grpo_phase,
+    loop_status,
+    search_phase,
+    system_usage,
+    value_arm,
+    value_benchmark,
+)
 
 from lean_search.monitoring.alerts import AlertThresholds, Severity, run_alerts
 from lean_search.monitoring.families import (
@@ -110,6 +118,14 @@ def failed_benchmark_scoring(writer: MetricsWriter) -> None:
     writer.write(loop_status(last_publish_time=NOW - 60, value_benchmark_failures=1), record_time=NOW - 30)
 
 
+def failed_evaluation_beside_sampling(writer: MetricsWriter) -> None:
+    writer.write(loop_status(last_publish_time=NOW - 60, evaluation_failures=1), record_time=NOW - 30)
+
+
+def value_benchmark_below_v0(writer: MetricsWriter) -> None:
+    writer.write(value_benchmark(upper=-0.01), record_time=NOW)
+
+
 @pytest.mark.parametrize(
     ("scenario", "title"),
     [
@@ -130,6 +146,8 @@ def failed_benchmark_scoring(writer: MetricsWriter) -> None:
         (low_disk, "Disk almost full"),
         (failing_servers, "Server failures"),
         (failed_benchmark_scoring, "Loop errors"),
+        (failed_evaluation_beside_sampling, "Loop errors"),
+        (value_benchmark_below_v0, "Value benchmark below v0"),
     ],
 )
 def test_rule_fires(tmp_path: Path, scenario: Callable[[MetricsWriter], None], title: str) -> None:
@@ -168,6 +186,16 @@ def worse_value_arm_of_a_replaced_value_model(writer: MetricsWriter) -> None:
     writer.write(loop_status(last_publish_time=NOW - 60), record_time=NOW - 10)
 
 
+def value_benchmark_overlapping_v0(writer: MetricsWriter) -> None:
+    writer.write(value_benchmark(upper=0.01), record_time=NOW)
+
+
+def value_benchmark_below_v0_of_a_replaced_value_model(writer: MetricsWriter) -> None:
+    writer.write(value_benchmark(upper=-0.01), record_time=NOW - 100)
+    writer.update_context(value_version=8)
+    writer.write(loop_status(last_publish_time=NOW - 60), record_time=NOW - 10)
+
+
 def healthy_phase_after_an_alert(writer: MetricsWriter) -> None:
     write_all(writer, [phase_health(clip_alert()), phase_health()])
 
@@ -182,6 +210,8 @@ def healthy_phase_after_an_alert(writer: MetricsWriter) -> None:
         balanced_curriculum,
         value_arm_no_worse,
         worse_value_arm_of_a_replaced_value_model,
+        value_benchmark_overlapping_v0,
+        value_benchmark_below_v0_of_a_replaced_value_model,
         healthy_phase_after_an_alert,
     ],
 )

@@ -1,4 +1,7 @@
+import dataclasses
 from pathlib import Path
+
+import pytest
 
 from lean_search.rl.loop_config import ValueBenchmarkConfig
 from lean_search.rl.value_trends import (
@@ -7,9 +10,11 @@ from lean_search.rl.value_trends import (
     earlier_scores,
     keep_scores,
     scored_versions,
+    worse_than_reference,
 )
 from lean_search.value.benchmark import BenchmarkScores, ValueBenchmark, benchmark_fingerprint
 from lean_search.value.bins import Readout
+from lean_search.value.pair_statistics import PairStatistic
 
 EMPTY = ValueBenchmark(provenance=(), states=(), groups=())
 
@@ -50,3 +55,10 @@ def test_a_trend_names_the_value_versions_it_compares(tmp_path: Path) -> None:
         30.0,
     )
     assert (trend.value_version, trend.reference_value_version, trend.previous_value_version) == (8, 0, 4)
+
+
+@pytest.mark.parametrize(("upper", "worse"), [(-0.01, True), (0.01, False)])
+def test_a_trend_is_worse_than_v0_only_with_its_interval_wholly_below(upper: float, worse: bool) -> None:
+    trend = benchmark_trend(EMPTY, VersionScores(8, scores("v8")), None, None, Readout(), ValueBenchmarkConfig(), 30.0)
+    against = PairStatistic(10, 100, 10, 0.6, 0.65, upper - 0.05, upper - 0.1, upper, 50.0, 1000, 0.95)
+    assert worse_than_reference(dataclasses.replace(trend, against_reference=against)) == worse

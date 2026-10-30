@@ -50,6 +50,8 @@ class LoopStatus:
     # because their summary failed.
     value_benchmark_failures: int = 0
     trees_left_out: int = 0
+    # This session: evaluations beside sampling that failed or were cut off at a pause (each runs again after it).
+    evaluation_failures: int = 0
 
 
 @dataclass(frozen=True)

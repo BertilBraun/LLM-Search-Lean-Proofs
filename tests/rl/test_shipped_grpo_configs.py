@@ -3,7 +3,9 @@ from pathlib import Path
 
 import pytest
 
+from lean_search.rl.evaluation import EvaluationKind
 from lean_search.rl.fixed_sets import FixedSetsConfig
+from lean_search.rl.fixed_targets import baseline_concurrency, baseline_jobs, target_config
 from lean_search.rl.loop_config import (
     EvaluationValueModel,
     GrpoLoopConfig,
@@ -176,9 +178,23 @@ def test_the_loop_probes_a_third_every_two_hours() -> None:
     assert (evaluation.probe_parts, evaluation.probe.every_hours) == (3, 2.0)
 
 
-def test_the_loop_probe_has_as_many_repls_as_the_searches_beside_it() -> None:
+def test_the_loop_probe_has_as_many_repls_as_the_searches_beside_it_at_least() -> None:
     config = loop("grpo/loop.toml")
-    assert config.evaluation.probe.concurrency == config.sampling.concurrency_beside_evaluations
+    assert config.evaluation.probe.concurrency == config.sampling.min_concurrency_beside_evaluations
+
+
+def test_the_loop_probe_cap_binds_rarely() -> None:
+    assert loop("grpo/loop.toml").evaluation.probe.max_wall_seconds == 3600.0
+
+
+def test_version_zeros_baselines_share_the_sampling_concurrency() -> None:
+    config = loop("grpo/loop.toml")
+    repls = sum(
+        baseline_concurrency(config, kind) * baseline_jobs(config.evaluation, kind)
+        for kind in EvaluationKind
+        if target_config(config.evaluation, kind).at_start
+    )
+    assert repls == config.sampling.concurrency
 
 
 def test_the_overfit_loop_probes_the_whole_set_when_requested() -> None:
