@@ -1,9 +1,11 @@
 """The policy as a search expander: one request with n samples per expansion, parsed into distinct candidates."""
 
 import contextlib
+import dataclasses
+import functools
 import itertools
 import time
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -12,17 +14,20 @@ from transformers import AutoTokenizer
 
 from lean_search.lean.text import FORBIDDEN_TOKENS
 from lean_search.policy.client import Generation, PolicyClient, Sample
-from lean_search.policy.config import PolicyConfig
+from lean_search.policy.config import FeedbackConfig, PolicyConfig
 from lean_search.policy.prompts import (
     FENCE,
     ChatTemplate,
+    FailedAttempt,
     ParsedSamples,
     ParseFailure,
     answer_opening,
+    error_summary,
     forced_answer_prompt,
     forced_sample,
     parse_samples,
     render_prompt,
+    shortened,
     stop_sequences,
     truncated_before_answer,
 )
@@ -30,11 +35,15 @@ from lean_search.retrieval.provider import LemmaProvider, load_lemma_provider
 from lean_search.retrieval.statistics import LemmaStatistics
 from lean_search.search.expanders import Candidate, CandidateBatch, CandidateBatches, SearchContext
 from lean_search.search.texts import GeneratedText, UnparsedSample
-from lean_search.search.tree import Node, StepSource
+from lean_search.search.tree import Edge, EdgeOutcome, FailureKind, Node, NodeStatus, SearchTree, StepSource
 
 MINIMUM_GENERATED_TOKENS = 32
 # Room for the closing of the thoughts and the opened block.
 FORCED_ANSWER_PROMPT_SLACK = 64
+# Failures whose message says what was wrong with the block (not infrastructure, not a missing block).
+FEEDBACK_FAILURE_KINDS = frozenset(
+    {FailureKind.ERROR, FailureKind.UNKNOWN_IDENTIFIER, FailureKind.HEARTBEAT_TIMEOUT, FailureKind.FORBIDDEN}
+)
 
 
 class PolicyTokenizer(ChatTemplate, Protocol):
@@ -77,6 +86,8 @@ class PolicyStatistics:
     forced_blocks: int = 0
     forced_prompt_tokens: int = 0
     forced_generated_tokens: int = 0
+    # Feedback rounds (policy.feedback), also counted in the totals above.
+    feedback_requests: int = 0
 
     def record(
         self, generation: Generation, parsed: ParsedSamples, seconds: float, forced: ForcedAnswers | None = None
@@ -119,6 +130,7 @@ def candidate_batch(
     ends_turn_on_stop: bool = True,
     temperature: float | None = None,
     top_p: float | None = None,
+    feedback: bool = False,
 ) -> CandidateBatch:
     """The whole request's cost and every sample's text: candidates with their samples, unparsed samples apart."""
     # A request with stop sequences ends at the fence, not at the end of turn.
@@ -141,6 +153,7 @@ def candidate_batch(
                 GeneratedText(samples[index].text, ended_turn(index), positions, samples[index].tokens.rounded())
                 for index, positions in zip(candidate.sample_indices, candidate.block_positions, strict=True)
             ),
+            feedback=feedback,
         )
         for candidate in parsed.candidates
     )
@@ -156,6 +169,7 @@ def candidate_batch(
         unparsed=unparsed,
         temperature=temperature,
         top_p=top_p,
+        feedback=feedback,
     )
 
 
@@ -167,6 +181,72 @@ class SampledExpansion:
     parsed: ParsedSamples
     forced: ForcedAnswers
     prompt: str = ""
+    feedback: bool = False
+
+
+@dataclass(frozen=True)
+class PromptContext:
+    """What a node's prompts show besides its goals; the feedback round adds the failed attempts."""
+
+    lemmas: tuple[str, ...] = ()
+    failed_tactics: tuple[str, ...] = ()
+    failed_attempts: tuple[FailedAttempt, ...] = ()
+
+
+def node_edges(tree: SearchTree, node: Node, source: StepSource) -> list[Edge]:
+    return [edge for edge in tree.edges if edge.parent_id == node.node_id and edge.source == source]
+
+
+def failed_automation(tree: SearchTree, node: Node) -> tuple[str, ...]:
+    """The sweep's tactics that failed at the node, in the sweep's order."""
+    return tuple(
+        edge.text for edge in node_edges(tree, node, StepSource.AUTOMATION) if edge.outcome == EdgeOutcome.FAILED
+    )
+
+
+def failed_blocks(edges: Sequence[Edge]) -> list[Edge]:
+    """The node's distinct policy blocks that failed with an error to show and reached no state, those behind the most
+    samples first. A block that made progress before failing is not a failed attempt."""
+    failed = [
+        edge
+        for edge in edges
+        if edge.source == StepSource.POLICY
+        and edge.repeat_of is None
+        and edge.outcome in (EdgeOutcome.FAILED, EdgeOutcome.REJECTED)
+        and edge.failure is not None
+        and edge.failure.kind in FEEDBACK_FAILURE_KINDS
+    ]
+    return sorted(failed, key=lambda edge: -edge.sample_count)
+
+
+def new_states(edges: Sequence[Edge]) -> int:
+    """New states the node's policy samples (and their repairs) reached."""
+    return sum(edge.source != StepSource.AUTOMATION and edge.outcome == EdgeOutcome.CHILD for edge in edges)
+
+
+def feedback_fires(edges: Sequence[Edge], min_children: int, proves: Callable[[Edge], bool]) -> bool:
+    """`edges`: the node's after its first request ran. With harvesting the search asks again after a proof; the node
+    is closed by then."""
+    return (
+        new_states(edges) < min_children
+        and bool(failed_blocks(edges))
+        and not any(proves(edge) for edge in edges if edge.outcome == EdgeOutcome.CHILD)
+    )
+
+
+def failed_attempt(edge: Edge, config: FeedbackConfig) -> FailedAttempt:
+    assert edge.failure is not None
+    return FailedAttempt(
+        shortened(edge.text, config.max_block_characters),
+        shortened(error_summary(edge.failure.message), config.max_error_characters),
+    )
+
+
+def proves(tree: SearchTree, edge: Edge) -> bool:
+    """`edge` reached a new state: a verified proof (a failed verification marks it FAILED)."""
+    assert edge.target_id is not None
+    target = tree.node(edge.target_id)
+    return target.is_proved and target.status != NodeStatus.FAILED
 
 
 class PolicyExpander:
@@ -189,9 +269,31 @@ class PolicyExpander:
         self._first_request_started: float | None = None
 
     async def expand(self, node: Node, context: SearchContext) -> CandidateBatches:
-        sampled = await self.sample(node, context)
+        prompt_context = await self.prompt_context(node, context)
+        sampled = await self.sample(node, context, prompt_context)
+        if sampled is None:
+            return
+        yield self.batch(sampled)
+        # The search ran the batch before asking for the next: its edges are in the tree.
+        feedback = self.config.feedback
+        if not feedback.enabled:
+            return
+        tree = context.tree
+        edges = [edge for edge in tree.edges if edge.parent_id == node.node_id]
+        if not feedback_fires(edges, feedback.min_children, functools.partial(proves, tree)):
+            return
+        attempts = tuple(failed_attempt(edge, feedback) for edge in failed_blocks(edges)[: feedback.max_attempts])
+        shown = attempts if feedback.show_attempts else ()
+        feedback_context = dataclasses.replace(prompt_context, failed_attempts=shown)
+        sampled = await self.sample(node, context, feedback_context, feedback.sample_count, feedback=True)
         if sampled is not None:
+            self.statistics.feedback_requests += 1
             yield self.batch(sampled)
+
+    async def prompt_context(self, node: Node, context: SearchContext) -> PromptContext:
+        lemmas = await self.lemma_provider.lemma_lines(node.state, context.repl) if self.lemma_provider else ()
+        failed_tactics = failed_automation(context.tree, node) if self.config.failed_automation_in_prompt else ()
+        return PromptContext(tuple(lemmas), failed_tactics)
 
     def batch(self, sampled: "SampledExpansion") -> CandidateBatch:
         return candidate_batch(
@@ -203,26 +305,38 @@ class PolicyExpander:
             ends_turn_on_stop=not stop_sequences(self.config.thinking, self.config.visible_reasoning),
             temperature=self.config.temperature,
             top_p=self.config.top_p,
+            feedback=sampled.feedback,
         )
 
-    async def sample(self, node: Node, context: SearchContext) -> SampledExpansion | None:
+    async def sample(
+        self,
+        node: Node,
+        context: SearchContext,
+        prompt_context: PromptContext | None = None,
+        sample_count: int | None = None,
+        feedback: bool = False,
+    ) -> SampledExpansion | None:
         """The node's samples (forced answers in place) and their candidates; None when the prompt is too long."""
-        lemmas = await self.lemma_provider.lemma_lines(node.state, context.repl) if self.lemma_provider else ()
+        if prompt_context is None:
+            prompt_context = await self.prompt_context(node, context)
         prompt = render_prompt(
             self.tokenizer,
             node.goals,
-            lemmas,
+            prompt_context.lemmas,
             few_shot=self.config.few_shot,
             thinking=self.config.thinking,
             thinking_instruction=self.config.thinking_instruction,
             visible=self.config.visible_reasoning,
+            failed_tactics=prompt_context.failed_tactics,
+            failed_attempts=prompt_context.failed_attempts,
         )
         prompt_token_ids = self.tokenizer.encode(prompt, add_special_tokens=False)
         max_tokens = min(self.config.max_tokens, self.max_model_length - len(prompt_token_ids))
         if max_tokens < MINIMUM_GENERATED_TOKENS:
             self.statistics.prompts_too_long += 1
             return None
-        generation, seconds = await self._generate(prompt, max_tokens)
+        sample_count = self.config.sample_count if sample_count is None else sample_count
+        generation, seconds = await self._generate(prompt, max_tokens, sample_count)
         samples, forced, forcing_seconds = await self.force_answers(prompt_token_ids, generation.samples)
         parsed = parse_samples(
             samples,
@@ -232,7 +346,7 @@ class PolicyExpander:
             visible=self.config.visible_reasoning,
         )
         self.statistics.record(generation, parsed, seconds + forcing_seconds, forced)
-        return SampledExpansion(generation, samples, parsed, forced, prompt)
+        return SampledExpansion(generation, samples, parsed, forced, prompt, feedback)
 
     async def force_answers(
         self, prompt_token_ids: Sequence[int], samples: Sequence[Sample]
@@ -243,13 +357,13 @@ class PolicyExpander:
         )
         return forced_samples, forced, time.monotonic() - started if forced.sample_indices else 0.0
 
-    async def _generate(self, prompt: str, max_tokens: int) -> tuple[Generation, float]:
+    async def _generate(self, prompt: str, max_tokens: int, sample_count: int) -> tuple[Generation, float]:
         started = time.monotonic()
         if self._first_request_started is None:
             self._first_request_started = started
         generation = await next(self._clients).generate(
             prompt,
-            sample_count=self.config.sample_count,
+            sample_count=sample_count,
             max_tokens=max_tokens,
             temperature=self.config.temperature,
             top_p=self.config.top_p,

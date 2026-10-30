@@ -33,9 +33,12 @@ class TreeSummary:
     cut_off_samples: int = 0
     repetition_loops: int = 0
     # Distinct policy blocks Lean judged (infrastructure failures left out), and those of them that ran completely:
-    # the held-out states' valid-Lean criterion.
+    # the held-out states' valid-Lean criterion. A block whose names the search repaired is judged by its own run.
     judged_blocks: int = 0
     valid_blocks: int = 0
+    # The search options A/B arm the statement fell into (`sampling.options_arm`); "" with the A/B off.
+    arm: str = ""
+    generated_tokens: int = 0
 
 
 def executed_edge(record: TreeRecord, edge: Edge) -> Edge:
@@ -62,7 +65,9 @@ def trainable_groups(record: TreeRecord, reward: RewardConfig, credit: CreditMod
     return sum(group_advantages(group).has_signal(credit) for group in groups), labels.remaining_steps[0]
 
 
-def tree_summary(record: TreeRecord, reward: RewardConfig, credit: CreditMode, expansion_budget: int) -> TreeSummary:
+def tree_summary(
+    record: TreeRecord, reward: RewardConfig, credit: CreditMode, expansion_budget: int, arm: str = ""
+) -> TreeSummary:
     blocks_by_expansion: defaultdict[int, int] = defaultdict(int)
     samples = 0
     executed = []
@@ -91,4 +96,6 @@ def tree_summary(record: TreeRecord, reward: RewardConfig, credit: CreditMode, e
         repetition_loops=sum(repeats_itself(completion.text) for completion in cut_off),
         judged_blocks=len(judged),
         valid_blocks=sum(ran_completely(edge) for edge in judged),
+        arm=arm,
+        generated_tokens=record.result.accounting.generated_tokens,
     )

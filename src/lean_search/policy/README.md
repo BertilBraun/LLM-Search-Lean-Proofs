@@ -106,9 +106,29 @@ Two search options change only timing, never which candidates run or how they ar
   proves the goal (or the wall-clock budget runs out), the search awaits the request and charges its tokens anyway,
   to the final accounting and to `solved_at`, because they were spent before the proof was found
   (`SearchContext.abandoned_batches`). A theorem proved by automation therefore costs at most one extra request.
+  Only an expander's first request is sent early: a later one (the feedback round below) waits until the search ran
+  the batches before it.
 - `[search] score_children_early = true`: each new child's value request is sent as soon as Lean creates the child,
   while the expansion's remaining candidates run; at the end of the expansion the children are pushed in creation
   order with the same priorities as before. Children scored before a proof ends the expansion are never enqueued but
   their value prompt tokens are charged (to `solved_at` too).
 
 Both default to off in the code, so older configs reproduce; the row and expert-iteration configs turn them on.
+
+## Search options under measurement (owner-approved 2026-10-30, all off)
+
+To be measured on the held-out states (`experiments/search_variants.py`) before any is enabled in the loop:
+
+- `[policy.feedback] enabled = true` (`min_children` 2, `max_attempts` 2, `sample_count` 4, `max_block_characters`
+  400, `max_error_characters` 300, `show_attempts` true): after the search ran the expansion's samples, if they (and
+  their repairs) reached fewer than `min_children` new states, some block failed with an error (Lean's, the
+  identifier check's, a heartbeat limit or a forbidden step) without reaching any state, and no edge proved the node
+  (with harvesting the search asks again after a proof), one more request at the node whose user message adds the
+  most-sampled such blocks as sampled, each with its error's first line (plus a mismatch's types or a `rw`'s
+  pattern; the goal dump dropped): "These attempts failed here (fix one or try something else): …".
+  `show_attempts = false` is the blind control: the same trigger and samples on the node's own prompt. Its samples
+  are recorded like the others with `Candidate.feedback`, `Edge.feedback` and their own `ExpansionTexts` (prompt
+  included, `feedback = true`), so GRPO groups them apart. In the loop the request passes the pause gate like the
+  first (`GatedExpander` gates every request).
+- `failed_automation_in_prompt = true`: the user message adds "Already tried here without success: omega, …", the
+  sweep tactics that failed at the node; needs `automation_then_policy` with `overlap = false` (validated).

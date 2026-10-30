@@ -77,6 +77,8 @@ class ExpansionTexts:
     top_p: float | None = None
     # The published policy version that sampled them; None outside the GRPO loop and in older records.
     policy_version: int | None = None
+    # The node's feedback round (policy.feedback): a second prompt, its samples a GRPO group of their own.
+    feedback: bool = False
 
 
 @dataclass(frozen=True)

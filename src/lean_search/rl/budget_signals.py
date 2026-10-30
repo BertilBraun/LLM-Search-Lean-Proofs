@@ -8,7 +8,7 @@ and the curriculum's difficulty of the solved statements stops rising.
 import statistics
 from collections.abc import Sequence
 
-from lean_search.monitoring.families import BudgetPhase
+from lean_search.monitoring.families import ArmOutcome, BudgetPhase
 from lean_search.rl.tree_store import TreeEntry
 
 # Inclusive ranges; None: no upper end.
@@ -66,6 +66,37 @@ def recent_phases(entries: Sequence[TreeEntry], phase: int, count: int) -> list[
     return [entry for entry in entries if phase - count < entry.phase <= phase]
 
 
+def arm_outcomes(entries: Sequence[TreeEntry]) -> dict[str, ArmOutcome]:
+    """Per search options A/B arm: trees, solves, trainable groups and generated tokens; empty with the A/B off."""
+    by_arm: dict[str, list[TreeEntry]] = {}
+    for entry in entries:
+        if entry.summary.arm:
+            by_arm.setdefault(entry.summary.arm, []).append(entry)
+    outcomes = {}
+    for arm, arm_entries in sorted(by_arm.items()):
+        solved = sum(entry.proved for entry in arm_entries)
+        groups = sum(entry.summary.trainable_groups for entry in arm_entries)
+        tokens = sum(entry.summary.generated_tokens for entry in arm_entries)
+        outcomes[arm] = ArmOutcome(
+            trees=len(arm_entries),
+            solved=solved,
+            trainable_groups=groups,
+            generated_tokens=tokens,
+            solved_per_million_tokens=1e6 * solved / tokens if tokens else 0.0,
+            trainable_groups_per_tree=groups / len(arm_entries),
+        )
+    return outcomes
+
+
+def arm_outcomes_text(outcomes: dict[str, ArmOutcome]) -> str:
+    return "; ".join(
+        f"{arm}: {outcome.trees} trees, {outcome.solved} solved, {outcome.trainable_groups} trainable groups, "
+        f"{outcome.generated_tokens / 1e6:.1f}M generated tokens ({outcome.solved_per_million_tokens:.2f} solves per "
+        "million)"
+        for arm, outcome in outcomes.items()
+    )
+
+
 def budget_phase_record(
     entries: Sequence[TreeEntry], phase: int, late_solve_phases: int, max_late_solve_share: float
 ) -> BudgetPhase:
@@ -95,4 +126,5 @@ def budget_phase_record(
         median_difficulty_solved=median_or_none(solved_difficulty),
         p90_difficulty_solved=quantile(solved_difficulty, 0.9),
         mean_difficulty_searched=mean_or_none(searched_difficulty),
+        by_search_arm=arm_outcomes(current),
     )

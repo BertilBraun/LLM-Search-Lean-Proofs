@@ -1,5 +1,6 @@
 """The policy's chat format (shared by every model, the search and SFT data) and parsing of its replies."""
 
+import itertools
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -28,6 +29,9 @@ END_OF_TURN = "<|im_end|>"
 THINK_START = "<think>"
 THINK_END = "</think>"
 LENGTH_FINISH_REASON = "length"
+FEEDBACK_HEADING = "These attempts failed here (fix one or try something else):"
+REWRITE_PATTERN_FAILURE = "did not find instance of the pattern"
+TYPE_LABELS = frozenset({"has type", "but is expected to have type"})
 
 
 @dataclass(frozen=True)
@@ -70,10 +74,50 @@ class ChatTemplate(Protocol):
     ) -> str: ...
 
 
-def user_message(goals: Sequence[str], lemmas: Sequence[str] = ()) -> str:
+@dataclass(frozen=True)
+class FailedAttempt:
+    """A block tried at the state and Lean's error, both already cut to the prompt's length."""
+
+    tactic_block: str
+    error: str
+
+
+def shortened(text: str, max_characters: int) -> str:
+    return text if len(text) <= max_characters else text[: max_characters - 1].rstrip() + "…"
+
+
+def error_summary(message: str) -> str:
+    """Lean's error without the goal dump that follows it: the first line, plus the pattern a failed `rw` looked for
+    and a mismatch's actual and expected types."""
+    lines = message.strip().splitlines()
+    kept = lines[:1]
+    for index, line in enumerate(lines):
+        if index == 0 and REWRITE_PATTERN_FAILURE in line:
+            kept.extend(indented_after(lines, index))
+        elif index > 0 and line.strip() in TYPE_LABELS:
+            kept.extend([line.strip(), *indented_after(lines, index)])
+    return "\n".join(kept)
+
+
+def indented_after(lines: Sequence[str], index: int) -> list[str]:
+    return list(itertools.takewhile(lambda line: line.startswith(" "), lines[index + 1 :]))
+
+
+def user_message(
+    goals: Sequence[str],
+    lemmas: Sequence[str] = (),
+    *,
+    failed_tactics: Sequence[str] = (),
+    failed_attempts: Sequence[FailedAttempt] = (),
+) -> str:
     sections = ["Proof state:\n```lean\n" + "\n\n".join(goals) + "\n```"]
     if lemmas:
         sections.append("Lemmas that may help:\n```lean\n" + "\n".join(lemmas) + "\n```")
+    if failed_tactics:
+        sections.append("Already tried here without success: " + ", ".join(failed_tactics))
+    if failed_attempts:
+        attempts = [f"```lean\n{attempt.tactic_block}\n```\nError: {attempt.error}" for attempt in failed_attempts]
+        sections.append(FEEDBACK_HEADING + "\n\n" + "\n\n".join(attempts))
     return "\n\n".join(sections)
 
 
@@ -86,14 +130,21 @@ def system_prompt(instruction: str = "") -> str:
 
 
 def prompt_messages(
-    goals: Sequence[str], lemmas: Sequence[str] = (), *, few_shot: bool = False, system_instruction: str = ""
+    goals: Sequence[str],
+    lemmas: Sequence[str] = (),
+    *,
+    few_shot: bool = False,
+    system_instruction: str = "",
+    failed_tactics: Sequence[str] = (),
+    failed_attempts: Sequence[FailedAttempt] = (),
 ) -> list[ChatMessage]:
     messages = [ChatMessage("system", system_prompt(system_instruction))]
     if few_shot:
         for example in FEW_SHOT_EXAMPLES:
             messages.append(ChatMessage("user", user_message(example.goals)))
             messages.append(ChatMessage("assistant", assistant_message(example.tactic_block)))
-    messages.append(ChatMessage("user", user_message(goals, lemmas)))
+    content = user_message(goals, lemmas, failed_tactics=failed_tactics, failed_attempts=failed_attempts)
+    messages.append(ChatMessage("user", content))
     return messages
 
 
@@ -106,22 +157,31 @@ def render_prompt(
     thinking: bool = False,
     thinking_instruction: str = "",
     visible: bool = False,
+    failed_tactics: Sequence[str] = (),
+    failed_attempts: Sequence[FailedAttempt] = (),
 ) -> str:
-    """`thinking_instruction` extends the system prompt in thinking mode only."""
+    """`thinking_instruction` extends the system prompt in thinking mode only. `failed_tactics`: the automation that
+    failed at the state; `failed_attempts`: the policy's failed blocks there (the feedback round)."""
     if visible:
         assert not thinking and not few_shot
+        content = user_message(goals, lemmas, failed_tactics=failed_tactics, failed_attempts=failed_attempts)
         conversation = [
             {"role": "system", "content": VISIBLE_SYSTEM_PROMPT},
-            {"role": "user", "content": user_message(goals, lemmas)},
+            {"role": "user", "content": content},
         ]
         return template.apply_chat_template(
             conversation, tokenize=False, add_generation_prompt=True, enable_thinking=False
         )
     instruction = thinking_instruction if thinking else ""
-    conversation = [
-        {"role": message.role, "content": message.content}
-        for message in prompt_messages(goals, lemmas, few_shot=few_shot, system_instruction=instruction)
-    ]
+    messages = prompt_messages(
+        goals,
+        lemmas,
+        few_shot=few_shot,
+        system_instruction=instruction,
+        failed_tactics=failed_tactics,
+        failed_attempts=failed_attempts,
+    )
+    conversation = [{"role": message.role, "content": message.content} for message in messages]
     text = template.apply_chat_template(
         conversation, tokenize=False, add_generation_prompt=True, enable_thinking=thinking
     )

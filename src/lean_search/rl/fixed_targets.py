@@ -1,10 +1,11 @@
 """The fixed targets of the loop as runnable jobs: the probe set (one part per slot), miniF2F-valid and the held-out
 states.
 
-Each runs against whatever the servers serve with the loop's search template, at the target's budget, without
-harvesting or ε-exploration, and with the loop's statement renaming when it is on (the held-out states are traced
-states with their original names and are never renamed). The loop serves its published policy and the value model of
-`EvaluationConfig.value_model`, except for a probe slot's value arm: the same part with the published value model.
+Each runs against whatever the servers serve with the loop's search template (the search options under measurement
+off), at the target's budget, without harvesting or ε-exploration, and with the loop's statement renaming when it is
+on (the held-out states are traced states with their original names and are never renamed). The loop serves its
+published policy and the value model of `EvaluationConfig.value_model`, except for a probe slot's value arm: the same
+part with the published value model.
 """
 
 import dataclasses
@@ -30,6 +31,7 @@ from lean_search.rl.fixed_sets import read_fixed_set
 from lean_search.rl.loop_config import EvaluationConfig, EvaluationTarget, GrpoLoopConfig
 from lean_search.rl.renaming import StatementRenamings
 from lean_search.rl.search_models import evaluation_run_config
+from lean_search.rl.search_options import without_search_options
 from lean_search.rl.single_step import (
     sample_success,
     search_states,
@@ -151,8 +153,10 @@ async def evaluate_target(
     renamings: StatementRenamings | None,
     log: Callable[[str], None],
 ) -> EvaluationSummary:
-    """`template`: the loop's search config on the served models; results under `directory` (resumable). A probe
-    slot searches its part of the probe set, without a slot the whole set."""
+    """`template`: the loop's search config on the served models, searched with every search option off whatever the
+    sampling enables (version 0's baselines stay comparable); results under `directory` (resumable). A probe slot
+    searches its part of the probe set, without a slot the whole set."""
+    template = without_search_options(template)
     target = run_target(evaluation, run)
     part = None
     match run.kind:

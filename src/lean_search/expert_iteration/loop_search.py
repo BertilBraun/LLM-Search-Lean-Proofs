@@ -83,26 +83,25 @@ class PauseGate:
 
 
 class GatedExpander:
-    """The policy expander behind the gate: its request is in flight until the first batch arrives."""
+    """The policy expander behind the gate: each request (the feedback round's too) is in flight until its batch
+    arrives."""
 
     def __init__(self, inner: Expander, gate: PauseGate) -> None:
         self.inner = inner
         self.gate = gate
 
     async def expand(self, node: Node, context: SearchContext) -> CandidateBatches:
-        await self.gate.enter()
-        policy_version = self.gate.policy_version
-        released = False
-        try:
-            async with contextlib.aclosing(self.inner.expand(node, context)) as batches:
-                async for batch in batches:
-                    if not released:
-                        self.gate.leave()
-                        released = True
-                    yield dataclasses.replace(batch, policy_version=policy_version)
-        finally:
-            if not released:
-                self.gate.leave()
+        async with contextlib.aclosing(self.inner.expand(node, context)) as batches:
+            while True:
+                await self.gate.enter()
+                policy_version = self.gate.policy_version
+                try:
+                    batch = await anext(batches, None)
+                finally:
+                    self.gate.leave()
+                if batch is None:
+                    return
+                yield dataclasses.replace(batch, policy_version=policy_version)
 
 
 class GatedValueEstimator:

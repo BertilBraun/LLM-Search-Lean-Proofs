@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 from collections.abc import Sequence
 
 from lean_search.data import Problem, Split
@@ -61,3 +62,46 @@ async def test_paused_time_accumulates_over_pauses() -> None:
         await asyncio.sleep(0.02)
         gate.resume()
     assert gate.paused_seconds() >= 0.04
+
+
+class TwoBatchExpander:
+    async def expand(self, node: Node, context: SearchContext) -> CandidateBatches:
+        yield CandidateBatch(())
+        yield CandidateBatch(())
+
+
+def root_context() -> SearchContext:
+    state = ProofState("", "theorem t : True := by", (), ("⊢ True",), repl_proof_state=0, session=0)
+    tree = SearchTree("t", state, 0.0)
+    return SearchContext(Problem("t", Split.VALID, "", state.statement, "", ""), tree, LeanRepl())
+
+
+async def test_a_later_request_of_an_expansion_waits_while_paused() -> None:
+    gate = PauseGate()
+    context = root_context()
+    async with contextlib.aclosing(
+        GatedExpander(TwoBatchExpander(), gate).expand(context.tree.root, context)
+    ) as batches:
+        await anext(batches)
+        await gate.pause()
+        second = asyncio.create_task(anext(batches))
+        await settle()
+        finished_early = second.done()
+        gate.resume()
+        await asyncio.wait_for(second, 1.0)
+    assert not finished_early
+
+
+async def test_a_later_batch_carries_the_version_served_when_its_request_entered() -> None:
+    gate = PauseGate()
+    gate.policy_version = 4
+    context = root_context()
+    async with contextlib.aclosing(
+        GatedExpander(TwoBatchExpander(), gate).expand(context.tree.root, context)
+    ) as batches:
+        await anext(batches)
+        await gate.pause()
+        gate.policy_version = 5
+        gate.resume()
+        second = await anext(batches)
+    assert second.policy_version == 5

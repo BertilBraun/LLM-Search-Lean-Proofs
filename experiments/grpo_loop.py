@@ -207,7 +207,9 @@ async def run(config: GrpoLoopConfig, paths: GrpoLoopPaths) -> None:
     renamings = load_renamings(config.renaming, DATA_DIRECTORY)
     host_memory = functools.partial(host_memory_text, config)
     async with (
-        open_tree_searcher(search_run_config(config), statements.headers(), renamings) as searcher,
+        open_tree_searcher(
+            search_run_config(config), statements.headers(), renamings, config.sampling.options_arm
+        ) as searcher,
         open_trainer(paths, config, log) as trainer,
     ):
         phase_template = (REPOSITORY_DIRECTORY / config.training.phase_config).read_text(encoding="utf-8")

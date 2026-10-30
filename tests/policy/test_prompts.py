@@ -6,7 +6,9 @@ from lean_search.policy import Sample
 from lean_search.policy.prompts import (
     FEW_SHOT_EXAMPLES,
     SYSTEM_PROMPT,
+    FailedAttempt,
     ParseFailure,
+    error_summary,
     normalize_tactic_block,
     normalized_block,
     parse_sample,
@@ -14,6 +16,7 @@ from lean_search.policy.prompts import (
     prompt_messages,
     render_completion,
     render_prompt,
+    shortened,
     stop_sequences,
     user_message,
 )
@@ -191,3 +194,43 @@ def test_failed_samples_are_counted_with_their_tokens() -> None:
 def test_samples_that_all_fail_yield_no_candidates() -> None:
     parsed = parse_samples([sample("sorry"), sample("", finish_reason="stop")], thinking=False)
     assert parsed.candidates == ()
+
+
+def test_user_message_names_the_failed_automation_after_the_state() -> None:
+    assert user_message(GOALS[:1], failed_tactics=["omega", "nlinarith"]).endswith(
+        "\n```\n\nAlready tried here without success: omega, nlinarith"
+    )
+
+
+def test_user_message_shows_failed_attempts_to_fix_or_replace() -> None:
+    attempts = [FailedAttempt("nlinarith [sq_nonneg x]", "linarith failed"), FailedAttempt("omega", "omega failed")]
+    assert user_message(GOALS[:1], failed_attempts=attempts).endswith(
+        "These attempts failed here (fix one or try something else):\n\n```lean\nnlinarith [sq_nonneg x]\n```\n"
+        "Error: linarith failed\n\n```lean\nomega\n```\nError: omega failed"
+    )
+
+
+@pytest.mark.parametrize(
+    ("message", "summary"),
+    [
+        (
+            "linarith failed to find a contradiction\ncase a\nx : ℝ\n⊢ False failed",
+            "linarith failed to find a contradiction",
+        ),
+        (
+            "tactic 'rewrite' failed, did not find instance of the pattern\n  a⁻¹.log\nx : ℝ\n⊢ x",
+            "tactic 'rewrite' failed, did not find instance of the pattern\n  a⁻¹.log",
+        ),
+        (
+            "type mismatch\n  h\nhas type\n  0 < x : Prop\nbut is expected to have type\n  0 ≤ x : Prop",
+            "type mismatch\nhas type\n  0 < x : Prop\nbut is expected to have type\n  0 ≤ x : Prop",
+        ),
+        ("unsolved goals\nx : ℕ\n⊢ x = 2", "unsolved goals"),
+    ],
+)
+def test_error_summary_drops_the_goal_dump(message: str, summary: str) -> None:
+    assert error_summary(message) == summary
+
+
+def test_shortened_text_ends_in_an_ellipsis_within_the_limit() -> None:
+    assert shortened("linarith failed to find a contradiction", 12) == "linarith fa…"

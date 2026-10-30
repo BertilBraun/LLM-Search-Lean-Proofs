@@ -111,6 +111,8 @@ class PolicyGroup:
     node_id: int
     goals: tuple[str, ...]
     samples: tuple[GroupSample, ...]
+    # The node's feedback round: its own prompt, so its own group.
+    feedback: bool = False
 
     @property
     def sample_count(self) -> int:
@@ -220,21 +222,26 @@ def policy_groups(
     estimates: Sequence[ValueEstimate | None],
     config: RewardConfig,
 ) -> TreeGroups:
-    """One group per expanded proof-graph node with policy samples; `tactics` from `policy_tactics`."""
+    """One group per prompt (the expansion's, its feedback round's) at an expanded proof-graph node with policy samples;
+    `tactics` from `policy_tactics`. A sample whose names the search repaired is in its group with its own failed run;
+    the repair (a REPAIR edge) is a search step like the sweep's, in no group and no policy proof, so a node only the
+    repair put on the proof graph forms no group under `require_policy_proof`."""
     groups = []
     for node_id, edges in sorted(labels.edges_by_parent().items()):
         if labels.node_classes[node_id] != NodeClass.PROOF_GRAPH:
             continue
-        by_text: dict[str, list[EdgeLabel]] = {}
+        by_prompt: dict[bool, dict[str, list[EdgeLabel]]] = {False: {}, True: {}}
         for edge in edges:
             if edge.source == StepSource.POLICY and edge.effective_kind != EdgeKind.INFRASTRUCTURE_FAILURE:
+                by_text = by_prompt[record.edges[edge.edge_id].feedback]
                 by_text.setdefault(edge.text.strip(), []).append(edge)
-        if not by_text:
-            continue
-        samples = tuple(
-            group_sample(members, tactics[members[0].executed_edge_id], labels, estimates, config)
-            for members in by_text.values()
-        )
-        groups.append(PolicyGroup(record.problem_name, node_id, record.nodes[node_id].goals, samples))
+        for feedback, by_text in by_prompt.items():
+            if not by_text:
+                continue
+            samples = tuple(
+                group_sample(members, tactics[members[0].executed_edge_id], labels, estimates, config)
+                for members in by_text.values()
+            )
+            groups.append(PolicyGroup(record.problem_name, node_id, record.nodes[node_id].goals, samples, feedback))
     kept = tuple(group for group in groups if group.has_policy_proof or not config.require_policy_proof)
     return TreeGroups(kept, len(groups) - len(kept))

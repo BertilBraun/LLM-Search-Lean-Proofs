@@ -38,7 +38,12 @@ One group per expanded proof-graph node with policy samples; no groups off the p
 With `require_policy_proof` (default) a group also needs a policy sample with a `proof_graph` tactic: where only the
 automation sweep's children reach the proof graph, the group is left out (`TreeGroups.without_policy_proof`, the
 search metrics' `graph.groups_without_policy_proof`); a policy sample repeating the sweep's tactic counts as the
-policy's. Identical texts are merged (multiplicity = the samples behind them). Each tactic gets
+policy's. Identical texts are merged (multiplicity = the samples behind them). A node's feedback round
+(`policy.feedback`, `Edge.feedback`) has its own prompt and forms its own group, trained on that prompt
+(`ExpansionTexts.feedback`). A sample whose names the search repaired trains as what it was: its own failed run
+(tactics before the bad name keep their rewards, the failing one gets the failure); the repair is a separate REPAIR
+edge, a search step like the sweep's, in no group and no policy proof, so a node only a repair put on the proof graph
+forms no group under `require_policy_proof` (its samples carried no positive). Each tactic gets
 `R = (1 − λ) · G + λ · L` (`RewardConfig`, λ = `local_share` = 0.15, L clipped to [−1, 1]), and a proof-graph state
 δ (`progress_per_step` = 0.2) per remaining step it is closer to a proof than the group's node, `δ · (d(node) − d(s))`
 (part of the global part; negative for a proof-graph state farther away, but the global part never falls below the
@@ -690,6 +695,31 @@ trees.
 - **Overfit on 300 statements** (`grpo/loop_overfit.toml`): the loop on a fixed list (`grpo_fixed_sets.py
   select-overfit`: 100 per stratum outside the probe and gate), policy only; `grpo_loop.py report` gives the solve
   rate per phase, which must rise.
+- **Search variants** (2026-10-30, owner-approved; reworked after reviews L and M, `search_variants.py`,
+  `experiments/search_variants.py`, `grpo/search_variants.toml`): the held-out evaluation with one change to the
+  loop's search template (its options off) per variant: `baseline` and `baseline_2` (the A/A noise floor),
+  `feedback_always` (`min_children` 9, so the round fires wherever a sample failed) and `feedback_blind` (same
+  trigger and samples, the node's own prompt), `sweep_first` (`tried_context`'s control), `tried_context`,
+  `name_repair`, `temperature_0.6/0.7/1.0`. Variants run interleaved in chunks of 64 states from one pool of 40 REPLs
+  (beside the loop's 112, while it samples). The served version is guarded on the loop's phase and stage
+  (`loop_state.json`), read at the start and before each tree is written: from the pause on the servers may serve
+  k+1 before `current` says so. Primary metrics per state, each also per 1k generated tokens: solved (a successful
+  sample), distinct new states, distinct successful states; pooled per-sample success is secondary; samples cut off
+  by the 120 s cap count as failures; Lean seconds per state (the sweep's apart). Each variant is paired per state
+  with `baseline` and its own controls (`compared_with`), bootstrap over states, Holm-corrected over every pairing ×
+  the six primary metrics at family-wise 0.05; `baseline_2` against `baseline` is reported apart as the noise floor.
+  Feedback variants also get first round against total within the run, how often the round fired, and both by the
+  first round's new states (0-4+), to set `min_children` from data. The report rebuilds everything from the trees
+  (`--report --results <dir>`), so the first run's `grpo_search_variants/v3/` reads too. Stage 0 needs no GPU:
+  `experiments/search_options_stage0.py` (error shares per phase, the round's trigger rate at `min_children` 1-3, the
+  held-out error mix against the loop's) and `experiments/name_repair_replay.py` (recorded unknown-name failures
+  repaired at 0.7-0.9 and run in Lean).
+- **Search options A/B in the loop** (`sampling.options_arm`, off; `search_options.py`): `name` and `options`
+  (temperature, `feedback`, `failed_automation_in_prompt`, `name_repair`); statements with an odd sha256(name)
+  search with them, the others (`control`) with the template. Both arms share versions, time and load. Each tree's
+  arm is in its `TreeSummary.arm`; per phase loop.log and the budget metrics (`by_search_arm`) give per arm trees,
+  solves, trainable groups and generated tokens. The loop's evaluations (held-out states, probe, miniF2F) always
+  search with every option off (`without_search_options`), so version 0's baselines stay comparable.
 - **Naming A/B** (`experiments/grpo_naming_ab.py`, `grpo/naming_ab.toml`): the data rewrite's two short fine-tunes on
   the probe (the named arm on renamed statements, its value queries with the original names), the unknown-name error
   rate per policy sample of those searches (`phase_metrics.unknown_names`) and MATH-500

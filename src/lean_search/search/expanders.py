@@ -44,6 +44,8 @@ class Candidate:
     sample_count: int = 1
     # Those samples' generated texts (empty for automation and for callers that do not keep them).
     completions: tuple[GeneratedText, ...] = ()
+    # Sampled in the node's feedback round (policy.feedback).
+    feedback: bool = False
 
 
 @dataclass(frozen=True)
@@ -61,6 +63,7 @@ class CandidateBatch:
     top_p: float | None = None
     # The published policy version that sampled it (the GRPO loop's gated searches only).
     policy_version: int | None = None
+    feedback: bool = False
 
 
 @dataclass(frozen=True)
@@ -122,7 +125,8 @@ class AutomationExpander:
 
 
 class CompositeExpander:
-    """Runs its expanders in order; with `overlap` the later ones start at once and their batches wait their turn."""
+    """Runs its expanders in order; with `overlap` the later ones' first batches are requested at once and wait their
+    turn, their further batches requested only after the search ran the ones before (as without overlap)."""
 
     def __init__(self, expanders: Sequence[Expander], overlap: bool = False) -> None:
         self.expanders = tuple(expanders)
@@ -136,37 +140,43 @@ class CompositeExpander:
                         yield batch
             return
         first, *later = self.expanders
-        prefetches = [asyncio.create_task(collect_batches(expander.expand(node, context))) for expander in later]
-        unconsumed: list[CandidateBatch] = []
+        generators = [expander.expand(node, context) for expander in later]
+        prefetches = [asyncio.create_task(next_batch(generator)) for generator in generators]
         next_prefetch = 0
         try:
             async with contextlib.aclosing(first.expand(node, context)) as batches:
                 async for batch in batches:
                     yield batch
             while next_prefetch < len(prefetches):
-                unconsumed = await prefetches[next_prefetch]
+                generator = generators[next_prefetch]
+                batch = await prefetches[next_prefetch]
                 next_prefetch += 1
-                while unconsumed:
-                    yield unconsumed.pop(0)
+                while batch is not None:
+                    yield batch
+                    batch = await next_batch(generator)
         except GeneratorExit:
             if asyncio.current_task().cancelling():
                 cancel_all(prefetches[next_prefetch:])
                 raise
             # The search stopped early (a proof): requests already sent are still paid for.
-            context.abandoned_batches.extend(unconsumed)
             for prefetch in prefetches[next_prefetch:]:
-                context.abandoned_batches.extend(await prefetch)
+                if (batch := await prefetch) is not None:
+                    context.abandoned_batches.append(batch)
             raise
         except BaseException:
             cancel_all(prefetches[next_prefetch:])
             raise
+        finally:
+            # A generator still running its first batch in a cancelled prefetch cannot be closed yet.
+            await asyncio.gather(*prefetches, return_exceptions=True)
+            for generator in generators:
+                await generator.aclose()
 
 
-async def collect_batches(batches: CandidateBatches) -> list[CandidateBatch]:
-    async with contextlib.aclosing(batches):
-        return [batch async for batch in batches]
+async def next_batch(batches: CandidateBatches) -> CandidateBatch | None:
+    return await anext(batches, None)
 
 
-def cancel_all(tasks: Sequence[asyncio.Task[list[CandidateBatch]]]) -> None:
+def cancel_all(tasks: Sequence[asyncio.Task[CandidateBatch | None]]) -> None:
     for task in tasks:
         task.cancel()
