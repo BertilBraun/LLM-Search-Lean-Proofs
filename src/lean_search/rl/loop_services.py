@@ -38,7 +38,6 @@ from lean_search.policy.server_control import (
     PhaseSeconds,
     is_healthy,
     is_sleeping,
-    publish_weights,
     release_gpu,
     restore_gpu,
 )
@@ -631,9 +630,10 @@ class VllmServers:
         await asyncio.gather(*(self.serve_weights(server, weights) for server in self.serving.value_servers))
 
     async def serve_weights(self, server: ServerEndpoint, weights: str) -> PhaseSeconds:
-        if await is_sleeping(server.url):
-            return await restore_gpu(server.url, Path(weights))
-        return await publish_weights(server.url, Path(weights))
+        # An in-place reload needs ~1.2 GiB beyond the KV cache, more than a GPU shared by two servers keeps free.
+        if not await is_sleeping(server.url):
+            await release_gpu(server.url)
+        return await restore_gpu(server.url, Path(weights))
 
 
 class SubprocessEvaluations:
