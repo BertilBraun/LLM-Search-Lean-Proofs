@@ -1785,12 +1785,12 @@ class GrpoLoop:
 
     def early_resume_floor(self) -> float:
         """The held-out valid-Lean rate the states finished so far need for the searches to resume beside the rest:
-        the collapse line, so that a collapsing version samples nothing more (0 without version 0's evaluation, which
-        turns the collapse check off)."""
+        a margin above the collapse line, so that a collapsing version samples nothing more (0 without version 0's
+        evaluation, which turns the collapse check off)."""
         version_zero = self.held_out_rates(0)
         if version_zero is None:
             return 0.0
-        return version_zero.valid_rate * self.config.health.stop_held_out_valid_fraction
+        return version_zero.valid_rate * self.config.health.early_resume_valid_fraction
 
     async def finish_held_out_states(self) -> None:
         """The held-out states' result, which the phase's health checks read."""

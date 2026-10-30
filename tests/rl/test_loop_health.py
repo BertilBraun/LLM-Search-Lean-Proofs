@@ -466,8 +466,8 @@ async def resumed_beside_the_tail(world: LoopWorld, lean_checks: asyncio.Event) 
     return resumed
 
 
-@pytest.mark.parametrize(("valid_rate", "resumed"), [(0.5, False), (0.6, True)])
-async def test_the_searches_resume_beside_the_tail_only_while_the_finished_states_are_above_the_collapse_line(
+@pytest.mark.parametrize(("valid_rate", "resumed"), [(0.6, False), (0.7, True)])
+async def test_the_searches_resume_beside_the_tail_only_while_the_finished_states_are_above_the_early_resume_line(
     tmp_path: Path, valid_rate: float, resumed: bool
 ) -> None:
     lean_checks = asyncio.Event()
