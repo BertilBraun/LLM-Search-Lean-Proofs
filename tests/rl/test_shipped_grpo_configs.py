@@ -220,11 +220,11 @@ def test_the_shared_search_template_keeps_its_64_expansions() -> None:
     assert config.search.max_expansions == 64
 
 
-def test_loop_phases_end_on_300_trainable_groups_within_45_to_90_minutes() -> None:
+def test_loop_phases_end_on_300_trainable_groups_within_75_to_120_minutes() -> None:
     training = loop("grpo/loop.toml").training
     assert (training.min_sampling_minutes, training.max_sampling_minutes, training.min_trainable_groups) == (
-        45.0,
-        90.0,
+        75.0,
+        120.0,
         300,
     )
 

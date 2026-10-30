@@ -7,14 +7,16 @@ known, and scored, for verified statements). Statements whose known proof compil
 (most of the pool: verification is slow) are fed as well and certified or taken out when the verifier reaches them,
 and every outcome is counted by kind so their solve rates can be compared. The scheduler takes statements at random
 from the band [low, low + width]. The first `window` statements fed since the band last moved are its cohort; once
-every one of them finished (solved searches finish much sooner than unsolved ones, so the first outcomes to arrive
-would overstate the solve rate), the band moves up by `step` when at least `raise_solve_rate` were solved (by
-`fast_band_step` at `fast_raise_solve_rate`) and down when fewer than `lower_solve_rate`. A cohort statement that ends
+`judged_share` of them finished, the ones still running counted unsolved (solved searches finish much sooner than
+unsolved ones, so the first outcomes to arrive alone would overstate the solve rate), the band moves up by `step`
+when at least `raise_solve_rate` were solved (by `fast_band_step` at `fast_raise_solve_rate`) and down when fewer than
+`lower_solve_rate`. A cohort statement that ends
 without an outcome (abandoned) leaves room for the next one fed. When the band holds no statement it moves to the
 nearest one. Statements the automation tactics alone close never enter.
 """
 
 import bisect
+import math
 import random
 import statistics
 from collections.abc import Collection, Iterable, Mapping
@@ -42,6 +44,8 @@ class CurriculumConfig:
     band_width: float = 1.0
     band_step: float = 0.5
     window: int = 50
+    # The cohort's slowest searches can outlast a phase and its pause; below 1 the last ones count as unsolved.
+    judged_share: float = 1.0
     raise_solve_rate: float = 0.5
     # Far above the target the band moves in bigger steps, so compute goes to statements near the 50% frontier.
     fast_raise_solve_rate: float = 0.8
@@ -219,9 +223,9 @@ class Curriculum:
             return
         self.cohort_running.discard(name)
         self.outcomes.append(solved)
-        if len(self.outcomes) < self.config.window or self.band_low is None:
+        if len(self.outcomes) < math.ceil(self.config.judged_share * self.config.window) or self.band_low is None:
             return
-        rate = statistics.fmean(self.outcomes)
+        rate = sum(self.outcomes) / self.config.window
         if rate >= self.config.fast_raise_solve_rate:
             self._move(self.band_low + self.config.fast_band_step, f"raised fast (solve rate {rate:.0%})")
         elif rate >= self.config.raise_solve_rate:

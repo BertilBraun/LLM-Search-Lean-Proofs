@@ -3,7 +3,7 @@
 # state it reaches, plus delta per step of progress on the proof graph. A sample's score is its final state's R minus
 # c per wasted tactic; the explanation gets the score minus the group's mean score, the block's first tactic reaching
 # a state with a reward its R minus the group's mean of those R (no division by a standard deviation), later tactics
-# their gain over the state before them, the closing fence 0. Every recorded sample trains on its sampled tokens at the sampling temperature, two passes per phase. The policy
+# their gain over the state before them, the closing fence 0. Every recorded sample trains on its sampled tokens at the sampling temperature, one pass per phase. The policy
 # adapter is the starting policy's own SFT adapter, continued phase by phase on the weights it was trained on
 # (`model`); the starting policy (`model` with `reference_adapter`) is the KL reference. The loop fills in model,
 # initial_adapter (the published one) and reference_adapter from loop.toml ([serving] policy_base_model, [initial]
@@ -61,8 +61,8 @@ model = "Qwen/Qwen3.5-4B"
 initial_adapter = "/workspace/checkpoints/data_rewrite_sft_numbered/adapter"
 reference_adapter = "/workspace/checkpoints/data_rewrite_sft_numbered/adapter"
 sequences_per_step = 64
-# Two passes if training time allows (the dashboard's training vs sampling time); 1 is allowed.
-passes_per_phase = 2
+# One pass over each phase's groups (owner, 2026-10-30): two passes made the pause ~half of the loop's time.
+passes_per_phase = 1
 warmup_steps = 5
 clip_low = 0.2
 clip_high = 0.28

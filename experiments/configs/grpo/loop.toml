@@ -100,15 +100,17 @@ phase_config = "experiments/configs/grpo/phase.toml"
 # (GPU 0 trains alone, its servers sleep, the other GPUs' servers stay loaded and idle).
 gpus = [0, 1, 2, 3]
 # A phase ends once it has 300 trainable groups (proof-graph nodes of solved trees with a policy proof and a non-zero
-# advantage, counted as each tree finishes), after at least 45 and at most 90 min of sampling: the pause's fixed costs
-# (start, loads, compile, merges, wake) are paid per phase (review F, M4). An evaluation beside sampling holds a due
-# pause up to [evaluation] max_pause_wait_minutes.
-min_sampling_minutes = 45.0
-max_sampling_minutes = 90.0
+# advantage, counted as each tree finishes), after at least 75 and at most 120 min of sampling: the pause's fixed costs
+# (start, loads, compile, merges, wake) are paid per phase (review F, M4). The groups always pass 300 long before
+# (1368 and 1881 in phases 1-2 at 45 min), so the minutes set the phase: one pass over ~2,500 groups, ~25 min of
+# training per ~75 min of sampling (owner, 2026-10-30). An evaluation beside sampling holds a due pause up to
+# [evaluation] max_pause_wait_minutes.
+min_sampling_minutes = 75.0
+max_sampling_minutes = 120.0
 min_trainable_groups = 300
 check_seconds = 30.0
-# The phases end at their 45-min minimum with 4-6x the 300 groups (phase 1: 1368 groups, 2 passes of 171 steps in 27
-# min; phase 2: 1881 plus the first value training), so a job's first phase of a kind gets 2 h, not 45 min.
+# A job's first phase of a kind (model building, compilation, and with a value phase the first value training) gets 2
+# h: phase 2 (1881 groups, then 2 passes) would have passed 45 min.
 first_train_timeout_minutes = 120.0
 # The value model every 2 phases on the last 4 phases' trees (with 45-90-minute phases a retrain every 1.5-3 h on 3-6 h
 # of trees), continuing the last value adapter trained; every one is published and searched with, the evaluations'
@@ -146,8 +148,11 @@ proof_steps_weight = 0.5
 root_value_weight = 0.5
 band_width = 1.0
 band_step = 0.5
-# Each band is judged on the first 50 statements fed at it, once all 50 finished (not the first 50 to finish).
+# Each band is judged on the first 50 statements fed at it (not the first 50 to finish), once 45 finished, the 5
+# still running counted unsolved: the slowest searches (p98 38 min, max 56) held a cohort past a phase and its pause,
+# and a restart starts a new cohort, so the band never moved in phases 1-3.
 window = 50
+judged_share = 0.9
 raise_solve_rate = 0.5
 fast_raise_solve_rate = 0.8
 fast_band_step = 1.5

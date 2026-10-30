@@ -117,6 +117,20 @@ def test_the_band_waits_for_every_statement_of_its_cohort() -> None:
     assert curriculum.band_low == 1.0
 
 
+def test_a_cohort_is_judged_once_its_judged_share_finished() -> None:
+    curriculum = curriculum_with([1] * 4 + [2] * 8, dataclasses.replace(CONFIG, judged_share=0.8))
+    cohort = fed_names(curriculum, 5)
+    record(curriculum, cohort[:4], True)
+    assert curriculum.band_low == 2.0
+
+
+def test_cohort_statements_still_running_at_the_judgement_count_as_unsolved() -> None:
+    curriculum = curriculum_with([1] * 4 + [2] * 8, dataclasses.replace(CONFIG, judged_share=0.4))
+    cohort = fed_names(curriculum, 5)
+    record(curriculum, cohort[:2], True)
+    assert curriculum.band_low == 1.0
+
+
 def test_an_abandoned_cohort_statement_makes_room_for_the_next_one_fed() -> None:
     curriculum = curriculum_with([1] * 6 + [2] * 8)
     cohort = fed_names(curriculum, 5)
