@@ -684,10 +684,10 @@ async def test_searches_fill_the_concurrency_the_evaluation_leaves(tmp_path: Pat
     assert world.searcher.most_in_flight == 2
 
 
-async def test_searches_above_the_limit_stop_the_idle_repls_beyond_it(tmp_path: Path) -> None:
+async def test_idle_repls_stop_once_per_evaluation_run_not_per_waiting_search(tmp_path: Path) -> None:
     world = beside_world(tmp_path, hold=asyncio.Event())
     await run_until_condition(world.loop(), lambda: len(world.searcher.searched) >= 20)
-    assert 1 in world.searcher.idle_repl_limits
+    assert world.searcher.idle_repl_limits == [1]
 
 
 async def test_the_host_memory_is_logged_around_an_evaluation_beside_sampling(tmp_path: Path) -> None:

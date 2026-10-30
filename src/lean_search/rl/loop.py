@@ -808,18 +808,13 @@ class GrpoLoop:
             stop.set()
 
     async def work(self, stop: asyncio.Event, index: int) -> None:
-        waiting = False
         while not stop.is_set():
             evaluating = self.running_evaluations_beside_sampling()
-            if evaluating is not None:
-                limit = self.sampling_limit()
-                if index >= limit:
-                    if not waiting:
-                        waiting = True
-                        await self.stop_idle_repls(limit)
-                    await asyncio.wait({evaluating}, timeout=self.config.training.check_seconds)
-                    continue
-            waiting = False
+            # Idle REPLs stop once per evaluation run, not here: the limit moves with every finished evaluation search,
+            # and stopping on each move restarted the same processes thousands of times per slot.
+            if evaluating is not None and index >= self.sampling_limit():
+                await asyncio.wait({evaluating}, timeout=self.config.training.check_seconds)
+                continue
             fed = self.statements.next_statement()
             if fed is None:
                 await asyncio.sleep(IDLE_SECONDS)

@@ -205,8 +205,10 @@ Meanwhile the workers taking statements are `sampling.concurrency` minus the eva
 `sampling.min_concurrency_beside_evaluations` (56): the job writes `progress.json` (its problems without a result) and
 the loop reads it (`SubprocessEvaluations.searches_in_flight`; before the first report it counts the job's whole
 concurrency), so sampling refills toward 112 as the evaluation's tail shrinks. Workers above the limit finish their
-search and wait; each then stops the idle search REPL processes beyond the limit (`LeanReplPool.stop_idle_processes`,
-longest idle first; the pool hands out the most recently used REPL first, so the stopped ones restart only on demand).
+search and wait. Each evaluation run stops the idle search REPL processes beyond the limit once, as it starts
+(`LeanReplPool.stop_idle_processes`, longest idle first; the pool hands out the most recently used REPL first, so the
+stopped ones restart only on demand); stopping again whenever the limit moved restarted the same processes 3,192 times
+in one probe slot.
 The loop's state stays `searching`. A phase that is due waits for them before its pause (`The phase's pause waits ...`
 in `loop.log`), sampling on and its progress saved, so no server sleeps under an evaluation job; after
 `evaluation.max_pause_wait_minutes` (30) it cancels them (the job is stopped; an `Alert:` line) and pauses. A failed
@@ -541,8 +543,8 @@ The node has about 240 GiB of RAM (check the cgroup limit, `system.memory_total_
 search (`sampling.concurrency`, 112) whose private memory grows from ~0.25 GiB after the import by ~0.25 MiB per proof
 state, restarted at 1 GiB when released and at 2 GiB in any case (`lean/repl.py`; the Mathlib .olean mappings are shared
 and not counted); an evaluation job's own pool (`evaluation.<target>.concurrency`: the held-out states 112 once the
-paused searches' REPLs stopped; the probe and miniF2F 56 beside sampling, the searches above the limit stopping their
-idle REPLs; version 0's baselines 112 together before sampling); the eight
+paused searches' REPLs stopped; the probe and miniF2F 56 beside sampling, the idle search REPLs above the limit
+stopped as each run starts; version 0's baselines 112 together before sampling); the eight
 vLLM processes; the training job's ranks (per-phase job: each reads and labels the phase's trees,
 about 13 MiB per tree with its texts in a synthetic unsolved-tree test; persistent job: only the main rank, one tree at
 a time while sampling, keeping the policy sequences, which every rank then holds during training; in a value phase the
@@ -569,7 +571,7 @@ and replays the proof states it needs, `LeanRepl.stop`), so with the defaults ti
 
 where the evaluation REPLs are the largest evaluation concurrency (version 0's baselines together), or beside sampling
 also the loop concurrency and the floor plus the probe's or miniF2F's (`loop_services.evaluation_repls`: 112 in
-`loop.toml`: the searches above the limit stop their idle REPLs). Right after a resume the resumed searches above the
+`loop.toml`: the idle search REPLs above the limit stop as each run starts). Right after a resume the resumed searches above the
 limit still finish theirs, up to 168 REPLs for a few minutes. The budget leaves out terms that overlap an evaluation
 beside sampling: the main rank's labelled window in a value phase (~1.4 MiB per tree, ~15 GiB at ~3,000 trees per
 phase) and the parked ranks' own resident memory (unmeasured).
