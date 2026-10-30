@@ -617,9 +617,8 @@ trees.
 ## Cheap tests
 
 - **Smoke cycle** (`grpo/loop_smoke.toml`, `phase_smoke.toml`; `deployment/README.md`, "GRPO loop" step 3): the loop on
-  the overfit statements with short phases, a value phase every phase (published, then scoring the tiny benchmark),
-  every evaluation at a tiny size (`EvaluationTarget.problems`; `grpo_fixed_sets.py gate-benchmark --problems` for a
-  tiny benchmark), the held-out states after every phase, and a value arm per published value model, so at every slot,
+  the overfit statements with short phases, a value phase every phase (published, then scoring the loop's benchmark),
+  every evaluation at a tiny size (`EvaluationTarget.problems`), the held-out states after every phase, and a value arm per published value model, so at every slot,
   so every stage, merge, swap and evaluation runs within the first hour on the node.
 - **Single-step GRPO** (`single_step.py`, `experiments/grpo_single_step.py`, `grpo/single_step.toml`): one policy
   request per held-out state, executed from the state rebuilt by replay (`search_theorem(..., start_state=...)`).

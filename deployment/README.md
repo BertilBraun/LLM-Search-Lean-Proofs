@@ -387,7 +387,7 @@ Order on a fresh node (each step catches what would otherwise surface hours late
    with visible student v2 as the starting policy, 5-10-minute phases, a value phase every phase (always published) and
    every evaluation at a tiny size (probe 12 problems, 4 per part, every part twice at the start; miniF2F 8; held-out
    states 32 after every phase; a value arm per published value model, so every slot). It runs the at-start baselines,
-   v0 scoring the tiny value benchmark through the value servers, a pause with policy and value training on four ranks,
+   v0 scoring the loop's value benchmark (step 5's, so step 5 runs first) through the value servers, a pause with policy and value training on four ranks,
    both GPU merges, the publish and the wake, the new value model scoring the benchmark, the swap to the fixed v0 value
    model for a probe slot and to the published one for its value arm, and the adapter pruning after the second phase. Go
    through the first-hour checks below on it, stop it after two phases and delete `$LEAN_SEARCH_RUNS/grpo_smoke*` and
@@ -407,8 +407,7 @@ deployment/grpo_loop.sh node-check   # step 1
 deployment/grpo_loop.sh sets         # once: probe (501), gate (402) and overfit (300) sets under $LEAN_SEARCH_DATA/grpo/
 LOOP_CONFIG=experiments/configs/grpo/loop_smoke.toml deployment/grpo_loop.sh init   # step 3, the smoke cycle:
 LOOP_CONFIG=experiments/configs/grpo/loop_smoke.toml deployment/grpo_loop.sh servers
-LOOP_CONFIG=experiments/configs/grpo/loop_smoke.toml deployment/grpo_loop.sh check
-deployment/grpo_loop.sh smoke-gate   # 60 gate problems searched by the smoke's version 0, its tiny benchmark
+LOOP_CONFIG=experiments/configs/grpo/loop_smoke.toml deployment/grpo_loop.sh check   # it scores step 5's benchmark
 LOOP_CONFIG=experiments/configs/grpo/loop_smoke.toml deployment/grpo_loop.sh dashboard
 LOOP_CONFIG=experiments/configs/grpo/loop_smoke.toml deployment/grpo_loop.sh loop   # two phases, then stop
 deployment/grpo_loop.sh init         # step 6: the starting policy's and the value v0 adapter merged into their bases

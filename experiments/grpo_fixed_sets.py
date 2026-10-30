@@ -16,7 +16,7 @@ curriculum never feeds them. It refuses to overwrite existing sets (they are fix
 gate-benchmark (once, ~1-2 h with the starting policy served, no value model) searches the gate set by log-probability
 best-first (value-free, so no value model chose its labels) into $LEAN_SEARCH_RUNS/<run-name>/ and builds the value
 benchmark from those trees into $LEAN_SEARCH_RUNS/<output>, the loop's `evaluation.value_benchmark.path`. Resumable.
---problems N takes only the first N (strata in turn): the smoke test's tiny benchmark (loop_smoke.toml).
+--problems N takes only the first N (strata in turn): a quick test of the command.
 
 rename (only for a starting policy trained on descriptive names; the naming A/B's named arm) renames the statements'
 numbered hypotheses with the data rewrite's namer and NamingConfig (its [namer] server, or rules when its model is

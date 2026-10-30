@@ -5,10 +5,7 @@
 # servers, one pause with policy and value training, both GPU merges, the publish and the wake, the new value model
 # scoring the benchmark, then the value servers' swap to the fixed v0 model for a probe slot and to the published one
 # for its value arm. Run two phases, check the first-hour list, stop it and delete its run and checkpoints
-# (grpo_smoke*).
-#   python experiments/grpo_fixed_sets.py --config experiments/configs/grpo/fixed_sets.toml gate-benchmark \
-#       --search-config experiments/configs/grpo/gate_search.toml --run-name grpo_smoke_gate_search \
-#       --output grpo_smoke_gate/benchmark.json.gz --problems 60     # with the smoke's version 0 served
+# (grpo_smoke*). It scores the loop's value benchmark (deployment/grpo_loop.sh gate first).
 #   LOOP_CONFIG=experiments/configs/grpo/loop_smoke.toml deployment/grpo_loop.sh init      # then servers, check, loop
 name = "grpo_smoke"
 
@@ -127,9 +124,9 @@ enabled = true
 confidence = 0.95
 significance = 0.05
 
-# The tiny benchmark above.
+# The loop's own: a separate smoke gate search would hold the servers through its own Lean-bound tail.
 [evaluation.value_benchmark]
-path = "grpo_smoke_gate/benchmark.json.gz"
+path = "grpo_gate/benchmark.json.gz"
 
 [evaluation.minif2f]
 max_expansions = 64

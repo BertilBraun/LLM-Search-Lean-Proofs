@@ -8,7 +8,6 @@
 #                                                # (a GPU's two one after another, the GPUs in parallel)
 #   deployment/grpo_loop.sh check                # one live request per policy server: what the search parses
 #   deployment/grpo_loop.sh gate                 # once, ~1-2 h: the value benchmark of the gate set (no value model)
-#   deployment/grpo_loop.sh smoke-gate           # the smoke cycle's tiny benchmark (60 gate problems, loop_smoke.toml)
 #   deployment/grpo_loop.sh dashboard            # system sampler and dashboard on port ${DASHBOARD_PORT:-8600}
 #   deployment/grpo_loop.sh loop                 # the loop in the background; rerun after a crash to resume
 #   deployment/grpo_loop.sh status               # progress, versions, trees, the last phase, μ
@@ -64,12 +63,6 @@ case "$1" in
         python experiments/grpo_fixed_sets.py --config experiments/configs/grpo/fixed_sets.toml gate-benchmark \
             --search-config experiments/configs/grpo/gate_search.toml --run-name grpo_gate_search \
             --output grpo_gate/benchmark.json.gz 2>&1 | tee -a "${LEAN_SEARCH_RUNS}/grpo_gate_search.log"
-        ;;
-    smoke-gate)
-        python experiments/grpo_fixed_sets.py --config experiments/configs/grpo/fixed_sets.toml gate-benchmark \
-            --search-config experiments/configs/grpo/gate_search.toml --run-name grpo_smoke_gate_search \
-            --output grpo_smoke_gate/benchmark.json.gz --problems 60 2>&1 \
-            | tee -a "${LEAN_SEARCH_RUNS}/grpo_smoke_gate_search.log"
         ;;
     dashboard)
         mkdir -p "${run_directory}"
