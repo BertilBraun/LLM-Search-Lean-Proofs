@@ -107,6 +107,9 @@ min_sampling_minutes = 45.0
 max_sampling_minutes = 90.0
 min_trainable_groups = 300
 check_seconds = 30.0
+# The phases end at their 45-min minimum with 4-6x the 300 groups (phase 1: 1368 groups, 2 passes of 171 steps in 27
+# min; phase 2: 1881 plus the first value training), so a job's first phase of a kind gets 2 h, not 45 min.
+first_train_timeout_minutes = 120.0
 # The value model every 2 phases on the last 4 phases' trees (with 45-90-minute phases a retrain every 1.5-3 h on 3-6 h
 # of trees), continuing the last value adapter trained; every one is published and searched with, the evaluations'
 # too (no gate; the value benchmark is a trend on the dashboard). The persistent trainer labels the window while the
