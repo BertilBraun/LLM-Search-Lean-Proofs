@@ -4,7 +4,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from lean_search.rl.policy_trainer import chunk_scores, clipped_policy_losses, kl_estimate  # noqa: E402
+from lean_search.rl.policy_trainer import chunk_scores, clipped_policy_losses, kl_estimate, median  # noqa: E402
 
 
 def gradient(ratio: float, advantage: float) -> float:
@@ -65,3 +65,7 @@ def test_scores_use_fp32_logits_under_bf16_autocast() -> None:
         scores, _ = chunk_scores(weight, hidden, targets, torch.full((4,), 0.8))
     exact = torch.log_softmax(hidden.double() @ weight.double().T / 0.8, dim=-1)[torch.arange(4), targets]
     assert torch.allclose(scores.double(), exact, atol=1e-4)
+
+
+def test_a_steps_kl_spike_leaves_the_phases_kl_to_the_reference_alone() -> None:
+    assert median([0.02, 0.09, 139501.0, 0.03, 0.05]) == 0.05

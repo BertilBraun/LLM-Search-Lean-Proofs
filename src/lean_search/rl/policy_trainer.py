@@ -2,6 +2,7 @@
 
 import contextlib
 import random
+import statistics
 import time
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
@@ -147,7 +148,7 @@ class GrpoTrainingResult:
     training_seconds: float
     peak_memory_gib: float
     trainable_parameters: int
-    # Means over the last pass's steps.
+    # Means over the last pass's steps; the KL to the reference their median.
     final_kl_to_data_policy: float
     final_kl_to_reference: float
     final_clip_fraction: float
@@ -488,6 +489,10 @@ def mean(values: Sequence[float]) -> float:
     return sum(values) / len(values) if values else 0.0
 
 
+def median(values: Sequence[float]) -> float:
+    return statistics.median(values) if values else 0.0
+
+
 def compile_warm_up(
     saved_module: torch.nn.Module,
     scorer: CompletionTokenScores,
@@ -695,8 +700,9 @@ def train_grpo(
         peak_memory_gib=largest(peak_memory, device, ranks),
         trainable_parameters=sum(parameter.numel() for parameter in parameters),
         final_kl_to_data_policy=mean([record.kl_to_data_policy for record in last_pass]),
-        final_kl_to_reference=sum(record.kl_to_reference * record.reference_tokens for record in last_pass)
-        / max(1, sum(record.reference_tokens for record in last_pass)),
+        # k3 on tokens the data policy sampled has a heavy tail: a rare token the reference prefers by ~e^10 alone
+        # moves a step's mean by 10^3-10^5 (phase 1 of grpo_loop_v1), so the phase's value is the steps' median.
+        final_kl_to_reference=median([record.kl_to_reference for record in last_pass]),
         final_clip_fraction=mean([record.clip_fraction for record in last_pass]),
         final_entropy=mean([record.entropy for record in last_pass]),
         final_policy_loss=mean([record.policy_loss for record in last_pass]),
