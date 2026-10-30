@@ -27,6 +27,8 @@ DIFFICULTY_BAND_COUNT = 6
 class FedStatement:
     statement: StatementRecord
     difficulty: float | None
+    # Whether its known proof compiled here; None outside the curriculum.
+    verified: bool | None = None
 
     @property
     def name(self) -> str:
@@ -114,7 +116,7 @@ class CurriculumStatements:
             return None
         name = problem_name(statement)
         self.unavailable.add(name)
-        return FedStatement(statement, self.curriculum.difficulty(name))
+        return FedStatement(statement, self.curriculum.difficulty(name), self.curriculum.is_verified(name))
 
     def record_outcome(self, name: str, solved: bool) -> None:
         self.curriculum.record_outcome(name, solved)

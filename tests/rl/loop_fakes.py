@@ -214,11 +214,11 @@ class FakeSearcher:
         self.most_in_flight = 0
         # The A/B arm each search was asked for, by statement.
         self.arms: dict[str, str] = {}
-        # Each search's paused seconds as `paused_seconds` reports them.
-        self.pause_seconds_per_search = 0.0
+        # What each search adds to `paused_seconds`, as if it waited that long at the gate.
+        self.paused_seconds_per_search = 0.0
         self.paused_total = 0.0
 
-    async def search(self, problem: Problem, arm: str = "") -> CompletedSearch:
+    async def search(self, problem: Problem, arm: str) -> CompletedSearch:
         self.arms[problem.name] = arm
         self.in_flight += 1
         self.most_in_flight = max(self.most_in_flight, self.in_flight)
@@ -226,7 +226,7 @@ class FakeSearcher:
             return await self.proving_search(problem)
         finally:
             self.in_flight -= 1
-            self.paused_total += self.pause_seconds_per_search
+            self.paused_total += self.paused_seconds_per_search
 
     async def proving_search(self, problem: Problem) -> CompletedSearch:
         await self.open.wait()

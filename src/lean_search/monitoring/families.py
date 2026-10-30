@@ -89,11 +89,25 @@ class BandOutcome:
 
 @dataclass(frozen=True)
 class ArmDifference:
-    """The options arm's rate minus the control arm's, and its 95% bootstrap interval over the arms' trees."""
+    """The options arm's rate minus the control arm's, and its bootstrap interval over the arms' trees (95%; 99% for
+    the balance)."""
 
     difference: float
     low: float
     high: float
+
+
+@dataclass(frozen=True)
+class ArmBalance:
+    """An A/A check of the hash split: the options arm minus the control arm on what the round cannot change, each
+    with its 99% interval; a difference outside it means the split or the routing is broken, not a result."""
+
+    mean_difficulty: ArmDifference | None = None
+    verified_share: ArmDifference | None = None
+    # The root's first round: the share of its judged blocks that ran completely, and its distinct blocks per tree.
+    root_valid_rate: ArmDifference | None = None
+    root_blocks_per_tree: ArmDifference | None = None
+    balanced: bool = True
 
 
 @dataclass(frozen=True)
@@ -110,13 +124,66 @@ class ArmOutcome:
     feedback_trainable_groups: int = 0
     # Of the generated tokens, those up to each tree's first proof (an unsolved tree's all); the rest harvested.
     generated_tokens_to_first_proof: int = 0
-    # Summed over the trees: a search's wall clock (a pause it waited through included) and its Lean time.
+    # Summed over the trees: a search's wall clock (a pause it waited through included), the same without the pauses
+    # (active) and its Lean time.
     wall_seconds: float = 0.0
     lean_seconds: float = 0.0
+    # Per active tree-hour.
     solved_per_tree_hour: float = 0.0
     # The options arm's against the control arm; None for the control arm.
     solved_per_thousand_tokens_difference: ArmDifference | None = None
     solved_per_tree_hour_difference: ArmDifference | None = None
+    active_seconds: float = 0.0
+    # Trainable groups with a feedback round's weighted by its samples against a first round's (4 of 8), per 1k
+    # generated tokens.
+    weighted_trainable_groups: float = 0.0
+    trainable_groups_per_thousand_tokens: float = 0.0
+    trainable_groups_per_thousand_tokens_difference: ArmDifference | None = None
+    # What the hash split leaves alike, per arm: the curriculum's difficulty, the share of verified statements, the
+    # root's first-round valid share and distinct blocks per tree; the options arm's balance against the control arm.
+    mean_difficulty: float | None = None
+    verified_share: float | None = None
+    root_valid_rate: float | None = None
+    root_blocks_per_tree: float = 0.0
+    balance: ArmBalance | None = None
+
+
+@dataclass(frozen=True)
+class RatioInterval:
+    """The options arm's rate over the control arm's, with its percentile bootstrap interval."""
+
+    ratio: float
+    low: float
+    high: float
+    confidence: float
+
+
+class OptionsVerdict(StrEnum):
+    CONTINUE = "continue"
+    ADOPT = "adopt"
+    DROP_HARMFUL = "drop: harmful"
+    DROP_FUTILE = "drop: futile"
+    DROP_NOT_ADOPTED = "drop: not adopted"
+
+
+@dataclass(frozen=True)
+class OptionsLook:
+    """A planned look of the search options A/B (rl/options_ab.py): the trees started in its first `look` phases,
+    pooled with a bootstrap stratified by phase and arm."""
+
+    arm: str
+    look: int
+    phases: tuple[int, ...]
+    arm_trees: int
+    control_trees: int
+    # R: solves per generated token (all tokens), at the look's confidence and at 95%; to the first proof (diagnostic).
+    solves_per_token: RatioInterval
+    solves_per_token_95: RatioInterval
+    solves_per_token_to_first_proof: RatioInterval
+    # G: weighted trainable groups per generated token, at 95%; the guard needs its lower bound >= 0.95.
+    groups_per_token: RatioInterval
+    guard_holds: bool
+    verdict: OptionsVerdict
 
 
 @dataclass(frozen=True)
@@ -368,7 +435,7 @@ class PhaseTiming:
     training_seconds: float
     publishing_seconds: float
     evaluation_seconds: float
-    # Trees the phase trained on and the searches still paused in place.
+    # Trees the phase trained on and the searches its pause held in place.
     trees: int
     searches_paused: int
     pause: PauseSegments = field(default_factory=PauseSegments)
@@ -407,6 +474,8 @@ class BudgetPhase:
     mean_difficulty_searched: float | None = None
     # The search options A/B's arms (`sampling.options_arm`); empty with it off.
     by_search_arm: dict[str, ArmOutcome] = field(default_factory=dict)
+    # The A/B's planned look due at this phase's check, if any.
+    options_look: OptionsLook | None = None
 
 
 @dataclass(frozen=True)

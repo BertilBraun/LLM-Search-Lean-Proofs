@@ -84,7 +84,7 @@ from lean_search.monitoring.store import MetricsWriter
 from lean_search.policy.adapters import handed_off_weights
 from lean_search.policy.server_control import PhaseSeconds
 from lean_search.rl.advantages import CreditMode
-from lean_search.rl.budget_signals import arm_outcomes_text, budget_phase_record
+from lean_search.rl.budget_signals import budget_phase_record
 from lean_search.rl.evaluation import (
     BaselineDifferences,
     EvaluationKind,
@@ -115,6 +115,7 @@ from lean_search.rl.health_checks import (
     write_health_stop,
 )
 from lean_search.rl.loop_config import EvaluationConfig, EvaluationTarget, EvaluationValueModel, GrpoLoopConfig
+from lean_search.rl.options_ab import arm_outcomes_text, options_arm_finished, options_look, options_look_text
 from lean_search.rl.phase_metrics import search_phase_record
 from lean_search.rl.retention import kept_adapters, prune_phase_adapters
 from lean_search.rl.search_options import search_arm
@@ -218,6 +219,15 @@ class PhaseRecord:
 
 
 @dataclass(frozen=True)
+class SearchStart:
+    """A search as the loop started it: its A/B arm, the phase collecting then and the searcher's paused seconds."""
+
+    arm: str
+    phase: int
+    paused_seconds: float
+
+
+@dataclass(frozen=True)
 class ReleasedLeanMemory:
     stopped_processes: int
     # Their private (anonymous) memory when they stopped.
@@ -237,7 +247,13 @@ class TrainingRequest:
 
 
 class TreeSearcher(Protocol):
-    async def search(self, problem: Problem) -> CompletedSearch: ...
+    async def search(self, problem: Problem, arm: str) -> CompletedSearch:
+        """`arm`: the search options A/B arm the loop chose for the statement ("" and control: the template)."""
+        ...
+
+    def paused_seconds(self) -> float:
+        """The seconds every request waited at the gate so far, summed over the pauses."""
+        ...
 
     async def pause(self) -> None:
         """Returns once no request is in flight; later requests wait until resume."""
@@ -706,7 +722,10 @@ class GrpoLoop:
         self.progress = read_progress(paths.progress)
         self.store = TreeStore(paths.trees)
         self.store_lock = asyncio.Lock()
-        self.collecting = self.progress.phase
+        # Whether statements start in the search options A/B, which ends by itself (`options_arm.max_phases`).
+        self.options_arm_running = False
+        self.collecting = 0
+        self.collect(self.progress.phase)
         self.sampling_since: float | None = None
         self.paused = False
         self.loop_state = LoopState.SEARCHING
@@ -758,6 +777,22 @@ class GrpoLoop:
         running = 0.0 if self.sampling_since is None else self.clock() - self.sampling_since
         return self.progress.sampling_seconds + running
 
+    def collect(self, phase: int) -> None:
+        """Finished trees go to `phase` from now on; statements start in the search options A/B until it ran its
+        phases."""
+        self.collecting = phase
+        arm = self.config.sampling.options_arm
+        running = bool(arm.name) and not options_arm_finished(self.store.entries, arm, phase)
+        if self.options_arm_running and not running:
+            self.log(
+                f"The search options A/B ({arm.name}) ran its {arm.max_phases} phases: statements search with the "
+                f"template from phase {phase} on; the searches started in it finish in their arm"
+            )
+        self.options_arm_running = running
+
+    def statement_arm(self, name: str) -> str:
+        return search_arm(self.config.sampling.options_arm, name) if self.options_arm_running else ""
+
     def phase_due(self) -> bool:
         training = self.config.training
         minutes = self.sampling_seconds() / 60
@@ -808,7 +843,7 @@ class GrpoLoop:
         self.searcher.serving(current.version)
         if self.progress.stage != PhaseStage.SAMPLING:
             self.log(f"Finishing phase {self.progress.phase} from {self.progress.stage}")
-            self.collecting = self.progress.phase + 1
+            self.collect(self.progress.phase + 1)
             await self.finish_phase()
             if stop.is_set():
                 return
@@ -845,9 +880,10 @@ class GrpoLoop:
             if fed is None:
                 await asyncio.sleep(IDLE_SECONDS)
                 continue
+            start = SearchStart(self.statement_arm(fed.name), self.collecting, self.searcher.paused_seconds())
             self.searches_running += 1
             try:
-                completed = await self.searcher.search(pool_problem(fed.statement))
+                completed = await self.searcher.search(pool_problem(fed.statement), start.arm)
             except httpx.HTTPError as error:
                 self.server_failed(fed, error)
                 self.recent_searches.append(True)
@@ -864,16 +900,17 @@ class GrpoLoop:
             self.recent_searches.append(False)
             result = completed.result
             if completed.tree is not None:
-                await self.keep_tree(fed, completed)
+                await self.keep_tree(fed, completed, start)
             self.statements.record_outcome(fed.name, result.proved)
             self.server_failures.pop(fed.name, None)
             self.session_trees += 1
             self.session_proofs += result.accounting.proofs
 
-    async def keep_tree(self, fed: FedStatement, completed: CompletedSearch) -> None:
+    async def keep_tree(self, fed: FedStatement, completed: CompletedSearch, start: SearchStart) -> None:
         """The tree into the store with its summary; a tree whose summary fails is logged and left out, so that
         neither the loop nor the training job stops on it."""
         assert completed.tree is not None
+        paused_seconds = self.searcher.paused_seconds() - start.paused_seconds
         # The statement searched: the renamed one when the loop renames hypotheses.
         record = tree_record(completed.tree, completed.tree.root.state.statement, completed.result)
         try:
@@ -883,7 +920,7 @@ class GrpoLoop:
                 self.reward_config,
                 self.credit,
                 self.config.sampling.max_expansions,
-                search_arm(self.config.sampling.options_arm, fed.name),
+                start.arm,
             )
         except Exception as error:
             self.trees_left_out += 1
@@ -894,7 +931,15 @@ class GrpoLoop:
             return
         async with self.store_lock:
             await asyncio.to_thread(
-                self.store.add, record, self.collecting, self.served_version, fed.difficulty, summary
+                self.store.add,
+                record,
+                self.collecting,
+                self.served_version,
+                fed.difficulty,
+                summary,
+                start.phase,
+                paused_seconds,
+                fed.verified,
             )
 
     def server_failed(self, fed: FedStatement, error: httpx.HTTPError) -> None:
@@ -1027,7 +1072,7 @@ class GrpoLoop:
         await self.finish_benchmark_scoring()
         phase = self.progress.phase
         sampling = self.sampling_seconds()
-        self.collecting = phase + 1
+        self.collect(phase + 1)
         self.sampling_since = None
         self.loop_state = LoopState.PAUSED
         self.write_status()
@@ -1208,9 +1253,24 @@ class GrpoLoop:
         sampled blocks' valid Lean requests the held-out states for the next pause."""
         health = self.config.health
         budget = budget_phase_record(self.store.entries, phase, health.late_solve_phases, health.max_late_solve_share)
+        arm = self.config.sampling.options_arm
+        if arm.name:
+            rejected = read_rejected_versions(self.paths.rejected_versions)
+            budget = dataclasses.replace(
+                budget, options_look=options_look(self.store.entries, arm.name, phase, rejected)
+            )
         self.writer.write(budget)
         if budget.by_search_arm:
             self.log(f"Search options A/B of phase {phase}: {arm_outcomes_text(budget.by_search_arm)}")
+            for name, outcome in budget.by_search_arm.items():
+                if outcome.balance is not None and not outcome.balance.balanced:
+                    self.log(
+                        f"Alert: the search options A/B's arms {name} and control differ beyond the 99% interval on "
+                        "what the hash split leaves alike: the split or the routing may be broken, the A/B's result "
+                        "is not one"
+                    )
+        if budget.options_look is not None:
+            self.log(options_look_text(budget.options_look))
         published = next(
             version for version in read_versions(self.paths.models) if version.trigger == phase_trigger(phase)
         )
@@ -1837,5 +1897,5 @@ class GrpoLoop:
             publishing_seconds=0.0,
             pause=PauseSegments(),
         )
-        self.collecting = phase + 1
+        self.collect(phase + 1)
         self.update_context()

@@ -86,8 +86,10 @@ max_expansions = 32
 # One REPL per search; most searches wait on the GPUs. Tune by the first hour (Lean cores and memory on the
 # dashboard's system page; a REPL holds 0.25-2 GiB of private memory; budget in src/lean_search/rl/README.md).
 concurrency = 112
-# While the probe or miniF2F runs beside sampling, the searches taking statements fill what its searches in flight
-# leave of the 112 (at least 56): 56 + 56 at its start, back toward 112 as its tail shrinks.
+# While the probe or miniF2F runs beside sampling, or the held-out states' last Lean checks after the early resume,
+# the searches taking statements fill what its searches in flight leave of the 112 (at least 56): 56 + 56 at its start,
+# back toward 112 as its tail shrinks. Searches the pause held all continue at the held-out resume, so the peak there is
+# up to 112 + the held-out states still in Lean (about 110).
 min_concurrency_beside_evaluations = 56
 status_seconds = 30.0
 # A search a policy or value server failed feeds its statement again, up to this many times.
@@ -95,9 +97,12 @@ server_failure_retries = 3
 server_failure_pause_seconds = 5.0
 
 # Search options A/B (rl/README.md): statements with an odd sha256(name) search with the feedback round, the others as
-# the template. Owner decision 2026-10-30: 2 phases, judged on solves per generated token and trainable groups.
+# the template. Owner decision 2026-10-30, after review P: looks after A/B phases 2, 4 and 6 on R (solves per generated
+# token, feedback over control) with the groups-per-token guard (rl/options_ab.py; loop.log "Search options A/B
+# (feedback) look <k>"); after 6 phases the arm switches off by itself, no restart needed.
 [sampling.options_arm]
 name = "feedback"
+max_phases = 6
 
 [sampling.options_arm.options.feedback]
 enabled = true

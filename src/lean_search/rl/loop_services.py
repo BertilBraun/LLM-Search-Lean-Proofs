@@ -63,7 +63,7 @@ from lean_search.rl.loop import (
 from lean_search.rl.loop_config import GrpoLoopConfig, LoopTrainingConfig
 from lean_search.rl.renaming import StatementRenamings, search_problem
 from lean_search.rl.search_models import SearchModels, open_search_models, options_run_config
-from lean_search.rl.search_options import CONTROL_ARM, OptionsArmConfig, search_arm
+from lean_search.rl.search_options import CONTROL_ARM, OptionsArmConfig
 from lean_search.rl.trainer_channel import TrainerChannel, TrainerCommand, TrainerCommandKind
 from lean_search.rl.training_phase import PhaseOutcome
 from lean_search.search import CompletedSearch, RunConfig, SearchConfig
@@ -113,11 +113,11 @@ class LeanTreeSearcher:
         self.renamings = renamings
         self.options_arm = options_arm
 
-    async def search(self, problem: Problem) -> CompletedSearch:
+    async def search(self, problem: Problem, arm: str) -> CompletedSearch:
         search, models = self.config.search, self.models
-        arm = self.options_arm
-        if arm is not None and search_arm(arm.config, problem.name) != CONTROL_ARM:
-            search, models = arm.search, arm.models
+        if arm and arm != CONTROL_ARM:
+            assert self.options_arm is not None and arm == self.options_arm.config.name, arm
+            search, models = self.options_arm.search, self.options_arm.models
         async with self.pool.acquire() as repl:
             return await search_problem(
                 problem, repl, models.expander, models.priority_function, search, self.renamings
@@ -131,6 +131,9 @@ class LeanTreeSearcher:
 
     def serving(self, policy_version: int) -> None:
         self.gate.policy_version = policy_version
+
+    def paused_seconds(self) -> float:
+        return self.gate.paused_seconds()
 
     async def release_lean_memory(self, above_bytes: int) -> ReleasedLeanMemory:
         stopped = await self.pool.stop_processes(above_bytes)

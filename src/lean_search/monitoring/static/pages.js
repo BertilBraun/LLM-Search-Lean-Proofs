@@ -403,12 +403,40 @@ const SEARCH_OPTIONS_AB = {
     series: ARM_DIFFERENCE("solved_per_thousand_tokens_difference"),
   },
   hours: {
-    title: "Solves per tree-hour", subtitle: "per arm; a search's wall clock, a pause it waited through included", family: "budget", x: "phase", unit: "number",
+    title: "Solves per active tree-hour", subtitle: "per arm; a search's wall clock without the pauses it waited through", family: "budget", x: "phase", unit: "number",
     series: ARM("solved_per_tree_hour"),
   },
   hoursDifference: {
-    title: "Solves per tree-hour, feedback minus control", subtitle: "dashed: 95% bootstrap interval over trees", family: "budget", x: "phase", unit: "number",
+    title: "Solves per active tree-hour, feedback minus control", subtitle: "dashed: 95% bootstrap interval over trees", family: "budget", x: "phase", unit: "number",
     series: ARM_DIFFERENCE("solved_per_tree_hour_difference"),
+  },
+  groupsPerToken: {
+    title: "Trainable groups per 1k tokens", subtitle: "per arm; a feedback round's groups weighted 4/8", family: "budget", x: "phase", unit: "number",
+    series: ARM("trainable_groups_per_thousand_tokens"),
+  },
+  groupsPerTokenDifference: {
+    title: "Trainable groups per 1k tokens, feedback minus control", subtitle: "dashed: 95% bootstrap interval over trees", family: "budget", x: "phase", unit: "number",
+    series: ARM_DIFFERENCE("trainable_groups_per_thousand_tokens_difference"),
+  },
+  balance: {
+    title: "A/A balance of the arms", subtitle: "feedback minus control on what the split leaves alike; dashed: 99% interval, must hold 0", family: "budget", x: "phase", unit: "number",
+    series: [
+      { label: "mean difficulty", field: "by_search_arm.feedback.balance.mean_difficulty.difference" },
+      { label: "verified share", field: "by_search_arm.feedback.balance.verified_share.difference" },
+      { label: "root valid share", field: "by_search_arm.feedback.balance.root_valid_rate.difference" },
+      { label: "difficulty 99% low", field: "by_search_arm.feedback.balance.mean_difficulty.low", dashed: true },
+      { label: "difficulty 99% high", field: "by_search_arm.feedback.balance.mean_difficulty.high", dashed: true },
+    ],
+  },
+  look: {
+    title: "A/B looks: R", subtitle: "solves per token, feedback over control, pooled over the A/B phases; adopt above 1 with R >= 1.05", family: "budget", x: "phase", unit: "number",
+    series: [
+      { label: "R", field: "options_look.solves_per_token.ratio" },
+      { label: "low", field: "options_look.solves_per_token.low", dashed: true },
+      { label: "high", field: "options_look.solves_per_token.high", dashed: true },
+      { label: "G (groups per token)", field: "options_look.groups_per_token.ratio" },
+      { label: "G 95% low (guard 0.95)", field: "options_look.groups_per_token.low", dashed: true },
+    ],
   },
   groups: {
     title: "Trainable groups per tree", subtitle: "per arm; the feedback arm's feedback-round groups apart", family: "budget", x: "phase", unit: "number",
@@ -686,7 +714,17 @@ export const PAGES = [
       },
       {
         title: "Search options A/B",
-        charts: [SEARCH_OPTIONS_AB.tokens, SEARCH_OPTIONS_AB.tokensDifference, SEARCH_OPTIONS_AB.hours, SEARCH_OPTIONS_AB.hoursDifference, SEARCH_OPTIONS_AB.groups],
+        charts: [
+          SEARCH_OPTIONS_AB.look,
+          SEARCH_OPTIONS_AB.tokens,
+          SEARCH_OPTIONS_AB.tokensDifference,
+          SEARCH_OPTIONS_AB.groupsPerToken,
+          SEARCH_OPTIONS_AB.groupsPerTokenDifference,
+          SEARCH_OPTIONS_AB.hours,
+          SEARCH_OPTIONS_AB.hoursDifference,
+          SEARCH_OPTIONS_AB.groups,
+          SEARCH_OPTIONS_AB.balance,
+        ],
       },
     ],
   },

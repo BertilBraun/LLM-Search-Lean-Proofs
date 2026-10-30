@@ -50,6 +50,12 @@ class TreeSummary:
     # Feedback rounds and their samples.
     feedback_expansions: int = 0
     feedback_samples: int = 0
+    # The root's first-round blocks: distinct, judged by Lean and of those run completely (the A/B's balance check).
+    root_blocks: int = 0
+    root_judged_blocks: int = 0
+    root_valid_blocks: int = 0
+    # The published policy versions that sampled the tree's expansions.
+    sampling_versions: tuple[int, ...] = ()
 
 
 def executed_edge(record: TreeRecord, edge: Edge) -> Edge:
@@ -91,6 +97,7 @@ def tree_summary(
     blocks_by_expansion: defaultdict[int, int] = defaultdict(int)
     samples = 0
     executed = []
+    root_executed = []
     feedback_rounds: set[int] = set()
     feedback_samples = 0
     for edge in record.edges:
@@ -103,7 +110,10 @@ def tree_summary(
         blocks_by_expansion[edge.expansion_index] += 1
         samples += edge.sample_count
         executed.append(executed_edge(record, edge))
+        if edge.parent_id == 0:
+            root_executed.append(executed[-1])
     judged = [edge for edge in executed if judged_by_lean(edge)]
+    root_judged = [edge for edge in root_executed if judged_by_lean(edge)]
     first_round = [expansion for expansion in record.expansions if not expansion.feedback]
     completions = [completion for expansion in first_round for completion in expansion.completions]
     cut_off = [completion for completion in completions if is_forced(completion)]
@@ -132,4 +142,10 @@ def tree_summary(
         lean_seconds=accounting.lean_seconds,
         feedback_expansions=len(feedback_rounds),
         feedback_samples=feedback_samples,
+        root_blocks=len(root_executed),
+        root_judged_blocks=len(root_judged),
+        root_valid_blocks=sum(ran_completely(edge) for edge in root_judged),
+        sampling_versions=tuple(
+            sorted({version for expansion in record.expansions if (version := expansion.policy_version) is not None})
+        ),
     )

@@ -435,3 +435,13 @@ def test_a_cleared_health_stop_is_kept_beside_it(tmp_path: Path) -> None:
     write_health_stop(path, health_of(0.5))
     kept = clear_health_stop(path)
     assert (path.exists(), kept.exists()) == (False, True)
+
+
+@pytest.mark.parametrize(("field", "count"), [("root_blocks", 2), ("root_judged_blocks", 2), ("root_valid_blocks", 1)])
+def test_a_tree_counts_its_roots_first_round_blocks(field: str, count: int) -> None:
+    assert getattr(summary_of(record()), field) == count
+
+
+def test_a_tree_records_the_versions_that_sampled_it() -> None:
+    tree = dataclasses.replace(record(), expansions=(ExpansionTexts("test.t0", 0, "prompt", (), policy_version=3),))
+    assert summary_of(tree).sampling_versions == (3,)

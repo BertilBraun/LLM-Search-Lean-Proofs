@@ -48,10 +48,12 @@ def without_search_options(template: RunConfig) -> RunConfig:
 @dataclass(frozen=True)
 class OptionsArmConfig:
     """The in-loop A/B: statements whose sha256(name) is odd search with `options` (the arm `name`), the others with
-    the search template as it is (`control`). An empty name turns it off."""
+    the search template as it is (`control`). An empty name turns it off, and so does the loop once statements were
+    started with it in `max_phases` phases (0: never; rl/options_ab.py)."""
 
     name: str = ""
     options: SearchOptions = field(default_factory=SearchOptions)
+    max_phases: int = 0
 
 
 def search_arm(config: OptionsArmConfig, problem_name: str) -> str:

@@ -6,21 +6,15 @@ and the curriculum's difficulty of the solved statements stops rising.
 """
 
 import statistics
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 
-import numpy
-
-from lean_search.monitoring.families import ArmDifference, ArmOutcome, BudgetPhase
-from lean_search.rl.search_options import CONTROL_ARM
+from lean_search.monitoring.families import BudgetPhase
+from lean_search.rl.options_ab import arm_outcomes
 from lean_search.rl.tree_store import TreeEntry
 
 # Inclusive ranges; None: no upper end.
 EXPANSION_BUCKETS = ((1, 1), (2, 2), (3, 4), (5, 8), (9, 16), (17, 24), (25, 32), (33, 48), (49, 64), (65, None))
 PROOF_STEP_BUCKETS = ((1, 1), (2, 2), (3, 3), (4, 5), (6, 8), (9, None))
-# The search options A/B's intervals for the difference between its arms.
-BOOTSTRAP_RESAMPLES = 2000
-BOOTSTRAP_SEED = 0
-CONFIDENCE = 0.95
 
 
 def bucket_name(low: int, high: int | None) -> str:
@@ -71,107 +65,6 @@ def quantile(values: Sequence[float], share: float) -> float | None:
 
 def recent_phases(entries: Sequence[TreeEntry], phase: int, count: int) -> list[TreeEntry]:
     return [entry for entry in entries if phase - count < entry.phase <= phase]
-
-
-def solves_per(entries: Sequence[TreeEntry], cost: Callable[[TreeEntry], float], scale: float) -> float:
-    total = sum(map(cost, entries))
-    return scale * sum(entry.proved for entry in entries) / total if total else 0.0
-
-
-def generated_tokens(entry: TreeEntry) -> float:
-    return entry.summary.generated_tokens
-
-
-def wall_seconds(entry: TreeEntry) -> float:
-    return entry.wall_seconds
-
-
-def resampled_rates(
-    entries: Sequence[TreeEntry], cost: Callable[[TreeEntry], float], scale: float, generator: numpy.random.Generator
-) -> numpy.ndarray:
-    solved = numpy.array([entry.proved for entry in entries], dtype=float)
-    costs = numpy.array([cost(entry) for entry in entries], dtype=float)
-    drawn = generator.integers(0, len(entries), size=(BOOTSTRAP_RESAMPLES, len(entries)))
-    with numpy.errstate(divide="ignore", invalid="ignore"):
-        return scale * solved[drawn].sum(axis=1) / costs[drawn].sum(axis=1)
-
-
-def rate_difference(
-    arm: Sequence[TreeEntry], control: Sequence[TreeEntry], cost: Callable[[TreeEntry], float], scale: float
-) -> ArmDifference | None:
-    """The arm's solves per unit of cost minus the control's, with a percentile interval from drawing each arm's trees
-    with replacement; None while either arm has no cost."""
-    if not sum(map(cost, arm)) or not sum(map(cost, control)):
-        return None
-    generator = numpy.random.default_rng(BOOTSTRAP_SEED)
-    differences = resampled_rates(arm, cost, scale, generator) - resampled_rates(control, cost, scale, generator)
-    low, high = numpy.nanquantile(differences, [(1 - CONFIDENCE) / 2, (1 + CONFIDENCE) / 2])
-    difference = solves_per(arm, cost, scale) - solves_per(control, cost, scale)
-    return ArmDifference(difference, float(low), float(high))
-
-
-def arm_outcome(entries: Sequence[TreeEntry], control: Sequence[TreeEntry] | None) -> ArmOutcome:
-    """`control`: the control arm's trees, for an options arm's differences."""
-    groups = sum(entry.summary.trainable_groups for entry in entries)
-    return ArmOutcome(
-        trees=len(entries),
-        solved=sum(entry.proved for entry in entries),
-        trainable_groups=groups,
-        generated_tokens=sum(entry.summary.generated_tokens for entry in entries),
-        solved_per_thousand_tokens=solves_per(entries, generated_tokens, 1e3),
-        trainable_groups_per_tree=groups / len(entries),
-        feedback_trainable_groups=sum(entry.summary.feedback_trainable_groups for entry in entries),
-        generated_tokens_to_first_proof=sum(entry.summary.generated_tokens_to_first_proof for entry in entries),
-        wall_seconds=sum(entry.wall_seconds for entry in entries),
-        lean_seconds=sum(entry.summary.lean_seconds for entry in entries),
-        solved_per_tree_hour=solves_per(entries, wall_seconds, 3600.0),
-        solved_per_thousand_tokens_difference=None
-        if control is None
-        else rate_difference(entries, control, generated_tokens, 1e3),
-        solved_per_tree_hour_difference=None
-        if control is None
-        else rate_difference(entries, control, wall_seconds, 3600.0),
-    )
-
-
-def arm_outcomes(entries: Sequence[TreeEntry]) -> dict[str, ArmOutcome]:
-    """Per search options A/B arm; empty with the A/B off. An options arm also carries its differences to the control
-    arm, once the control arm has trees."""
-    by_arm: dict[str, list[TreeEntry]] = {}
-    for entry in entries:
-        if entry.summary.arm:
-            by_arm.setdefault(entry.summary.arm, []).append(entry)
-    control = by_arm.get(CONTROL_ARM)
-    return {
-        arm: arm_outcome(arm_entries, None if arm == CONTROL_ARM else control)
-        for arm, arm_entries in sorted(by_arm.items())
-    }
-
-
-def difference_text(difference: ArmDifference | None, unit: str) -> str:
-    if difference is None:
-        return f"no difference per {unit} yet"
-    return f"{difference.difference:+.3g} per {unit} [{difference.low:+.3g}, {difference.high:+.3g}]"
-
-
-def arm_outcome_text(arm: str, outcome: ArmOutcome) -> str:
-    text = (
-        f"{arm}: {outcome.trees} trees, {outcome.solved} solved, {outcome.trainable_groups} trainable groups "
-        f"({outcome.feedback_trainable_groups} of feedback rounds), {outcome.generated_tokens / 1e6:.1f}M generated "
-        f"tokens ({outcome.generated_tokens_to_first_proof / 1e6:.1f}M to the first proof), "
-        f"{outcome.wall_seconds / 3600:.1f} tree-hours, {outcome.lean_seconds / 3600:.1f} Lean hours; "
-        f"{outcome.solved_per_thousand_tokens:.3g} solves per 1k tokens, {outcome.solved_per_tree_hour:.3g} per "
-        "tree-hour"
-    )
-    if arm == CONTROL_ARM:
-        return text
-    tokens = difference_text(outcome.solved_per_thousand_tokens_difference, "1k tokens")
-    hours = difference_text(outcome.solved_per_tree_hour_difference, "tree-hour")
-    return f"{text}; minus control (95% bootstrap over trees): {tokens}, {hours}"
-
-
-def arm_outcomes_text(outcomes: dict[str, ArmOutcome]) -> str:
-    return "; ".join(arm_outcome_text(arm, outcome) for arm, outcome in outcomes.items())
 
 
 def budget_phase_record(

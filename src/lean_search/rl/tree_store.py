@@ -1,6 +1,7 @@
 """The loop's finished search trees: one gzipped TreeRecord per search under trees/phase_<k>/, and an index.
 
-A tree belongs to the phase that was collecting when its search finished; a phase trains on its own directory. The
+A tree belongs to the phase that was collecting when its search finished (its entry also names the one when it
+started); a phase trains on its own directory. The
 index (trees/index.jsonl, one `TreeEntry` per tree) is what a restart reads back: per-phase counts, the statements
 already searched, the curriculum outcomes and each tree's `TreeSummary` (trainable groups, budget and health signals).
 Tree files are written to a temporary name and renamed, so a crash never leaves a truncated tree for the trainer.
@@ -35,6 +36,20 @@ class TreeEntry:
     wall_seconds: float
     finished_time: float
     summary: TreeSummary = field(default_factory=TreeSummary)
+    # The phase collecting when the search started (0: not recorded, read as `phase`), and the seconds of it the
+    # searches were paused.
+    started_phase: int = 0
+    paused_seconds: float = 0.0
+    # The curriculum fed a verified statement; None: no curriculum.
+    verified: bool | None = None
+
+    @property
+    def start_phase(self) -> int:
+        return self.started_phase or self.phase
+
+    @property
+    def active_seconds(self) -> float:
+        return max(0.0, self.wall_seconds - self.paused_seconds)
 
 
 def phase_directory_name(phase: int) -> str:
@@ -60,6 +75,9 @@ class TreeStore:
         policy_version: int,
         difficulty: float | None,
         summary: TreeSummary,
+        started_phase: int = 0,
+        paused_seconds: float = 0.0,
+        verified: bool | None = None,
     ) -> TreeEntry:
         sequence = len(self.entries)
         relative = f"{phase_directory_name(phase)}/{sequence:07d}_{record.problem_name}.json.gz"
@@ -82,6 +100,9 @@ class TreeStore:
             wall_seconds=record.result.accounting.wall_seconds,
             finished_time=time.time(),
             summary=summary,
+            started_phase=started_phase,
+            paused_seconds=paused_seconds,
+            verified=verified,
         )
         with self.index.open("a", encoding="utf-8") as handle:
             handle.write(to_json(entry) + "\n")
