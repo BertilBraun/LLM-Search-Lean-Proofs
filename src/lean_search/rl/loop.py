@@ -1672,6 +1672,7 @@ class GrpoLoop:
         self.held_out_beside_sampling = True
         self.log("The held-out states' job sampled every state: the searches resume beside its last Lean checks")
         self.resume_searches()
+        await self.log_host_memory("as the searches resume beside the held-out states")
 
     async def finish_held_out_states(self) -> None:
         """The held-out states' result, which the phase's health checks read."""

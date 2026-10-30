@@ -62,6 +62,8 @@ class PolicySequence:
     # Records without token ids: the text tokenized again.
     retokenized: bool
     segments: tuple[TokenSegment, ...]
+    # Of a node's feedback round's group.
+    feedback: bool = False
 
     @property
     def token_count(self) -> int:
@@ -206,6 +208,7 @@ def policy_sequence(
         forced=bool(tokens.inserted),
         retokenized=tokens.retokenized,
         segments=credits.segments,
+        feedback=group.feedback,
     )
     return sequence, mismatch
 
@@ -295,7 +298,8 @@ def data_metrics(
         if segment != TokenSegment.INSERTED
     )
     inserted = sum(sequence.segment_tokens(TokenSegment.INSERTED) for sequence in sequences)
-    count = max(1, len(sequences))
+    # A health signal against phases without feedback rounds: the first round's sequences only.
+    first_round = [sequence for sequence in sequences if not sequence.feedback]
     return PolicyDataMetrics(
         groups=len(groups),
         groups_trained=len(trained_groups),
@@ -309,8 +313,8 @@ def data_metrics(
         retokenized_sequences=sum(sequence.retokenized for sequence in sequences),
         token_mismatch_sequences=mismatches,
         forced_sequences=sum(sequence.forced for sequence in sequences),
-        mean_explanation_tokens=sum(sequence.segment_tokens(TokenSegment.EXPLANATION) for sequence in sequences)
-        / count,
+        mean_explanation_tokens=sum(sequence.segment_tokens(TokenSegment.EXPLANATION) for sequence in first_round)
+        / max(1, len(first_round)),
         mean_tactics_per_sample=sum(len(sample.tactics) for sample in trained_samples) / max(1, len(trained_samples)),
         untrained_token_share=untrained / max(1, completion_tokens_total - inserted),
     )

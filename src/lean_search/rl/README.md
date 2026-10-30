@@ -509,8 +509,9 @@ its threshold dashed, and its alert list shows the latest phase's alerts. Thresh
 | `held_out_success` | held-out per-sample success | < 0.9 × version 0's | version 0's held-out evaluation |
 | `search_budget` | share of solves in the budget's last quarter, pooled over the last 3 phases | > 0.10 (a note) | absolute |
 
-The sampled-output signals (`distinct_samples`, `cut_off_samples`, `valid_blocks`, and the `search` family's failure
-tiers, unknown names and forced answers) count the first round's policy samples only: the feedback round
+The sampled-output signals (`distinct_samples`, `cut_off_samples`, `valid_blocks`, `explanation_length` over the
+trained sequences, and the `search` family's failure tiers, unknown names and forced answers) count the first round's
+policy samples only: the feedback round
 (`policy.feedback`) runs where the first round failed, so its samples would drift thresholds taken from phases
 without it, or mask a collapse. `TreeSummary` keeps the round's own counts apart (`feedback_expansions`,
 `feedback_samples`).
@@ -605,8 +606,9 @@ family (`lean_private_memory_p90_gib`, `vllm_private_memory_gib`; the merge is t
 publishing, the training term its rise while training) and from `loop.log`, which reports the host memory at each stage
 boundary of a pause (`Host memory at the pause`, `before training`, `after training`, `after publishing`, `before the
 evaluations`, and at the sampling condition's peak: `after the early resume, the handoff not yet on disk` and `after the
-durable write, before clearing the handoff`; beside sampling `as the evaluations beside sampling start` and `after the
-evaluations beside sampling`): available of the limit, the Lean processes' and vLLM's private memory, the
+durable write, before clearing the handoff`; beside sampling `as the evaluations beside sampling start`, `after the
+evaluations beside sampling` and `as the searches resume beside the held-out states`, where the resumed searches'
+REPLs restart beside the held-out states still in Lean): available of the limit, the Lean processes' and vLLM's private memory, the
 persistent job's parked and handed-off GiB, and the four conditions on these measurements, `OVER` where one fails; the
 rank and merge terms count 0 there). Before every wake it also logs each training GPU's free memory beside its servers'
 shares (`GPU memory before the wake`: a parked rank's CUDA context and NCCL buffers, or a stray process, show as the

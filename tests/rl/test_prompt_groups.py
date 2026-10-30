@@ -3,7 +3,7 @@ from test_policy_data import CharacterTokenizer, completion
 from lean_search.lean import ProofState
 from lean_search.lean.identifiers import NameRepair
 from lean_search.rl.grpo_groups import PolicyGroup, RewardConfig
-from lean_search.rl.policy_data import ExpansionTexts, PolicyDataConfig, PolicyTree, build_policy_data
+from lean_search.rl.policy_data import ExpansionTexts, PolicyData, PolicyDataConfig, PolicyTree, build_policy_data
 from lean_search.rl.single_step import reference_labels, single_step_groups
 from lean_search.search import (
     Accounting,
@@ -140,13 +140,18 @@ def test_node_only_a_repair_put_on_the_proof_graph_forms_no_group() -> None:
     assert groups_of(record_of(tree)) == []
 
 
-def prompts_by_edge() -> dict[int, str]:
+def feedback_tree_data(feedback_explanation: str = "Idea.") -> PolicyData:
     first = (completion(0, "simp only [Nat.add_zero]"), completion(1, "linarith"), completion(4, SAMPLED))
-    texts = (
-        ExpansionTexts("t", 0, "prompt", first),
-        ExpansionTexts("t", 0, "feedback", (completion(2, "rw [Nat.add_zero]"), completion(3, "omega")), feedback=True),
+    feedback = (
+        completion(2, "rw [Nat.add_zero]", explanation=feedback_explanation),
+        completion(3, "omega", explanation=feedback_explanation),
     )
-    data = build_policy_data([PolicyTree(tuple(root_groups()), texts)], CharacterTokenizer(), PolicyDataConfig())
+    texts = (ExpansionTexts("t", 0, "prompt", first), ExpansionTexts("t", 0, "feedback", feedback, feedback=True))
+    return build_policy_data([PolicyTree(tuple(root_groups()), texts)], CharacterTokenizer(), PolicyDataConfig())
+
+
+def prompts_by_edge() -> dict[int, str]:
+    data = feedback_tree_data()
     return {
         sequence.edge_id: "".join(map(chr, sequence.tokenized.input_ids[: sequence.tokenized.prompt_token_count]))
         for sequence in data.sequences
@@ -155,3 +160,8 @@ def prompts_by_edge() -> dict[int, str]:
 
 def test_each_sample_trains_on_the_prompt_it_was_sampled_from() -> None:
     assert prompts_by_edge() == {0: "prompt", 1: "prompt", 2: "feedback", 3: "feedback", 4: "prompt"}
+
+
+def test_the_explanation_length_health_signal_leaves_out_the_feedback_round() -> None:
+    longer = feedback_tree_data("A much longer idea, written after the errors.").metrics.mean_explanation_tokens
+    assert longer == feedback_tree_data().metrics.mean_explanation_tokens

@@ -335,3 +335,19 @@ async def test_a_hard_stop_beside_sampling_still_stops_the_loop(tmp_path: Path) 
     world = collapsing_world(tmp_path, COLLAPSE_ONCE, toml, lean_checks)
     tail = await through_a_held_out_tail(world, lean_checks, phases=3)
     assert tail.stopped_by_itself
+
+
+async def test_a_stop_during_the_held_out_states_last_lean_checks_runs_them_again_at_the_restart(
+    tmp_path: Path,
+) -> None:
+    lean_checks = asyncio.Event()
+    world = collapsing_world(tmp_path, HEALTHY, lean_checks=lean_checks)
+    stop = asyncio.Event()
+    task = asyncio.create_task(world.loop().run(stop))
+    await until(lambda: bool(world.evaluations.generated), task)
+    stop.set()
+    await task
+    lean_checks.set()
+    await run_until(world, world.loop(), phases=1)
+    held_out = [phase for run, phase in world.evaluations.runs if run.kind == EvaluationKind.HELD_OUT_STATES]
+    assert held_out == [0, 1, 1]
