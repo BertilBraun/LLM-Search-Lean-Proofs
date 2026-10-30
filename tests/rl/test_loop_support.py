@@ -19,6 +19,7 @@ from lean_search.rl.evaluation import (
     clopper_pearson,
     compare_repeats,
     fixed_targets_record,
+    keep_config,
     paired_difference,
     repeats_to_compare,
     rolling_probe,
@@ -52,6 +53,34 @@ def template() -> RunConfig:
 
 def test_a_run_config_reads_back_from_its_text() -> None:
     assert parse_run_config(run_config_text(template())) == template()
+
+
+def without_lines(text: str, *table_names: str) -> str:
+    """The config text without these tables and their keys, as code from before they existed wrote it."""
+    kept = []
+    skipping = False
+    for line in text.splitlines(keepends=True):
+        if line.startswith("["):
+            skipping = line.strip().strip("[]") in table_names
+        if not skipping:
+            kept.append(line)
+    return "".join(kept)
+
+
+def test_a_resumed_evaluation_keeps_a_config_written_without_newer_default_fields(tmp_path: Path) -> None:
+    config = evaluation_run_config(template(), EvaluationTarget(16, 600.0, 8))
+    paths = EvaluationPaths(tmp_path)
+    paths.config.write_text(without_lines(run_config_text(config), "policy.feedback", "search.name_repair"))
+    keep_config(paths, config)
+    assert parse_run_config(paths.config.read_text(encoding="utf-8")) == config
+
+
+def test_a_resumed_evaluation_refuses_another_config(tmp_path: Path) -> None:
+    config = evaluation_run_config(template(), EvaluationTarget(16, 600.0, 8))
+    paths = EvaluationPaths(tmp_path)
+    paths.config.write_text(run_config_text(evaluation_run_config(template(), EvaluationTarget(32, 600.0, 8))))
+    with pytest.raises(ValueError, match="holds another config"):
+        keep_config(paths, config)
 
 
 @pytest.mark.parametrize("part", ["harvest", "exploration"])

@@ -29,6 +29,7 @@ from lean_search.rl.loop_config import ValueArmConfig
 from lean_search.rl.renaming import StatementRenamings, search_problem
 from lean_search.rl.search_models import open_search_models, run_config_text
 from lean_search.search import CompletedSearch, RunConfig, SearchResult, StopReason, read_results, tree_record
+from lean_search.search.config import parse_run_config
 from lean_search.search.records import from_json_object, to_json, write_tree
 
 
@@ -468,8 +469,10 @@ def fixed_targets_record(
 
 
 def keep_config(paths: EvaluationPaths, config: RunConfig) -> None:
+    """Compared parsed, defaults filled in: a run resumed by newer code that writes fields the older left out (at
+    their defaults) keeps its config."""
     text = run_config_text(config)
-    if paths.config.exists() and paths.config.read_text(encoding="utf-8") != text:
+    if paths.config.exists() and parse_run_config(paths.config.read_text(encoding="utf-8")) != parse_run_config(text):
         raise ValueError(f"{paths.config} holds another config; an evaluation run keeps one.")
     paths.directory.mkdir(parents=True, exist_ok=True)
     paths.config.write_text(text, encoding="utf-8")
