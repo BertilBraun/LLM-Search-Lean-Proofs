@@ -1769,7 +1769,7 @@ class GrpoLoop:
                     self.log(
                         f"The held-out states' job sampled every state, but those finished are "
                         f"{'not measured' if valid_rate is None else f'{valid_rate:.1%}'} valid (resume at "
-                        f"{floor:.1%}): the searches stay paused until its result"
+                        f"{floor:.1%}): the searches stay paused until they reach it or the result is in"
                     )
             await asyncio.wait({task}, timeout=check_seconds)
         if task.done():
