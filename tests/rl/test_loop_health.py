@@ -507,3 +507,26 @@ async def test_beside_the_held_out_tail_new_statements_fill_what_its_searches_in
     world = collapsing_world(tmp_path, HEALTHY, HELD_OUT_WITH_A_FLOOR, lean_checks)
     world.evaluations.searches_reported = held_out_in_flight
     assert await most_searches_beside_the_tail(world, lean_checks) == searches
+
+
+async def test_a_stop_beside_the_held_out_tail_keeps_its_sampling_seconds_for_the_next_phase(tmp_path: Path) -> None:
+    lean_checks = asyncio.Event()
+    world = collapsing_world(tmp_path, HEALTHY, lean_checks=lean_checks)
+    stop = asyncio.Event()
+    task = asyncio.create_task(world.loop().run(stop))
+    await until(lambda: bool(world.evaluations.generated) and world.searcher.open.is_set(), task)
+    stop.set()
+    await task
+    assert read_progress(world.paths.progress).next_phase_sampling_seconds > 0
+
+
+async def test_the_phase_timing_counts_the_searches_its_pause_held(tmp_path: Path) -> None:
+    lean_checks = asyncio.Event()
+    world = collapsing_world(tmp_path, HEALTHY, lean_checks=lean_checks)
+    messages: list[str] = []
+    loop = world.loop()
+    loop.log = messages.append
+    await through_a_held_out_tail(world, lean_checks, loop=loop)
+    paused = next(message for message in messages if message.startswith("Phase 1: "))
+    held = int(paused.removesuffix(" searches paused").rsplit("; ", 1)[1])
+    assert RunReader(world.paths.directory).series("timing").columns["searches_paused"][0] == held

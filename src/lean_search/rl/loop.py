@@ -187,6 +187,9 @@ class LoopProgress:
     probe_slots: int = 0
     # The published value version whose value arm ran last (0: none yet; v0 is the reference and gets none).
     value_arm_version: int = 0
+    # Sampling of the next phase before a stop cut off `phase`'s pause (the searches resumed early or beside the
+    # held-out states' last Lean checks); the next phase starts from it.
+    next_phase_sampling_seconds: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -730,6 +733,8 @@ class GrpoLoop:
         self.paused = False
         self.loop_state = LoopState.SEARCHING
         self.searches_running = 0
+        # The searches the phase's pause held in place.
+        self.searches_paused = 0
         self.session_started = clock()
         self.session_trees = 0
         self.session_proofs = 0
@@ -819,6 +824,8 @@ class GrpoLoop:
             await asyncio.gather(session, *background, return_exceptions=True)
             if self.progress.stage == PhaseStage.SAMPLING:
                 self.save_progress(sampling_seconds=self.sampling_seconds())
+            elif self.sampling_since is not None:
+                self.save_progress(next_phase_sampling_seconds=self.clock() - self.sampling_since)
             self.loop_state = LoopState.STOPPED
             self.write_status()
             self.log(f"Stopped after {self.session_trees:,} trees and {self.session_proofs:,} proofs this session")
@@ -1083,10 +1090,11 @@ class GrpoLoop:
         async with self.store_lock:
             # A tree being written when the phase began still lands in this phase's directory.
             entries = self.store.phase_entries(phase)
+        self.searches_paused = self.searches_running
         self.log(
             f"Phase {phase}: {len(entries)} trees ({sum(entry.proved for entry in entries)} solved, "
             f"{self.trainable_groups(phase)} trainable groups) after {sampling / 60:.1f} min of sampling; "
-            f"{self.searches_running} searches paused"
+            f"{self.searches_paused} searches paused"
         )
         self.save_progress(
             stage=PhaseStage.TRAINING, sampling_seconds=sampling, pause=PauseSegments(drain_seconds=drain_seconds)
@@ -1865,7 +1873,7 @@ class GrpoLoop:
                 publishing_seconds=progress.publishing_seconds,
                 evaluation_seconds=evaluation_seconds,
                 trees=len(entries),
-                searches_paused=self.searches_running,
+                searches_paused=self.searches_paused,
                 pause=progress.pause,
             )
         )
@@ -1889,10 +1897,12 @@ class GrpoLoop:
         self.beside_sampling = BesideSampling()
         with self.paths.phases.open("a", encoding="utf-8") as handle:
             handle.write(to_json(record) + "\n")
+        self.searches_paused = 0
         self.save_progress(
             phase=phase + 1,
             stage=PhaseStage.SAMPLING,
-            sampling_seconds=0.0,
+            sampling_seconds=progress.next_phase_sampling_seconds,
+            next_phase_sampling_seconds=0.0,
             training_seconds=0.0,
             publishing_seconds=0.0,
             pause=PauseSegments(),
