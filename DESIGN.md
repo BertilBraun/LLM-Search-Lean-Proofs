@@ -873,7 +873,8 @@ foundation of everything above, so it comes first.
   wall-clock stops are counted per slot and compared with version 0's. **Concurrency** (decided 2026-10-30): the probe
   and miniF2F run 56 REPLs beside sampling, and the searches taking statements fill what the evaluation's searches in
   flight leave of 112 (at least 56), so sampling refills as the evaluation's tail shrinks; their idle REPLs above the
-  limit stop. Only the held-out states (112) pause the loop. A phase due meanwhile waits at most 30 min, then the
+  limit stop. Only the held-out states (112) pause the loop, until their job sampled every state (its last Lean checks
+  run beside the resumed searches). A phase due meanwhile waits at most 30 min, then the
   evaluation is cancelled and runs again after the pause; a failed evaluation is an alert and runs again likewise, never
   a stop. **Evaluation share** (estimate, per ~2 h of loop time): the held-out states ~2 min paused, plus the slot's
   duration at reduced sampling concurrency while its first wave runs. To be measured on the node.
@@ -1039,6 +1040,12 @@ Paper names in the last three rows are from memory and still need checking befor
   with the error's first line. A repaired sample trains as its own failure, the repair a separate untrained REPAIR
   edge. The loop's evaluations always search with every option off. An in-loop A/B (`sampling.options_arm`, by
   sha256 of the statement name) is ready, off. Stage 0 (no GPU): `search_options_stage0.py`, `name_repair_replay.py`.
+- Owner decision 2026-10-30, after review N: the in-loop A/B runs the feedback round (`min_children` 2,
+  `max_attempts` 2, 4 samples) on half the statements for 2 phases, judged on solves per generated token and
+  trainable groups; per arm per phase also tree-hours, Lean hours and tokens to the first proof, and for both rates a
+  95% bootstrap interval over trees of the difference to the control arm. The health checks count first-round samples
+  only. At a pause the searches resume once the held-out states' job sampled every state, beside its last Lean checks;
+  the health checks wait for its result, and a rollback pauses the searches around the swap.
 - Serving precision: fp16-merged vs bf16-merged vs unmerged LoRA, decided by the node test against fp32.
 - Whether the four-GPU pause with the persistent trainer meets its ~1 min fixed part on the node (smoke cycle: pause
   segments, `compiled_graphs` 0 after the first phase, the wake's memory next to the parked ranks' CUDA contexts, the

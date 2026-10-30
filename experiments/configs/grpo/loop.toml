@@ -235,7 +235,8 @@ baseline_concurrency = 40
 # hard stop's signal. Version 0's run before sampling is its reference; the loop refuses to start without it.
 [evaluation.held_out_states]
 max_expansions = 1
-# One slow Lean check held phase 2's pause ~5 min with idle GPUs (version 0's run stopped no state at 600 s).
+# One slow Lean check held phase 2's pause ~5 min with idle GPUs (version 0's run stopped no state at 600 s); the
+# searches now resume once every state is sampled, beside the last Lean checks.
 max_wall_seconds = 120.0
 concurrency = 112
 every_hours = 2.0

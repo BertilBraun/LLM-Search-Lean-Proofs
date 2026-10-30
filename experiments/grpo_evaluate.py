@@ -17,8 +17,9 @@ once), at its phase pauses (the held-out states) or beside sampling (`evaluation
 miniF2F); without a running loop (before the first phase, after the last) serve them and run it directly.
 `--concurrency` overrides the target's REPLs.
 Results go to $LEAN_SEARCH_RUNS/<loop>/evaluations/<target>[_slot<slot>]_v<version>/ (resumable: rerun the same
-command; progress.json holds the problems still without a result), the fixed_targets line to the loop's metrics (a
-probe slot's with the rolling whole set of the last probe_parts slots) and a line to evaluations.jsonl. `--repeat k`
+command; progress.json holds the problems still without a result and, for the held-out states, whether every one was
+sampled), the fixed_targets line to the loop's metrics (a probe slot's with the rolling whole set of the last
+probe_parts slots) and a line to evaluations.jsonl. `--repeat k`
 searches the same version (and part) again into ..._repeat<k>/ and compares it with the first run (comparison.json, the
 fixed_targets line), once both are complete: whichever of the two finishes last compares them. `--value-arm` searches a
 slot's part with the published value model into ..._value_arm/ and pairs it per problem with the slot's run

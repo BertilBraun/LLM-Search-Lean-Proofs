@@ -1,10 +1,10 @@
 """Fixed-target evaluations: a problem set searched at a fixed budget with the served version, resumable.
 
 A run directory holds config.toml (the search's run config, which the value benchmark reads for provenance),
-results.jsonl (one SearchResult per problem), trees/<problem>.json.gz, progress.json (the problems without a result,
-which the loop reads) and, once complete, summary.json; a repeated run
-of the same version holds comparison.json against the first, a probe slot's value arm comparison.json against the
-slot's run with the reference value model.
+results.jsonl (one SearchResult per problem), trees/<problem>.json.gz, progress.json (the problems without a result and,
+for the held-out states, whether every state was sampled; the loop reads it) and, once complete, summary.json; a
+repeated run of the same version holds comparison.json against the first, a probe slot's value arm comparison.json
+against the slot's run with the reference value model.
 """
 
 import asyncio
