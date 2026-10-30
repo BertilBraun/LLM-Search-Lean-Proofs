@@ -97,11 +97,12 @@ def write_tree(path: Path, record: TreeRecord) -> None:
 
 
 def read_tree(path: Path, texts: bool = True) -> TreeRecord:
-    """Without `texts` the policy's sample texts (`expansions`, most of a record) are dropped before conversion."""
+    """Without `texts` the policy's prompts and samples (most of a record) are dropped before conversion; each
+    expansion keeps its node, round and sampling version."""
     with gzip.open(path, "rt", encoding="utf-8") as file:
         data = json.load(file)
     if not texts:
-        data.pop("expansions", None)
+        data["expansions"] = [expansion | {"prompt": "", "completions": []} for expansion in data.get("expansions", [])]
     return from_json_object(TreeRecord, data)
 
 

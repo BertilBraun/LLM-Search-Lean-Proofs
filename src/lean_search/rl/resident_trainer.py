@@ -188,16 +188,17 @@ class PhasePreparation(TreePreparation[PolicyDataParts]):
         return prepare_policy_tree(read_tree(path), self.config, self.tokenizer, self.data)
 
 
-class WindowPreparation(TreePreparation[LabelledTree]):
+class WindowPreparation(TreePreparation[tuple[LabelledTree, ...]]):
     """The value model's window labelled as the value training does: the finished phases' trees at once, the
-    collecting phase's as they arrive, read without their texts (about 1.4 MiB per labelled tree on the main rank)."""
+    collecting phase's as they arrive, read without their texts (about 1.4 MiB per labelled tree on the main rank);
+    a tree an excluded version sampled becomes none."""
 
     def __init__(self, directories: tuple[Path, ...], config_text: str) -> None:
         super().__init__(directories, config_text)
         self.start()
 
-    def prepare(self, path: Path) -> LabelledTree:
-        return label_value_trees([read_tree(path, texts=False)], self.config)[0]
+    def prepare(self, path: Path) -> tuple[LabelledTree, ...]:
+        return label_value_trees([read_tree(path, texts=False)], self.config)
 
 
 class TrainerRank:
@@ -408,7 +409,7 @@ class TrainerRank:
         started = time.perf_counter()
         window: Sequence[LabelledTree] = ()
         if self.ranks.is_main:
-            window = self.start_window_preparation(command, config_text).finish()
+            window = [tree for trees in self.start_window_preparation(command, config_text).finish() for tree in trees]
             self.window_preparation = None
         window_seconds = time.perf_counter() - started
         tokenizer = self.tokenizers[ModelKind.VALUE]

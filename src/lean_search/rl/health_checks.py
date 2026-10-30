@@ -5,8 +5,9 @@ Absolute limits: the KL to the starting policy (version 0's is 0) and the clip f
 samples per expansion, explanation length, cut-off samples and the sampled blocks' valid-Lean rate (a free early warning
 that brings the held-out states forward) against the mean of the first `reference_phases` phases; the held-out
 valid-Lean rate and per-sample success against version 0's held-out evaluation. One check acts: a held-out valid-Lean
-rate below `stop_held_out_valid_fraction` of version 0's (a collapse). The loop then publishes the last good version's
-policy again (`publish_rollback`) and keeps sampling; a second collapse within `rollback_window_phases` of that rollback
+rate below `stop_held_out_valid_fraction` of version 0's (a collapse). The collapsed version is rejected
+(`reject_version`: no later phase trains on its samples), and the loop publishes the last good version's policy again
+(`publish_rollback`) and keeps sampling; a second collapse within `rollback_window_phases` of that rollback
 closes the phase, writes `health_stop.json` and stops the loop, which refuses to start until the owner rolls back
 (`grpo_loop.py rollback`) or clears the stop. Every default is a first guess, to be calibrated on the first phases.
 """
@@ -373,6 +374,36 @@ def clear_health_stop(path: Path) -> Path:
     return kept
 
 
+@dataclass(frozen=True)
+class RejectedVersion:
+    """A policy version the loop or its owner rolled back from: no later phase trains on its samples."""
+
+    version: int
+    reason: str
+    rejected_at: str
+
+
+def read_rejected_versions(path: Path) -> tuple[int, ...]:
+    if not path.exists():
+        return ()
+    lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return tuple(sorted({from_json_object(RejectedVersion, json.loads(line)).version for line in lines}))
+
+
+def reject_version(path: Path, version: int, reason: str) -> bool:
+    """Records the version once; whether it was new."""
+    if version in read_rejected_versions(path):
+        return False
+    rejected = RejectedVersion(version, reason, datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds"))
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(to_json(rejected) + "\n")
+    return True
+
+
+def collapsed(record: PhaseHealth) -> bool:
+    return any(alert.severity == HealthSeverity.STOP for alert in record.alerts)
+
+
 def rollback_trigger(version: int, phase: int | None = None) -> str:
     """By hand (`grpo_loop.py rollback`), or by the loop after a phase's collapse."""
     return f"rollback to v{version}" + ("" if phase is None else f" after phase {phase}")
@@ -395,3 +426,14 @@ def publish_rollback(paths: LoopPaths, publisher: Publisher, version: int, trigg
     record_published(paths, prepared)
     publisher.prune(prepared)
     return prepared
+
+
+def roll_back_by_hand(paths: LoopPaths, publisher: Publisher, version: int, rejected_versions: Path) -> ModelVersion:
+    """`grpo_loop.py rollback`, with the loop stopped: the version rolled back from is rejected (its trees in flight
+    at the stop sit in the next phase), unless it serves the target's policy; then the target's policy is published."""
+    versions = read_versions(paths)
+    current = versions[-1]
+    target = next(entry for entry in versions if entry.version == version)
+    if current.policy_adapter != target.policy_adapter:
+        reject_version(rejected_versions, current.version, f"rolled back by hand to v{version}")
+    return publish_rollback(paths, publisher, version, rollback_trigger(version))

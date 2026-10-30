@@ -17,7 +17,13 @@ from loop_fakes import (
     run_until,
 )
 
-from lean_search.expert_iteration.serving import MergedPublisher, read_current, read_versions, write_json_atomically
+from lean_search.expert_iteration.serving import (
+    MergedPublisher,
+    ModelVersion,
+    read_current,
+    read_versions,
+    write_json_atomically,
+)
 from lean_search.monitoring.alerts import AlertThresholds, run_alerts
 from lean_search.monitoring.families import HealthMeasurements, HealthThresholds, PhaseHealth
 from lean_search.monitoring.store import RunReader
@@ -27,10 +33,14 @@ from lean_search.rl.health_checks import (
     clear_health_stop,
     publish_rollback,
     read_health_stop,
+    read_rejected_versions,
+    roll_back_by_hand,
     rollback_trigger,
 )
-from lean_search.rl.loop import LoopProgress, PhaseStage, read_progress, request_evaluation
+from lean_search.rl.loop import GrpoLoop, LoopProgress, PhaseStage, read_progress, request_evaluation
+from lean_search.rl.training_phase import TrainingPhaseConfig, label_phase_data
 from lean_search.rl.tree_store import TreeStore
+from lean_search.search.records import from_json_object
 
 HELD_OUT_BLOCK = """[evaluation.held_out_states]
 max_expansions = 1
@@ -276,12 +286,14 @@ class HeldOutTail:
     stopped_by_itself: bool
 
 
-async def through_a_held_out_tail(world: LoopWorld, lean_checks: asyncio.Event, phases: int = 1) -> HeldOutTail:
+async def through_a_held_out_tail(
+    world: LoopWorld, lean_checks: asyncio.Event, phases: int = 1, loop: GrpoLoop | None = None
+) -> HeldOutTail:
     """Runs the loop until the first held-out run after a phase waits on its Lean checks and `SEARCHES_BESIDE` searches
     finished since it started and as many trees landed in the next phase (or a timeout), ends the checks, and runs on
     until `phases` phases closed."""
     stop = asyncio.Event()
-    task = asyncio.create_task(world.loop().run(stop))
+    task = asyncio.create_task((loop or world.loop()).run(stop))
     await until(lambda: bool(world.evaluations.generated), task)
     started = len(world.searcher.searched)
 
@@ -351,3 +363,91 @@ async def test_a_stop_during_the_held_out_states_last_lean_checks_runs_them_agai
     await run_until(world, world.loop(), phases=1)
     held_out = [phase for run, phase in world.evaluations.runs if run.kind == EvaluationKind.HELD_OUT_STATES]
     assert held_out == [0, 1, 1]
+
+
+async def test_a_collapse_rejects_the_collapsed_version(tmp_path: Path) -> None:
+    world = collapsing_world(tmp_path, COLLAPSE_ONCE)
+    await run_until(world, world.loop(), phases=1)
+    assert read_rejected_versions(world.paths.rejected_versions) == (1,)
+
+
+async def test_a_hard_stop_rejects_the_collapsed_version_too(tmp_path: Path) -> None:
+    world = await stopped_world(tmp_path)
+    assert read_rejected_versions(world.paths.rejected_versions) == (1, 3)
+
+
+async def test_the_next_phase_trains_without_the_rejected_versions_samples(tmp_path: Path) -> None:
+    world = collapsing_world(tmp_path, COLLAPSE_ONCE)
+    await run_until(world, world.loop(), phases=2)
+    assert tomllib.loads(world.trainer.requests[1].config_text)["excluded_policy_versions"] == [1]
+
+
+def publisher_of(world: LoopWorld) -> MergedPublisher:
+    return MergedPublisher(world.config.serving, world.paths.weights, merge_by_writing)
+
+
+async def test_a_rollback_by_hand_rejects_the_version_rolled_back_from(tmp_path: Path) -> None:
+    world = collapsing_world(tmp_path, HEALTHY)
+    await run_until(world, world.loop(), phases=1)
+    roll_back_by_hand(world.paths.models, publisher_of(world), 0, world.paths.rejected_versions)
+    assert read_rejected_versions(world.paths.rejected_versions) == (1,)
+
+
+async def test_a_rollback_by_hand_after_a_hard_stop_rejects_nothing_new(tmp_path: Path) -> None:
+    world = await stopped_world(tmp_path)
+    roll_back_by_hand(world.paths.models, publisher_of(world), 0, world.paths.rejected_versions)
+    assert read_rejected_versions(world.paths.rejected_versions) == (1, 3)
+
+
+def tree_sampling_versions(world: LoopWorld, phase: int) -> set[int | None]:
+    return {
+        expansion.policy_version
+        for record in TreeStore(world.paths.trees).records(phase)
+        for expansion in record.expansions
+    }
+
+
+def trained_group_versions(world: LoopWorld, phase: int) -> set[int | None]:
+    """The versions that sampled the groups the phase's training request trains on."""
+    request = next(request for request in world.trainer.requests if request.phase == phase)
+    config = from_json_object(TrainingPhaseConfig, tomllib.loads(request.config_text))
+    labelled = label_phase_data(TreeStore(world.paths.trees).records(phase), config)
+    versions = set()
+    for tree in labelled.policy_trees:
+        by_round = {(expansion.node_id, expansion.feedback): expansion.policy_version for expansion in tree.texts}
+        versions |= {by_round[group.node_id, group.feedback] for group in tree.groups}
+    return versions
+
+
+async def test_the_collapsed_version_samples_next_phase_trees_beside_the_held_out_tail(tmp_path: Path) -> None:
+    lean_checks = asyncio.Event()
+    world = collapsing_world(tmp_path, COLLAPSE_ONCE, lean_checks=lean_checks)
+    await through_a_held_out_tail(world, lean_checks, phases=2)
+    assert 1 in tree_sampling_versions(world, 2)
+
+
+async def test_no_trained_group_of_the_next_phase_was_sampled_by_the_collapsed_version(tmp_path: Path) -> None:
+    lean_checks = asyncio.Event()
+    world = collapsing_world(tmp_path, COLLAPSE_ONCE, lean_checks=lean_checks)
+    await through_a_held_out_tail(world, lean_checks, phases=2)
+    assert 1 not in trained_group_versions(world, 2)
+
+
+class RecordingPublisher(MergedPublisher):
+    def __init__(self, world: LoopWorld) -> None:
+        super().__init__(world.config.serving, world.paths.weights, merge_by_writing)
+        self.events = world.searcher.events
+
+    def prepare(self, version: ModelVersion) -> ModelVersion:
+        self.events.append(f"prepare v{version.version}")
+        return super().prepare(version)
+
+
+async def test_a_rollback_beside_sampling_pauses_the_searches_before_its_merge(tmp_path: Path) -> None:
+    lean_checks = asyncio.Event()
+    world = collapsing_world(tmp_path, COLLAPSE_ONCE, lean_checks=lean_checks)
+    loop = world.loop()
+    loop.publisher = RecordingPublisher(world)
+    await through_a_held_out_tail(world, lean_checks, loop=loop)
+    events = world.searcher.events
+    assert events[events.index("prepare v2") - 1] == "pause"

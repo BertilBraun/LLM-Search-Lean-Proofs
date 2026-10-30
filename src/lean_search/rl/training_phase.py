@@ -5,7 +5,7 @@ import gc
 import json
 import random
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -35,6 +35,7 @@ from lean_search.rl.tree_statistics import GraphStatistics, graph_statistics, to
 from lean_search.search.graph_labels import label_graph
 from lean_search.search.records import TreeRecord, to_json
 from lean_search.search.tactic_labels import policy_tactics
+from lean_search.search.texts import ExpansionTexts
 from lean_search.training.data_parallel import SINGLE_PROCESS, Ranks, broadcast_from_main, largest
 from lean_search.training.math_data import MathSolution, tokenize_math_solution
 from lean_search.training.sft import TrainableLoader, load_trainable_model
@@ -80,6 +81,8 @@ class TrainingPhaseConfig:
     policy: GrpoConfig | None = None
     policy_replay: PolicyReplayConfig = field(default_factory=PolicyReplayConfig)
     value: GraphValueConfig | None = None
+    # Policy versions the loop rolled back from: their groups leave the policy data, their trees the value window.
+    excluded_policy_versions: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -181,8 +184,23 @@ class PhaseOutcome:
     memory: tuple[StageMemory, ...] = ()
 
 
+def sampled_by(record: TreeRecord, versions: Collection[int]) -> bool:
+    return any(expansion.policy_version in versions for expansion in record.expansions)
+
+
+def groups_not_sampled_by(
+    groups: Sequence[PolicyGroup], expansions: Sequence[ExpansionTexts], versions: Collection[int]
+) -> tuple[PolicyGroup, ...]:
+    """Each group is one round's samples at a node, so a mixed tree keeps the groups of the versions not excluded."""
+    excluded = {
+        (expansion.node_id, expansion.feedback) for expansion in expansions if expansion.policy_version in versions
+    }
+    return tuple(group for group in groups if (group.node_id, group.feedback) not in excluded)
+
+
 def label_phase_data(records: Sequence[TreeRecord], config: TrainingPhaseConfig) -> LabelledPhaseData:
-    """Value targets from the recorded estimates (the value version that ran the search) and the GRPO groups."""
+    """Value targets from the recorded estimates (the value version that ran the search) and the GRPO groups, without
+    those an excluded version sampled."""
     trees = []
     policy_trees = []
     statistics = []
@@ -193,14 +211,24 @@ def label_phase_data(records: Sequence[TreeRecord], config: TrainingPhaseConfig)
         tactics = policy_tactics(record, labels, config.reward.off_graph_min_expanded_nodes)
         tree_groups = policy_groups(record, labels, tactics, estimates, config.reward)
         trees.append(LabelledTree(record, labels, targets))
-        policy_trees.append(PolicyTree(tree_groups.groups, record.expansions))
+        groups = groups_not_sampled_by(tree_groups.groups, record.expansions, config.excluded_policy_versions)
+        policy_trees.append(PolicyTree(groups, record.expansions))
         statistics.append(graph_statistics(record, labels, targets, tactics, tree_groups))
     return LabelledPhaseData(tuple(trees), tuple(policy_trees), total_statistics(statistics))
 
 
+def value_window(trees: Sequence[LabelledTree], config: TrainingPhaseConfig) -> tuple[LabelledTree, ...]:
+    """Without the trees an excluded version took part in: a node it left unproved is labelled as the search's
+    failure, which depends on the policy that searched."""
+    return tuple(tree for tree in trees if not sampled_by(tree.record, config.excluded_policy_versions))
+
+
 def label_value_trees(records: Sequence[TreeRecord], config: TrainingPhaseConfig) -> tuple[LabelledTree, ...]:
+    """The value window's trees (`value_window`)."""
     trees = []
     for record in records:
+        if sampled_by(record, config.excluded_policy_versions):
+            continue
         labels = label_graph(record)
         targets = value_targets(record, labels, recorded_estimates(record, config.readout), config.value_targets)
         trees.append(LabelledTree(record, labels, targets))
@@ -389,7 +417,11 @@ def run_training_phase(
         directory = output_directory / "value"
         window: Sequence[LabelledTree] = ()
         if ranks.is_main:
-            window = label_value_trees(inputs.value_records, config) if inputs.value_records else labelled.trees
+            window = (
+                label_value_trees(inputs.value_records, config)
+                if inputs.value_records
+                else value_window(labelled.trees, config)
+            )
         value = train_value_phase(
             config,
             config.value,

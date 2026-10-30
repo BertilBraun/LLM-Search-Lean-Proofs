@@ -302,7 +302,48 @@ def test_preparation_while_sampling_labels_the_value_window(tmp_path: Path) -> N
     expected = label_value_trees(
         [read_tree(tmp_path / "trees" / entry.file, texts=False) for entry in store.entries], config
     )
-    assert tuple(preparation.finish()) == expected
+    assert tuple(tree for trees in preparation.finish() for tree in trees) == expected
+
+
+def sampled_by_version(record: TreeRecord, versions: Mapping[int, int]) -> TreeRecord:
+    """Each node's expansion sampled by the version given for it (by node id), the others by version 0."""
+    expansions = tuple(
+        dataclasses.replace(expansion, policy_version=versions.get(expansion.node_id, 0))
+        for expansion in record.expansions
+    )
+    return dataclasses.replace(record, expansions=expansions)
+
+
+EXCLUDING_VERSION_1 = TrainingPhaseConfig(excluded_policy_versions=(1,))
+
+
+def group_nodes(record: TreeRecord, config: TrainingPhaseConfig) -> list[int]:
+    return [group.node_id for group in label_phase_data([record], config).groups]
+
+
+def test_the_groups_an_excluded_version_sampled_leave_the_policy_data() -> None:
+    record = sampled_by_version(phase_tree(), {0: 1})
+    assert 0 not in group_nodes(record, EXCLUDING_VERSION_1)
+
+
+def test_a_tree_an_excluded_version_sampled_in_part_keeps_its_other_groups() -> None:
+    record = sampled_by_version(phase_tree(), {0: 1})
+    kept = group_nodes(sampled_by_version(phase_tree(), {}), TrainingPhaseConfig())
+    assert group_nodes(record, EXCLUDING_VERSION_1) == [node for node in kept if node != 0]
+
+
+def test_a_tree_an_excluded_version_sampled_leaves_the_value_window() -> None:
+    records = [sampled_by_version(phase_tree("r"), {1: 1}), sampled_by_version(phase_tree("s"), {})]
+    window = label_value_trees(records, EXCLUDING_VERSION_1)
+    assert [tree.record.nodes[0].goals for tree in window] == [records[1].nodes[0].goals]
+
+
+def test_the_value_windows_preparation_drops_a_tree_an_excluded_version_sampled(tmp_path: Path) -> None:
+    store = TreeStore(tmp_path / "trees")
+    store.add(sampled_by_version(phase_tree("r"), {1: 1}), 1, 1, None, TreeSummary())
+    config = TrainingPhaseConfig(value=GraphValueConfig(model="unused"), excluded_policy_versions=(1,))
+    preparation = WindowPreparation((store.phase_directory(1),), toml_text(without_none(dataclasses.asdict(config))))
+    assert preparation.finish() == [()]
 
 
 cuda_only = pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a GPU (run on the node)")

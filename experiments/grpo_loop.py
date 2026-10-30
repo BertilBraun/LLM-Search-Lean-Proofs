@@ -48,9 +48,8 @@ from lean_search.rl.fixed_sets import read_fixed_set
 from lean_search.rl.health_checks import (
     clear_health_stop,
     health_stop_text,
-    publish_rollback,
     read_health_stop,
-    rollback_trigger,
+    roll_back_by_hand,
 )
 from lean_search.rl.loop import (
     GrpoLoop,
@@ -235,12 +234,13 @@ async def run(config: GrpoLoopConfig, paths: GrpoLoopPaths) -> None:
 
 def rollback(config: GrpoLoopConfig, paths: GrpoLoopPaths, version: int | None) -> None:
     """With the loop stopped: the version's policy adapter published as a new version (merged on the CPU), the health
-    stop cleared; the loop then continues training from that adapter."""
+    stop cleared; the loop then continues training from that adapter. The version rolled back from is rejected: no
+    later phase trains on what it sampled (`roll_back_by_hand`)."""
     stop = read_health_stop(paths.health_stop)
     if version is None and stop is None:
         raise SystemExit("No health stop recorded: name the version to roll back to with --version.")
     target = stop.last_good_version if version is None else version
-    published = publish_rollback(paths.models, publisher(config, paths), target, rollback_trigger(target))
+    published = roll_back_by_hand(paths.models, publisher(config, paths), target, paths.rejected_versions)
     print(f"Version {published.version} serves version {target}'s policy ({published.policy_adapter}).")
     if stop is not None:
         print(f"Health stop kept as {clear_health_stop(paths.health_stop)}; start the loop again.")

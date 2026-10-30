@@ -54,6 +54,7 @@ from lean_search.search import (
     StopReason,
 )
 from lean_search.search.records import to_json
+from lean_search.search.texts import ExpansionTexts
 from lean_search.value.benchmark import BenchmarkScores, ValueBenchmark, benchmark_fingerprint
 
 REPOSITORY_DIRECTORY = Path(__file__).resolve().parents[2]
@@ -152,12 +153,14 @@ def statement(number: int) -> HeldOutStatement:
     return HeldOutStatement(record, 1.0 + number % 3, Stratum.EASY)
 
 
-def solved_tree(problem: Problem) -> SearchTree:
-    """The root, a failed policy step, then a policy step that proves it."""
+def solved_tree(problem: Problem, policy_version: int | None = None) -> SearchTree:
+    """The root, a failed policy step, then a policy step that proves it, the root's samples drawn by
+    `policy_version`."""
     state = ProofState(problem.header, problem.formal_statement, (), ("⊢ True",), 0, 0)
     tree = SearchTree(problem.name, state, 0.0)
     root = tree.root
     root.expansion_index = 0
+    tree.expansion_texts.append(ExpansionTexts(problem.name, 0, "prompt", (), policy_version=policy_version))
     tree.add_edge(
         root,
         text="exact foo",
@@ -188,8 +191,9 @@ def solved_tree(problem: Problem) -> SearchTree:
 
 
 class FakeSearcher:
-    """Every search proves its statement at once (after its `server_failures`); requests wait while paused. The trees of
-    `malformed` statements hold a failed edge without its failure, which labelling refuses."""
+    """Every search proves its statement at once (after its `server_failures`), sampled by the version served when the
+    gate let it through; requests wait while paused. The trees of `malformed` statements hold a failed edge without its
+    failure, which labelling refuses."""
 
     def __init__(self, server_failures: dict[str, int] | None = None, malformed: frozenset[str] = frozenset()) -> None:
         self.open = asyncio.Event()
@@ -208,14 +212,21 @@ class FakeSearcher:
         self.servers_down: set[str] = set()
         self.in_flight = 0
         self.most_in_flight = 0
+        # The A/B arm each search was asked for, by statement.
+        self.arms: dict[str, str] = {}
+        # Each search's paused seconds as `paused_seconds` reports them.
+        self.pause_seconds_per_search = 0.0
+        self.paused_total = 0.0
 
-    async def search(self, problem: Problem) -> CompletedSearch:
+    async def search(self, problem: Problem, arm: str = "") -> CompletedSearch:
+        self.arms[problem.name] = arm
         self.in_flight += 1
         self.most_in_flight = max(self.most_in_flight, self.in_flight)
         try:
             return await self.proving_search(problem)
         finally:
             self.in_flight -= 1
+            self.paused_total += self.pause_seconds_per_search
 
     async def proving_search(self, problem: Problem) -> CompletedSearch:
         await self.open.wait()
@@ -230,7 +241,7 @@ class FakeSearcher:
         result = SearchResult(
             problem.name, True, StopReason.PROVED, "trivial", ("trivial",), (), accounting, None, 0, 1
         )
-        tree = solved_tree(problem)
+        tree = solved_tree(problem, self.policy_versions[-1] if self.policy_versions else None)
         if problem.name in self.malformed:
             tree.add_edge(
                 tree.root,
@@ -254,6 +265,9 @@ class FakeSearcher:
 
     def serving(self, policy_version: int) -> None:
         self.policy_versions.append(policy_version)
+
+    def paused_seconds(self) -> float:
+        return self.paused_total
 
     async def release_lean_memory(self, above_bytes: int) -> ReleasedLeanMemory:
         self.memory_releases.append(above_bytes)

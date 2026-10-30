@@ -99,6 +99,7 @@ from lean_search.rl.fixed_targets import baseline_concurrency, run_target, targe
 from lean_search.rl.health_checks import (
     HeldOutRates,
     append_health,
+    collapsed,
     health_stop_text,
     healthy_versions,
     held_out_rates,
@@ -108,6 +109,8 @@ from lean_search.rl.health_checks import (
     publish_rollback,
     read_health_history,
     read_health_stop,
+    read_rejected_versions,
+    reject_version,
     rollback_trigger,
     write_health_stop,
 )
@@ -393,6 +396,11 @@ class GrpoLoopPaths:
         return self.directory / "health_stop.json"
 
     @property
+    def rejected_versions(self) -> Path:
+        """The policy versions rolled back from (`RejectedVersion`): the training drops what they sampled."""
+        return self.directory / "rejected_versions.jsonl"
+
+    @property
     def children(self) -> Path:
         """A record per running training or evaluation job, so a restarted loop never starts a second one."""
         return self.directory / "children"
@@ -472,11 +480,13 @@ def phase_config_text(
     phase: int,
     value_share: float,
     value_adapter: str | None,
+    rejected_versions: tuple[int, ...] = (),
 ) -> str:
     """The template with the published policy adapter to continue from (on the policy base), the starting policy's
-    adapter as the KL reference, μ and per-phase seeds; `value_adapter` is the value adapter to continue (None: the
-    value model does not train)."""
+    adapter as the KL reference, μ, per-phase seeds and the rejected versions, whose samples the phase drops;
+    `value_adapter` is the value adapter to continue (None: the value model does not train)."""
     table = tomllib.loads(template)
+    table["excluded_policy_versions"] = list(rejected_versions)
     for section in ("reward", "value_targets"):
         table.setdefault(section, {})["value_share"] = value_share
     policy = table["policy"]
@@ -1216,6 +1226,10 @@ class GrpoLoop:
             self.log(f"Health of phase {phase}: no alerts")
         if held_out is None and any(alert.check == HealthCheck.VALID_BLOCKS for alert in record.alerts):
             request_evaluation(self.paths, EvaluationKind.HELD_OUT_STATES)
+        if collapsed(record) and reject_version(
+            self.paths.rejected_versions, published.version, f"held-out collapse after phase {phase}"
+        ):
+            self.log(f"Version {published.version} rejected: no phase trains on its samples")
         if record.hard_stop:
             self.log(health_stop_text(write_health_stop(self.paths.health_stop, record)))
         return record
@@ -1223,13 +1237,14 @@ class GrpoLoop:
     async def roll_back(self, phase: int, version: int, searching: bool) -> None:
         """After a collapse: the version's policy adapter published again as a new version (merged on the CPU) and
         served; the searches continue with it and the next phase trains on from it. A restart that finds the
-        rollback recorded only serves it. `searching`: the searches already resumed, so they pause around the swap."""
+        rollback recorded only serves it. `searching`: the searches already resumed, so they pause first: the
+        collapsed version samples nothing more while the rollback merges."""
+        sampled = await self.pause_searches() if searching else 0.0
         trigger = rollback_trigger(version, phase)
         current = read_current(self.paths.models)
         if current.trigger != trigger:
             current = await asyncio.to_thread(publish_rollback, self.paths.models, self.publisher, version, trigger)
             await asyncio.to_thread(self.prune_adapters)
-        sampled = await self.pause_searches() if searching else 0.0
         await self.servers.serve(current)
         self.served_value_weights = current.value_weights
         self.served_version = current.version
@@ -1287,6 +1302,7 @@ class GrpoLoop:
             phase,
             value_share,
             (self.progress.value_adapter or current.value_adapter) if value_trees else None,
+            read_rejected_versions(self.paths.rejected_versions),
         )
         return TrainingRequest(
             phase,

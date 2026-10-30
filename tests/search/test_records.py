@@ -123,14 +123,15 @@ def test_tree_record_keeps_the_value_distribution(tmp_path: Path) -> None:
     assert read_tree(tmp_path / "t.json.gz").nodes[0].value_distribution == (0.5, 0, 0, 0, 0, 0, 0, 0.25, 0.25)
 
 
-def test_reading_without_texts_leaves_out_only_the_expansions(tmp_path: Path) -> None:
+def test_reading_without_texts_leaves_out_only_the_prompts_and_samples(tmp_path: Path) -> None:
     tree = new_tree("⊢ p")
     child = add_child(tree, tree.root, ("⊢ q",), step="intros")
     completion = SampledCompletion(0, "Explain.\n\n```lean\nintros\n```", (CharacterSpan(19, 25),), False, TOKENS)
-    tree.expansion_texts.append(ExpansionTexts("t", child.node_id, "<prompt>", (completion,), 0.8, 1.0))
+    tree.expansion_texts.append(ExpansionTexts("t", child.node_id, "<prompt>", (completion,), 0.8, 1.0, 3))
     record = tree_record(tree, "theorem t : p := by", RESULT)
     write_tree(tmp_path / "t.json.gz", record)
-    assert read_tree(tmp_path / "t.json.gz", texts=False) == dataclasses.replace(record, expansions=())
+    without_texts = ExpansionTexts("t", child.node_id, "", (), 0.8, 1.0, 3)
+    assert read_tree(tmp_path / "t.json.gz", texts=False) == dataclasses.replace(record, expansions=(without_texts,))
 
 
 def test_whole_numbers_in_a_list_of_optional_floats_read_as_floats() -> None:
