@@ -88,6 +88,18 @@ class BandOutcome:
 
 
 @dataclass(frozen=True)
+class ArmOutcome:
+    """A search options A/B arm's trees of a phase (rl/README.md, "Search options A/B")."""
+
+    trees: int
+    solved: int
+    trainable_groups: int
+    generated_tokens: int
+    solved_per_million_tokens: float
+    trainable_groups_per_tree: float
+
+
+@dataclass(frozen=True)
 class FixedTargets:
     family: ClassVar[str] = "fixed_targets"
     minif2f_valid_solved: int | None = None
@@ -373,6 +385,8 @@ class BudgetPhase:
     median_difficulty_solved: float | None = None
     p90_difficulty_solved: float | None = None
     mean_difficulty_searched: float | None = None
+    # The search options A/B's arms (`sampling.options_arm`); empty with it off.
+    by_search_arm: dict[str, ArmOutcome] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

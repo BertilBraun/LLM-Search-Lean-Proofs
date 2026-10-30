@@ -564,8 +564,8 @@ at 50k 9 stop on heartbeats and 1 fails fast (median 8.6 s, 133 s), at 100k 5 he
   `max_attempts` failed blocks with Lean's errors, `sample_count` samples, its own GRPO group);
   `policy.failed_automation_in_prompt` (a line naming the sweep's failed tactics; needs `automation_then_policy`
   without overlap); `search.name_repair` (an unknown dotted name replaced by its namespace's most similar constant at
-  difflib ratio ≥ `min_similarity`, the repaired block run once and kept out of GRPO training; names without a
-  namespace, mostly hypotheses, are not repaired); temperature per variant.
+  difflib ratio ≥ `min_similarity`, the repaired block run once as an untrained REPAIR edge, the sample trained on its
+  own failure; names without a namespace, mostly hypotheses, are not repaired); temperature per variant.
 
 ### Policy update: GRPO over sibling groups
 
@@ -1031,6 +1031,14 @@ Paper names in the last three rows are from memory and still need checking befor
 - Owner decision 2026-10-30: the error-feedback round, the failed automation in the prompt, name repair and lower
   temperatures are measured on the held-out states (`experiments/search_variants.py`, paired with the loop's own
   search on the same states and served version) before any is enabled in the loop ("Lean execution and harness").
+- Owner decisions 2026-10-30, after reviews L and M: the harness judges per state (solved, distinct new states,
+  distinct successful states, each also per generated token; Holm-corrected paired bootstrap; an A/A baseline pair as
+  the noise floor), with the controls `feedback_blind`, `feedback_always`, `sweep_first` and `temperature_1.0`; crowded-
+  out samples count as failures; variants run interleaved per 64 states at concurrency 40 and are guarded on the
+  loop's phase, not `current`. No feedback round after a proof; the round shows sampled, progress-free failed blocks
+  with the error's first line. A repaired sample trains as its own failure, the repair a separate untrained REPAIR
+  edge. The loop's evaluations always search with every option off. An in-loop A/B (`sampling.options_arm`, by
+  sha256 of the statement name) is ready, off. Stage 0 (no GPU): `search_options_stage0.py`, `name_repair_replay.py`.
 - Serving precision: fp16-merged vs bf16-merged vs unmerged LoRA, decided by the node test against fp32.
 - Whether the four-GPU pause with the persistent trainer meets its ~1 min fixed part on the node (smoke cycle: pause
   segments, `compiled_graphs` 0 after the first phase, the wake's memory next to the parked ranks' CUDA contexts, the

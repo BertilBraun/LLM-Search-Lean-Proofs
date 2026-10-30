@@ -10,6 +10,7 @@ from lean_search.expert_iteration.loop_search import GatedExpander, GatedValueEs
 from lean_search.expert_iteration.toml_text import toml_text
 from lean_search.policy.expander import PolicyStatistics, open_policy_expander
 from lean_search.rl.loop_config import EvaluationTarget, SamplingConfig
+from lean_search.rl.search_options import SearchOptions, with_search_options, without_search_options
 from lean_search.search import (
     Expander,
     PriorityFunction,
@@ -18,6 +19,7 @@ from lean_search.search import (
     build_expander,
     build_priority_function,
 )
+from lean_search.search.config import parse_run_config
 from lean_search.value.estimator import open_value_estimator
 
 
@@ -85,6 +87,11 @@ def run_config_text(config: RunConfig) -> str:
     table = without_none(dataclasses.asdict(config))
     assert isinstance(table, Mapping)
     return toml_text(table)
+
+
+def options_run_config(template: RunConfig, options: SearchOptions) -> RunConfig:
+    """The template with the options on (and every other off), validated like a config file."""
+    return parse_run_config(run_config_text(with_search_options(without_search_options(template), options)))
 
 
 @contextlib.asynccontextmanager

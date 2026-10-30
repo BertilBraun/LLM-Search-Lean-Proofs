@@ -8,6 +8,7 @@ from lean_search.policy.prompts import (
     SYSTEM_PROMPT,
     FailedAttempt,
     ParseFailure,
+    error_summary,
     normalize_tactic_block,
     normalized_block,
     parse_sample,
@@ -201,12 +202,34 @@ def test_user_message_names_the_failed_automation_after_the_state() -> None:
     )
 
 
-def test_user_message_shows_failed_attempts_and_asks_for_another_tactic() -> None:
+def test_user_message_shows_failed_attempts_to_fix_or_replace() -> None:
     attempts = [FailedAttempt("nlinarith [sq_nonneg x]", "linarith failed"), FailedAttempt("omega", "omega failed")]
     assert user_message(GOALS[:1], failed_attempts=attempts).endswith(
-        "These attempts failed here:\n\n```lean\nnlinarith [sq_nonneg x]\n```\nError: linarith failed\n\n"
-        "```lean\nomega\n```\nError: omega failed\n\nGive a different tactic or tactics that avoid these errors."
+        "These attempts failed here (fix one or try something else):\n\n```lean\nnlinarith [sq_nonneg x]\n```\n"
+        "Error: linarith failed\n\n```lean\nomega\n```\nError: omega failed"
     )
+
+
+@pytest.mark.parametrize(
+    ("message", "summary"),
+    [
+        (
+            "linarith failed to find a contradiction\ncase a\nx : ℝ\n⊢ False failed",
+            "linarith failed to find a contradiction",
+        ),
+        (
+            "tactic 'rewrite' failed, did not find instance of the pattern\n  a⁻¹.log\nx : ℝ\n⊢ x",
+            "tactic 'rewrite' failed, did not find instance of the pattern\n  a⁻¹.log",
+        ),
+        (
+            "type mismatch\n  h\nhas type\n  0 < x : Prop\nbut is expected to have type\n  0 ≤ x : Prop",
+            "type mismatch\nhas type\n  0 < x : Prop\nbut is expected to have type\n  0 ≤ x : Prop",
+        ),
+        ("unsolved goals\nx : ℕ\n⊢ x = 2", "unsolved goals"),
+    ],
+)
+def test_error_summary_drops_the_goal_dump(message: str, summary: str) -> None:
+    assert error_summary(message) == summary
 
 
 def test_shortened_text_ends_in_an_ellipsis_within_the_limit() -> None:

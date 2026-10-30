@@ -26,7 +26,7 @@ from lean_search.lean.identifiers import (
     environment_names,
     lean_unknown_names,
     name_scope,
-    namespace_members,
+    shared_name_repairer,
 )
 from lean_search.lean.plans import Rejection, TacticPlan, plain_plan, plan_block
 from lean_search.lean.repl import BlockFailure, BlockResult
@@ -60,6 +60,7 @@ DEFAULT_FORBIDDEN_STEPS = (
     "library_search",
 )
 POLICY_STEP_KEY = "<policy>"
+REPAIR_STEP_KEY = "<repair>"
 logger = logging.getLogger(__name__)
 
 
@@ -89,7 +90,8 @@ class ExplorationConfig:
 
 @dataclass(frozen=True)
 class NameRepairConfig:
-    """A policy block failing on an unknown dotted name runs once more with the namespace's most similar constant."""
+    """A policy block failing on an unknown dotted name runs once more with the namespace's most similar constant, as
+    a REPAIR edge beside the sample's own failed one."""
 
     enabled: bool = False
     # difflib's ratio between the written and the existing last name component.
@@ -271,7 +273,13 @@ def node_scores(scores: Scores) -> list[NodeScore]:
 def step_statistics(tree: SearchTree) -> tuple[StepStatistics, ...]:
     by_step: dict[str, StepStatistics] = {}
     for edge in tree.edges:
-        key = edge.text if edge.source == StepSource.AUTOMATION else POLICY_STEP_KEY
+        match edge.source:
+            case StepSource.AUTOMATION:
+                key = edge.text
+            case StepSource.POLICY:
+                key = POLICY_STEP_KEY
+            case StepSource.REPAIR:
+                key = REPAIR_STEP_KEY
         statistics = by_step.setdefault(key, StepStatistics(key))
         statistics.attempts += 1
         statistics.lean_seconds += edge.lean_seconds
@@ -327,6 +335,8 @@ class _Expansion:
     # The expansion found the search's first proof, so its costs are the solve's too.
     solved: bool = False
     out_of_time: bool = False
+    # Repaired blocks already run, so another sample with the same repair does not run it again.
+    repaired_texts: set[str] = field(default_factory=set)
     early_scores: dict[int, asyncio.Task[Scores]] = field(default_factory=dict)
 
     @property
@@ -411,8 +421,8 @@ class _TheoremSearch:
             return
         self.identifier_checker = IdentifierChecker(names)
         if self.config.name_repair.enabled:
-            members = await asyncio.to_thread(namespace_members, names)
-            self.name_repairer = NameRepairer(members, self.config.name_repair.min_similarity)
+            minimum = self.config.name_repair.min_similarity
+            self.name_repairer = await asyncio.to_thread(shared_name_repairer, names, minimum)
 
     async def _named(self, state: ProofState) -> tuple[ProofState, float]:
         """The state with its inaccessible hypotheses renamed by Lean, or unchanged if that did not name them all."""
@@ -541,14 +551,15 @@ class _TheoremSearch:
                 if self.wall_seconds() >= self.config.max_wall_seconds:
                     expansion.out_of_time = True
                     return
-                edge, child = await self._execute(expansion, candidate)
+                edge, children = await self._execute(expansion, candidate)
                 completions.extend(self._completions(edge, candidate))
-                if child is not None and child.is_proved and await self._verify(child):
-                    expansion.solved = expansion.solved or self.proofs[0] is child
-                    if expansion.proved is None:
-                        expansion.proved = child
-                    if expansion.stopped:
-                        return
+                for child in children:
+                    if child.is_proved and await self._verify(child):
+                        expansion.solved = expansion.solved or self.proofs[0] is child
+                        if expansion.proved is None:
+                            expansion.proved = child
+                        if expansion.stopped:
+                            return
         finally:
             if batch.prompt:
                 self.tree.expansion_texts.append(
@@ -591,35 +602,47 @@ class _TheoremSearch:
             for generated in candidate.completions
         ]
 
-    async def _execute(self, expansion: _Expansion, candidate: Candidate) -> tuple[Edge, Node | None]:
+    async def _execute(self, expansion: _Expansion, candidate: Candidate) -> tuple[Edge, list[Node]]:
+        """The candidate's edge, and the new nodes it and (a sample with unknown names) its repair reached."""
         node = expansion.node
         self.accounting.edges += 1
         normalized_text = candidate.text.strip()
         earlier_edge_id = expansion.edge_id_by_text.get(normalized_text)
         if earlier_edge_id is not None:
-            return self._record(node, candidate, EdgeOutcome.REPEATED, repeat_of=earlier_edge_id), None
-        child: Node | None = None
+            return self._record(node, candidate, EdgeOutcome.REPEATED, repeat_of=earlier_edge_id), []
+        children: list[Node] = []
         forbidden = self.forbidden_steps.find(candidate.text)
         if forbidden:
             self.accounting.rejected += 1
             failure = Failure(FailureKind.FORBIDDEN, f"Forbidden steps: {', '.join(forbidden)}")
             edge = self._record(node, candidate, EdgeOutcome.REJECTED, failure=failure)
         else:
-            edge, child = await self._apply(node, candidate)
+            result = await self._run_block(node, candidate)
+            edge, child = await self._apply(node, candidate, result)
+            children.extend([] if child is None else [child])
+            repaired = await self._repaired(expansion, candidate, result.failure)
+            if repaired is not None:
+                children.extend(await self._run_repair(expansion, candidate, repaired))
         expansion.edge_id_by_text[normalized_text] = edge.edge_id
-        if (
-            self.config.score_children_early
-            and child is not None
-            and not child.is_proved
-            and child.depth < self.config.max_depth
-        ):
-            expansion.early_scores[child.node_id] = asyncio.create_task(
-                self.priority_function.score([child], self.tree)
-            )
-        return edge, child
+        if self.config.score_children_early:
+            for child in children:
+                if not child.is_proved and child.depth < self.config.max_depth:
+                    expansion.early_scores[child.node_id] = asyncio.create_task(
+                        self.priority_function.score([child], self.tree)
+                    )
+        return edge, children
+
+    async def _run_repair(self, expansion: _Expansion, candidate: Candidate, repaired: RepairedBlock) -> list[Node]:
+        """The repaired block as a search step of its own; the sample's edge keeps its own failure, for training."""
+        self.accounting.edges += 1
+        expansion.repaired_texts.add(repaired.text.strip())
+        repair = dataclasses.replace(candidate, text=repaired.text, source=StepSource.REPAIR, completions=())
+        result = await self._run_block(expansion.node, repair)
+        _, child = await self._apply(expansion.node, repair, result, repaired.repairs)
+        return [] if child is None else [child]
 
     def _plan(self, node: Node, candidate: Candidate) -> TacticPlan:
-        if candidate.source != StepSource.POLICY:
+        if candidate.source == StepSource.AUTOMATION:
             return plain_plan(candidate.text)
         plan = plan_block(candidate.text, flatten=self.config.flatten_blocks)
         if self.identifier_checker is None or self.name_scope is None:
@@ -634,7 +657,9 @@ class _TheoremSearch:
         )
         return await self.repl.apply_block(node.state, self._plan(node, candidate), heartbeats, timeout_seconds)
 
-    def _repaired(self, candidate: Candidate, failure: BlockFailure | None) -> RepairedBlock | None:
+    async def _repaired(
+        self, expansion: _Expansion, candidate: Candidate, failure: BlockFailure | None
+    ) -> RepairedBlock | None:
         if self.name_repairer is None or candidate.source != StepSource.POLICY:
             return None
         match failure:
@@ -644,17 +669,20 @@ class _TheoremSearch:
                 unknown = lean_unknown_names(message)
             case _:
                 return None
+        if not unknown:
+            return None
         assert self.name_scope is not None
-        return self.name_repairer.repaired(candidate.text, unknown, self.name_scope.namespaces) if unknown else None
+        namespaces = self.name_scope.namespaces
+        repaired = await asyncio.to_thread(self.name_repairer.repaired, candidate.text, unknown, namespaces)
+        if repaired is None:
+            return None
+        text = repaired.text.strip()
+        # A sample that wrote the repaired block itself ran it already.
+        return None if text in expansion.edge_id_by_text or text in expansion.repaired_texts else repaired
 
-    async def _apply(self, node: Node, candidate: Candidate) -> tuple[Edge, Node | None]:
-        result = await self._run_block(node, candidate)
-        repaired = self._repaired(candidate, result.failure)
-        repair_seconds = 0.0
-        if repaired is not None:
-            repair_seconds = result.elapsed_seconds
-            candidate = dataclasses.replace(candidate, text=repaired.text)
-            result = await self._run_block(node, candidate)
+    async def _apply(
+        self, node: Node, candidate: Candidate, result: BlockResult, name_repairs: tuple[NameRepair, ...] = ()
+    ) -> tuple[Edge, Node | None]:
         failure = None if result.failure is None else Failure.from_lean(result.failure)
         match None if failure is None else failure.kind:
             case FailureKind.HEARTBEAT_TIMEOUT | FailureKind.WALL_CLOCK_TIMEOUT:
@@ -671,7 +699,7 @@ class _TheoremSearch:
         state, naming_seconds = (
             (result.state, 0.0) if not applied_tactics or result.state.is_proved else await self._named(result.state)
         )
-        lean_seconds = repair_seconds + result.elapsed_seconds + naming_seconds
+        lean_seconds = result.elapsed_seconds + naming_seconds
         self.accounting.lean_seconds += lean_seconds
         execution = _Execution(
             applied_tactics,
@@ -681,7 +709,7 @@ class _TheoremSearch:
             result.tactics,
             result.flattened,
             tuple(tactic_state.goals for tactic_state in result.tactic_states),
-            () if repaired is None else repaired.repairs,
+            name_repairs,
         )
         if not applied_tactics:
             return self._record(node, candidate, EdgeOutcome.FAILED, execution=execution), None

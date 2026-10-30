@@ -160,8 +160,11 @@ print `x✝` where the node prints `x_1`; intermediate states match nodes by `no
   `unknown constant` runs once more with every unknown dotted name replaced by the most similar constant of the
   namespace it is written in (the longest written prefix that is a namespace, also under opened namespaces; difflib
   ratio of the last component ≥ `min_similarity`, 0.85), or not at all when one name has no such constant. Names
-  without a namespace are left alone (mostly hypotheses, whose near neighbours mean something else). The edge records
-  the repaired text and `name_repairs`.
+  without a namespace are left alone (mostly hypotheses, whose near neighbours mean something else). The sample's
+  edge keeps its own text and failure (trained as such); the repaired block runs as a separate `REPAIR` edge with
+  `name_repairs`, a search step never trained, and is not run twice in an expansion. One repairer per environment
+  and threshold is shared by the searches (`shared_name_repairer`, its lookups cached under a lock) and runs in a
+  worker thread. Offline calibration: `experiments/name_repair_replay.py`.
 
 ## Proof states and replay
 

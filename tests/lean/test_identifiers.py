@@ -10,7 +10,9 @@ from lean_search.lean.identifiers import (
     name_scope,
     namespace_members,
     parse_environment_names,
+    shared_name_repairer,
     tokenize,
+    unknown_names,
 )
 
 HEADER = (
@@ -218,3 +220,24 @@ def test_name_inside_a_comment_is_left_alone() -> None:
 )
 def test_lean_messages_name_their_unknown_constants(message: str, names: tuple[str, ...]) -> None:
     assert lean_unknown_names(message) == names
+
+
+def test_one_repairer_is_shared_per_environment_and_threshold() -> None:
+    assert shared_name_repairer(NAMES, 0.85) is shared_name_repairer(NAMES, 0.85)
+
+
+def test_repeated_lookup_gives_the_cached_replacement() -> None:
+    repairer = NameRepairer(namespace_members(NAMES), 0.85)
+    repairer.replacement("Nat.succ_le_iff'", SCOPE.namespaces)
+    assert repairer.replacement("Nat.succ_le_iff'", SCOPE.namespaces) == "Nat.succ_le_iff"
+
+
+@pytest.mark.parametrize(
+    ("message", "names"),
+    [
+        (UnknownNames(0, ("Nat.foo'", "Nat.bar")).rejection.message, ("Nat.foo'", "Nat.bar")),
+        ("unknown constant 'Nat.card_fin'\nunknown constant 'Nat.card_insert'", ("Nat.card_fin", "Nat.card_insert")),
+    ],
+)
+def test_recorded_failures_name_their_unknown_names(message: str, names: tuple[str, ...]) -> None:
+    assert unknown_names(message) == names

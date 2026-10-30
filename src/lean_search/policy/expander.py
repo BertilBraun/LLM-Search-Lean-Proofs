@@ -2,9 +2,10 @@
 
 import contextlib
 import dataclasses
+import functools
 import itertools
 import time
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -21,6 +22,7 @@ from lean_search.policy.prompts import (
     ParsedSamples,
     ParseFailure,
     answer_opening,
+    error_summary,
     forced_answer_prompt,
     forced_sample,
     parse_samples,
@@ -33,7 +35,7 @@ from lean_search.retrieval.provider import LemmaProvider, load_lemma_provider
 from lean_search.retrieval.statistics import LemmaStatistics
 from lean_search.search.expanders import Candidate, CandidateBatch, CandidateBatches, SearchContext
 from lean_search.search.texts import GeneratedText, UnparsedSample
-from lean_search.search.tree import Edge, EdgeOutcome, FailureKind, Node, SearchTree, StepSource
+from lean_search.search.tree import Edge, EdgeOutcome, FailureKind, Node, NodeStatus, SearchTree, StepSource
 
 MINIMUM_GENERATED_TOKENS = 32
 # Room for the closing of the thoughts and the opened block.
@@ -202,23 +204,49 @@ def failed_automation(tree: SearchTree, node: Node) -> tuple[str, ...]:
     )
 
 
-def failed_attempts(edges: Sequence[Edge], config: FeedbackConfig) -> tuple[FailedAttempt, ...]:
-    """The distinct failed blocks with an error to show, those behind the most samples first."""
+def failed_blocks(edges: Sequence[Edge]) -> list[Edge]:
+    """The node's distinct policy blocks that failed with an error to show and reached no state, those behind the most
+    samples first. A block that made progress before failing is not a failed attempt."""
     failed = [
         edge
         for edge in edges
-        if edge.repeat_of is None and edge.failure is not None and edge.failure.kind in FEEDBACK_FAILURE_KINDS
+        if edge.source == StepSource.POLICY
+        and edge.repeat_of is None
+        and edge.outcome in (EdgeOutcome.FAILED, EdgeOutcome.REJECTED)
+        and edge.failure is not None
+        and edge.failure.kind in FEEDBACK_FAILURE_KINDS
     ]
-    failed.sort(key=lambda edge: -edge.sample_count)
-    return tuple(failed_attempt(edge, config) for edge in failed[: config.max_attempts])
+    return sorted(failed, key=lambda edge: -edge.sample_count)
+
+
+def new_states(edges: Sequence[Edge]) -> int:
+    """New states the node's policy samples (and their repairs) reached."""
+    return sum(edge.source != StepSource.AUTOMATION and edge.outcome == EdgeOutcome.CHILD for edge in edges)
+
+
+def feedback_fires(edges: Sequence[Edge], min_children: int, proves: Callable[[Edge], bool]) -> bool:
+    """`edges`: the node's after its first request ran. With harvesting the search asks again after a proof; the node
+    is closed by then."""
+    return (
+        new_states(edges) < min_children
+        and bool(failed_blocks(edges))
+        and not any(proves(edge) for edge in edges if edge.outcome == EdgeOutcome.CHILD)
+    )
 
 
 def failed_attempt(edge: Edge, config: FeedbackConfig) -> FailedAttempt:
     assert edge.failure is not None
     return FailedAttempt(
         shortened(edge.text, config.max_block_characters),
-        shortened(edge.failure.message.strip(), config.max_error_characters),
+        shortened(error_summary(edge.failure.message), config.max_error_characters),
     )
+
+
+def proves(tree: SearchTree, edge: Edge) -> bool:
+    """`edge` reached a new state: a verified proof (a failed verification marks it FAILED)."""
+    assert edge.target_id is not None
+    target = tree.node(edge.target_id)
+    return target.is_proved and target.status != NodeStatus.FAILED
 
 
 class PolicyExpander:
@@ -250,14 +278,14 @@ class PolicyExpander:
         feedback = self.config.feedback
         if not feedback.enabled:
             return
-        edges = node_edges(context.tree, node, StepSource.POLICY)
-        if sum(edge.outcome == EdgeOutcome.CHILD for edge in edges) >= feedback.min_children:
+        tree = context.tree
+        edges = [edge for edge in tree.edges if edge.parent_id == node.node_id]
+        if not feedback_fires(edges, feedback.min_children, functools.partial(proves, tree)):
             return
-        attempts = failed_attempts(edges, feedback)
-        if not attempts:
-            return
-        feedback_context = dataclasses.replace(prompt_context, failed_attempts=attempts)
-        sampled = await self.sample(node, context, feedback_context, feedback.sample_count)
+        attempts = tuple(failed_attempt(edge, feedback) for edge in failed_blocks(edges)[: feedback.max_attempts])
+        shown = attempts if feedback.show_attempts else ()
+        feedback_context = dataclasses.replace(prompt_context, failed_attempts=shown)
+        sampled = await self.sample(node, context, feedback_context, feedback.sample_count, feedback=True)
         if sampled is not None:
             self.statistics.feedback_requests += 1
             yield self.batch(sampled)
@@ -286,6 +314,7 @@ class PolicyExpander:
         context: SearchContext,
         prompt_context: PromptContext | None = None,
         sample_count: int | None = None,
+        feedback: bool = False,
     ) -> SampledExpansion | None:
         """The node's samples (forced answers in place) and their candidates; None when the prompt is too long."""
         if prompt_context is None:
@@ -317,7 +346,6 @@ class PolicyExpander:
             visible=self.config.visible_reasoning,
         )
         self.statistics.record(generation, parsed, seconds + forcing_seconds, forced)
-        feedback = bool(prompt_context.failed_attempts)
         return SampledExpansion(generation, samples, parsed, forced, prompt, feedback)
 
     async def force_answers(

@@ -62,7 +62,7 @@ class CumulativeLogProbability:
         match node.source:
             case StepSource.AUTOMATION:
                 return self.automation_log_probability
-            case StepSource.POLICY:
+            case StepSource.POLICY | StepSource.REPAIR:
                 assert node.log_probability is not None, node.node_id
                 return node.log_probability
             case None:

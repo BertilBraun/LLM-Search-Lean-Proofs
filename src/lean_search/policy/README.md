@@ -120,10 +120,13 @@ Both default to off in the code, so older configs reproduce; the row and expert-
 To be measured on the held-out states (`experiments/search_variants.py`) before any is enabled in the loop:
 
 - `[policy.feedback] enabled = true` (`min_children` 2, `max_attempts` 2, `sample_count` 4, `max_block_characters`
-  400, `max_error_characters` 300): after the search ran the expansion's samples, if they reached fewer than
-  `min_children` new states and some failed with an error (Lean's, the identifier check's, a heartbeat limit or a
-  forbidden step), one more request at the node whose user message adds the most-sampled failed blocks with their
-  errors ("These attempts failed here: … Give a different tactic or tactics that avoid these errors."). Its samples
+  400, `max_error_characters` 300, `show_attempts` true): after the search ran the expansion's samples, if they (and
+  their repairs) reached fewer than `min_children` new states, some block failed with an error (Lean's, the
+  identifier check's, a heartbeat limit or a forbidden step) without reaching any state, and no edge proved the node
+  (with harvesting the search asks again after a proof), one more request at the node whose user message adds the
+  most-sampled such blocks as sampled, each with its error's first line (plus a mismatch's types or a `rw`'s
+  pattern; the goal dump dropped): "These attempts failed here (fix one or try something else): …".
+  `show_attempts = false` is the blind control: the same trigger and samples on the node's own prompt. Its samples
   are recorded like the others with `Candidate.feedback`, `Edge.feedback` and their own `ExpansionTexts` (prompt
   included, `feedback = true`), so GRPO groups them apart. In the loop the request passes the pause gate like the
   first (`GatedExpander` gates every request).

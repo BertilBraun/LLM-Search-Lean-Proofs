@@ -10,6 +10,7 @@ from lean_search.search import (
     CandidateBatches,
     CompletedSearch,
     DepthPlusGoals,
+    Edge,
     EdgeOutcome,
     Node,
     SearchConfig,
@@ -59,16 +60,39 @@ async def test_repaired_block_runs_with_the_existing_name(tmp_path: Path) -> Non
     assert completed.result.proved
 
 
-async def test_repaired_edge_records_the_executed_text(tmp_path: Path) -> None:
+async def repaired_edges(tmp_path: Path) -> list[Edge]:
     completed = await search(tmp_path, Batches(policy_batch("rw [Nat.add_zeroo]")), {CLOSING: ()}, repair=True)
     assert completed.tree is not None
-    assert completed.tree.edges[0].text == CLOSING
+    return completed.tree.edges
 
 
-async def test_repaired_edge_names_its_repair(tmp_path: Path) -> None:
-    completed = await search(tmp_path, Batches(policy_batch("rw [Nat.add_zeroo]")), {CLOSING: ()}, repair=True)
-    assert completed.tree is not None
-    assert completed.tree.edges[0].name_repairs == (NameRepair("Nat.add_zeroo", "Nat.add_zero"),)
+async def test_sampled_edge_keeps_its_own_text_and_failure(tmp_path: Path) -> None:
+    edge = (await repaired_edges(tmp_path))[0]
+    assert (edge.text, edge.outcome, edge.repaired) == ("rw [Nat.add_zeroo]", EdgeOutcome.FAILED, False)
+
+
+async def test_repair_runs_as_a_search_step_of_its_own(tmp_path: Path) -> None:
+    edge = (await repaired_edges(tmp_path))[1]
+    assert (edge.source, edge.text, edge.outcome) == (StepSource.REPAIR, CLOSING, EdgeOutcome.CHILD)
+
+
+async def test_repair_edge_names_its_repair(tmp_path: Path) -> None:
+    edge = (await repaired_edges(tmp_path))[1]
+    assert edge.name_repairs == (NameRepair("Nat.add_zeroo", "Nat.add_zero"),)
+
+
+async def test_repair_a_sample_already_wrote_is_not_run_again(tmp_path: Path) -> None:
+    directory = write_environment_names(tmp_path, CONSTANTS)
+    config = SearchConfig(
+        max_expansions=1,
+        name_inaccessible_hypotheses=False,
+        environment_names_directory=str(directory),
+        name_repair=NameRepairConfig(enabled=True),
+    )
+    repl = ScriptedRepl(tmp_path, {CLOSING: ("a : ℕ\n⊢ a = a",)})
+    expander = Batches(policy_batch(CLOSING, "rw [Nat.add_zeroo]"))
+    await search_theorem(PROBLEM, repl, expander, DepthPlusGoals(), config, root_state())
+    assert repl.blocks == [CLOSING, "rw [Nat.add_zeroo]"]
 
 
 async def test_without_repair_the_unknown_name_is_rejected(tmp_path: Path) -> None:

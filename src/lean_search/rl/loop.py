@@ -82,7 +82,7 @@ from lean_search.monitoring.store import MetricsWriter
 from lean_search.policy.adapters import handed_off_weights
 from lean_search.policy.server_control import PhaseSeconds
 from lean_search.rl.advantages import CreditMode
-from lean_search.rl.budget_signals import budget_phase_record
+from lean_search.rl.budget_signals import arm_outcomes_text, budget_phase_record
 from lean_search.rl.evaluation import (
     BaselineDifferences,
     EvaluationKind,
@@ -112,6 +112,7 @@ from lean_search.rl.health_checks import (
 from lean_search.rl.loop_config import EvaluationConfig, EvaluationTarget, EvaluationValueModel, GrpoLoopConfig
 from lean_search.rl.phase_metrics import search_phase_record
 from lean_search.rl.retention import kept_adapters, prune_phase_adapters
+from lean_search.rl.search_options import search_arm
 from lean_search.rl.statement_sources import FedStatement, StatementSource
 from lean_search.rl.training_phase import (
     PhaseOutcome,
@@ -857,7 +858,12 @@ class GrpoLoop:
         record = tree_record(completed.tree, completed.tree.root.state.statement, completed.result)
         try:
             summary = await asyncio.to_thread(
-                tree_summary, record, self.reward_config, self.credit, self.config.sampling.max_expansions
+                tree_summary,
+                record,
+                self.reward_config,
+                self.credit,
+                self.config.sampling.max_expansions,
+                search_arm(self.config.sampling.options_arm, fed.name),
             )
         except Exception as error:
             self.trees_left_out += 1
@@ -1168,6 +1174,8 @@ class GrpoLoop:
         health = self.config.health
         budget = budget_phase_record(self.store.entries, phase, health.late_solve_phases, health.max_late_solve_share)
         self.writer.write(budget)
+        if budget.by_search_arm:
+            self.log(f"Search options A/B of phase {phase}: {arm_outcomes_text(budget.by_search_arm)}")
         published = next(
             version for version in read_versions(self.paths.models) if version.trigger == phase_trigger(phase)
         )

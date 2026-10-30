@@ -223,18 +223,16 @@ def policy_groups(
     config: RewardConfig,
 ) -> TreeGroups:
     """One group per prompt (the expansion's, its feedback round's) at an expanded proof-graph node with policy samples;
-    `tactics` from `policy_tactics`. Samples whose names the search repaired are left out: their tokens were not run."""
+    `tactics` from `policy_tactics`. A sample whose names the search repaired is in its group with its own failed run;
+    the repair (a REPAIR edge) is a search step like the sweep's, in no group and no policy proof, so a node only the
+    repair put on the proof graph forms no group under `require_policy_proof`."""
     groups = []
     for node_id, edges in sorted(labels.edges_by_parent().items()):
         if labels.node_classes[node_id] != NodeClass.PROOF_GRAPH:
             continue
         by_prompt: dict[bool, dict[str, list[EdgeLabel]]] = {False: {}, True: {}}
         for edge in edges:
-            if (
-                edge.source == StepSource.POLICY
-                and edge.effective_kind != EdgeKind.INFRASTRUCTURE_FAILURE
-                and not record.edges[edge.executed_edge_id].repaired
-            ):
+            if edge.source == StepSource.POLICY and edge.effective_kind != EdgeKind.INFRASTRUCTURE_FAILURE:
                 by_text = by_prompt[record.edges[edge.edge_id].feedback]
                 by_text.setdefault(edge.text.strip(), []).append(edge)
         for feedback, by_text in by_prompt.items():

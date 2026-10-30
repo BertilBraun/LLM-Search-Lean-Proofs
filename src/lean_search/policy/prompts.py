@@ -1,5 +1,6 @@
 """The policy's chat format (shared by every model, the search and SFT data) and parsing of its replies."""
 
+import itertools
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -28,6 +29,9 @@ END_OF_TURN = "<|im_end|>"
 THINK_START = "<think>"
 THINK_END = "</think>"
 LENGTH_FINISH_REASON = "length"
+FEEDBACK_HEADING = "These attempts failed here (fix one or try something else):"
+REWRITE_PATTERN_FAILURE = "did not find instance of the pattern"
+TYPE_LABELS = frozenset({"has type", "but is expected to have type"})
 
 
 @dataclass(frozen=True)
@@ -82,6 +86,23 @@ def shortened(text: str, max_characters: int) -> str:
     return text if len(text) <= max_characters else text[: max_characters - 1].rstrip() + "…"
 
 
+def error_summary(message: str) -> str:
+    """Lean's error without the goal dump that follows it: the first line, plus the pattern a failed `rw` looked for
+    and a mismatch's actual and expected types."""
+    lines = message.strip().splitlines()
+    kept = lines[:1]
+    for index, line in enumerate(lines):
+        if index == 0 and REWRITE_PATTERN_FAILURE in line:
+            kept.extend(indented_after(lines, index))
+        elif index > 0 and line.strip() in TYPE_LABELS:
+            kept.extend([line.strip(), *indented_after(lines, index)])
+    return "\n".join(kept)
+
+
+def indented_after(lines: Sequence[str], index: int) -> list[str]:
+    return list(itertools.takewhile(lambda line: line.startswith(" "), lines[index + 1 :]))
+
+
 def user_message(
     goals: Sequence[str],
     lemmas: Sequence[str] = (),
@@ -96,8 +117,7 @@ def user_message(
         sections.append("Already tried here without success: " + ", ".join(failed_tactics))
     if failed_attempts:
         attempts = [f"```lean\n{attempt.tactic_block}\n```\nError: {attempt.error}" for attempt in failed_attempts]
-        sections.append("These attempts failed here:\n\n" + "\n\n".join(attempts))
-        sections.append("Give a different tactic or tactics that avoid these errors.")
+        sections.append(FEEDBACK_HEADING + "\n\n" + "\n\n".join(attempts))
     return "\n\n".join(sections)
 
 

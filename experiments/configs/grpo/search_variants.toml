@@ -1,28 +1,48 @@
 # Search variants on the held-out states (experiments/search_variants.py), each the loop's held-out evaluation (one
-# policy request per state on the loop's servers, 120 s per state) with one change to the loop's search template.
-# Approved by the owner on 2026-10-30 to be measured before any of them is enabled in the loop (DESIGN.md, "Lean
-# execution and harness"). Phases 2-3: 31% of the policy's samples end in a Lean error, 15% reach an existing state.
-name = "grpo_search_variants"
+# policy request per state on the loop's servers, 120 s per state) with one change to the loop's search template, its
+# options off. Approved by the owner on 2026-10-30 to be measured before any of them is enabled in the loop (DESIGN.md,
+# "Lean execution and harness"); controls and metrics after reviews L and M (2026-10-30). The first run (2026-10-30,
+# results under grpo_search_variants/v3/) used the variants baseline, feedback, tried_context, temperature_0.7 and
+# name_repair; its trees stay readable by `--report --results`.
+name = "grpo_search_variants_stage1"
 baseline = "baseline"
+# The A/A pair: their difference is the noise floor.
+second_baseline = "baseline_2"
 bootstrap_samples = 2000
+# Family-wise level 0.05, Holm-corrected over every pairing and the six primary metrics.
 confidence = 0.95
 seed = 0
+chunk_states = 64
 
 [[variants]]
 name = "baseline"
 
-# Fewer than 2 new states from the 8 samples: 4 more samples, the prompt showing up to 2 failed blocks with Lean's
-# errors.
 [[variants]]
-name = "feedback"
-feedback = { enabled = true, min_children = 2, max_attempts = 2, sample_count = 4 }
+name = "baseline_2"
 
-# The sweep runs first (it does not in the loop's held-out evaluation) and the prompt names its failed tactics.
+# min_children above the 8 samples: the round fires wherever a sample failed, and the report's strata by the first
+# round's new states show the yield per token at every threshold.
+[[variants]]
+name = "feedback_always"
+feedback = { enabled = true, min_children = 9, max_attempts = 2, sample_count = 4 }
+compared_with = ["feedback_blind"]
+
+# The same trigger and 4 more samples on the node's own prompt: what the shown attempts add.
+[[variants]]
+name = "feedback_blind"
+feedback = { enabled = true, min_children = 9, max_attempts = 2, sample_count = 4, show_attempts = false }
+
+# The sweep first without overlap and without the prompt line: tried_context's control.
+[[variants]]
+name = "sweep_first"
+sweep_first = true
+
 [[variants]]
 name = "tried_context"
 failed_automation_in_prompt = true
+compared_with = ["sweep_first"]
 
-# An unknown dotted name replaced by its namespace's most similar constant (difflib ratio of the last component).
+# Measured within run (successes with and without the repairs) and offline (experiments/name_repair_replay.py).
 [[variants]]
 name = "name_repair"
 name_repair = { enabled = true, min_similarity = 0.85 }
@@ -36,7 +56,5 @@ name = "temperature_0.7"
 temperature = 0.7
 
 [[variants]]
-name = "combined"
-feedback = { enabled = true, min_children = 2, max_attempts = 2, sample_count = 4 }
-failed_automation_in_prompt = true
-name_repair = { enabled = true, min_similarity = 0.85 }
+name = "temperature_1.0"
+temperature = 1.0

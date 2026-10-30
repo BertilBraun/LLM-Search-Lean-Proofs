@@ -16,6 +16,8 @@ MAX_FAILURE_MESSAGE_CHARACTERS = 1000
 class StepSource(StrEnum):
     AUTOMATION = "automation"
     POLICY = "policy"
+    # A policy sample's block with its unknown names repaired (search.name_repair): a search step, never trained.
+    REPAIR = "repair"
 
 
 class NodeStatus(StrEnum):
@@ -138,7 +140,8 @@ class Edge:
     tactic_goals: tuple[tuple[str, ...], ...] = ()
     # Sampled in the node's feedback round (policy.feedback).
     feedback: bool = False
-    # Unknown names the search replaced (search.name_repair): `text` is the repaired block, not what was sampled.
+    # A REPAIR edge's replaced names. Records before 2026-10-31 kept them on the policy edge, its `text` the repaired
+    # block and its outcome the repaired run's.
     name_repairs: tuple[NameRepair, ...] = ()
 
     @property

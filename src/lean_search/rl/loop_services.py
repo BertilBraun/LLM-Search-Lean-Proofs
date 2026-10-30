@@ -61,10 +61,11 @@ from lean_search.rl.loop import (
 )
 from lean_search.rl.loop_config import GrpoLoopConfig, LoopTrainingConfig
 from lean_search.rl.renaming import StatementRenamings, search_problem
-from lean_search.rl.search_models import SearchModels, open_search_models
+from lean_search.rl.search_models import SearchModels, open_search_models, options_run_config
+from lean_search.rl.search_options import CONTROL_ARM, OptionsArmConfig, search_arm
 from lean_search.rl.trainer_channel import TrainerChannel, TrainerCommand, TrainerCommandKind
 from lean_search.rl.training_phase import PhaseOutcome
-from lean_search.search import CompletedSearch, RunConfig
+from lean_search.search import CompletedSearch, RunConfig, SearchConfig
 from lean_search.search.records import from_json_object
 from lean_search.training.resident import HostDirectories
 from lean_search.value.benchmark import BenchmarkScores, ValueBenchmark
@@ -83,6 +84,15 @@ JOB_MARKER_VARIABLE = "LEAN_SEARCH_LOOP_JOB"
 EVERY_RECORD = "**/*.pid"
 
 
+@dataclass(frozen=True)
+class OptionsArmSearch:
+    """The options arm of the in-loop A/B: its search settings and its expander, behind the same gate."""
+
+    config: OptionsArmConfig
+    search: SearchConfig
+    models: SearchModels
+
+
 class LeanTreeSearcher:
     """One search per REPL of the pool, with the served models behind the pause gate."""
 
@@ -93,22 +103,23 @@ class LeanTreeSearcher:
         models: SearchModels,
         gate: PauseGate,
         renamings: StatementRenamings | None,
+        options_arm: OptionsArmSearch | None = None,
     ) -> None:
         self.config = config
         self.pool = pool
         self.models = models
         self.gate = gate
         self.renamings = renamings
+        self.options_arm = options_arm
 
     async def search(self, problem: Problem) -> CompletedSearch:
+        search, models = self.config.search, self.models
+        arm = self.options_arm
+        if arm is not None and search_arm(arm.config, problem.name) != CONTROL_ARM:
+            search, models = arm.search, arm.models
         async with self.pool.acquire() as repl:
             return await search_problem(
-                problem,
-                repl,
-                self.models.expander,
-                self.models.priority_function,
-                self.config.search,
-                self.renamings,
+                problem, repl, models.expander, models.priority_function, search, self.renamings
             )
 
     async def pause(self) -> None:
@@ -131,16 +142,26 @@ class LeanTreeSearcher:
 
 @contextlib.asynccontextmanager
 async def open_tree_searcher(
-    config: RunConfig, headers: Sequence[str], renamings: StatementRenamings | None
+    config: RunConfig,
+    headers: Sequence[str],
+    renamings: StatementRenamings | None,
+    options_arm: OptionsArmConfig | None = None,
 ) -> AsyncIterator[LeanTreeSearcher]:
-    """A REPL for each concurrent search (`config.lean.pool_size`), the headers imported up front."""
+    """A REPL for each concurrent search (`config.lean.pool_size`), the headers imported up front; with the A/B on, a
+    second expander for the options arm's statements."""
     gate = PauseGate()
-    async with (
-        open_search_models(config, gate) as models,
-        LeanReplPool(config.lean.pool_size, LeanReplConfig(), config.lean.restart_fraction) as pool,
-    ):
+    async with contextlib.AsyncExitStack() as stack:
+        models = await stack.enter_async_context(open_search_models(config, gate))
+        arm = None
+        if options_arm is not None and options_arm.name:
+            arm_config = options_run_config(config, options_arm.options)
+            arm_models = await stack.enter_async_context(open_search_models(arm_config, gate))
+            arm = OptionsArmSearch(options_arm, arm_config.search, arm_models)
+        pool = await stack.enter_async_context(
+            LeanReplPool(config.lean.pool_size, LeanReplConfig(), config.lean.restart_fraction)
+        )
         await pool.start(headers)
-        yield LeanTreeSearcher(config, pool, models, gate, renamings)
+        yield LeanTreeSearcher(config, pool, models, gate, renamings, arm)
 
 
 @dataclass(frozen=True)

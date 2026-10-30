@@ -11,10 +11,11 @@ from lean_search.lean import LeanRepl, ProofState
 from lean_search.policy import PolicyClient, Sample
 from lean_search.policy.client import Generation
 from lean_search.policy.config import FeedbackConfig, PolicyConfig
-from lean_search.policy.expander import PolicyExpander, candidate_batch
+from lean_search.policy.expander import PolicyExpander, candidate_batch, failed_attempt, failed_blocks
 from lean_search.policy.prompts import BRIEF_THINKING_INSTRUCTION, parse_samples
 from lean_search.search import (
     CandidateBatch,
+    Edge,
     EdgeOutcome,
     ExpanderKind,
     Failure,
@@ -368,3 +369,85 @@ def test_failed_automation_in_the_prompt_runs_after_a_finished_sweep() -> None:
 def test_invalid_feedback_section_is_rejected(feedback: str) -> None:
     with pytest.raises(ValueError):
         parse_run_config(POLICY_SECTION + f"[policy.feedback]\nenabled = true\n{feedback}\n")
+
+
+BLIND = PolicyConfig(
+    model="policy", sample_count=2, feedback=FeedbackConfig(enabled=True, sample_count=3, show_attempts=False)
+)
+
+
+async def test_blind_feedback_round_repeats_the_node_s_own_prompt() -> None:
+    async with completion_server([choice("nlinarith")]) as (server, url):
+        await expand_as_the_search(url, BLIND, EdgeOutcome.FAILED)
+    assert server.prompts[1] == server.prompts[0]
+
+
+async def test_blind_feedback_round_is_marked_feedback() -> None:
+    async with completion_server([choice("nlinarith")]) as (_, url):
+        batches = await expand_as_the_search(url, BLIND, EdgeOutcome.FAILED)
+    assert [batch.feedback for batch in batches] == [False, True]
+
+
+async def test_no_feedback_round_at_a_node_already_proved() -> None:
+    context = root_context()
+    tree = context.tree
+    edge = tree.add_edge(
+        tree.root,
+        text="decide",
+        source=StepSource.AUTOMATION,
+        log_probability=None,
+        prompt_tokens=0,
+        generated_tokens=0,
+        outcome=EdgeOutcome.CHILD,
+        target_id=tree.next_node_id(),
+        applied_tactics=1,
+        total_tactics=1,
+    )
+    proved = ProofState("", tree.root.state.statement, ("decide",), (), 0, 0)
+    tree.add_child(tree.root, edge.edge_id, "decide", StepSource.AUTOMATION, None, proved, 0.0, 0.0)
+    async with completion_server([choice("nlinarith")]) as (_, url):
+        batches = await expand_as_the_search(url, FEEDBACK, EdgeOutcome.FAILED, context)
+    assert len(batches) == 1
+
+
+def root_edge(tree: SearchTree, text: str, outcome: EdgeOutcome, source: StepSource = StepSource.POLICY) -> Edge:
+    return tree.add_edge(
+        tree.root,
+        text=text,
+        source=source,
+        log_probability=-1.0,
+        prompt_tokens=0,
+        generated_tokens=0,
+        outcome=outcome,
+        target_id=tree.next_node_id() if outcome == EdgeOutcome.CHILD else None,
+        failure=LINARITH,
+    )
+
+
+def test_block_that_made_progress_before_failing_is_no_failed_attempt() -> None:
+    tree = root_context().tree
+    edges = [
+        root_edge(tree, "constructor\nlinarith", EdgeOutcome.CHILD),
+        root_edge(tree, "nlinarith", EdgeOutcome.FAILED),
+    ]
+    assert [edge.text for edge in failed_blocks(edges)] == ["nlinarith"]
+
+
+def test_repair_is_no_failed_attempt() -> None:
+    tree = root_context().tree
+    assert failed_blocks([root_edge(tree, "rw [Nat.add_zero]", EdgeOutcome.FAILED, StepSource.REPAIR)]) == []
+
+
+def test_failed_attempt_shows_the_error_s_first_line() -> None:
+    tree = root_context().tree
+    edge = tree.add_edge(
+        tree.root,
+        text="nlinarith",
+        source=StepSource.POLICY,
+        log_probability=-1.0,
+        prompt_tokens=0,
+        generated_tokens=0,
+        outcome=EdgeOutcome.FAILED,
+        failure=Failure(FailureKind.ERROR, "linarith failed to find a contradiction\ncase a\nx : ℝ\n⊢ False failed"),
+    )
+    assert failed_attempt(edge, FeedbackConfig()).error == "linarith failed to find a contradiction"

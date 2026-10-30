@@ -8,6 +8,7 @@ from pathlib import Path
 from lean_search.expert_iteration.curriculum import CurriculumConfig
 from lean_search.expert_iteration.loop_config import InitialModels, ServerEndpoint, ServingConfig
 from lean_search.rl.renaming import RenamingConfig
+from lean_search.rl.search_options import CONTROL_ARM, OptionsArmConfig
 from lean_search.search.records import from_json_object
 from lean_search.value.benchmark import BenchmarkConfig
 from lean_search.value.pair_statistics import PairStatisticConfig
@@ -54,6 +55,9 @@ class SamplingConfig:
     server_failure_window: int = 20
     server_failure_share: float = 0.5
     restart_dead_servers: bool = True
+    # Off by default: half of the statements (by a hash of the name) search with these options, the loop's evaluations
+    # never (rl/README.md, "Search options A/B").
+    options_arm: OptionsArmConfig = field(default_factory=OptionsArmConfig)
 
 
 @dataclass(frozen=True)
@@ -282,6 +286,8 @@ def parse_loop_config(text: str) -> GrpoLoopConfig:
         )
     if sampling.max_expansions < 1:
         raise ValueError("sampling.max_expansions must be at least 1.")
+    if sampling.options_arm.name == CONTROL_ARM:
+        raise ValueError(f"sampling.options_arm.name must not be {CONTROL_ARM!r}, the other arm's.")
     if (
         config.evaluation.beside_sampling
         and not 1 <= sampling.min_concurrency_beside_evaluations <= sampling.concurrency

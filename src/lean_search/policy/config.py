@@ -5,8 +5,9 @@ from lean_search.retrieval.config import RetrievalConfig
 
 @dataclass(frozen=True)
 class FeedbackConfig:
-    """After an expansion's samples ran: when they gave fewer than `min_children` new states, one more request at the
-    node whose prompt adds up to `max_attempts` of the samples' failed blocks with Lean's errors."""
+    """After an expansion's samples ran: when they gave fewer than `min_children` new states, some failed with an error
+    and none proved the node, one more request at the node whose prompt adds up to `max_attempts` of the samples'
+    failed blocks (as sampled) with the first lines of Lean's errors."""
 
     enabled: bool = False
     min_children: int = 2
@@ -14,6 +15,8 @@ class FeedbackConfig:
     sample_count: int = 4
     max_block_characters: int = 400
     max_error_characters: int = 300
+    # False: the blind control, the same trigger and samples on the node's own prompt (still marked feedback).
+    show_attempts: bool = True
 
 
 @dataclass(frozen=True)

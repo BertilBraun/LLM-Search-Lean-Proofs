@@ -22,18 +22,28 @@ from pathlib import Path
 
 from lean_search.corpora.tracing import state_before
 from lean_search.data import Problem, Split
-from lean_search.lean import LeanReplConfig, LeanReplPool, ProofState
+from lean_search.lean import LeanRepl, LeanReplConfig, LeanReplPool, ProofState
 from lean_search.reasoning.states import ReasoningState
 from lean_search.rl.grpo_groups import RewardConfig, TreeGroups, policy_groups
 from lean_search.rl.policy_data import PolicyTree
-from lean_search.rl.search_models import open_search_models
+from lean_search.rl.search_models import SearchModels, open_search_models
 from lean_search.rl.training_phase import LabelledPhaseData
 from lean_search.rl.tree_statistics import graph_statistics, total_statistics
-from lean_search.search import ExpanderKind, PriorityKind, RunConfig, TreeRecord, search_theorem, tree_record
+from lean_search.search import (
+    ExpanderKind,
+    PriorityKind,
+    RunConfig,
+    SearchConfig,
+    TreeRecord,
+    search_theorem,
+    tree_record,
+)
 from lean_search.search.graph_labels import EdgeKind, GoalKey, GraphLabels, NodeClass, goal_key, label_graph
 from lean_search.search.records import read_tree, write_tree
 from lean_search.search.tactic_labels import TacticLabel, TacticOutcome, policy_tactics
 from lean_search.search.tree import Edge, EdgeOutcome, StepSource
+
+POLICY_SOURCE = frozenset({StepSource.POLICY})
 
 
 @dataclass(frozen=True)
@@ -111,11 +121,11 @@ def reference_steps(keys: Sequence[GoalKey]) -> dict[GoalKey, int]:
     return {key: len(keys) - 1 - index for index, key in enumerate(keys)}
 
 
-def single_step_run_config(template: RunConfig) -> RunConfig:
+def single_step_run_config(template: RunConfig, sweep_first: bool = False) -> RunConfig:
     """One policy request per state (and its feedback round), no value model, nothing after it. No automation sweep,
-    unless the prompt names the sweep's failures: then the sweep runs first, and a proof by it still lets the policy's
-    samples run (harvesting on, for no further expansions)."""
-    sweep = template.policy.failed_automation_in_prompt
+    unless asked for or the prompt names the sweep's failures: then the sweep runs first without overlap, and a proof
+    by it still lets the policy's samples run (harvesting on, for no further expansions)."""
+    sweep = sweep_first or template.policy.failed_automation_in_prompt
     harvest = template.search.harvest
     search = dataclasses.replace(
         template.search,
@@ -174,7 +184,7 @@ def single_step_groups(
 
 @dataclass(frozen=True)
 class RootSample:
-    """A root policy edge (infrastructure failures left out) and the samples behind it."""
+    """A root edge of the policy (or a repair of one; infrastructure failures left out) and the samples behind it."""
 
     edge: Edge
     executed: Edge
@@ -182,39 +192,44 @@ class RootSample:
     # The block ran completely; and it ended closed or on a reference state.
     valid: bool
     success: bool
+    # The state the block (or its valid prefix) reached, as the tree tells states apart (empty: closed); None: none.
+    reached: GoalKey | None
 
 
-def root_samples(record: TreeRecord, reference_keys: frozenset[GoalKey]) -> list[RootSample]:
+def root_samples(
+    record: TreeRecord, reference_keys: frozenset[GoalKey], sources: frozenset[StepSource] = POLICY_SOURCE
+) -> list[RootSample]:
     labels = label_graph(record)
     samples = []
     for edge in labels.edges:
-        if edge.parent_id != 0 or edge.source != StepSource.POLICY:
+        if edge.parent_id != 0 or edge.source not in sources:
             continue
         if edge.effective_kind == EdgeKind.INFRASTRUCTURE_FAILURE:
             continue
         executed = record.edges[edge.executed_edge_id]
         valid = executed.failure is None and executed.outcome != EdgeOutcome.REJECTED and executed.target_id is not None
+        reached = None
         success = False
-        if valid:
-            assert executed.target_id is not None
+        if executed.target_id is not None:
             target = record.nodes[executed.target_id]
             goals = executed.tactic_goals[-1] if executed.tactic_goals else target.goals
-            proved = not target.goals and labels.node_classes[target.node_id] == NodeClass.PROOF_GRAPH
-            success = proved or bool(goals and goal_key(goals) in reference_keys)
-        samples.append(RootSample(record.edges[edge.edge_id], executed, edge.sample_count, valid, success))
+            reached = goal_key(target.goals) if target.node_id else None
+            if valid:
+                proved = not target.goals and labels.node_classes[target.node_id] == NodeClass.PROOF_GRAPH
+                success = proved or bool(goals and goal_key(goals) in reference_keys)
+        samples.append(RootSample(record.edges[edge.edge_id], executed, edge.sample_count, valid, success, reached))
     return samples
 
 
 def sample_success(record: TreeRecord, reference_keys: frozenset[GoalKey]) -> SampleSuccess:
-    """The root's policy samples whose block ran completely (valid) and ended closed or on a reference state. A sample
-    whose names the search repaired counts as neither: its own text failed, and these rates measure the policy."""
+    """The root's policy samples whose block ran completely (valid) and ended closed or on a reference state; a sample
+    whose names the search repaired is judged by its own failed run, its repair being a search step apart."""
     samples = root_samples(record, reference_keys)
-    own = [sample for sample in samples if not sample.executed.repaired]
     return SampleSuccess(
         1,
         sum(sample.sample_count for sample in samples),
-        sum(sample.sample_count for sample in own if sample.success),
-        sum(sample.sample_count for sample in own if sample.valid),
+        sum(sample.sample_count for sample in samples if sample.success),
+        sum(sample.sample_count for sample in samples if sample.valid),
     )
 
 
@@ -227,16 +242,23 @@ def total_success(successes: Sequence[SampleSuccess]) -> SampleSuccess:
     )
 
 
+def state_tree_path(trees_directory: Path, state: StateProblem) -> Path:
+    return trees_directory / f"{state.problem.name}.json.gz"
+
+
+async def search_state(state: StateProblem, repl: LeanRepl, models: SearchModels, config: SearchConfig) -> TreeRecord:
+    completed = await search_theorem(
+        state.problem, repl, models.expander, models.priority_function, config, state.start
+    )
+    assert completed.tree is not None, state.problem.name
+    return tree_record(completed.tree, state.problem.formal_statement, completed.result)
+
+
 async def search_states(
-    states: Sequence[StateProblem],
-    config: RunConfig,
-    trees_directory: Path,
-    log: Callable[[str], None],
-    before_writing: Callable[[], None] | None = None,
+    states: Sequence[StateProblem], config: RunConfig, trees_directory: Path, log: Callable[[str], None]
 ) -> list[TreeRecord]:
-    """One single-step search per state (trees already written are read back); the records in the states' order.
-    `before_writing` runs before each tree is written and may raise to keep it out."""
-    pending = [state for state in states if not (trees_directory / f"{state.problem.name}.json.gz").exists()]
+    """One single-step search per state (trees already written are read back); the records in the states' order."""
+    pending = [state for state in states if not state_tree_path(trees_directory, state).exists()]
     if pending:
         async with contextlib.AsyncExitStack() as stack:
             models = await stack.enter_async_context(open_search_models(config))
@@ -250,19 +272,8 @@ async def search_states(
             async def search_one(state: StateProblem) -> None:
                 nonlocal finished
                 async with semaphore, pool.acquire() as repl:
-                    completed = await search_theorem(
-                        state.problem,
-                        repl,
-                        models.expander,
-                        models.priority_function,
-                        config.search,
-                        state.start,
-                    )
-                assert completed.tree is not None, state.problem.name
-                if before_writing is not None:
-                    before_writing()
-                record = tree_record(completed.tree, state.problem.formal_statement, completed.result)
-                await asyncio.to_thread(write_tree, trees_directory / f"{state.problem.name}.json.gz", record)
+                    record = await search_state(state, repl, models, config.search)
+                await asyncio.to_thread(write_tree, state_tree_path(trees_directory, state), record)
                 finished += 1
                 if finished % 64 == 0 or finished == len(pending):
                     log(f"{finished}/{len(pending)} states sampled")
@@ -275,7 +286,7 @@ async def search_states(
                 for search in searches:
                     search.cancel()
                 await asyncio.gather(*searches, return_exceptions=True)
-    return [read_tree(trees_directory / f"{state.problem.name}.json.gz") for state in states]
+    return [read_tree(state_tree_path(trees_directory, state)) for state in states]
 
 
 def single_step_phase_data(
