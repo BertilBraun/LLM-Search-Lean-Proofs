@@ -12,6 +12,7 @@ from lean_search.rl.tree_summary import (
     is_bare_have,
     is_linarith_opening,
     is_proof_have,
+    opening,
     summed_habits,
     tree_summary,
 )
@@ -45,7 +46,7 @@ def filler_tree() -> TreeRecord:
     ],
 )
 def test_bare_have_opening(block: str, bare: bool) -> None:
-    assert is_bare_have(block) is bare
+    assert is_bare_have(opening(block)) is bare
 
 
 def test_block_samples_count_every_judged_block() -> None:
@@ -61,15 +62,15 @@ def test_bare_have_openings_are_counted() -> None:
     [("have h₂ : x = -4 := by linarith", True), ("have h := h₀.1", True), ("have h₂ : x = -4", False), ("simp", False)],
 )
 def test_have_with_its_proof_opening(block: str, proof_have: bool) -> None:
-    assert is_proof_have(block) is proof_have
+    assert is_proof_have(opening(block)) is proof_have
 
 
 @pytest.mark.parametrize(
-    ("block", "opening"),
+    ("block", "linarith"),
     [("nlinarith [sq_nonneg x]", True), ("linarith", True), ("linarith_helper", False), ("have h : 0 < 1", False)],
 )
-def test_linarith_opening(block: str, opening: bool) -> None:
-    assert is_linarith_opening(block) is opening
+def test_linarith_opening(block: str, linarith: bool) -> None:
+    assert is_linarith_opening(opening(block)) is linarith
 
 
 def test_bare_have_leaving_its_claim_open_is_an_open_claim() -> None:

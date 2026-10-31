@@ -142,22 +142,22 @@ def trainable_groups(
 
 
 def opening(block: str) -> str:
+    """The block's first top-level tactic."""
     tactics = split_tactics(block)
     return tactics[0] if tactics else ""
 
 
-def is_bare_have(block: str) -> bool:
-    first = opening(block)
+def is_bare_have(first: str) -> bool:
+    """`first`: the block's `opening`."""
     return BARE_HAVE.match(first) is not None and ":=" not in first
 
 
-def is_proof_have(block: str) -> bool:
-    first = opening(block)
+def is_proof_have(first: str) -> bool:
     return BARE_HAVE.match(first) is not None and ":=" in first
 
 
-def is_linarith_opening(block: str) -> bool:
-    return LINARITH.match(opening(block)) is not None
+def is_linarith_opening(first: str) -> bool:
+    return LINARITH.match(first) is not None
 
 
 def proof_graph_steps(outcomes: Sequence[TacticOutcome]) -> list[bool]:
@@ -214,7 +214,8 @@ def block_habits(record: TreeRecord, tactics: Mapping[int, Sequence[TacticOutcom
             continue
         samples = edge.sample_count
         first = tactics[executed.edge_id][0]
-        bare = is_bare_have(executed.text)
+        first_tactic = opening(executed.text)
+        bare = is_bare_have(first_tactic)
         open_claim = bare and first.leaves_claim_open
         valid = ran_completely(executed)
         steps = proof_graph_steps(tactics[executed.edge_id])
@@ -225,8 +226,8 @@ def block_habits(record: TreeRecord, tactics: Mapping[int, Sequence[TacticOutcom
                 open_claims=samples * open_claim,
                 proved_claims=samples * (open_claim and first.label != TacticLabel.UNPROVED_CLAIM),
                 closed_form_fillers=samples * adds_closed_form_filler(record, executed),
-                proof_have_openings=samples * is_proof_have(executed.text),
-                linarith_openings=samples * is_linarith_opening(executed.text),
+                proof_have_openings=samples * is_proof_have(first_tactic),
+                linarith_openings=samples * is_linarith_opening(first_tactic),
                 valid_blocks=samples * valid,
                 valid_block_tactics=samples * valid * executed.applied_tactics,
                 proof_graph_steps=samples * len(steps),

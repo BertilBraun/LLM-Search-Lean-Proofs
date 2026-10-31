@@ -92,8 +92,9 @@ class Claim:
     continuation: GoalKey | None
 
 
-def claim_of(tactic: str, before: Sequence[str], after: Sequence[str]) -> Claim | None:
-    if not before or not after or CLAIM_TACTIC.match(tactic) is None:
+def claim_of(before: Sequence[str], after: Sequence[str]) -> Claim | None:
+    """The claim a tactic's states have the shape of; `CLAIM_TACTIC` tells whether its tactic made one."""
+    if not before or not after:
         return None
     stated = goal_parts(before[0])
     opened = goal_parts(after[0])
@@ -257,15 +258,20 @@ class TacticGraph:
         """`states`: those of the applied tactics, None where not recorded. A claim its block leaves open is marked, and
         off the proof graph one the tree never proves is an unproved claim."""
         judged = list(outcomes)
-        texts = tactic_texts(edge)
+        texts: list[str] | None = None
         befores = [self.record.nodes[edge.parent_id].goals, *states]
         for index, goals in enumerate(states):
             before = befores[index]
-            if goals is None or before is None or index >= len(texts):
+            claim = None if goals is None or before is None else claim_of(before, goals)
+            if claim is None:
                 continue
-            claim = claim_of(texts[index], before, goals)
+            texts = tactic_texts(edge) if texts is None else texts
             later = [state for state in states[index + 1 :] if state is not None]
-            if claim is None or any(proves(claim, state) for state in later):
+            if (
+                index >= len(texts)
+                or CLAIM_TACTIC.match(texts[index]) is None
+                or any(proves(claim, state) for state in later)
+            ):
                 continue
             outcome = dataclasses.replace(outcomes[index], leaves_claim_open=True)
             assert edge.target_id is not None, edge.edge_id
