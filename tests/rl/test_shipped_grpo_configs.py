@@ -15,7 +15,6 @@ from lean_search.rl.loop_config import (
     StatementSourceKind,
     load_loop_config,
 )
-from lean_search.rl.options_ab import LAST_LOOK
 from lean_search.rl.search_options import SearchOptions
 from lean_search.rl.single_step import SingleStepConfig
 from lean_search.rl.training_phase import TrainingPhaseConfig
@@ -268,8 +267,8 @@ def test_the_loop_runs_the_feedback_a_b() -> None:
     assert loop("grpo/loop.toml").sampling.options_arm.name == "feedback"
 
 
-def test_the_loop_feedback_a_b_ends_after_its_last_planned_look() -> None:
-    assert loop("grpo/loop.toml").sampling.options_arm.max_phases == LAST_LOOK
+def test_the_loop_feedback_a_b_ended_after_three_phases() -> None:
+    assert loop("grpo/loop.toml").sampling.options_arm.max_phases == 3
 
 
 def test_the_loop_feedback_arm_asks_for_4_samples_with_2_failed_attempts_below_2_new_states() -> None:

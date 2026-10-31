@@ -99,10 +99,12 @@ server_failure_pause_seconds = 5.0
 # Search options A/B (rl/README.md): statements with an odd sha256(name) search with the feedback round, the others as
 # the template. Owner decision 2026-10-30, after review P: looks after A/B phases 2, 4 and 6 on R (solves per generated
 # token, feedback over control) with the groups-per-token guard (rl/options_ab.py; loop.log "Search options A/B
-# (feedback) look <k>"); after 6 phases the arm switches off by itself, no restart needed.
+# (feedback) look <k>"); after `max_phases` the arm switches off by itself. Ended after 3 phases (6-8), 2026-10-31: look
+# 2 R 0.81 (95% [0.68, 0.97]), groups per token 0.84 (guard 0.95 failed), phase 8 alone -0.0043 solves per 1k tokens
+# [-0.0081, -0.0008]; look 4's futility bound (upper 95% < 1.05) already met.
 [sampling.options_arm]
 name = "feedback"
-max_phases = 6
+max_phases = 3
 
 [sampling.options_arm.options.feedback]
 enabled = true
