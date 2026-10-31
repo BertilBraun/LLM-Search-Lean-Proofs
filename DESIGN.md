@@ -614,8 +614,9 @@ at 50k 9 stop on heartbeats and 1 fails fast (median 8.6 s, 133 s), at 100k 5 he
   |---|---|---|---|
   | Reaches a proof-graph state (closing the goal included) | 1, + δ per step gained | 0.1 per goal closed | 0.85 + 0.2 per step + 0.015 per goal |
   | Reaches a dead end, or an expanded off-graph state with ≥ 4 expanded nodes in its subtree (itself included) | 0 (+ μ · q once on) | 0 | ≈ 0 |
-  | Reaches a state never expanded, an expanded off-graph state with live children and < 4 expanded nodes in its subtree, or a state no node has | unknown | — | **neutral**: untrained, outside the baseline |
-  | No progress (unchanged, ancestor, redundant hypothesis) | 0 | −1 | −0.15 |
+  | Reaches a state never expanded, an expanded off-graph state with live children and < 4 expanded nodes in its subtree, or a state no node has | 0 | −0.5 | −0.075 (unknown; untrained and outside the baseline until 2026-10-31) |
+  | Off the proof graph, adds goals (a bare `have h : claim`) that no state reachable from it closes (2026-10-31) | 0 | −1 | −0.15 (unproved claim) |
+  | No progress (unchanged, ancestor, redundant hypothesis; off the proof graph also closed-form hypotheses, 2026-10-31) | 0 | −1 | −0.15 |
   | First failing tactic (the line Lean's error points to, after flattening) | 0 | −1 | −0.15 |
   | Everything after the failing tactic | — | — | masked (Lean never evaluated it) |
 
@@ -642,7 +643,7 @@ at 50k 9 stop on heartbeats and 1 fails fast (median 8.6 s, 133 s), at 100k 5 he
   advantage and the later gains do not grow with d(node); only the explanation's spread grows, with the progress
   samples make within one block (`rl/README.md`).
 
-  Tokens: a tactic's span and the gap before it get the tactic's advantage (untrained when unknown or masked), the
+  Tokens: a tactic's span and the gap before it get the tactic's advantage (untrained when masked), the
   explanation and the opening fence score − b, the **closing fence and end of turn 0** after a complete block
   (untrained after a failure). The closing tokens are trained at 0 rather than masked: the loss divides by a fixed
   token count, so they add no gradient but stay in the KL term and the per-token metrics. Before, they got the last
@@ -1061,6 +1062,15 @@ Paper names in the last three rows are from memory and still need checking befor
   35% of the statements fed from verified ones below the band (`below_band_share`; not yet fed first, then the least
   recently searched; outside the cohort that moves the band, trained like the rest), a k3 KL penalty of 0.01 to the
   starting policy on every GRPO sequence (replay not penalised; k3 linear beyond 5 nats of log ratio), and policy lr 3e-5 → 2e-5.
+- Owner decision 2026-10-31, reward hacking in phases 1–10 (168 probe problems, v4 against v10): bare
+  `have h : claim` blocks 3,879 → 10,416 with 0.2% of their claims ever proved (2.0% before), `have … := term`
+  1,261 → 242, filler like `have h1 : 0 < (1:ℝ)`, linarith/nlinarith openings 7% → 2%, median explanation 143 → 89
+  characters, probe solves 35–43 against v0's 76–82. Cause: any valid step (off graph 0, unknown not trained) beat a
+  real attempt that might fail (−0.15). Fix: a state off the proof graph that added goals no reachable state closes is
+  `unproved_claim` (L −1); off the proof graph a block adding only closed-form hypotheses (no name of the context)
+  is redundant (L −1); unknown states score L −0.5 (`unknown_local`) instead of being left out. Health warnings
+  against the reference phases: bare-`have` openings above 1.5×, their claims proved below 0.5×, median explanation
+  characters below 0.7×.
 - Serving precision: fp16-merged vs bf16-merged vs unmerged LoRA, decided by the node test against fp32.
 - Whether the four-GPU pause with the persistent trainer meets its ~1 min fixed part on the node (smoke cycle: pause
   segments, `compiled_graphs` 0 after the first phase, the wake's memory next to the parked ranks' CUDA contexts, the

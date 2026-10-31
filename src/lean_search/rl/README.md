@@ -19,8 +19,10 @@ state of any edge reaching it (`graph_labels.nodes_by_goal_key`). The checks, in
 | `no_progress` | the state equals one before it on its path: the node, its ancestors, or an earlier state of the same block (the trailing no-ops skipped after a nested proof closed repeat their state, so they count too) |
 | `redundant_hypothesis` | the state adds only hypotheses whose types the context already had, or reflexive `a = a` / `a ↔ a` (`lean/hypotheses.py`, `adds_only_redundant_hypotheses`, against every earlier state of the path); a flattened `have h : A` also puts `⊢ A` first, which counts as redundant when `A` is |
 | `proof_graph` | a proof-graph node's state, or an intermediate state of a forward edge on a route to a proof |
+| `redundant_hypothesis` (closed form) | off the proof graph: the state adds only hypotheses that are redundant as above or closed-form, mentioning no variable or hypothesis name of the state before (`adds_only_closed_form_hypotheses`: `0 < (1:ℝ)`, `0 < ((0:ℝ))`; under a statement without local names every addition is closed-form) |
 | `off_graph` | a dead end (its expansion produced nothing usable: real evidence however small), or an expanded node off the proof graph with at least `off_graph_min_expanded_nodes` (4) expanded nodes in its subtree, itself included: the n of the value targets' weight n / (n + 4) |
 | `unknown` | anything else: a node never expanded, an expanded off-graph node with live children and fewer expanded nodes (one harvesting or ε expansion is too little evidence to push a sibling down), or a state no node has |
+| `unproved_claim` | an `off_graph` or `unknown` state with more goals than the state before its tactic (a bare `have h : A`, a `constructor`) whose added goals nothing proves: no later state of its block, and no state reachable from the block's node over forward edges (descendants, transpositions, the states their blocks ran through), has at most as many goals as before the tactic (`ClaimProofs`: Lean works on the first goal, the added one, so getting back to that count proves it; goal-list tactics like `swap` could fool it) |
 
 The proof graph is defined at tactic granularity: `label_graph` splits a forward edge at every intermediate tactic
 state that is another node's state, so that node routes to the proof too (and gets exact remaining steps). Records
@@ -55,8 +57,18 @@ farther on it earns what an off-graph state does, and as a first tactic still mo
 | proof graph | 1 | `goal_closed_bonus` (0.1) per goal closed | 0.85 + 0.2 per step of progress + 0.015 per goal, global part ≥ (1 − λ) · μ |
 | off graph | μ · q (`value_share`, 0 until set by hand, "The value model in the loop"; q averages the state's expanded descendants, else its own estimate) | 0 | 0 while μ = 0 |
 | no progress, redundant hypothesis | 0 | `no_progress_local` (−1, as a failure: a no-op wastes the sample too) | −0.15 |
+| unproved claim | 0 | `unproved_claim_local` (−1) | −0.15 |
+| unknown | 0 | `unknown_local` (−0.5) | −0.075 |
 | failing | 0 | `failure_local` (−1) | −0.15 |
-| unknown, masked | — | — | no reward |
+| masked | — | — | no reward |
+
+Owner decision 2026-10-31, after the reward hacking of phases 1-10 (bare `have` claims 3,879 → 10,416 on the 168
+probe problems with 0.2% of them ever proved, closed-form filler, linarith/nlinarith openings 7% → 2%, explanations
+143 → 89 characters, the probe below the starting policy): an unexplored or useless valid step scored 0 or nothing,
+above a real attempt that might fail (−0.15). Now explored off graph 0 > unknown −0.075 > unproved claim, redundant,
+no progress, failure −0.15, all far below a proof-graph state. Every sample has a score, so groups whose other
+samples are unknown now carry a signal: `trainable_groups` (the phase trigger's count) rises somewhat; the trigger's
+300 groups were passed long before the 75 minutes in every phase, so the phase length is unchanged.
 
 ## Advantages (`advantages.py`) and tokens (`token_credit.py`, `policy_data.py`)
 
@@ -66,14 +78,14 @@ the first decides only whether the block gets further than the state before it (
 
 | Tactic | Advantage |
 |---|---|
-| the anchor: the first reaching a state with a reward (proof graph, off graph), else the first tactic when it failed or made no progress | R − b₁ |
-| a later one reaching a state with a reward | R(s_i) − R(s_j), s_j the most recent earlier state of the block with a reward: δ per step gained on the proof graph (plus its goal bonus), the whole drop when it leaves the proof graph |
+| the anchor: the first reaching a state with a reward (proof graph, off graph, unknown, unproved claim), else the first tactic when it failed or made no progress | R − b₁ |
+| a later one reaching a state with a reward | R(s_i) − R(s_j), s_j the most recent earlier state of the block with a reward: δ per step gained on the proof graph (plus its goal bonus), the whole drop when it leaves the proof graph (for an unknown state too, since 2026-10-31) |
 | any other failing, no-progress or redundant one (a no-op before the anchor included) | −c (`wasted_tactic_cost` = 0.1, a local part in the local share): the prefix is kept, only its tokens are wasted |
-| unknown, masked | untrained |
+| masked | untrained |
 
 A sample's score is its final state's R minus c per wasted tactic (`GroupSample.score_parts`: the anchor's R plus
 every gain); a sample whose first tactic fails or makes no progress, with no state with a reward after it, scores
-that tactic's R (minus c per later wasted one), one without a state with a reward or such a first tactic has no score.
+that tactic's R (minus c per later wasted one); with unknown states rewarded, every sample has a score.
 The baseline b is the multiplicity-weighted mean score of the group's samples with a score, the first-tactic baseline
 b₁ the same mean of their anchors' R (`GroupSample.anchor_parts`, `GroupAdvantages.first_tactic_baseline`). The
 explanation gets score − b and a block's tactic advantages add up to score − b₁: b − b₁ is the group's mean progress
@@ -91,9 +103,9 @@ at d ≥ 7 (0.51–0.54 at every d); the local share of the tactic advantages 0.
 real steps, and dividing δ by d would raise the continue threshold below at deep nodes and push their blocks short.
 
 Stopping after t_i keeps s_i, the reference point of t_{i+1}, so the closing tokens get 0. Continuing gets δ · steps
-gained when t_{i+1} is correct, −c when it fails or makes no progress, nothing when its state is unknown, and the
-whole drop R(s_i) − R(off) ≈ 0.85 + δ · progress when it is valid but leaves the proof graph for a well-explored
-off-graph state or a dead end. So it pays when δ · P(correct) − c · P(error) − drop · P(valid off graph) > 0: the
+gained when t_{i+1} is correct, −c when it fails or makes no progress, and the whole drop R(s_i) − R(s_{i+1}) ≈
+0.85 + δ · progress when it is valid but leaves the proof graph (an unknown state, an unproved claim, a well-explored
+off-graph state or a dead end). So it pays when δ · P(correct) − c · P(error) − drop · P(valid off graph) > 0: the
 threshold P(correct) > c / (c + δ) = 1/3 holds only when the alternative to a correct tactic is a Lean error. With 5%
 valid off-graph steps it is about 0.49. A valid step off the graph thus costs about 10× a later error; this follows
 what the search keeps (the error leaves the proof-graph prefix as the child) and stopping still beats deliberate
@@ -105,11 +117,11 @@ value. After a failure the closing follows masked tactics and stays untrained.
 | Tokens | `per_tactic` credit (default) | `sequence` credit |
 |---|---|---|
 | explanation and opening fence (before the first tactic's span) | score − b | score − b |
-| a tactic's span, and the gap before it (newlines, comments) | the tactic's advantage above; untrained when unknown or masked | score − b |
+| a tactic's span, and the gap before it (newlines, comments) | the tactic's advantage above; untrained when masked | score − b |
 | after the last tactic (closing fence, end of turn) | 0 after a complete block; untrained after a failure | score − b |
 | inserted by the harness (`SampledTokens.inserted`) | untrained | untrained |
 
-Unknown scores train nothing. A sample without a span per executed tactic (no usable block, spans not recorded) gets
+A sample without a span per executed tactic (no usable block, spans not recorded) gets
 score − b on every sampled token, so an unparsed sample scores like a failing tactic over its whole completion.
 Sequence credit sees the progress and the wasted-tactic costs through the score.
 
@@ -537,6 +549,9 @@ its threshold dashed, and its alert list shows the latest phase's alerts. Thresh
 | `explanation_length` | mean explanation tokens of the trained samples | outside 0.5-2 × reference | the first phases |
 | `cut_off_samples` | share of policy samples cut off at the token cap (repetition loops shown with it) | > max(2 × reference, reference + 0.01) | the first phases |
 | `valid_blocks` | share of the phase's distinct policy blocks Lean judged that ran completely (`TreeSummary.valid_blocks`, free) | < 0.85 × reference: the held-out states run at the next pause | the first phases |
+| `bare_haves` | share of the samples with a block that open with a bare `have h : A` (first top-level tactic without `:=`; `TreeSummary.habits`) | > 1.5 × reference (`max_bare_have_factor`) | the first phases |
+| `claims_proved` | of the bare-`have` samples whose child has more goals than its parent (the claim left open), the share whose claim got proved in the tree (`ClaimProofs`) | < 0.5 × reference (`min_claim_proved_fraction`) | the first phases |
+| `explanation_characters` | median explanation characters before the opening fence, per sample (10-character bins, interpolated) | < 0.7 × reference (`min_explanation_characters_fraction`) | the first phases |
 | `held_out_valid_lean` | share of held-out samples whose block runs completely in Lean | < 0.9 × version 0's (warning); **< 0.7 × version 0's: a collapse** (rollback, below) | version 0's held-out evaluation |
 | `held_out_success` | held-out per-sample success | < 0.9 × version 0's | version 0's held-out evaluation |
 | `search_budget` | share of solves in the budget's last quarter, pooled over the last 3 phases | > 0.10 (a note) | absolute |
@@ -554,6 +569,12 @@ and at the next pause after a `valid_blocks` warning. They judge the version the
 the phase alike. Relative thresholds stay unset (no alert) until their reference exists; with the held-out states on a
 schedule and the hard stop on, the loop refuses to start without version 0's held-out evaluation (or with one without
 valid samples), since the stop could never fire.
+
+The block habits (`bare_haves`, `claims_proved`, `explanation_characters`, and the closed-form filler share: samples
+with a tactic adding only closed-form hypotheses, charted without a check) are warnings only, from the first round's
+samples, logged every phase (`Block habits of phase <k>: ...`) and charted on the Training page. Trees summarized
+before 2026-10-31 have none: at its start the loop measures them from the trees of the reference phases whose health
+lines lack them and appends those lines again, so the reference stays the first phases' policy.
 
 **Rollback and hard stop** (decided 2026-10-29 after review G). When the held-out valid-Lean rate falls below
 `stop_held_out_valid_fraction` (0.7; 0 never acts) of version 0's, the loop publishes the last good version's policy
