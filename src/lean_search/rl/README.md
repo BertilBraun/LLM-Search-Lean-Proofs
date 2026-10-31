@@ -99,7 +99,7 @@ valid off-graph steps it is about 0.49. A valid step off the graph thus costs ab
 what the search keeps (the error leaves the proof-graph prefix as the child) and stopping still beats deliberate
 errors, but it pushes blocks shorter than 1/3 suggests: watch the block length and continue rate. The closing tokens are trained with advantage 0 rather than masked: the loss divides by a fixed sequences × 256 tokens,
 so a zero-advantage token adds no gradient and changes no other token's weight; it only keeps the stop decision
-under the KL term (`kl_coefficient`, 0 by default) and in the per-token metrics, as a decision with a known neutral
+under the KL term (`kl_coefficient`, 0 by default, 0.01 in `phase.toml`) and in the per-token metrics, as a decision with a known neutral
 value. After a failure the closing follows masked tactics and stays untrained.
 
 | Tokens | `per_tactic` credit (default) | `sequence` credit |
@@ -131,10 +131,24 @@ and in older records), carried to every sequence (`PolicySequence.policy_version
 ## Trainer (`policy_trainer.py`)
 
 PPO-clipped objective per token, clip [1 − 0.2, 1 + 0.28], loss Σ token loss / (sequences in the step × 256), KL to
-the data-collecting policy (k3) and to the starting policy (k1 = log π − log π_ref) reported, NLL replay. The KL to the
-starting policy only feeds a metric while `kl_coefficient` is 0 (a penalty would train on k3), so its log-probabilities
+the data-collecting policy (k3) and to the starting policy (k1 = log π − log π_ref) reported, NLL replay. With
+`kl_coefficient` > 0 (0.01 in `phase.toml` since 2026-10-31, after the drift of phases 1–10) the loss adds
+`kl_coefficient` × Σ weight · k3 / (sequences × 256), k3 = e^r − r − 1 with r = log π_ref − log π on every trained token
+of every GRPO sequence (feedback rounds and zero-advantage closing tokens included, inserted tokens not), under the same
+normalization as the policy loss. r is capped at 20 nats (`MAX_PENALTY_LOG_RATIO`): e^r overflows fp32 above ~88 and
+one such token would make the step NaN; below 0 k3 is near linear, so a token the policy now prefers far more than the
+reference keeps its pull back. Every sequence is then scored under the reference (one more gradient-free forward over
+the phase's sequences, sharded over the ranks and gathered like the old log-probabilities; each rank swaps the
+reference weights in place). Replay examples are not penalised: they are SFT data, not samples of the policy, so k3 on
+them would not estimate the KL; their NLL already ties the policy to the data the reference learned; they are never
+scored under the reference nor counted in the reported KL. The cost is about one more `scoring` segment per phase:
+that segment is the old pass over the phase's N sequences (8–15k) plus the reference on 256, so the penalty adds
+`scoring` × (N − 256) / (N + 256), about 0.95 of it; per sequence the training step (forward, checkpointed recompute,
+backward through frozen weights, ~3–3.5 forwards) plus both scorings goes from ~4.5 to ~5.5 forwards, ~+20% of
+`scoring` + `policy_training`. Without a penalty the KL to the starting policy only feeds a metric, so its log-probabilities
 are scored on `reference_sequences` (256) sequences per phase, spread evenly over the last pass's steps (all of them
-with a KL penalty); the phase's value is the token mean of k1 over those sequences' trained tokens. Before 2026-10-31
+with a KL penalty); the phase's value is the token mean of k1 over those sequences' trained tokens, with or without the
+penalty (k3 trains, k1 reports). Before 2026-10-31
 the draw repeated the step shuffle's random numbers, so nearly all 256 landed in the last ~4 steps of the first pass,
 and the steps' k3 means (one token the reference preferred by 20+ nats adds e^20) went up to 10^9. Each step and pass also reports the mean probability ratio and
 clip fraction of the positive- and of the negative-advantage tokens (`SignedRatios`, `GrpoTrainingResult.ratios_by_pass`,
@@ -406,7 +420,7 @@ segments; the training job's come from its `phase.json` (`TrainerTimings`, the m
 | `policy_load` | job | loading the 4B base with the adapter (and torch.compile's wrappers). The persistent job: unparking the policy and loading the adapter to continue |
 | `compile` | job | one scoring and one training micro-batch on the shortest sequence before scoring, which compile the compiled layers (`compile_warm_up`; 0 without `compile_layers`). The persistent job compiles in its first phase only; `phase.json`'s `compiled_graphs` counts the graphs compiled per phase, 0 after the first |
 | `unpark` | job | the persistent job moving its models from host memory onto the GPUs, every time (the slowest rank; also part of `policy_load`, `value_training` and `merge`) |
-| `scoring` | job | the old (and, when it differs, the reference's on `reference_sequences`) log-probabilities, sharded |
+| `scoring` | job | the old (and, when it differs, the reference's: on every sequence with a KL penalty, else on `reference_sequences`) log-probabilities, sharded |
 | `policy_training` | job | the policy steps (both passes, replay included) |
 | `value_training` | job | the value model's load (the persistent job: unpark), compilation, steps and adapter save |
 | `merge` | job | loading each base (the persistent job: unparking it) and merging the new adapters on the main rank's GPU |

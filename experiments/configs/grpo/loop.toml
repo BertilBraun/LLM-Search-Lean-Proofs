@@ -266,8 +266,8 @@ healthy_versions = 3
 # `reference_phases` phases or version 0's held-out evaluation).
 [health]
 reference_phases = 2
-# k1's mean per token over the last pass's 256 reference sequences (the first round's), an unbiased KL that no single
-# token dominates. The loop's KL keeps growing phase by phase: 0.5 nats per token flags a policy far from its start.
+# k1's mean per token over the last pass's reference sequences (the first round's; every sequence with phase.toml's KL
+# penalty, else 256), an unbiased KL that no single token dominates. The loop's KL keeps growing phase by phase: 0.5 nats per token flags a policy far from its start.
 max_kl_to_starting_policy = 0.5
 max_clip_fraction = 0.1
 min_distinct_samples_fraction = 0.75

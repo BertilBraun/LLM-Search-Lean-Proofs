@@ -66,9 +66,11 @@ passes_per_phase = 1
 warmup_steps = 5
 clip_low = 0.2
 clip_high = 0.28
-kl_coefficient = 0.0
+# Owner decision 2026-10-31, after the drift of phases 1-10: a k3 penalty to the starting policy on every trained
+# token of the GRPO sequences (replay has its NLL and no penalty); every sequence is then scored under the reference.
+kl_coefficient = 0.01
 reference = "starting_weights"
-# With kl_coefficient 0 the KL to the reference is only reported: scored on this many sequences per phase.
+# Only with kl_coefficient 0, when the KL to the reference is reported alone: the sequences scored per phase.
 reference_sequences = 256
 normalization_tokens = 256
 replay_weight = 0.1
@@ -90,7 +92,8 @@ dropout = 0.0
 
 [policy.optimization]
 method = "lora"
-learning_rate = 3e-5
+# 3e-5 (single-step test) until the drift of phases 1-10; owner decision 2026-10-31.
+learning_rate = 2e-5
 minimum_learning_rate_ratio = 1.0
 max_gradient_norm = 1.0
 micro_batch_tokens = 16384

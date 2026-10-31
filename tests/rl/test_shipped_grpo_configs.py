@@ -15,6 +15,7 @@ from lean_search.rl.loop_config import (
     StatementSourceKind,
     load_loop_config,
 )
+from lean_search.rl.policy_trainer import GrpoConfig, ReferencePolicy
 from lean_search.rl.search_options import SearchOptions
 from lean_search.rl.single_step import SingleStepConfig
 from lean_search.rl.training_phase import TrainingPhaseConfig
@@ -130,6 +131,22 @@ def test_sequence_credit_phase_differs_from_the_phase_only_in_its_credit() -> No
     )
     sequence["policy"]["data"]["credit"] = phase["policy"]["data"]["credit"]
     assert sequence == phase
+
+
+def shipped_policy() -> GrpoConfig:
+    text = (CONFIGS / "grpo/phase.toml").read_text(encoding="utf-8")
+    policy = from_json_object(TrainingPhaseConfig, tomllib.loads(text)).policy
+    assert policy is not None
+    return policy
+
+
+def test_the_phase_penalizes_the_kl_to_the_starting_policy() -> None:
+    policy = shipped_policy()
+    assert (policy.kl_coefficient, policy.reference) == (0.01, ReferencePolicy.STARTING_WEIGHTS)
+
+
+def test_the_phase_trains_the_policy_at_2e_5() -> None:
+    assert shipped_policy().optimization.learning_rate == 2e-5
 
 
 def test_progress_per_step_outweighs_the_wasted_tactic_cost() -> None:
