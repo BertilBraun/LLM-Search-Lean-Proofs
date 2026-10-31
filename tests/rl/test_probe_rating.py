@@ -205,9 +205,27 @@ def test_an_unreadable_or_empty_run_is_counted_and_skipped(tmp_path: Path, summa
     assert finished_probe_runs(tmp_path) == FinishedRuns((), 1)
 
 
-def test_the_reward_fix_marks_the_version_its_first_phase_publishes(tmp_path: Path) -> None:
+def write_versions(directory: Path, triggers: dict[int, str]) -> None:
+    (directory / "models").mkdir()
+    lines = [json.dumps({"version": version, "trigger": trigger}) + "\n" for version, trigger in triggers.items()]
+    (directory / "models" / "versions.jsonl").write_text("".join(lines), encoding="utf-8")
+
+
+def test_the_reward_fix_marks_the_version_its_first_phase_published_after_a_rollback(tmp_path: Path) -> None:
     (tmp_path / "reward_fix.json").write_text(json.dumps({"first_phase": 15, "recorded_at": ""}), encoding="utf-8")
-    assert read_markers(tmp_path).reward_fix_version == 16
+    write_versions(tmp_path, {15: "phase 14", 16: "rollback to v4 after phase 14", 17: "phase 15"})
+    assert read_markers(tmp_path).reward_fix_version == 17
+
+
+def test_a_reward_fix_whose_phase_published_nothing_yet_marks_no_version(tmp_path: Path) -> None:
+    (tmp_path / "reward_fix.json").write_text(json.dumps({"first_phase": 15, "recorded_at": ""}), encoding="utf-8")
+    write_versions(tmp_path, {15: "phase 14"})
+    assert read_markers(tmp_path).reward_fix_version is None
+
+
+def test_an_unreadable_reward_fix_counts_as_absent(tmp_path: Path) -> None:
+    (tmp_path / "reward_fix.json").write_text("{", encoding="utf-8")
+    assert read_markers(tmp_path) == LoopMarkers()
 
 
 def test_rejected_versions_are_read_once_each(tmp_path: Path) -> None:

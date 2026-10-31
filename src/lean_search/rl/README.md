@@ -774,10 +774,12 @@ dashboard warns below `min_free_disk_gib` (50) free.
   different thirds, and the fit takes each problem's difficulty from every version that searched it, so the parts'
   difficulty cancels without pairing slots by part. The 95% intervals resample problems (200 bootstraps, the
   difficulty prior counted once per draw so that they shrink as the point fit; ~2 s for 14 runs). They cover the
-  search's noise per problem, not effects shared by a whole run (one run per version): a version's own rating moves by
-  about 40 Elo between runs. So the headline pools a pass, the latest non-rejected run of every third (the whole set
+  search's noise per problem (a version's own rating, one third, has an SD of about 40 Elo), not effects shared by a
+  whole run such as a slower GPU beside sampling (one run per version), so a pass difference's 95% covers nearer
+  85-90% (review W). So the headline pools a pass, the latest non-rejected run of every third (the whole set
   once, `latest_pass`), and compares it with the pass before it (`against_previous`) and, for the revert rule above,
-  with the last pass of versions before the reward fix (`against_pre_fix`, once the latest pass is wholly after it;
+  with the last pass of versions before the reward fix (`against_pre_fix`: before the version its first phase published,
+  by `models/versions.jsonl`; once the latest pass is wholly after it;
   `post_fix_parts` counts its thirds so far), each fitted together with its own interval. Each version also gets its
   share proved within 1, 2, 4, ... expansions (the first proof's expansion) beside the anchor's on the same problems,
   its wall-clock stops (counted unproved, as in the probe's solve rate), and the problems of the whole set it is

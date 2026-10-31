@@ -98,7 +98,8 @@ def finished_probe_runs(evaluations: Path) -> FinishedRuns:
             continue
         try:
             run = read_probe_run(directory)
-        except (OSError, ValueError, KeyError, TypeError):
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            print(f"{directory.name} is not rated: {error!r}", file=sys.stderr)
             unreadable += 1
             continue
         if run.outcomes:
@@ -108,16 +109,25 @@ def finished_probe_runs(evaluations: Path) -> FinishedRuns:
     return FinishedRuns(tuple(sorted(runs, key=lambda run: run.finished_at)), unreadable)
 
 
+def json_lines(path: Path) -> list[dict]:
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
 def read_markers(run_directory: Path) -> LoopMarkers:
-    """`rejected_versions.jsonl` and `reward_fix.json` of the loop (rl/health_checks.py)."""
-    rejected_path = run_directory / "rejected_versions.jsonl"
-    lines = rejected_path.read_text(encoding="utf-8").splitlines() if rejected_path.exists() else []
-    fix_path = run_directory / "reward_fix.json"
-    first_phase = json.loads(fix_path.read_text(encoding="utf-8"))["first_phase"] if fix_path.exists() else None
-    return LoopMarkers(
-        rejected_versions=tuple(sorted({json.loads(line)["version"] for line in lines if line.strip()})),
-        reward_fix_version=None if first_phase is None else first_phase + 1,
-    )
+    """`rejected_versions.jsonl` and `reward_fix.json` of the loop (rl/health_checks.py), and the version the fix's
+    first phase published (`models/versions.jsonl`, trigger "phase <n>": rollbacks publish versions too). A marker that
+    cannot be read counts as absent, as the loop treats it."""
+    try:
+        rejected = tuple(sorted({line["version"] for line in json_lines(run_directory / "rejected_versions.jsonl")}))
+    except (OSError, ValueError, KeyError, TypeError):
+        rejected = ()
+    try:
+        first_phase = json.loads((run_directory / "reward_fix.json").read_text(encoding="utf-8"))["first_phase"]
+        published = json_lines(run_directory / "models" / "versions.jsonl")
+        fix_version = next((line["version"] for line in published if line["trigger"] == f"phase {first_phase}"), None)
+    except (OSError, ValueError, KeyError, TypeError):
+        fix_version = None
+    return LoopMarkers(rejected_versions=rejected, reward_fix_version=fix_version)
 
 
 @dataclass(frozen=True)

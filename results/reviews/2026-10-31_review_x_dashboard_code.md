@@ -169,3 +169,141 @@ relying on it on the node:
 
 Version-0 anchoring and overlap (4) should be guarded so that a missing baseline part cannot produce a confident wrong
 rating. The rest is minor: convergence at very many versions, the null displays, labels and tests.
+
+## Re-review
+
+Reviewed `git diff 814d2f9..dashboard-headline`, which is commit 6432859, together with the uncommitted working-tree
+changes to `probe_rating.py`, `tests/rl/test_probe_rating.py` and `rl/README.md`. Those changes make `read_markers`
+map the reward-fix phase to its version through `models/versions.jsonl`.
+
+What was run:
+- `tests/rl/test_probe_rating.py tests/monitoring`: 158 passed.
+- A rescan of `fit_abilities` against an exact joint Newton fit.
+- `probe_ratings` timed on a realistic synthetic run: 501 problems in 3 thirds, v0 run twice per third, one third per
+  later version.
+- The import cost of `probe_rating` measured.
+- The demo rendered in a browser: overview and Evaluations pages, no console errors.
+
+### Earlier findings
+
+1. **Torch/transformers import: addressed (verified).**
+   - `dashboard.py` imports `probe_rating` only in the `record-ratings` branch.
+   - `probe_rating` no longer imports `rl.evaluation`; it reads `summary.json` as JSON and the results through
+     `search.records`.
+   - Importing it after the monitoring modules leaves max RSS at 49 MB, with no torch or transformers in
+     `sys.modules`.
+2. **Recorder dying: addressed.**
+   - The loop body is wrapped in `try`, and the traceback goes to stderr.
+   - Unreadable runs and runs without results are skipped and counted (`runs_unreadable`).
+   - Unreadable markers count as absent.
+   - Empty outcomes can no longer reach the fit.
+   - The headline shows the rating's age and warns when a newer probe slot is not rated yet.
+   - Left over (minor, new finding 4 below): unreadable runs are counted without their reason.
+3. **Alerts hidden by a collapsed section: addressed.** The alerts render again at the top of the overview, outside
+   every section.
+4. **Version-0 anchor and overlap: partly addressed.**
+   - Done: `anchor_version` is emitted, and the tiles and table name it. `baseline_solved_within` is `None` without
+     overlap, and the table omits it then. There are tests for both cases.
+   - Not done: a version whose problems connect to the anchor through no shared problem still gets a rating that only
+     the priors determine, with a narrow interval. Verified earlier: ±1.87 logits for a 20% or 80% solve rate on
+     disjoint problems. This still needs a missing baseline part, and the loop's v0 baselines cover every third twice.
+   - Two labels stay hardcoded: the rating chart's "version 0" reference line (`pages.js` `RATING.elo.references`)
+     and its subtitle "version 0 = 0".
+5. **Convergence: addressed (verified).**
+   - The fit stops at a step below 1e-6, capped at 500 steps.
+   - Against an exact joint Newton fit, the maximum ability error is 5e-5 at 150 versions with a single v0 run,
+     3e-6 with two v0 runs, and 2e-5 at 200 versions with a 6-logit spread. Before the fix these were 0.17, 0.02 and
+     0.6.
+6. **Value benchmark null: addressed.** The tile is omitted when `difference` is null, and the sub uses
+   `versus.pairs`.
+7. **Health tiles: addressed.**
+   - Both tiles use `?? null`, so `undefined` from older records is handled.
+   - "Claims proved" now displays the value it judges, below-band when present, and names that population.
+8. **`value_version = max`: not addressed (minor, unchanged).**
+9. **Hardcoded 16, mixed budgets: addressed.** Labels come from `expansion_budget` or say "the probe's budget", and
+   only runs at the most common budget are rated.
+10. **Toggle without storage: addressed.** `state.sections` keeps the choice in memory first.
+11. **`grpo_loop.sh`: partly addressed.** The echo now names `rating_recorder.log`. Rerunning `dashboard` still starts
+    a second recorder and a second sampler. Kill the old processes when deploying (see the verdict).
+12. **Tests: addressed for the failure modes named:**
+    - no shared problems
+    - no v0
+    - other budgets
+    - unreadable or empty runs
+    - markers, including a rollback before the fix
+
+    Convergence against an exact fit is not tested. It is verified here by hand.
+
+### New findings
+
+1. **minor, verified: one rating round takes minutes and grows with the run.**
+   - Each round fits 1 point estimate plus 200 bootstrap fits for the versions, and the same again for the latest
+     pass and for each side of both pass comparisons: about 1,200 fits of up to 500 Newton steps.
+   - Timings in WSL on synthetic data: 10 s at 30 runs, 65 s at 81 runs, 209 s at 156 runs. A run gets about 12 runs
+     a day, so 156 runs is about two weeks of the loop.
+   - Each round occupies one CPU core on the node. At about 400 runs a round would reach ten-odd minutes.
+   - The headline's 30-minute "newer probe slot not rated yet" warning would then start to fire between a slot and
+     its rating.
+   - A round that raises is retried every 300 s from scratch, at the same cost.
+
+   Cheaper options:
+   - Warm-start the bootstrap fits from the point fit's ability and difficulty, which cuts the steps per fit.
+   - Compute `pass_rating(reference)` once instead of inside each comparison.
+   - Back off after a failed round.
+
+   Not urgent for the next weeks.
+2. **minor: a rollback after the reward fix to a pre-fix policy counts as post-fix.**
+   - With the working-tree fix, `reward_fix_version` is the version whose trigger is `phase <first_phase>`. That is
+     correct, including after the earlier rollback to v4, and tested.
+   - A rollback publishes a new, higher version number carrying an older policy adapter. Suppose a later collapse
+     rolls back to a version from before the fix. The republished version is `>= reward_fix_version`, so its probe
+     runs enter the "post-fix" pass that the revert rule compares, although that policy is pre-fix.
+   - Fix: classify versions by `models/versions.jsonl`. A version whose trigger starts with `rollback to v<N>`
+     inherits v<N>'s side of the fix.
+   - Unlikely today; the loop's rollback target is the last good version.
+3. **minor: changing the probe budget can silently drop the anchor.** "Most common budget" is a count of runs. Say
+   `evaluation.probe.max_expansions` changes mid-run. Once more runs exist at the new budget than at the old one (v0
+   has 6), every v0 run is excluded. The anchor then silently becomes the lowest later version, and the rating jumps.
+   The `anchor_version` label shows it, but nothing warns. Prefer the anchor's budget: v0's most common one.
+4. **minor: unreadable runs are counted, not explained.** `finished_probe_runs` swallows the exception. If the results
+   ever stop parsing, for example a `SearchResult` schema mismatch between the loop's code and the recorder's, every
+   run is "unreadable" and nothing is written. The tile then says "no finished probe run rated yet", and
+   `rating_recorder.log` gives no reason. Print the directory and the exception to stderr.
+5. **minor, demo only: two new tiles show "–" in the demo.** The demo's `fixed_targets` lines have no
+   `held_out_valid_rate`, and its `curriculum` lines have no `by_origin`. So "Held-out valid Lean" and the band
+   cohort's rate show "–" there. The loop writes both (`evaluation.py:475`, `statement_sources.py:183`), so real runs
+   are unaffected.
+
+Checked and fine:
+- **Passes:**
+  - `latest_pass` takes the last run per third in `finished_at` order.
+  - The previous pass excludes the latest pass's runs, so the two never share a run.
+  - The pre-fix comparison is `None` until the latest pass is wholly after the fix, because a shared run returns
+    `None`.
+- **Grouping:** `pooled` never moves the anchor's runs, since the anchor is never eligible.
+- **The difficulty prior scaled by the bootstrap weight:** a problem drawn 0 times has zero curvature, the guarded
+  divide makes its step 0, and the point fit is unchanged with all weights at 1.
+- **The reward-fix mapping through the `phase N` trigger, and its test with a rollback.**
+- **Frontend:**
+  - `latestReferences` drops null paths.
+  - The stale check compares the last `probe_solved` time with the rating line's time.
+  - The loop tile reads `hard_stop` and `rolled_back_to`.
+  - The fixed_targets series needed by the health tiles is now in `TILE_FAMILIES.health`.
+  - The rating table handles a null baseline.
+  - The demo renders the overview with all tiles and charts and no console errors.
+
+### Verdict
+
+**Fine to deploy, with two steps.** The deploy restarts the dashboard server, the system sampler and the rating
+recorder; the loop is untouched. All three of the earlier blockers for the node are fixed: the import cost, the
+recorder dying and the hidden alerts. The remaining findings are minor and none can break the loop or the dashboard.
+
+1. **Before starting `grpo_loop.sh dashboard`:** kill the old `dashboard.py serve`, `record-system` and any
+   `record-ratings` processes. Otherwise the second recorder or sampler appends duplicate lines, and the second
+   server fails to bind the port.
+2. **After the recorder's first round** (allow a few minutes): check that `rating_recorder.log` has no traceback, and
+   that the `rating` line on the dashboard shows `runs_unreadable = 0` and `anchor_version = 0`. A non-zero count
+   would mean the real `results.jsonl` files do not parse with the current `SearchResult` (new finding 4).
+
+Commit the working-tree `read_markers` fix with the deploy: the committed version computes `first_phase + 1`, which is
+right only with exactly one rollback before the fix.

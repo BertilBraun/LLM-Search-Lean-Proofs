@@ -264,3 +264,70 @@ On the health side:
 Operationally, make the rating fail loudly, either inside the loop or with per-iteration error handling and a staleness
 marker. None of these is a blocker for merging a read-only dashboard. Findings 1, 2, 4, 8 and 15 should land before
 anyone reads the headline's green as "the RL is working".
+
+## Re-review
+
+Scope: `git diff 814d2f9..dashboard-headline` (6432859): `probe_rating.py` in full, the `families.py`, `app.js`,
+`pages.js` and README diffs, plus `loop.py` and `health_checks.py` for how versions, rollbacks and `reward_fix.json` are
+written. One more simulation (`projected.py` in the same scratchpad) checks `projected_solved` against the truth.
+
+| # | Status | Note |
+|---|---|---|
+| 1 | Partly | The table now shows wall-clock stops, and the README says plainly that the interval leaves out run effects. There is still no censoring and no mark at the value-model switch. Passes average three runs' shocks, but the pass and pass-difference intervals still assume there are none. With τ = 0.2 the shocks alone add ≈ 0.12 logits of SD per pass, against a bootstrap SD of ≈ 0.15, so read green on "change since previous pass" as roughly 85–90% coverage, not 95%. The README's "moves by about 40 Elo between runs" is the bootstrap SD (the noise it *does* cover), not the uncovered run effect; reword. |
+| 2 | Addressed | The prior is scaled by the weight, and zero-weight problems keep a step of 0 and get no rows. This is the fix the simulation validated. |
+| 3 | Addressed | The spread is recorded and shown with the caveat. At the node's 2.3 the joint fit is fine. |
+| 4 | Addressed | The headline is the pooled latest pass (non-rejected, non-anchor runs). The previous pass is fitted jointly with a bootstrap interval of the difference, and "best" is gone. Note new problem B. |
+| 5 | Addressed | Projected solves are shown beside the Elo number. Note new problem C. |
+| 6 | Addressed | The tile is removed, and "within 1" is described as the root's samples. |
+| 7 | Addressed | The rating tiles are neutral while the interval holds 0. The value tile is red only when wholly below 0. Stale shows as a warning, which is right. |
+| 8 | Addressed | The judged value and its slice are shown, with the all-statement value beside them. |
+| 9 | Partly | The design is right: the comparison waits until the latest pass is wholly post-fix (the disjointness test does exactly that), and the reference line and `post_fix_parts` are there. But the version mapping is fragile; see new problem A. |
+| 10 | Not addressed | Deferred, and it is still the one per-phase collapse signature DESIGN.md names. Removing the KL sparkline (13) leaves the Health row with no per-phase drift trend apart from valid blocks and the habits. Keep this on the list. |
+| 11 | Addressed | The held-out valid-Lean tile has the loop's two thresholds. The Loop tile shows a rollback or hard stop, but only from the *latest* health record, so the rollback note disappears after one phase. The alert list still carries it. |
+| 12 | Mostly | The rate is the band cohort's (`by_origin.band`), and the wording is right. The "band rising while passes do not" warning exists only as text. The in-band colour still colours a controlled variable (minor). |
+| 13 | Addressed | |
+| 14 | Addressed | The headline note says what the probe and the held-out states each measure. The regime marking is in 1. |
+| 15 | Addressed | Each round is caught, logged and retried. Unreadable runs are counted, and the headline goes stale 30 min after an unrated probe slot. The model code is no longer imported. Note new problem D. |
+| 16 | Addressed | |
+
+New problems:
+
+- **A. `reward_fix_version = first_phase + 1` assumes exactly one version that no phase published (should-fix,
+  small).**
+  - Versions count publishes, not phases. A phase publishes `current.version + 1` (`loop.py:1571`), and so does every
+    rollback (`health_checks.py:579`, automatic or by hand).
+  - With no rollback, phase k publishes v_k and the fix version is `first_phase`. With the node's one rollback (v11)
+    it is `first_phase + 1`. So the value is right on this node only if exactly one rollback preceded the fix, and it
+    goes wrong after any future rollback in another run.
+  - Fix: read `models/versions.jsonl` and take the version whose `trigger == "phase {first_phase}"`. The loop
+    identifies phase publishes the same way (`loop.py:514`, `value_published_by`).
+  - Before trusting the revert-rule tile on the node, check that line once by hand.
+- **B. A pass has no age limit (minor).**
+  - When a third's recent runs are all rejected, the "latest pass" falls back to that third's last non-rejected run,
+    which may be very old: v2 or v4 today. The "previous pass" is likewise the second-latest eligible run per third,
+    of any age.
+  - The tile lists the versions, so this is visible, not hidden.
+  - Fix: show the slot or age span of the pass, or require its runs to lie within the last k slots, and say "no pass"
+    otherwise.
+- **C. `projected_solved` depends on the prior for problems never solved (minor).**
+  - Every never-solved problem gets a difficulty of ≈ 2.6 logits from the prior, so each still counts ≈ 0.07 of a
+    solve at v0's ability.
+  - Simulated with about a third of the set never solved (σ_d = 2, mean difficulty +1): v0's projection is 196 where
+    the truth is 177, and a +1.18 version's projected gain is 68 problems where the truth is 87. So the level is high
+    and the gain is understated by ~20%.
+  - The error points the safe way for the headline. Still, show v0's *observed* mean solves (it searched every
+    problem twice) beside the projection, and treat "≈ N of 501" as approximate.
+- **D. An unreadable marker file stops all ratings (minor).**
+  - `read_markers` runs inside the guarded round. A truncated `reward_fix.json`, or a bad line in
+    `rejected_versions.jsonl`, therefore fails every round, and the headline only goes stale.
+  - The loop itself ignores an unreadable `reward_fix.json` with a warning (`loop.py:1354-1362`).
+  - Fix: do the same. Fall back to no markers (or the last good ones) and log once, so the ratings continue.
+
+**Verdict.**
+- Of the 16 findings, 12 are addressed, 3 are partly addressed (1, 9, 12) and one is not (10, deferred).
+- The fixes introduce no new design problem that blocks deployment. The statistics now support the headline's
+  colours, with the caveat that run effects remain uncovered.
+- The dashboard is fine to deploy as a read-only monitor.
+- Before acting on the reward-fix tile, check new problem A on the node: does version `first_phase + 1` in
+  `models/versions.jsonl` carry trigger `phase <first_phase>`? Fix the mapping before any other run relies on it.
+- Keep 10 (entropy and replay NLL into `grpo`) on the list.
