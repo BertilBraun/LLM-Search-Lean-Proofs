@@ -8,7 +8,7 @@
 #                                                # (a GPU's two one after another, the GPUs in parallel)
 #   deployment/grpo_loop.sh check                # one live request per policy server: what the search parses
 #   deployment/grpo_loop.sh gate                 # once, ~1-2 h: the value benchmark of the gate set (no value model)
-#   deployment/grpo_loop.sh dashboard            # system sampler and dashboard on port ${DASHBOARD_PORT:-8600}
+#   deployment/grpo_loop.sh dashboard            # system sampler, probe ratings, dashboard on ${DASHBOARD_PORT:-8600}
 #   deployment/grpo_loop.sh loop                 # the loop in the background; rerun after a crash to resume
 #   deployment/grpo_loop.sh status               # progress, versions, trees, the last phase, μ
 #   deployment/grpo_loop.sh value-share 0.15     # μ from the next phase that starts training (0: off; starts at 0)
@@ -68,10 +68,12 @@ case "$1" in
         mkdir -p "${run_directory}"
         nohup python experiments/dashboard.py record-system --run-directory "${run_directory}" \
             --hourly-price "${HOURLY_PRICE:-0.80}" > "${run_directory}/system_sampler.log" 2>&1 &
+        nohup python experiments/dashboard.py record-ratings --run-directory "${run_directory}" \
+            > "${run_directory}/rating_recorder.log" 2>&1 &
         nohup python experiments/dashboard.py serve --run-directory "${run_directory}" --host 0.0.0.0 \
             --port "${DASHBOARD_PORT:-8600}" --config experiments/configs/dashboard/dashboard.toml \
             > "${run_directory}/dashboard.log" 2>&1 &
-        echo "Dashboard on port ${DASHBOARD_PORT:-8600}; logs in ${run_directory}/{system_sampler,dashboard}.log"
+        echo "Dashboard on port ${DASHBOARD_PORT:-8600}; logs in ${run_directory}/{system_sampler,rating_recorder,dashboard}.log"
         ;;
     loop)
         mkdir -p "${run_directory}"
