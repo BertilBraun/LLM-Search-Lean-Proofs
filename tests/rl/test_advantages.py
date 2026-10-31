@@ -62,7 +62,9 @@ def test_design_example_leaves_the_masked_tactics_untrained() -> None:
         ((FAILING,), FAILING_REWARD),
         ((UNKNOWN,), UNKNOWN_REWARD),
         ((UNPROVED_CLAIM,), NO_PROGRESS_REWARD - COST),
-        ((UNPROVED_CLAIM, FAILING, MASKED), FAILING_REWARD),
+        ((UNPROVED_CLAIM, FAILING, MASKED), NO_PROGRESS_REWARD - COST),
+        ((PROOF_GRAPH, OFF_GRAPH), ONE_STEP_REWARD - COST),
+        ((PROOF_GRAPH, UNPROVED_CLAIM), ONE_STEP_REWARD - 2 * COST),
         ((PROOF_GRAPH, PROOF_GRAPH), ONE_STEP_REWARD + STEP),
         ((PROOF_GRAPH, FAILING, MASKED), ONE_STEP_REWARD - COST),
         ((PROOF_GRAPH, NO_PROGRESS, PROOF_GRAPH), ONE_STEP_REWARD + STEP - COST),
@@ -81,6 +83,8 @@ def test_design_example_leaves_the_masked_tactics_untrained() -> None:
         "unknown",
         "claim left open",
         "failed attempt at a claim",
+        "explored off graph continuation",
+        "claim after progress",
         "two steps",
         "partial",
         "wasted tactic between",
@@ -204,9 +208,14 @@ def test_wasted_later_tactic_after_an_unknown_state_costs_its_tokens_only() -> N
     assert advantages.samples[0].tactics[1] == pytest.approx(-COST)
 
 
-def test_later_tactic_leaving_the_proof_graph_loses_the_state_it_left() -> None:
+def test_explored_off_graph_state_ending_a_block_after_the_proof_graph_costs_its_tokens_only() -> None:
     advantages = group_advantages(group(sample("a", PROOF_GRAPH, OFF_GRAPH), sample("b", FAILING)))
-    assert advantages.samples[0].tactics[1] == pytest.approx(OFF_GRAPH_REWARD - ONE_STEP_REWARD)
+    assert advantages.samples[0].tactics[1] == pytest.approx(-COST)
+
+
+def test_explored_off_graph_state_after_an_unknown_first_state_gains_over_it() -> None:
+    advantages = group_advantages(group(sample("a", UNKNOWN, OFF_GRAPH), sample("b", FAILING)))
+    assert advantages.samples[0].tactics[1] == pytest.approx(OFF_GRAPH_REWARD - UNKNOWN_REWARD)
 
 
 def test_unknown_state_ending_a_block_after_the_proof_graph_costs_its_tokens_only() -> None:
@@ -237,17 +246,17 @@ def test_continuing_correctly_beats_stopping_in_the_explanation() -> None:
 
 @pytest.mark.parametrize(
     ("labels", "closing"),
-    [((PROOF_GRAPH, PROOF_GRAPH), 0.0), ((PROOF_GRAPH, UNKNOWN), 0.0), ((PROOF_GRAPH, FAILING, MASKED), None)],
-    ids=["complete", "unknown last state", "failed"],
+    [
+        ((PROOF_GRAPH, PROOF_GRAPH), 0.0),
+        ((PROOF_GRAPH, UNKNOWN), 0.0),
+        ((PROOF_GRAPH, FAILING, MASKED), None),
+        ((PROOF_GRAPH, UNPROVED_CLAIM), 0.0),
+    ],
+    ids=["complete", "unknown last state", "failed", "open claim"],
 )
 def test_closing_tokens_get_zero_after_a_complete_block(labels: tuple, closing: float | None) -> None:
     advantages = group_advantages(group(sample("a", *labels), sample("b", FAILING)))
     assert advantages.samples[0].closing == closing
-
-
-def test_closing_tokens_cost_c_after_a_block_stopping_on_an_open_claim() -> None:
-    advantages = group_advantages(group(sample("a", PROOF_GRAPH, UNPROVED_CLAIM), sample("b", FAILING)))
-    assert advantages.samples[0].closing == pytest.approx(-COST)
 
 
 @pytest.mark.parametrize(

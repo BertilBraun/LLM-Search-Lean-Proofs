@@ -8,14 +8,18 @@ from tactic_trees import (
     CONSTRUCTOR,
     CONTEXT,
     COPY,
+    ERRORING_HAVE,
     FIRST_THEN_FAILING,
+    OPEN_ENDED_HAVE,
     PROOF,
+    PROVABLE_ATTEMPT,
     ROOT,
     claim_tree,
     example_tree,
+    open_claims_tree,
 )
 
-from lean_search.rl.advantages import CreditMode, group_advantages
+from lean_search.rl.advantages import CreditMode, SampleAdvantages, group_advantages
 from lean_search.rl.grpo_groups import GroupSample, PolicyGroup, RewardConfig, TreeGroups, policy_groups
 from lean_search.search import FailureKind, StepSource, TreeRecord
 from lean_search.search.graph_labels import label_graph
@@ -119,7 +123,7 @@ def claim_sample(on_proof_graph: bool = False) -> GroupSample:
     return claim
 
 
-def test_bare_claim_left_open_scores_its_claim_and_the_closing_cost() -> None:
+def test_bare_claim_left_open_scores_a_failure_and_c() -> None:
     assert claim_sample().score == pytest.approx(-0.15 - 0.1)
 
 
@@ -139,18 +143,39 @@ def attempt_samples() -> dict[str, GroupSample]:
     return {sample.text: sample for sample in root.samples}
 
 
-def test_failed_inline_proof_scores_as_one_failing_tactic() -> None:
-    assert attempt_samples()[INLINE_ATTEMPT].score == pytest.approx(-0.15)
-
-
-def test_failed_inline_proof_scores_above_the_bare_claim() -> None:
+def test_failed_inline_proof_of_an_invented_claim_scores_like_the_bare_claim() -> None:
     samples = attempt_samples()
-    assert samples[INLINE_ATTEMPT].score > samples[BARE_HAVE].score
+    assert samples[INLINE_ATTEMPT].score == pytest.approx(samples[BARE_HAVE].score)
 
 
-def test_failed_inline_proof_charges_its_failing_tactic_not_its_claim() -> None:
+def test_failed_inline_proof_charges_its_claim_not_its_failing_tactic() -> None:
     gains = [None if tactic.gain is None else tactic.gain.total for tactic in attempt_samples()[INLINE_ATTEMPT].tactics]
-    assert gains[:2] == [0.0, None]
+    assert gains[:2] == [None, 0.0]
+
+
+def open_claims_samples() -> dict[str, tuple[GroupSample, SampleAdvantages]]:
+    (root,) = [group for group in groups(open_claims_tree()) if group.node_id == 0]
+    advantages = group_advantages(root)
+    return {sample.text: (sample, found) for sample, found in zip(root.samples, advantages.samples, strict=True)}
+
+
+def test_failed_attempt_at_a_provable_claim_scores_above_one_at_an_invented_claim() -> None:
+    samples = open_claims_samples()
+    assert samples[PROVABLE_ATTEMPT][0].score > samples[ERRORING_HAVE][0].score
+
+
+def test_an_invented_claims_opener_gets_a_lower_advantage_than_a_provable_ones() -> None:
+    samples = open_claims_samples()
+    assert samples[ERRORING_HAVE][1].tactics[0] < samples[PROVABLE_ATTEMPT][1].tactics[0]
+
+
+def test_failing_proof_tactic_after_an_invented_claim_gets_no_advantage() -> None:
+    assert open_claims_samples()[ERRORING_HAVE][1].tactics[1] == 0.0
+
+
+def test_flattened_have_left_open_by_a_valid_tactic_scores_like_the_erroring_one() -> None:
+    samples = open_claims_samples()
+    assert samples[OPEN_ENDED_HAVE][0].score == pytest.approx(samples[ERRORING_HAVE][0].score)
 
 
 def test_unproved_suffices_scores_like_a_bare_claim() -> None:
