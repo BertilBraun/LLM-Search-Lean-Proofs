@@ -175,6 +175,9 @@ raise_solve_rate = 0.5
 fast_raise_solve_rate = 0.8
 fast_band_step = 1.5
 lower_solve_rate = 0.3
+# Owner decision 2026-10-31, after the drift of phases 1-10 (the band from 2.5 to 6.9, only hard statements trained):
+# this share is fed from verified statements below the band, outside the cohort that moves it.
+below_band_share = 0.35
 seed = "grpo-curriculum"
 
 [evaluation]

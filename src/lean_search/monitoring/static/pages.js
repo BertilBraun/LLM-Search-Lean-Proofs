@@ -741,6 +741,21 @@ export const PAGES = [
             band: { low: "min_solve_rate", high: "max_solve_rate" }, compare: true, series: [DIFFICULTY_RATE],
           },
           {
+            title: "Solve rate by origin per phase", subtitle: "fed from the band, and from below it", family: "curriculum",
+            unit: "share", band: { low: "min_solve_rate", high: "max_solve_rate" },
+            series: [
+              { label: "band", field: "by_origin.band.solved", over: "by_origin.band.attempts" },
+              { label: "below the band", field: "by_origin.below_band.solved", over: "by_origin.below_band.attempts" },
+            ],
+          },
+          {
+            title: "Trees by origin per phase", family: "curriculum", unit: "count",
+            series: [
+              { label: "band", field: "by_origin.band.attempts" },
+              { label: "below the band", field: "by_origin.below_band.attempts" },
+            ],
+          },
+          {
             title: "Solve rate by difficulty, latest phase", family: "curriculum", kind: "bands", unit: "share",
             prefix: "by_difficulty.", band: { low: "min_solve_rate", high: "max_solve_rate" },
           },

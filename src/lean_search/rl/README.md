@@ -256,6 +256,20 @@ splits each step's units (sibling groups with their pairs) the same way, under t
 rank everything is the single-GPU path. A step on two ranks equals the one-process step
 (`tests/graph/test_data_parallel_trainers.py`, gloo on the CPU). The LoRA gradients are fp32 (~0.5 GB for the policy adapter), so each policy step all-reduces about that much over PCIe.
 
+Statements (`statement_sources.CurriculumStatements`, `expert_iteration/curriculum.py`): the curriculum feeds verified
+pool v3 statements from a difficulty band that follows the solve rate of its cohort (the first `window` statements fed
+at the band). Each is fed from the band once per loop. Since 2026-10-31 `below_band_share` (0.35 in `loop.toml`) of
+the statements fed are verified ones below the band's low edge, never above its high one: first ones not fed in this
+loop, at random, and once none is left ones already searched, least recently searched first (never one still
+running). They never join the cohort, so they do not move the band, and they train like every other tree, policy and
+value. `TreeSummary.below_band` marks them in the tree index; `loop.log` splits each phase's trees by origin at the
+pause (`Phase <k> curriculum: from the band ... ; from below it ...`, with solve rates), and the `curriculum` family
+has `by_origin.band` and `by_origin.below_band` (the dashboard's Curriculum page). A restart reads the searched
+statements from the tree index in finishing order: none comes again from the band, and below it they come again in
+that order. The band, its move count and a finished cohort's outcomes are in `curriculum.json`; outcomes of a cohort
+with statements still running are dropped, so a restart starts a new cohort (statements running below the band do not
+count).
+
 Restart: `loop_state.json` holds the phase, its stage, sampling and training time, the last value adapter trained, the μ
 of the last phase that trained, the evaluation clock and the next probe slot; `models/current.json` and `versions.jsonl`
 the published versions; the tree index the searched statements and per-phase trees. `grpo_loop.py run` after a crash
@@ -266,7 +280,7 @@ k and the stage at publishing: the restart serves version k from disk (pruning o
 exist), then serves version k + 1 from host memory again and records it once on disk, or, when host memory is gone (a
 reboot), merges it on the CPU first. At every start the loop clears merges in host memory that no restart will serve
 (all of them unless the interrupted phase's version awaits its record; then only partly written ones). Searches cut off
-by the crash are lost (the curriculum feeds each statement once; the fixed list feeds it again). The node's disk is not
+by the crash are lost (they left no tree, so the curriculum offers their statements again; the fixed list too). The node's disk is not
 persistent: back up the run's `metrics/`, `phases.jsonl`, `evaluations*/summary.json` and `report.md`; trees and the
 retained adapters ("Disk") stay on the node.
 

@@ -382,6 +382,8 @@ class CurriculumPhase:
     verified_statements: int
     by_difficulty: dict[str, BandOutcome] = field(default_factory=dict)
     by_stage: dict[str, BandOutcome] = field(default_factory=dict)
+    # The trees fed from the band and from below it (`below_band_share`).
+    by_origin: dict[str, BandOutcome] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

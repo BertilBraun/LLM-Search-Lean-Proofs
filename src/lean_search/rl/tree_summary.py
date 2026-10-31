@@ -56,6 +56,8 @@ class TreeSummary:
     root_valid_blocks: int = 0
     # The published policy versions that sampled the tree's expansions.
     sampling_versions: tuple[int, ...] = ()
+    # The curriculum fed the statement from below its band (`below_band_share`), not from the band.
+    below_band: bool = False
 
 
 def executed_edge(record: TreeRecord, edge: Edge) -> Edge:
@@ -92,7 +94,12 @@ def trainable_groups(record: TreeRecord, reward: RewardConfig, credit: CreditMod
 
 
 def tree_summary(
-    record: TreeRecord, reward: RewardConfig, credit: CreditMode, expansion_budget: int, arm: str = ""
+    record: TreeRecord,
+    reward: RewardConfig,
+    credit: CreditMode,
+    expansion_budget: int,
+    arm: str = "",
+    below_band: bool = False,
 ) -> TreeSummary:
     blocks_by_expansion: defaultdict[int, int] = defaultdict(int)
     samples = 0
@@ -148,4 +155,5 @@ def tree_summary(
         sampling_versions=tuple(
             sorted({version for expansion in record.expansions if (version := expansion.policy_version) is not None})
         ),
+        below_band=below_band,
     )

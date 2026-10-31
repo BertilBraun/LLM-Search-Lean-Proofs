@@ -47,6 +47,7 @@ from lean_search.rl.loop import (
 )
 from lean_search.rl.loop_config import EvaluationTarget, parse_loop_config
 from lean_search.rl.loop_services import SubprocessTrainer
+from lean_search.rl.statement_sources import FedStatement, FixedStatements
 from lean_search.rl.training_phase import TrainerTimings
 from lean_search.rl.tree_store import TreeStore
 from lean_search.rl.value_trends import scored_versions
@@ -136,6 +137,26 @@ async def test_a_phase_trains_on_its_own_tree_directory(tmp_path: Path) -> None:
     record_version_zero(world)
     await run_until(world, world.loop(), phases=1)
     assert world.trainer.requests[0].trees == TreeStore(world.paths.trees).phase_directory(1)
+
+
+class OddBelowTheBand(FixedStatements):
+    """The fixed list, its odd statements fed as if from below the curriculum's band."""
+
+    def next_statement(self) -> FedStatement | None:
+        fed = super().next_statement()
+        return None if fed is None else dataclasses.replace(fed, below_band=int(fed.name[-1]) % 2 == 1)
+
+
+async def test_each_tree_records_whether_its_statement_came_from_below_the_band(tmp_path: Path) -> None:
+    world = loop_world(tmp_path)
+    record_version_zero(world)
+    loop = world.loop()
+    loop.statements = OddBelowTheBand([statement(number) for number in range(6)])
+    await run_until(world, loop, phases=1)
+    entries = TreeStore(world.paths.trees).entries
+    assert {entry.problem_name: entry.summary.below_band for entry in entries} == {
+        entry.problem_name: int(entry.problem_name[-1]) % 2 == 1 for entry in entries
+    }
 
 
 async def test_the_training_gpu_is_released_for_each_phase(tmp_path: Path) -> None:

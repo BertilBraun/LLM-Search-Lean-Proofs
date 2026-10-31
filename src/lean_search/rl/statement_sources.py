@@ -21,6 +21,8 @@ from lean_search.search.records import from_json_object
 
 # Difficulty bands of the curriculum family: [0, 1), [1, 2), ..., and everything from the last one on.
 DIFFICULTY_BAND_COUNT = 6
+BAND_ORIGIN = "band"
+BELOW_BAND_ORIGIN = "below_band"
 
 
 @dataclass(frozen=True)
@@ -29,6 +31,8 @@ class FedStatement:
     difficulty: float | None
     # Whether its known proof compiled here; None outside the curriculum.
     verified: bool | None = None
+    # The curriculum fed it from below its band (`below_band_share`), outside the cohort that moves the band.
+    below_band: bool = False
 
     @property
     def name(self) -> str:
@@ -79,8 +83,34 @@ def outcomes_by_band(entries: Sequence[TreeEntry]) -> dict[str, BandOutcome]:
     return {band: BandOutcome(attempts, solved) for band, (attempts, solved) in sorted(counts.items())}
 
 
+def tree_outcome(entries: Sequence[TreeEntry]) -> BandOutcome:
+    return BandOutcome(len(entries), sum(entry.proved for entry in entries))
+
+
+def outcomes_by_origin(entries: Sequence[TreeEntry]) -> dict[str, BandOutcome]:
+    """The trees the curriculum fed from its band and from below it."""
+    return {
+        BAND_ORIGIN: tree_outcome([entry for entry in entries if not entry.summary.below_band]),
+        BELOW_BAND_ORIGIN: tree_outcome([entry for entry in entries if entry.summary.below_band]),
+    }
+
+
+def outcome_text(outcome: BandOutcome) -> str:
+    rate = f" ({outcome.solved / outcome.attempts:.0%})" if outcome.attempts else ""
+    return f"{outcome.attempts} trees, {outcome.solved} solved{rate}"
+
+
+def origin_text(entries: Sequence[TreeEntry]) -> str:
+    outcomes = outcomes_by_origin(entries)
+    return (
+        f"from the band {outcome_text(outcomes[BAND_ORIGIN])}; "
+        f"from below it {outcome_text(outcomes[BELOW_BAND_ORIGIN])}"
+    )
+
+
 class CurriculumStatements:
-    """Each verified statement once per loop, from the band the solve rate moves; held-out sets never."""
+    """Each verified statement once per loop from the band the solve rate moves, and with `below_band_share` some
+    from below it, those searched before again once none is left; held-out sets never."""
 
     def __init__(
         self,
@@ -88,8 +118,9 @@ class CurriculumStatements:
         data_root: Path,
         state_path: Path,
         held_out: Collection[str],
-        searched: Collection[str],
+        searched: Sequence[str],
     ) -> None:
+        """`searched`: the statements of the loop's trees, in the order their searches finished."""
         self.config = config
         self.data_root = data_root
         self.state_path = state_path
@@ -100,6 +131,7 @@ class CurriculumStatements:
         self.read_verified()
         if config.unverified:
             self.curriculum.add_unverified(read_index(data_root / config.unverified), self.unavailable)
+        self.curriculum.mark_searched(searched)
         if state_path.exists():
             state = json.loads(state_path.read_text(encoding="utf-8"))
             self.curriculum.restore(from_json_object(CurriculumState, state))
@@ -116,7 +148,12 @@ class CurriculumStatements:
             return None
         name = problem_name(statement)
         self.unavailable.add(name)
-        return FedStatement(statement, self.curriculum.difficulty(name), self.curriculum.is_verified(name))
+        return FedStatement(
+            statement,
+            self.curriculum.difficulty(name),
+            self.curriculum.is_verified(name),
+            self.curriculum.is_below_band(name),
+        )
 
     def record_outcome(self, name: str, solved: bool) -> None:
         self.curriculum.record_outcome(name, solved)
@@ -127,7 +164,7 @@ class CurriculumStatements:
         self.retrying.append(fed)
 
     def abandon(self, name: str) -> None:
-        # The curriculum feeds each statement once per loop; a restart offers the ones without a tree again.
+        # A restart offers the statements without a tree again.
         self.curriculum.abandon(name)
 
     def refresh(self) -> list[str]:
@@ -143,6 +180,7 @@ class CurriculumStatements:
             pool_statements=counts.statements,
             verified_statements=counts.verified_statements,
             by_difficulty=outcomes_by_band(entries),
+            by_origin=outcomes_by_origin(entries),
         )
 
     def headers(self) -> list[str]:

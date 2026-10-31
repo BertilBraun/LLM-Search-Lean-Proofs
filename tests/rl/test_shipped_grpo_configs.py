@@ -281,6 +281,10 @@ def test_the_loop_feedback_arm_changes_nothing_but_the_feedback_round() -> None:
     assert dataclasses.replace(options, feedback=FeedbackConfig()) == SearchOptions()
 
 
+def test_the_loop_feeds_35_percent_from_below_the_curriculum_band() -> None:
+    assert loop("grpo/loop.toml").statements.curriculum.below_band_share == 0.35
+
+
 @pytest.mark.parametrize("name", ["grpo/loop_overfit.toml", "grpo/loop_smoke.toml"])
 def test_the_other_loops_run_no_a_b(name: str) -> None:
     assert loop(name).sampling.options_arm.name == ""

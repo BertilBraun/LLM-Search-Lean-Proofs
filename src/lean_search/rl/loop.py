@@ -120,7 +120,7 @@ from lean_search.rl.options_ab import arm_outcomes_text, options_arm_finished, o
 from lean_search.rl.phase_metrics import search_phase_record
 from lean_search.rl.retention import kept_adapters, prune_phase_adapters
 from lean_search.rl.search_options import search_arm
-from lean_search.rl.statement_sources import FedStatement, StatementSource
+from lean_search.rl.statement_sources import FedStatement, StatementSource, origin_text
 from lean_search.rl.training_phase import (
     PhaseOutcome,
     TrainerTimings,
@@ -929,6 +929,7 @@ class GrpoLoop:
                 self.credit,
                 self.config.sampling.max_expansions,
                 start.arm,
+                fed.below_band,
             )
         except Exception as error:
             self.trees_left_out += 1
@@ -1097,6 +1098,8 @@ class GrpoLoop:
             f"{self.trainable_groups(phase)} trainable groups) after {sampling / 60:.1f} min of sampling; "
             f"{self.searches_paused} searches paused"
         )
+        if any(entry.summary.below_band for entry in entries):
+            self.log(f"Phase {phase} curriculum: {origin_text(entries)}")
         self.save_progress(
             stage=PhaseStage.TRAINING, sampling_seconds=sampling, pause=PauseSegments(drain_seconds=drain_seconds)
         )

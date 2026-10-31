@@ -12,7 +12,9 @@ unsolved ones, so the first outcomes to arrive alone would overstate the solve r
 when at least `raise_solve_rate` were solved (by `fast_band_step` at `fast_raise_solve_rate`) and down when fewer than
 `lower_solve_rate`. A cohort statement that ends
 without an outcome (abandoned) leaves room for the next one fed. When the band holds no statement it moves to the
-nearest one. Statements the automation tactics alone close never enter.
+nearest one. Statements the automation tactics alone close never enter. With `below_band_share`, that share of the
+statements fed are verified ones below the band (never above it): first ones not fed yet, at random, then ones searched
+before, least recently first; they never join a cohort.
 """
 
 import bisect
@@ -51,6 +53,8 @@ class CurriculumConfig:
     fast_raise_solve_rate: float = 0.8
     fast_band_step: float = 1.5
     lower_solve_rate: float = 0.3
+    # Fed from below the band, so training keeps seeing statements the policy already solves.
+    below_band_share: float = 0.0
     # Roots nearest the band re-scored by each new value model (one prefill each).
     root_value_refresh: int = 4096
     reload_seconds: float = 300.0
@@ -106,6 +110,9 @@ class CurriculumCounts:
     # Statements fed this session, by whether they were verified when fed.
     verified_outcomes: KindOutcomes
     unverified_outcomes: KindOutcomes
+    # The same by where they were fed from.
+    band_outcomes: KindOutcomes
+    below_band_outcomes: KindOutcomes
 
 
 @dataclass(frozen=True)
@@ -127,6 +134,12 @@ class Curriculum:
         self.generation = 0
         self.fed_verified: dict[str, bool] = {}
         self.kind_counts = {True: [0, 0, 0], False: [0, 0, 0]}
+        # By whether fed from below the band.
+        self.origin_counts = {True: [0, 0, 0], False: [0, 0, 0]}
+        self.below_band_running: set[str] = set()
+        self.below_band_credit = 0.0
+        # Statements whose search finished, least recently first: below the band they may be fed again.
+        self.searched: dict[str, None] = {}
         # The band's cohort: statements still running, and the outcomes of those that finished.
         self.cohort_running: set[str] = set()
         self.outcomes: list[bool] = []
@@ -177,6 +190,12 @@ class Curriculum:
         for name in names:
             self._make_unavailable(name)
 
+    def mark_searched(self, names: Iterable[str]) -> None:
+        """Statements searched before a restart, in the order their searches finished."""
+        for name in names:
+            if name in self.statements:
+                self._searched_now(name)
+
     def difficulty(self, name: str) -> float:
         record = self.statements[name]
         root_value = self.root_values.get(name, (float(record.proof_tactics), -1))[0]
@@ -204,21 +223,34 @@ class Curriculum:
         if start == end:
             self._move_to_nearest(start)
             start, end = self._band_range()
+        self.below_band_credit += self.config.below_band_share
+        if self.below_band_credit >= 1.0:
+            self.below_band_credit -= 1.0
+            below = self._below_band_name(start)
+            if below is not None:
+                self.below_band_running.add(below)
+                return self._fed(below, below_band=True)
         _, name = ordered.pop(self.random.randrange(start, end))
         self.available.discard(name)
         if len(self.cohort_running) + len(self.outcomes) < self.config.window:
             self.cohort_running.add(name)
-        verified = self.statements[name].verified
-        self.fed_verified[name] = verified
-        self.kind_counts[verified][0] += 1
-        return self.statements[name].statement
+        return self._fed(name, below_band=False)
+
+    def is_below_band(self, name: str) -> bool:
+        """Whether the running statement was fed from below the band."""
+        return name in self.below_band_running
 
     def record_outcome(self, name: str, solved: bool) -> None:
         """Counts the outcome of a cohort statement and moves the band once the whole cohort finished."""
         verified = self.fed_verified.pop(name, None)
+        below_band = name in self.below_band_running
+        self.below_band_running.discard(name)
         if verified is not None:
             self.kind_counts[verified][1] += 1
             self.kind_counts[verified][2] += solved
+            self.origin_counts[below_band][1] += 1
+            self.origin_counts[below_band][2] += solved
+            self._searched_now(name)
         if name not in self.cohort_running:
             return
         self.cohort_running.discard(name)
@@ -240,6 +272,7 @@ class Curriculum:
         """A statement that ended without an outcome; a cohort statement's place goes to the next one fed."""
         self.fed_verified.pop(name, None)
         self.cohort_running.discard(name)
+        self.below_band_running.discard(name)
 
     def take_messages(self) -> list[str]:
         messages, self.messages = self.messages, []
@@ -294,7 +327,37 @@ class Curriculum:
             ),
             verified_outcomes=KindOutcomes(*self.kind_counts[True]),
             unverified_outcomes=KindOutcomes(*self.kind_counts[False]),
+            band_outcomes=KindOutcomes(*self.origin_counts[False]),
+            below_band_outcomes=KindOutcomes(*self.origin_counts[True]),
         )
+
+    def _fed(self, name: str, below_band: bool) -> StatementRecord:
+        verified = self.statements[name].verified
+        self.fed_verified[name] = verified
+        self.kind_counts[verified][0] += 1
+        self.origin_counts[below_band][0] += 1
+        return self.statements[name].statement
+
+    def _below_band_name(self, band_start: int) -> str | None:
+        """A verified statement below the band: one not fed yet at random, else the least recently searched."""
+        assert self.band_low is not None
+        fresh = [index for index in range(band_start) if self.statements[self.ordered[index][1]].verified]
+        if fresh:
+            _, name = self.ordered.pop(self.random.choice(fresh))
+            self.available.discard(name)
+            return name
+        band_low = self.band_low
+        searched = next(
+            (name for name in self.searched if self.statements[name].verified and self.difficulty(name) < band_low),
+            None,
+        )
+        if searched is not None:
+            del self.searched[searched]
+        return searched
+
+    def _searched_now(self, name: str) -> None:
+        self.searched.pop(name, None)
+        self.searched[name] = None
 
     def _make_available(self, name: str) -> None:
         self.available.add(name)

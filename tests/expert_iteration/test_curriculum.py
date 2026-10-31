@@ -260,3 +260,88 @@ def test_only_verified_roots_are_scored() -> None:
     curriculum.add([verified(0, 1)], started=set())
     curriculum.add_unverified([indexed(1, 1)], started=set())
     assert [root.name for root in curriculum.roots_to_score(window=10, limit=10)] == ["s.t0"]
+
+
+def mixed_at_band_three(tactics: list[int], share: float = 0.5) -> Curriculum:
+    curriculum = curriculum_with(tactics, dataclasses.replace(CONFIG, below_band_share=share))
+    curriculum.restore(CurriculumState(3.0, 1, ()))
+    return curriculum
+
+
+def below_band_fed(curriculum: Curriculum, count: int) -> list[str]:
+    return [name for name in fed_names(curriculum, count) if curriculum.is_below_band(name)]
+
+
+def test_the_below_band_share_of_statements_is_fed_from_below_the_band() -> None:
+    curriculum = mixed_at_band_three([1] * 20 + [3] * 20, share=0.25)
+    assert len(below_band_fed(curriculum, 20)) == 5
+
+
+def test_no_statement_above_the_band_is_fed_beside_the_ones_below_it() -> None:
+    curriculum = mixed_at_band_three([1] * 10 + [3] * 10 + [5] * 10)
+    assert max(fed_tactics(curriculum, 16)) == 3
+
+
+def test_statements_below_the_band_do_not_move_the_band() -> None:
+    curriculum = mixed_at_band_three([1] * 10 + [3] * 10)
+    record(curriculum, below_band_fed(curriculum, 10), True)
+    assert curriculum.band_low == 3.0
+
+
+def test_the_band_cohort_is_judged_without_the_statements_below_the_band() -> None:
+    curriculum = mixed_at_band_three([1] * 10 + [3] * 10)
+    names = fed_names(curriculum, 10)
+    record(curriculum, [name for name in names if not curriculum.is_below_band(name)], True)
+    assert curriculum.band_low == 4.0
+
+
+def test_statements_not_fed_yet_come_before_searched_ones_below_the_band() -> None:
+    curriculum = mixed_at_band_three([1] * 3 + [3] * 10)
+    searched = below_band_fed(curriculum, 2)
+    record(curriculum, searched, True)
+    assert below_band_fed(curriculum, 2)[0] not in searched
+
+
+def test_searched_statements_below_the_band_are_fed_again_least_recently_searched_first() -> None:
+    curriculum = mixed_at_band_three([1] * 2 + [3] * 10)
+    first, second = below_band_fed(curriculum, 4)
+    record(curriculum, [second, first], True)
+    assert below_band_fed(curriculum, 2) == [second]
+
+
+def test_a_statement_fed_again_is_not_fed_twice_while_it_runs() -> None:
+    curriculum = mixed_at_band_three([1] + [3] * 10)
+    record(curriculum, below_band_fed(curriculum, 2), True)
+    fed_names(curriculum, 2)
+    assert below_band_fed(curriculum, 2) == []
+
+
+def test_statements_searched_before_a_restart_are_fed_again_in_their_order() -> None:
+    curriculum = Curriculum(dataclasses.replace(CONFIG, below_band_share=0.5), value_version=0)
+    curriculum.add([verified(number, count) for number, count in enumerate([1, 1, 3, 3])], {"s.t0", "s.t1"})
+    curriculum.mark_searched(["s.t1", "s.t0"])
+    curriculum.restore(CurriculumState(3.0, 1, ()))
+    assert below_band_fed(curriculum, 2) == ["s.t1"]
+
+
+def test_statements_running_below_the_band_keep_the_finished_cohort_through_a_restart() -> None:
+    curriculum = mixed_at_band_three([1] * 10 + [3] * 10)
+    band = [name for name in fed_names(curriculum, 10) if not curriculum.is_below_band(name)]
+    curriculum.abandon(band[0])
+    record(curriculum, band[1:], False)
+    assert len(curriculum.state().outcomes) == 4
+
+
+def test_outcomes_are_counted_by_where_they_were_fed_from() -> None:
+    curriculum = mixed_at_band_three([1] * 10 + [3] * 10)
+    record(curriculum, fed_names(curriculum, 4), True)
+    counts = curriculum.counts()
+    assert (counts.band_outcomes.solved, counts.below_band_outcomes.solved) == (2, 2)
+
+
+def test_unverified_statements_are_never_fed_from_below_the_band() -> None:
+    curriculum = Curriculum(dataclasses.replace(CONFIG, below_band_share=0.5), value_version=0)
+    curriculum.add_unverified([indexed(0, 1)], started=set())
+    curriculum.add([verified(1, 3), verified(2, 3)], started=set())
+    curriculum.restore(CurriculumState(3.0, 1, ()))
+    assert below_band_fed(curriculum, 2) == []
