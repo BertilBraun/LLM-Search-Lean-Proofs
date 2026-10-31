@@ -536,8 +536,8 @@ First-hour checks:
   explanation length, cut-off samples and the sampled blocks' valid-Lean rate (a drop brings the held-out states to the
   next pause); the relative thresholds appear from phase 3 on (the mean of phases 1-2) and the held-out ones once
   version 0's held-out evaluation exists. Version 0's held-out valid-Lean rate and success (Evaluations page) set the
-  collapse threshold (0.7 × valid-Lean rate: a rollback, a second one within 4 phases a stop). At lr 3e-5 watch the
-  first phases' KL and clip fraction closely.
+  collapse threshold (0.7 × valid-Lean rate: a rollback, a second one within 4 phases a stop). At lr 2e-5 with the KL
+  penalty (since 2026-10-31) watch the first phases' KL and clip fraction closely.
 
 First-day checks:
 

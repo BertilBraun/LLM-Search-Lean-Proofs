@@ -693,10 +693,10 @@ at 50k 9 stop on heartbeats and 1 fails fast (median 8.6 s, 133 s), at 100k 5 he
 - **Optimization** (implemented defaults): PPO-style clipped objective per token, clip range [1 − 0.2, 1 + 0.28];
   old log-probabilities from the trainer's own weights before the phase's first update, logged against the recorded
   vLLM log-probabilities; KL measured to the data-collecting policy (k3) and to the starting weights (k1, its token
-  mean over 256 sequences spread over the last pass's steps while it is only reported), penalty coefficient 0; the mean probability
+  mean over 256 sequences spread over the last pass's steps while it is only reported), penalty coefficient 0 (0.01 on every sequence since 2026-10-31, below); the mean probability
   ratio and clip fraction of the positive- and of the negative-advantage tokens logged per pass; loss normalized as Σ token loss / (sequences in the step × 256), so there is no
   per-sequence mean and no length bias; the starting adapter's rank (64), learning rate 3e-5 (single-step test
-  below), 64 sequences per
+  below; 2e-5 since 2026-10-31), 64 sequences per
   step, `passes_per_phase` 2 (1 allowed); NLL replay (the rewritten Lean SFT data and math) at weight 0.1;
   data-parallel on four GPUs (one as the fallback).
 - **No control run** (decided 2026-10-28): a second full loop is out of budget. The credit comparison happens in
@@ -1055,6 +1055,12 @@ Paper names in the last three rows are from memory and still need checking befor
   hand) is rejected: later phases drop the groups it sampled and the value window its trees. The early resume beside
   the held-out states needs the states finished so far above the collapse line, and a rollback pauses the searches
   before its CPU merge. KL and clip fraction in the health checks count first-round sequences only.
+- Owner decision 2026-10-31, after the drift of phases 1–10: the curriculum band rose from difficulty 2.5 to 6.9, so
+  training saw only hard statements; the probe solve rate fell back to, then below, the starting policy's, the replay
+  NLL on the SFT data doubled and the entropy fell from 0.36 to 0.23. Rolled back to version 4, then a new recipe:
+  35% of the statements fed from verified ones below the band (`below_band_share`; not yet fed first, then the least
+  recently searched; outside the cohort that moves the band, trained like the rest), a k3 KL penalty of 0.01 to the
+  starting policy on every GRPO sequence (replay not penalised; log ratio capped at 20 nats), and policy lr 3e-5 → 2e-5.
 - Serving precision: fp16-merged vs bf16-merged vs unmerged LoRA, decided by the node test against fp32.
 - Whether the four-GPU pause with the persistent trainer meets its ~1 min fixed part on the node (smoke cycle: pause
   segments, `compiled_graphs` 0 after the first phase, the wake's memory next to the parked ranks' CUDA contexts, the
