@@ -613,10 +613,10 @@ at 50k 9 stop on heartbeats and 1 fails fast (median 8.6 s, 133 s), at 100k 5 he
   | Tactic | G | L | R (λ = 0.15) |
   |---|---|---|---|
   | Reaches a proof-graph state (closing the goal included) | 1, + δ per step gained | 0.1 per goal closed | 0.85 + 0.2 per step + 0.015 per goal |
-  | Reaches a dead end, or an expanded off-graph state with ≥ 4 expanded nodes in its subtree (itself included) | 0 (+ μ · q once on) | 0 | ≈ 0 |
+  | Reaches a dead end, or an expanded off-graph state with ≥ 4 expanded nodes in its subtree (itself included) | 0 (+ μ · q once on) | −0.5 (0 until reviews S and T, 2026-10-31) | −0.075 |
   | Reaches a state never expanded, an expanded off-graph state with live children and < 4 expanded nodes in its subtree, or a state no node has | 0 | −0.5 | −0.075 (unknown; untrained and outside the baseline until 2026-10-31) |
-  | Off the proof graph, adds goals (a bare `have h : claim`) that no state reachable from it closes (2026-10-31) | 0 | −1 | −0.15 (unproved claim) |
-  | No progress (unchanged, ancestor, redundant hypothesis; off the proof graph also closed-form hypotheses, 2026-10-31) | 0 | −1 | −0.15 |
+  | Off the proof graph, a claim the model invented (`have`, `obtain … :`, `replace`, `suffices`) the tree never proves (2026-10-31) | 0 | −1 | −0.15 (unproved claim; a block stopping on it −0.25) |
+  | No progress (unchanged, ancestor, redundant hypothesis; off the proof graph also a numeral comparison like `0 < (1:ℝ)` in a statement with local names, 2026-10-31) | 0 | −1 | −0.15 |
   | First failing tactic (the line Lean's error points to, after flattening) | 0 | −1 | −0.15 |
   | Everything after the failing tactic | — | — | masked (Lean never evaluated it) |
 
@@ -628,12 +628,13 @@ at 50k 9 stop on heartbeats and 1 fails fast (median 8.6 s, 133 s), at 100k 5 he
   **Later tactics in a block** (decided 2026-10-29): the search keeps a block's longest valid prefix, so a tactic
   after the first decides only whether the block gets further than the state before it. The block's anchor (its first
   tactic reaching a state with a reward, else its first tactic when that failed or made no progress) gets R − b₁.
-  A later tactic reaching a state with a reward gets `R(s_i) − R(s_j)`, s_j the most recent earlier state of the
-  block with a reward: δ per step gained on the proof graph (plus its goal bonus), the whole drop when it leaves the
-  proof graph. Any other failing, no-progress or redundant tactic (a no-op before the anchor included) gets
-  **−c = −0.1** (local part): the prefix is kept, only its tokens are wasted. A sample's score is its final state's R
+  A later tactic reaching a state with evidence (proof graph, off graph) gets `R(s_i) − R(s_j)`, s_j the most
+  recent earlier such state of the block or the anchor: δ per step gained on the proof graph (plus its goal bonus),
+  the whole drop when it leaves the proof graph; a later unknown state keeps s_j (0, or −c when it ends the block,
+  2026-10-31). Any other failing, no-progress or redundant tactic (a no-op before the anchor included) gets
+  **−c = −0.1** (local part): the prefix is kept, only its tokens are wasted. A sample's score is its reference state's R
   minus c per wasted tactic; a sample whose first tactic fails or makes no progress, with no state with a reward
-  after it, scores that tactic's R; one with neither has no score. The baseline b is the multiplicity-weighted mean
+  after it, scores that tactic's R; since 2026-10-31 every sample has a score. The baseline b is the multiplicity-weighted mean
   score of the group's samples with a score, the **first-tactic baseline b₁** (decided 2026-10-29, second round) the
   same mean of their anchors' R. The explanation gets score − b, and a block's tactic advantages add up to
   score − b₁: b − b₁ is the group's mean progress after the anchor, which the later tactics' gains carry. Against b
@@ -645,7 +646,7 @@ at 50k 9 stop on heartbeats and 1 fails fast (median 8.6 s, 133 s), at 100k 5 he
 
   Tokens: a tactic's span and the gap before it get the tactic's advantage (untrained when masked), the
   explanation and the opening fence score − b, the **closing fence and end of turn 0** after a complete block
-  (untrained after a failure). The closing tokens are trained at 0 rather than masked: the loss divides by a fixed
+  (−c when it stops on an open claim, 2026-10-31; untrained after a failure). The closing tokens are trained at 0 rather than masked: the loss divides by a fixed
   token count, so they add no gradient but stay in the KL term and the per-token metrics. Before, they got the last
   tactic's advantage.
 
@@ -1071,6 +1072,20 @@ Paper names in the last three rows are from memory and still need checking befor
   is redundant (L −1); unknown states score L −0.5 (`unknown_local`) instead of being left out. Health warnings
   against the reference phases: bare-`have` openings above 1.5×, their claims proved below 0.5×, median explanation
   characters below 0.7×.
+- Owner decisions 2026-10-31 after reviews S (code) and T (design) of that fix, which found valid or attempted steps
+  scoring below failures again: (1) an unknown state after a proof-graph or off-graph state keeps that state as the
+  reference, its tactic 0 when the block reaches a later state and −c when it ends there, so a valid continuation
+  never scores below an error at the same place (it took the whole drop, ~11 errors); only a block's first state
+  scores unknown at −0.075. (2) An attempt at an unproved claim that fails scores as one failing tactic (−0.15, or −c
+  after progress); a block stopping on an open claim pays −c at its closing tokens (bare claim −0.25): proved claim
+  > failed attempt ≥ bare claim. (3) `unproved_claim` only for invented claims (`have`, `obtain … :`, `replace`,
+  `suffices`; `swap` after closing the main goal does not prove them), never goal splits; proved too when the tree has
+  the claim's continuation anywhere. (4) Explored off graph scores like unknown (−0.075), so a real attempt beats any
+  useless valid step from ~6% success. (5) Closed-form filler only for numeral comparisons, never in statements
+  without local names. (6) μ stays 0. (7) The reference phases' habits are measured once beside the searches. (8) The
+  habits add `have … :=` and linarith openings, block length, the continue rate, a below-band comparison for the
+  warnings, probe habits and the phase the fix trains from (`reward_fix.json`). (9) `experiments/reward_replay.py`
+  replays phases 1–12 under both rules on the CPU before deploying.
 - Serving precision: fp16-merged vs bf16-merged vs unmerged LoRA, decided by the node test against fp32.
 - Whether the four-GPU pause with the persistent trainer meets its ~1 min fixed part on the node (smoke cycle: pause
   segments, `compiled_graphs` 0 after the first phase, the wake's memory next to the parked ranks' CUDA contexts, the
