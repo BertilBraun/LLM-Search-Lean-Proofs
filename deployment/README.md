@@ -285,11 +285,14 @@ committed) and turns on the login described below:
 mkdir -p ~/.config/lean-search && (umask 077 && read -rsp 'password: ' p && printf '%s' "$p" > ~/.config/lean-search/dashboard_password)
 ```
 
-Run it next to the loop (and the system sampler, which records GPUs, cgroup CPU, Lean REPL cores and the money spent):
+Run it next to the loop (and the system sampler, which records GPUs, cgroup CPU, Lean REPL cores and the money spent,
+and the probe rating's recorder, `src/lean_search/rl/README.md`, "Fixed targets"); `deployment/grpo_loop.sh dashboard`
+starts all three:
 
 ```bash
 R=$LEAN_SEARCH_RUNS/<run>
 nohup python experiments/dashboard.py record-system --run-directory $R --hourly-price 0.80 > $R/system_sampler.log 2>&1 &
+nohup python experiments/dashboard.py record-ratings --run-directory $R > $R/rating_recorder.log 2>&1 &
 nohup python experiments/dashboard.py serve --run-directory $R --compare control=$LEAN_SEARCH_RUNS/<control run> \
     --host 0.0.0.0 --port 8600 \
     --config experiments/configs/dashboard/dashboard.toml > $R/dashboard.log 2>&1 &

@@ -22,6 +22,7 @@ the record. With `tensorboard=True` every numeric field is also logged as the sc
 | `status` | `LoopStatus` | every heartbeat | loop state, searches running, statements and proofs (cumulative and per hour), last publish time, heartbeat interval, searches a server failed and statements dropped after repeated failures (this session) |
 | `system` | `SystemUsage` | `record-system`, every 30 s | per-GPU utilization, memory and power; cgroup cores used and available; Lean REPL cores; throttling; memory used, the limit and what is available; private memory of the Lean REPLs (total, p90) and the vLLM processes; size and free space of the fullest filesystem of the run and its checkpoints; hourly price and money spent |
 | `fixed_targets` | `FixedTargets` | after evaluations (`grpo_evaluate.py`) | miniF2F-valid solved / problems at the fixed budget, the probe set solved (by difficulty stratum, at its budget), held-out per-sample success and valid-Lean rate, MATH-500 visible and thinking, the evaluation's wall time, searches stopped on the wall clock; a probe slot's part (`probe_slot`, `probe_part`) and the last three slots together (`probe_rolling_*`, the whole set); a repeated run's solved, difference and discordant problems against the first run (`probe_repeat_*`, per part); version 0 is the baseline |
+| `rating` | `ProbeRatings` | `record-ratings`, whenever a probe run finishes (`rl/probe_rating.py`) | every finished probe run's version rated on one scale against version 0 (`VersionRating`: rating in logits with its 95% bootstrap interval over problems, runs, problems, searches and proofs, the share proved within each of `budgets` expansions and version 0's on the same problems), and the newest version's rating as numbers |
 | `grpo` | `GrpoPhase` | per training phase (`training_phase.grpo_phase_record`) | proof-graph groups, trained groups (non-zero advantage) and their share, trained tactics by credit label, mean local and global reward per known tactic, local share of the advantages, KL to the data-collecting policy, clip fraction, mean probability ratio and clip fraction of the positive- and negative-advantage tokens per pass, sampler-vs-trainer log-probability difference (overall and by sampling age: the version trained from minus the version that sampled), forced answers kept, explanation and block length, loss, tokens, training and sampling time |
 | `value_phase` | `ValuePhase` | per phase (the loop, from the phase's labelled trees) | μ in effect; `PhaseValueMetrics`: the value targets' label distribution per bin by source and tree outcome (exact steps unsmoothed), the serving model's recorded predictions of the same states and of the never-expanded frontier (mean per bin, p_dead and expected-steps histograms), calibration on expanded states (reliability bins, ECE, Brier), remaining-steps MAE and Spearman on proof-graph states |
 | `value_training` | `ValueTraining` | per value retrain | the value version that publishes it, window trees, loss, the window's label distribution per bin by source (smoothed as trained) and the v0 replay's |
@@ -43,6 +44,12 @@ default, or a new dataclass with its own `family`.
 - `GET /api/runs`, `/api/overview?run=` (latest line per family, alerts, thresholds), `/api/series?run=&family=
   &points=&since=&fields=` (columns downsampled to at most `points` buckets: mean values, last versions). Everything
   but `/login`, `/healthz` and `/static/*` needs the session cookie or HTTP basic auth.
+- The overview leads with two rows of tiles, each with a line on what it measures and what good looks like (the
+  header's Explain button hides those lines): the headline on fixed targets (the probe rating and its solves within the
+  budget against version 0, the held-out states, the value benchmark against v0) and health (the loop, the GPUs and the
+  money, the reward-hacking habits, the drift from the starting policy, sampled blocks' valid Lean, the curriculum's
+  solve rate) with the alerts below it; then chart sections, which every page lets the reader collapse (remembered per
+  browser; a section can start collapsed, and a collapsed one loads no data).
 - Pages and charts are data in `static/pages.js`: a chart names a family, an x axis (time, a version, the phase or a
   numeric field such as `probe_slot`), a unit and its series (a column, a sum, a ratio `over` another column or a
   column prefix, or one series per column of a prefix); `compare: true` overlays the other runs (`--compare
@@ -50,7 +57,8 @@ default, or a new dataclass with its own `family`.
   thresholds, `references` are fixed lines, and a series with `dashed: true` draws a column dashed (the `health`
   family's per-phase thresholds). A `histogram` chart draws lists of numbers from a family's latest record as grouped
   bars per category (`series: [{label, path, family, normalize}]`), a `reliability` chart lists of reliability bins
-  (`curves: [{label, path, family}]`; a series or curve may read another family's latest record). Every detail page
+  (`curves: [{label, path, family}]`; a series or curve may read another family's latest record), a `versions` chart a
+  list of objects in the latest record as one point per object (the probe rating by version). Every detail page
   also lists all columns of its families with sparklines, so a new field is visible without touching the frontend.
 - Alerts (`alerts.py`, thresholds in `experiments/configs/dashboard/dashboard.toml`): loop silent, no publish,
   no-progress share rising or high, repetition loops, KL to the data-collecting policy high, MATH-500 below its minimum

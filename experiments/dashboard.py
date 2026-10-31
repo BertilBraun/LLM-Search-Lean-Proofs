@@ -3,6 +3,7 @@
     python experiments/dashboard.py serve --run-directory $LEAN_SEARCH_RUNS/<run> [--compare control=<dir>] \
         [--host 0.0.0.0] [--port 8600] [--password-file ~/.config/lean-search/dashboard_password] [--config ...]
     python experiments/dashboard.py record-system --run-directory $LEAN_SEARCH_RUNS/<run> --hourly-price 0.8
+    python experiments/dashboard.py record-ratings --run-directory $LEAN_SEARCH_RUNS/<run>
     python experiments/dashboard.py demo [--output artifacts/dashboard_demo] [--days 3] [--live] [--port 8600]
 
 The dashboard is read-only and open by default. A password is optional: --password-file or the
@@ -29,6 +30,7 @@ from lean_search.monitoring.server import (
 )
 from lean_search.monitoring.store import METRICS_DIRECTORY, MetricsWriter
 from lean_search.monitoring.system_sampler import LEAN_PROCESS_NAMES, record_system
+from lean_search.rl.probe_rating import record_ratings
 
 MINIMUM_PASSWORD_LENGTH = 12
 
@@ -60,6 +62,9 @@ def parse_arguments() -> argparse.Namespace:
         action="append",
         help="paths whose filesystems to watch, the fullest reported (default: the run directory and the checkpoints)",
     )
+    ratings = commands.add_parser("record-ratings", help="rate every version on the probe set as its runs finish")
+    ratings.add_argument("--run-directory", type=Path, required=True)
+    ratings.add_argument("--interval", type=float, default=300.0)
     return parser.parse_args()
 
 
@@ -131,6 +136,8 @@ def main() -> None:
             names = tuple(arguments.process_name or LEAN_PROCESS_NAMES)
             disk_paths = arguments.disk_path or default_disk_paths(arguments.run_directory)
             record_system(arguments.run_directory, arguments.interval, arguments.hourly_price, names, disk_paths)
+        case "record-ratings":
+            record_ratings(arguments.run_directory, arguments.interval)
 
 
 if __name__ == "__main__":

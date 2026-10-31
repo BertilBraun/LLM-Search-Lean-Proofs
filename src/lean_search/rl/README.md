@@ -766,6 +766,16 @@ dashboard warns below `min_free_disk_gib` (50) free.
   `held_out_states`: per-sample success and valid Lean on the 512 per-step evaluation states (`single_step.py`), with
   every probe slot (every 2 hours, a few minutes at 112 REPLs): the hard stop's signal. Each writes
   `evaluations/<target>_v<version>/` (resumable), a `fixed_targets` line and `evaluations.jsonl`.
+- Probe rating (`probe_rating.py`, `dashboard.py record-ratings`, started by `grpo_loop.sh dashboard`): every finished
+  probe run (with a `summary.json`; value arms left out) rated on one scale, logit P(version v proves problem p) =
+  ability_v − difficulty_p, version 0 anchored at 0, weak Gaussian priors (difficulty 0.1, ability 0.01) so that a
+  problem proved by every run keeps a finite estimate; 100 Newton steps on the two diagonal blocks. Consecutive versions
+  search different thirds, and the fit takes each problem's difficulty from every version that searched it, so the
+  parts' difficulty cancels without pairing slots by part. The 95% interval resamples problems (200 bootstraps, ~4 s
+  for 14 runs). Each version also gets its share proved within 1, 2, 4, 8 and 16 expansions (the first proof's
+  expansion) beside version 0's on the same problems. A rating covers the policy with the value model it searched with
+  (`evaluation.value_model`). The recorder rates again whenever the set of finished runs changes and appends a `rating`
+  line; the dashboard's headline reads the latest (on the Elo scale, 400 / ln 10 per logit).
 - `grpo_fixed_sets.py gate-benchmark` searches the gate set once with the starting policy and no value model
   (`grpo/gate_search.toml`, log-probability best-first) and builds the value benchmark from those trees
   (`value/benchmark.py`), the loop's `evaluation.value_benchmark.path`.

@@ -228,6 +228,41 @@ class FixedTargets:
 
 
 @dataclass(frozen=True)
+class VersionRating:
+    """A version's strength on the probe set (policy and the value model it searched with), against version 0."""
+
+    policy_version: int
+    value_version: int
+    runs: int
+    problems: int
+    # Over all its runs: searches (a problem per run) and those that proved it.
+    searches: int
+    solved: int
+    # Rasch ability in logits (version 0: 0) and its 95% bootstrap interval over problems.
+    rating: float
+    lower: float
+    upper: float
+    # Share of its problems proved within each of `ProbeRatings.budgets` expansions, and version 0's on the same ones.
+    solved_within: tuple[float, ...]
+    baseline_solved_within: tuple[float, ...]
+
+
+@dataclass(frozen=True)
+class ProbeRatings:
+    """Every finished probe run rated on one scale (rl/probe_rating.py): the parts' difficulty cancels, since the fit
+    estimates each problem's difficulty from every version that searched it."""
+
+    family: ClassVar[str] = "rating"
+    budgets: tuple[int, ...]
+    versions: tuple[VersionRating, ...]
+    # The newest rated version, as numbers so that they chart over time.
+    latest_policy_version: int
+    latest_rating: float
+    latest_lower: float
+    latest_upper: float
+
+
+@dataclass(frozen=True)
 class GrpoPhase:
     family: ClassVar[str] = "grpo"
     # Groups at proof-graph nodes and their policy samples.
@@ -600,6 +635,7 @@ FAMILIES = (
     LoopStatus,
     SystemUsage,
     FixedTargets,
+    ProbeRatings,
     GrpoPhase,
     ValueTraining,
     ValueBenchmarkTrend,

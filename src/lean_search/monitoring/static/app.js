@@ -29,12 +29,17 @@ const X_NAMES = {
   probe_part: "part ",
 };
 
+// The probe rating's logits on the Elo scale (400 / ln 10 per logit).
+const ELO = 400 / Math.LN10;
+const DIFFICULTY_RATE = { sum: "by_difficulty.", suffix: ".solved", over: { sum: "by_difficulty.", suffix: ".attempts" } };
+
 const state = {
   run: null,
   runs: {},
   main: null,
   range: Number(stored("range", "0")),
   theme: stored("theme", "auto"),
+  explain: stored("explain", "on") === "on",
   overview: null,
   data: new Map(),
   openDetails: new Set(),
@@ -69,6 +74,14 @@ async function fetchJson(url) {
   return response.json();
 }
 
+function sectionKey(page, section) {
+  return `collapsed.${page.id}/${section.title}`;
+}
+
+function collapsed(page, section) {
+  return stored(sectionKey(page, section), section.collapsed ? "yes" : "no") === "yes";
+}
+
 function currentPage() {
   const id = window.location.hash.replace(/^#\/?/, "") || "overview";
   return PAGES.find((page) => page.id === id) || PAGES[0];
@@ -86,19 +99,26 @@ function dataKey(run, family, allTime) {
   return `${run}|${family}|${allTime ? "all" : state.range}`;
 }
 
+// The series each row of tiles reads ([family, all time]); their latest records come with the overview.
+const TILE_FAMILIES = {
+  headline: [["fixed_targets", true]],
+  health: [["status", false], ["system", false], ["health", true], ["curriculum", true]],
+  operations: [["status", false], ["system", false], ["fixed_targets", true]],
+};
+
 function wantedSeries(page) {
   const wanted = new Map();
   const add = (run, family, allTime) => {
     if (state.runs[run] && state.runs[run].includes(family)) wanted.set(dataKey(run, family, allTime), { run, family, allTime });
   };
   for (const section of page.sections) {
+    if (collapsed(page, section)) continue;
     for (const chart of section.charts || []) {
-      if (!chart.family) continue;
+      if (!chart.family || chart.kind === "versions") continue;
       add(state.run, chart.family, chart.allTime);
       if (chart.compare) otherRuns().forEach((run) => add(run, chart.family, chart.allTime));
     }
-    if (section.tiles) ["status", "system"].forEach((family) => add(state.run, family, false));
-    if (section.tiles) ["fixed_targets", "value_phase", "value_arm"].forEach((family) => add(state.run, family, true));
+    for (const [family, allTime] of TILE_FAMILIES[section.tiles] || []) add(state.run, family, allTime);
     if (section.table) add(state.run, section.table, true);
   }
   page.families.forEach((family) => add(state.run, family, false));
@@ -221,21 +241,53 @@ function renderChart(parent, chart) {
       return lineChart(parent, reliabilitySpec(chart));
     case "histogram":
       return groupedBarChart(parent, histogramSpec(chart));
+    case "versions": {
+      const built = versionSeries(chart);
+      return lineChart(parent, { ...chart, xKind, xLabel, band, references: chartReferences(chart, built), series: built });
+    }
     default: {
       const built = chartSeries(chart);
-      const references = [...(chart.references || [])];
-      references.push(...(chart.thresholds || []).map((threshold) => ({
-        value: thresholdValue(threshold.key),
-        label: `${threshold.label} ${formatValue(thresholdValue(threshold.key), chart.unit)}`,
-        kind: "threshold",
-      })));
-      const first = built[0] && built[0].points.find((point) => point.y !== null);
-      if (chart.baseline && first) {
-        references.push({ value: first.y, label: `baseline ${formatValue(first.y, chart.unit)}`, kind: "baseline" });
-      }
-      return lineChart(parent, { ...chart, xKind, xLabel, band, references, series: built });
+      return lineChart(parent, { ...chart, xKind, xLabel, band, references: chartReferences(chart, built), series: built });
     }
   }
+}
+
+function chartReferences(chart, built) {
+  const references = [...(chart.references || [])];
+  references.push(...(chart.thresholds || []).map((threshold) => ({
+    value: thresholdValue(threshold.key),
+    label: `${threshold.label} ${formatValue(thresholdValue(threshold.key), chart.unit)}`,
+    kind: "threshold",
+  })));
+  const first = built[0] && built[0].points.find((point) => point.y !== null);
+  if (chart.baseline && first) {
+    references.push({ value: first.y, label: `baseline ${formatValue(first.y, chart.unit)}`, kind: "baseline" });
+  }
+  return references;
+}
+
+// A list field of an object at a budget's position: "last", or an index into the record's budgets.
+function budgetValue(entry, spec, budgets) {
+  const values = entry[spec.field] || [];
+  return values[spec.budget === "last" ? budgets.length - 1 : spec.budget] ?? null;
+}
+
+// chart.path: a list of objects in the chart family's latest record, one point per object at its field chart.x.
+function versionSeries(chart) {
+  const fields = latestFields(chart.family);
+  const entries = (fields && lookup(fields, chart.path)) || [];
+  const budgets = (fields && fields.budgets) || [];
+  return chart.series.map((spec, index) => ({
+    label: spec.label,
+    slot: spec.slot ?? index,
+    dashed: Boolean(spec.dashed),
+    points: entries
+      .map((entry) => {
+        const value = spec.budget === undefined ? lookup(entry, spec.field) : budgetValue(entry, spec, budgets);
+        return { x: entry[chart.x], y: value === null || value === undefined ? null : value * (spec.scale || 1) };
+      })
+      .sort((first, second) => first.x - second.x),
+  }));
 }
 
 function latestFields(family) {
@@ -327,7 +379,8 @@ function recentMean(values, count) {
   return known.length ? known.reduce((sum, value) => sum + value, 0) / known.length : null;
 }
 
-function tile(parent, { label, value, sub, status, spark }) {
+// why: what the value measures and what good looks like; the header's Explain button shows or hides it.
+function tile(parent, { label, value, sub, status, spark, why }) {
   const card = htmlElement("div", "tile", null, parent);
   const head = htmlElement("div", "label", null, card);
   if (status) htmlElement("span", `status-icon ${status}`, null, head);
@@ -335,11 +388,177 @@ function tile(parent, { label, value, sub, status, spark }) {
   htmlElement("div", "value", value, card);
   if (sub) htmlElement("div", "sub", sub, card);
   if (spark) sparkline(card, spark);
+  if (why) htmlElement("div", "why", why, card);
 }
 
-function overviewTiles(parent) {
-  const grid = htmlElement("div", "tiles", null, parent);
+function signed(value, digits = 0) {
+  if (value === null || value === undefined) return "–";
+  return `${value < 0 ? "−" : "+"}${Math.abs(value).toFixed(digits)}`;
+}
+
+// A health measurement against its limit (a maximum or a minimum); null without either.
+function limitStatus(value, limit, kind) {
+  if (value === null || value === undefined || limit === null || limit === undefined) return null;
+  return (kind === "max" ? value > limit : value < limit) ? "warning" : "good";
+}
+
+function knownValues(values) {
+  return (values || []).filter((value) => value !== null);
+}
+
+function headlineTiles(parent) {
+  const grid = htmlElement("div", "tiles headline", null, parent);
+  const latest = state.overview.latest;
+  const rating = latest.rating ? latest.rating.fields : null;
+  if (rating && rating.versions.length) {
+    const versions = rating.versions;
+    const newest = versions[versions.length - 1];
+    const best = versions.reduce((top, version) => (version.rating > top.rating ? version : top));
+    const anchor = versions.length === 1;
+    tile(grid, {
+      label: "Strength: probe rating",
+      status: anchor ? null : newest.lower > 0 ? "good" : newest.upper < 0 ? "critical" : "warning",
+      value: `${signed(newest.rating * ELO)} Elo`,
+      sub: `v${newest.policy_version}, 95% ${signed(newest.lower * ELO)} to ${signed(newest.upper * ELO)} · best v${best.policy_version} ${signed(best.rating * ELO)}`,
+      spark: versions.map((version) => version.rating * ELO),
+      why: "Every version on the fixed probe set at 16 expansions, on one scale with version 0 at 0; +100 is a 64% chance on a problem v0 proves half the time. Good: rising over versions with the interval above 0.",
+    });
+    const last = rating.budgets.length - 1;
+    const gain = newest.solved_within[last] - newest.baseline_solved_within[last];
+    tile(grid, {
+      label: `Probe solved within ${rating.budgets[last]} expansions`,
+      status: anchor ? null : gain > 0 ? "good" : "warning",
+      value: formatValue(newest.solved_within[last], "share"),
+      sub: `v0 on the same problems ${formatValue(newest.baseline_solved_within[last], "share")} · within 1: ${formatValue(newest.solved_within[0], "share")} vs ${formatValue(newest.baseline_solved_within[0], "share")}`,
+      spark: versions.map((version) => version.solved_within[last] - version.baseline_solved_within[last]),
+      why: "The newest rated version's share of its probe problems proved, beside version 0 on the same problems; within 1 expansion is the policy's first answer without search. The line is the gain over v0 per version.",
+    });
+  } else {
+    tile(grid, { label: "Strength: probe rating", value: "–", sub: "no finished probe run rated yet" });
+  }
+  const fixed = series(state.run, "fixed_targets", true);
+  const health = latest.health ? latest.health.fields : null;
+  if (fixed) {
+    const success = knownValues(fixed.columns.held_out_success);
+    const valid = knownValues(fixed.columns.held_out_valid_rate);
+    tile(grid, {
+      label: "Policy alone: held-out states",
+      status: limitStatus(lastValue(success), health ? health.thresholds.min_held_out_success : null, "min"),
+      value: formatValue(lastValue(success), "share"),
+      sub: `success per sample, v0 ${formatValue(firstValue(success), "share")} · valid Lean ${formatValue(lastValue(valid), "share")} (v0 ${formatValue(firstValue(valid), "share")})`,
+      spark: success,
+      why: "512 fixed proof states, one block each, no search and no value model: the policy's step quality. Good: success rising. Valid Lean rising while success falls is filler that compiles but goes nowhere.",
+    });
+  }
+  const benchmark = latest.value_benchmark ? latest.value_benchmark.fields : null;
+  if (benchmark && benchmark.against_reference) {
+    const versus = benchmark.against_reference;
+    tile(grid, {
+      label: "Value model: benchmark vs v0",
+      status: versus.upper < 0 ? "warning" : null,
+      value: `${signed(versus.difference * 100, 1)} points`,
+      sub: `value v${benchmark.value_version}, 95% ${signed(versus.lower * 100, 1)} to ${signed(versus.upper * 100, 1)} · ${benchmark.pairs.pairs} pairs`,
+      why: `Sibling pairs the value model orders right (the proof-graph child first), minus v0's share, in points. ${benchmark.pairs.pairs} pairs separate only large differences: read an interval wholly below 0, not the point.`,
+    });
+  }
+}
+
+function healthTiles(parent) {
+  const grid = htmlElement("div", "tiles health", null, parent);
   const now = state.overview.now;
+  const thresholds = state.overview.thresholds;
+  const latest = state.overview.latest;
+  const status = latest.status;
+  if (status) {
+    const alive = now - status.time <= thresholds.stale_heartbeats * status.fields.heartbeat_seconds;
+    const published = status.fields.last_publish_time;
+    const sincePublish = published === null ? null : now - published;
+    const stale = sincePublish !== null && sincePublish > thresholds.max_minutes_since_publish * 60;
+    tile(grid, {
+      label: "Loop",
+      status: !alive ? "critical" : stale ? "warning" : "good",
+      value: alive ? `${status.fields.state.replace(/^./, (letter) => letter.toUpperCase())}, phase ${status.phase ?? "–"}` : "Silent",
+      sub: `policy v${status.policy_version ?? "–"} · published ${sincePublish === null ? "never" : `${formatAge(sincePublish)} ago`}`,
+      why: `The heartbeat and the last publish: silent, or no publish for ${thresholds.max_minutes_since_publish} min, means the loop is stuck.`,
+    });
+  } else {
+    tile(grid, { label: "Loop", status: "critical", value: "No status", sub: "nothing written yet" });
+  }
+  const system = series(state.run, "system", false);
+  if (system && latest.system) {
+    const utilization = evaluate(system, { mean: "gpu_utilization." });
+    const recent = recentMean(utilization, 5);
+    const fields = latest.system.fields;
+    tile(grid, {
+      label: "GPUs",
+      status: recent === null ? null : recent < thresholds.min_gpu_utilization ? "warning" : "good",
+      value: formatValue(recent, "percent"),
+      sub: `mean of ${fields.gpu_utilization.length} · spent ${formatValue(fields.cost_so_far, "dollars")} at ${formatValue(fields.hourly_price, "dollars")}/h`,
+      spark: utilization,
+      why: `Mean utilization of the last samples; below ${thresholds.min_gpu_utilization}% the node is paid for and idle.`,
+    });
+  }
+  const health = latest.health ? latest.health.fields : null;
+  const healthSeries = series(state.run, "health", true);
+  if (health) {
+    const measured = health.measured;
+    const limits = health.thresholds;
+    const belowBand = measured.below_band_bare_have_share;
+    const bareHaves = belowBand ?? measured.bare_have_share;
+    tile(grid, {
+      label: "Bare claims",
+      status: limitStatus(bareHaves, limits.max_bare_have_share, "max"),
+      value: formatValue(bareHaves, "share"),
+      sub: `${belowBand === null ? "all statements" : "below the band"}, limit ${formatValue(limits.max_bare_have_share, "share")} · all ${formatValue(measured.bare_have_share, "share")}`,
+      spark: healthSeries?.columns[belowBand === null ? "measured.bare_have_share" : "measured.below_band_bare_have_share"],
+      why: "Blocks opening with a bare `have h : A` that leaves the claim for later: the reward hack of phases 1-10. Good: falling back toward the first phases' share; the limit is 1.5 times it.",
+    });
+    const proved = measured.below_band_claim_proved_rate ?? measured.claim_proved_rate;
+    tile(grid, {
+      label: "Claims proved",
+      status: limitStatus(proved, limits.min_claim_proved_rate, "min"),
+      value: formatValue(measured.claim_proved_rate, "share"),
+      sub: `of the claims left open · linarith openings ${formatValue(measured.linarith_opening_share, "share")}`,
+      spark: healthSeries?.columns["measured.claim_proved_rate"],
+      why: "Of the claims blocks leave open, the share proved later in the tree. Good: rising, as claims become real steps; below the limit warns.",
+    });
+    tile(grid, {
+      label: "Drift from the start",
+      status: limitStatus(measured.kl_to_starting_policy, limits.max_kl_to_starting_policy, "max"),
+      value: formatValue(measured.kl_to_starting_policy, "number"),
+      sub: `KL per token, limit ${formatValue(limits.max_kl_to_starting_policy, "number")} · phase ${health.phase}`,
+      spark: healthSeries?.columns["measured.kl_to_starting_policy"],
+      why: "How far training has moved the policy from the version it started from. A steady climb past the limit is drift like the collapse before the rollback to v4.",
+    });
+    tile(grid, {
+      label: "Valid Lean of sampled blocks",
+      status: limitStatus(measured.valid_block_rate, limits.min_valid_block_rate, "min"),
+      value: formatValue(measured.valid_block_rate, "share"),
+      sub: `limit ${formatValue(limits.min_valid_block_rate, "share")} · measured every phase`,
+      spark: healthSeries?.columns["measured.valid_block_rate"],
+      why: "The share of the phase's policy blocks that run completely in Lean. A drop means broken output; below the limit the held-out states run at the next pause.",
+    });
+  }
+  const curriculum = latest.curriculum ? latest.curriculum.fields : null;
+  const curriculumSeries = series(state.run, "curriculum", true);
+  if (curriculum) {
+    const outcomes = Object.values(curriculum.by_difficulty || {});
+    const attempts = outcomes.reduce((sum, outcome) => sum + outcome.attempts, 0);
+    const rate = attempts ? outcomes.reduce((sum, outcome) => sum + outcome.solved, 0) / attempts : null;
+    const inBand = rate !== null && rate >= thresholds.min_solve_rate && rate <= thresholds.max_solve_rate;
+    tile(grid, {
+      label: "Curriculum solve rate",
+      status: rate === null ? null : inBand ? "good" : "warning",
+      value: formatValue(rate, "share"),
+      sub: `band ${formatValue(curriculum.band_low, "number")}-${formatValue(curriculum.band_high, "number")} · ${formatValue(curriculum.verified_statements, "count")} verified statements`,
+      spark: curriculumSeries ? evaluate(curriculumSeries, DIFFICULTY_RATE) : null,
+      why: `The latest phase's searches solved. The target moves with the band, so this is health, not progress: it should stay within ${formatValue(thresholds.min_solve_rate, "share")}-${formatValue(thresholds.max_solve_rate, "share")} while the band climbs.`,
+    });
+  }
+}
+
+function operationsTiles(parent) {
+  const grid = htmlElement("div", "tiles", null, parent);
   const thresholds = state.overview.thresholds;
   const latest = state.overview.latest;
   const status = latest.status;
@@ -348,27 +567,6 @@ function overviewTiles(parent) {
   const fixed = series(state.run, "fixed_targets", true);
 
   if (status) {
-    const age = now - status.time;
-    const alive = age <= thresholds.stale_heartbeats * status.fields.heartbeat_seconds;
-    tile(grid, {
-      label: "Loop",
-      status: alive ? "good" : "critical",
-      value: alive ? status.fields.state.replace(/^./, (letter) => letter.toUpperCase()) : "Silent",
-      sub: `status ${formatAge(age)} ago`,
-    });
-    tile(grid, {
-      label: "Phase",
-      value: status.phase === null ? "–" : `Phase ${status.phase}`,
-      sub: `policy v${status.policy_version ?? "–"} · value v${status.value_version ?? "–"}`,
-    });
-    const published = status.fields.last_publish_time;
-    const sincePublish = published === null ? null : now - published;
-    tile(grid, {
-      label: "Since publish",
-      status: sincePublish === null ? null : sincePublish > thresholds.max_minutes_since_publish * 60 ? "warning" : "good",
-      value: sincePublish === null ? "never" : formatAge(sincePublish),
-      sub: published === null ? "" : formatTime(published),
-    });
     tile(grid, {
       label: "Proofs per hour",
       value: formatValue(recentMean(statusSeries?.columns.proofs_per_hour, 30), "number"),
@@ -384,27 +582,13 @@ function overviewTiles(parent) {
   } else {
     tile(grid, { label: "Loop", status: "critical", value: "No status", sub: "nothing written yet" });
   }
-  if (system) {
-    const utilization = evaluate(system, { mean: "gpu_utilization." });
-    const recent = recentMean(utilization, 5);
+  if (system && latest.system) {
     const fields = latest.system.fields;
-    tile(grid, {
-      label: "GPU utilization",
-      status: recent === null ? null : recent < thresholds.min_gpu_utilization ? "warning" : "good",
-      value: formatValue(recent, "percent"),
-      sub: `mean of ${fields.gpu_utilization.length} GPUs`,
-      spark: utilization,
-    });
     tile(grid, {
       label: "Lean CPU",
       value: `${formatValue(recentMean(system.columns.lean_cores_used, 5), "cores")} cores`,
       sub: `of ${formatValue(fields.cpu_cores_available, "cores")} available`,
       spark: system.columns.lean_cores_used,
-    });
-    tile(grid, {
-      label: "Spent",
-      value: formatValue(fields.cost_so_far, "dollars"),
-      sub: `${formatValue(fields.hourly_price, "dollars")} per hour`,
     });
   }
   if (fixed) {
@@ -420,26 +604,21 @@ function overviewTiles(parent) {
       sub: delta === null ? "" : `baseline ${baseline}, ${delta >= 0 ? "+" : ""}${delta}`,
       spark: solved,
     });
-    const heldOut = fixed.columns.held_out_success;
-    tile(grid, {
-      label: "Held-out states",
-      value: formatValue(lastValue(heldOut), "share"),
-      sub: `per sample; baseline ${formatValue(firstValue(heldOut), "share")}`,
-      spark: heldOut,
-    });
     const visible = fixed.columns.math500_visible;
     const mathNow = lastValue(visible);
     const mathStart = firstValue(visible);
     const mathStatus = mathNow === null ? null
       : mathNow < thresholds.min_math500_visible ? "critical"
       : mathStart - mathNow > thresholds.max_math500_drop ? "warning" : "good";
-    tile(grid, {
-      label: "MATH-500 visible",
-      status: mathStatus,
-      value: formatValue(mathNow, "share"),
-      sub: `baseline ${formatValue(mathStart, "share")}; thinking ${formatValue(lastValue(fixed.columns.math500_thinking), "share")}`,
-      spark: visible,
-    });
+    if (mathNow !== null) {
+      tile(grid, {
+        label: "MATH-500 visible",
+        status: mathStatus,
+        value: formatValue(mathNow, "share"),
+        sub: `baseline ${formatValue(mathStart, "share")}; thinking ${formatValue(lastValue(fixed.columns.math500_thinking), "share")}`,
+        spark: visible,
+      });
+    }
   }
   const valuePhase = latest.value_phase;
   const arm = latest.value_arm;
@@ -473,7 +652,39 @@ function renderAlerts(parent) {
   }
 }
 
+const TILES = { headline: headlineTiles, health: healthTiles, operations: operationsTiles };
+
+function renderRatingTable(parent) {
+  const card = chartCard(parent, { title: "Probe rating by version", wide: true });
+  const fields = latestFields("rating");
+  if (!fields || !fields.versions.length) {
+    htmlElement("div", "empty", "No finished probe run rated yet", card);
+    return;
+  }
+  const table = htmlElement("table", "data-table", null, htmlElement("div", "table-wrap", null, card));
+  const columns = [
+    ["Policy", (version) => `v${version.policy_version}`],
+    ["Value", (version) => `v${version.value_version}`],
+    ["Runs", (version) => String(version.runs)],
+    ["Solved", (version) => `${version.solved} / ${version.searches}`],
+    ["Rating (Elo)", (version) => signed(version.rating * ELO)],
+    ["95% interval", (version) => `${signed(version.lower * ELO)} to ${signed(version.upper * ELO)}`],
+    ...fields.budgets.map((budget, index) => [
+      `Within ${budget}`,
+      (version) => `${formatValue(version.solved_within[index], "share")} (v0 ${formatValue(version.baseline_solved_within[index], "share")})`,
+    ]),
+  ];
+  const head = htmlElement("tr", "", null, htmlElement("thead", "", null, table));
+  columns.forEach(([name]) => htmlElement("th", "", name, head));
+  const body = htmlElement("tbody", "", null, table);
+  for (const version of [...fields.versions].reverse()) {
+    const row = htmlElement("tr", "", null, body);
+    columns.forEach(([, cell]) => htmlElement("td", "", cell(version), row));
+  }
+}
+
 function renderTable(parent, family) {
+  if (family === "rating") return renderRatingTable(parent);
   const data = series(state.run, family, true);
   const card = chartCard(parent, { title: "All evaluations", wide: true });
   if (!data || !data.time.length) {
@@ -539,10 +750,21 @@ function render() {
   main.style.minHeight = `${height}px`;
   main.replaceChildren();
   document.querySelectorAll("nav.tabs a").forEach((link) => link.classList.toggle("active", link.dataset.page === page.id));
-  if (page.id === "overview") renderAlerts(main);
   for (const section of page.sections) {
-    htmlElement("h2", "section", section.title, main);
-    if (section.tiles) overviewTiles(main);
+    const closed = collapsed(page, section);
+    const heading = htmlElement("h2", "section", null, main);
+    const toggle = htmlElement("button", `section-toggle${closed ? " closed" : ""}`, section.title, heading);
+    toggle.type = "button";
+    toggle.setAttribute("aria-expanded", String(!closed));
+    toggle.addEventListener("click", () => {
+      store(sectionKey(page, section), closed ? "no" : "yes");
+      if (closed) refresh();
+      else render();
+    });
+    if (closed) continue;
+    if (section.note) htmlElement("div", "section-note", section.note, main);
+    if (section.tiles) TILES[section.tiles](main);
+    if (section.alerts) renderAlerts(main);
     if (section.charts) {
       const grid = htmlElement("div", "charts", null, main);
       section.charts.forEach((chart) => renderChart(grid, chart));
@@ -609,6 +831,13 @@ function buildRunSelect() {
   select.replaceChildren(...names.map((name) => new Option(name, name, false, name === state.run)));
 }
 
+function applyExplain() {
+  document.body.classList.toggle("hide-why", !state.explain);
+  const button = document.getElementById("explain");
+  button.textContent = state.explain ? "Hide explanations" : "Explain";
+  button.setAttribute("aria-pressed", String(state.explain));
+}
+
 function applyTheme() {
   if (state.theme === "auto") delete document.documentElement.dataset.theme;
   else document.documentElement.dataset.theme = state.theme;
@@ -633,6 +862,11 @@ function setUp() {
     state.run = event.target.value;
     refresh();
   });
+  document.getElementById("explain").addEventListener("click", () => {
+    state.explain = !state.explain;
+    store("explain", state.explain ? "on" : "off");
+    applyExplain();
+  });
   document.getElementById("theme").addEventListener("click", () => {
     state.theme = THEMES[(THEMES.indexOf(state.theme) + 1) % THEMES.length];
     store("theme", state.theme);
@@ -653,6 +887,7 @@ function setUp() {
   });
   setInterval(updateClock, 5000);
   applyTheme();
+  applyExplain();
   refresh();
 }
 

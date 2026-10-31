@@ -26,12 +26,14 @@ from lean_search.monitoring.families import (
     PauseSegments,
     PhaseHealth,
     PhaseTiming,
+    ProbeRatings,
     SearchPhase,
     SystemUsage,
     ValueArmResult,
     ValueBenchmarkTrend,
     ValuePhase,
     ValueTraining,
+    VersionRating,
 )
 from lean_search.monitoring.store import LoopContext, MetricsWriter
 from lean_search.rl.policy_data import AdvantageSignRatios, SamplerAgreement, SignedRatios
@@ -176,6 +178,7 @@ class DemoRun:
         self.statements_solved = 0
         self.band_low = 1.0
         self.probe_slots: list[FixedTargets] = []
+        self.ratings: list[VersionRating] = []
         # Problems solved by one arm only, by published value version: (v0 only, published only, problems).
         self.value_arms: dict[int, list[tuple[int, int, int]]] = {}
         self.context()
@@ -489,6 +492,44 @@ class DemoRun:
             )
         self.probe_slots.append(record)
         self.writer.write(record, record_time=moment)
+        self.write_ratings(moment)
+
+    def write_ratings(self, moment: float) -> None:
+        """The probe rating after a slot: every rated version again, the newest appended (versions repeat at the
+        start, version 0's baseline runs)."""
+        learned = self.progress(moment)
+        rating = 0.0 if not self.ratings else 1.4 * learned + self.noise(0.15)
+        first = (0.13, 0.22, 0.29, 0.36, 0.41)
+        within = tuple(min(1.0, share * (1 + 0.5 * learned)) for share in first)
+        if self.ratings and self.ratings[-1].policy_version == self.phase:
+            self.ratings.pop()
+        self.ratings.append(
+            VersionRating(
+                policy_version=self.phase,
+                value_version=self.value_version,
+                runs=1,
+                problems=PROBE_PART_PROBLEMS * len(PROBE_STRATA),
+                searches=PROBE_PART_PROBLEMS * len(PROBE_STRATA),
+                solved=round(PROBE_PART_PROBLEMS * len(PROBE_STRATA) * within[-1]),
+                rating=rating,
+                lower=rating - 0.4,
+                upper=rating + 0.45,
+                solved_within=within,
+                baseline_solved_within=first,
+            )
+        )
+        latest = self.ratings[-1]
+        self.writer.write(
+            ProbeRatings(
+                budgets=(1, 2, 4, 8, 16),
+                versions=tuple(self.ratings),
+                latest_policy_version=latest.policy_version,
+                latest_rating=latest.rating,
+                latest_lower=latest.lower,
+                latest_upper=latest.upper,
+            ),
+            record_time=moment,
+        )
 
     def write_grpo(self, moment: float) -> None:
         learned = self.progress(moment)

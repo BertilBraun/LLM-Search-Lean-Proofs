@@ -11,6 +11,9 @@
 // histogram (latest records): categories, at (the caption's context field, default "phase"),
 //          series: [{label, path, family, normalize, detail: {name: key}}]
 // reliability (latest records): at, curves: [{label, path, family}] to lists of reliability bins
+// versions (latest record): path to a list of objects, one point per object at its field `x`; series {label, field,
+//          budget ("last" or an index into the record's budgets, for a list field), scale, slot, dashed}
+// section: {title, note, collapsed (the default; the reader's choice is remembered), tiles | charts | table, alerts}
 
 const SAMPLES = "graph.policy_samples.";
 const EDGE_GROUPS = (prefix) => [
@@ -49,7 +52,7 @@ const FIXED = {
   },
   probe: {
     title: "Probe set solve rate",
-    subtitle: "16 expansions, value v0; each slot a stratified third, the curve the last three slots (the whole set)",
+    subtitle: "16 expansions, the published value model; each slot a stratified third, the curve the last three slots (the whole set)",
     family: "fixed_targets", x: "probe_slot", unit: "share", compare: true, allTime: true,
     series: [
       { label: "slot (a third)", field: "probe_solved", over: "probe_problems" },
@@ -90,6 +93,34 @@ const FIXED = {
     family: "fixed_targets", x: "policy_version", unit: "share", allTime: true,
     thresholds: [{ key: "min_math500_visible", label: "minimum visible" }],
     series: [{ label: "visible", field: "math500_visible" }, { label: "thinking", field: "math500_thinking" }],
+  },
+};
+
+// The probe rating's logits on the Elo scale: 400 / ln 10 per logit, so +100 is a 64% chance to beat version 0 on a
+// problem it proves half the time.
+const ELO = 400 / Math.LN10;
+const RATING = {
+  elo: {
+    title: "Probe rating by version",
+    subtitle: "every finished probe run on one scale (Elo-like, version 0 = 0): policy and the value model it searched with, 16 expansions; dashed: 95% interval over problems",
+    family: "rating", kind: "versions", path: "versions", x: "policy_version", unit: "number",
+    references: [{ value: 0, label: "version 0", kind: "baseline" }],
+    series: [
+      { label: "rating", field: "rating", scale: ELO },
+      { label: "95% low", field: "lower", scale: ELO, slot: 0, dashed: true },
+      { label: "95% high", field: "upper", scale: ELO, slot: 0, dashed: true },
+    ],
+  },
+  solvedWithin: {
+    title: "Probe solved within the budget",
+    subtitle: "share of each version's probe problems proved within 16 and within 1 expansion; dashed: version 0 on the same problems",
+    family: "rating", kind: "versions", path: "versions", x: "policy_version", unit: "share",
+    series: [
+      { label: "within 16", field: "solved_within", budget: "last" },
+      { label: "v0, within 16", field: "baseline_solved_within", budget: "last", slot: 0, dashed: true },
+      { label: "within 1", field: "solved_within", budget: 0 },
+      { label: "v0, within 1", field: "baseline_solved_within", budget: 0, slot: 2, dashed: true },
+    ],
   },
 };
 
@@ -480,7 +511,15 @@ const SEARCH_OPTIONS_AB = {
   },
 };
 
-const DIFFICULTY_RATE ={ label: "solve rate", sum: "by_difficulty.", suffix: ".solved", over: { sum: "by_difficulty.", suffix: ".attempts" } };
+const DIFFICULTY_RATE = { label: "solve rate", sum: "by_difficulty.", suffix: ".solved", over: { sum: "by_difficulty.", suffix: ".attempts" } };
+const CURRICULUM_SOLVE_RATE = {
+  title: "Solve rate per phase", subtitle: "target band shaded", family: "curriculum", unit: "share",
+  band: { low: "min_solve_rate", high: "max_solve_rate" }, compare: true, series: [DIFFICULTY_RATE],
+};
+const CURRICULUM_BAND = {
+  title: "Difficulty band", subtitle: "rises as the policy solves the band", family: "curriculum", unit: "number",
+  series: [{ label: "low", field: "band_low" }, { label: "high", field: "band_high" }],
+};
 
 export const PAGES = [
   {
@@ -488,12 +527,45 @@ export const PAGES = [
     title: "Overview",
     families: [],
     sections: [
-      { title: "Status", tiles: "overview" },
-      { title: "Fixed targets", charts: [FIXED.probeDifference, FIXED.probe, FIXED.minif2f, FIXED.heldOut, FIXED.math] },
-      { title: "RL health", charts: [GRPO.kl, GRPO.clip, GRPO.mixed, GRPO.rewards] },
-      { title: "Training health", charts: [HEALTH.kl, HEALTH.heldOut, HEALTH.distinct, BUDGET.lateSolves] },
-      { title: "Value health", charts: [VALUE.share, VALUE.benchmarkVersusV0, VALUE.armPooled, VALUE.phaseCalibration] },
-      { title: "Search behaviour", charts: [SEARCH.samples, SEARCH.noProgress, SEARCH.continuation, SEARCH.loops] },
+      {
+        title: "Headline: is the prover getting stronger?",
+        note: "Fixed targets only: the same problems at the same budget for every version, never the curriculum's moving one.",
+        tiles: "headline",
+      },
+      {
+        title: "Health: is anything going wrong?",
+        note: "The loop running, the GPUs busy, and the reward-hacking habits within the limits the loop alerts on.",
+        tiles: "health",
+        alerts: true,
+      },
+      {
+        title: "Strength over versions",
+        note: "The headline's history: a rising rating with its interval above 0 is the RL working.",
+        charts: [RATING.elo, RATING.solvedWithin, FIXED.heldOut, FIXED.probeDifference],
+      },
+      {
+        title: "Reward-hacking habits",
+        note: "How the policy writes its blocks, per phase: bare claims and filler were the hack of phases 1-10.",
+        charts: [HEALTH.habits, HEALTH.openings, HEALTH.blockLength, HEALTH.explanationCharacters],
+      },
+      {
+        title: "Training stability",
+        note: "How far and how fast training moves the policy, and whether its output still compiles.",
+        charts: [HEALTH.kl, GRPO.kl, HEALTH.validBlocks, GRPO.mixed],
+      },
+      {
+        title: "Value model",
+        note: "The benchmark is small (a hundred-odd sibling pairs): read only a clear drop below 0.",
+        collapsed: true,
+        charts: [VALUE.benchmarkVersusV0, VALUE.phaseCalibration],
+      },
+      {
+        title: "Search and curriculum",
+        note: "What the searches produce; the solve rate should stay in its band while the band climbs.",
+        collapsed: true,
+        charts: [SEARCH.samples, SEARCH.noProgress, CURRICULUM_SOLVE_RATE, CURRICULUM_BAND],
+      },
+      { title: "Operations", note: "Throughput and the other fixed targets.", collapsed: true, tiles: "operations" },
     ],
   },
   {
@@ -769,10 +841,7 @@ export const PAGES = [
       {
         title: "Solve rate",
         charts: [
-          {
-            title: "Solve rate per phase", subtitle: "target band shaded", family: "curriculum", unit: "share",
-            band: { low: "min_solve_rate", high: "max_solve_rate" }, compare: true, series: [DIFFICULTY_RATE],
-          },
+          CURRICULUM_SOLVE_RATE,
           {
             title: "Solve rate by origin per phase", subtitle: "fed from the band, and from below it", family: "curriculum",
             unit: "share", band: { low: "min_solve_rate", high: "max_solve_rate" },
@@ -793,10 +862,7 @@ export const PAGES = [
             prefix: "by_difficulty.", band: { low: "min_solve_rate", high: "max_solve_rate" },
           },
           { title: "Solve rate by stage, latest phase", family: "curriculum", kind: "bands", unit: "share", prefix: "by_stage." },
-          {
-            title: "Difficulty band", family: "curriculum", unit: "number",
-            series: [{ label: "low", field: "band_low" }, { label: "high", field: "band_high" }],
-          },
+          CURRICULUM_BAND,
           { title: "Verified statements", family: "curriculum", unit: "count", series: [{ label: "verified", field: "verified_statements" }, { label: "pool", field: "pool_statements" }] },
         ],
       },
@@ -805,11 +871,13 @@ export const PAGES = [
   {
     id: "evaluations",
     title: "Evaluations",
-    families: ["fixed_targets"],
+    families: ["fixed_targets", "rating"],
     sections: [
       {
         title: "Fixed targets",
         charts: [
+          RATING.elo,
+          RATING.solvedWithin,
           FIXED.probeDifference,
           FIXED.probe,
           FIXED.probeBands,
@@ -821,6 +889,7 @@ export const PAGES = [
           { ...FIXED.math, title: "MATH-500 thinking", thresholds: [], compare: true, series: [{ label: "thinking", field: "math500_thinking" }] },
         ],
       },
+      { title: "Probe rating", table: "rating" },
       { title: "Table", table: "fixed_targets" },
     ],
   },
