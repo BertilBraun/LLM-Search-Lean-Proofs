@@ -129,14 +129,37 @@ def test_useful_facts_are_no_closed_form_filler(before: str, after: str) -> None
 
 @pytest.mark.parametrize(
     "proposition",
-    ["0 < (1:ℝ)", "2 ≤ 3", "(4:ℕ) = 4", "0 < ((0:ℝ))", "((2 : ℕ) : ℝ) ≠ 0", "↑3 > (-1:ℤ)", "(0.5:ℝ) ≥ 0"],
+    [
+        "0 < (1:ℝ)",
+        "2 ≤ 3",
+        "(4:ℕ) = 4",
+        "0 < ((0:ℝ))",
+        "((2 : ℕ) : ℝ) ≠ 0",
+        "↑3 > (-1:ℤ)",
+        "(0.5:ℝ) ≥ 0",
+        "-1 < 0",
+        "0 ≤ (0:ℝ)",
+    ],
 )
 def test_numeral_comparisons_are_closed_form(proposition: str) -> None:
     assert is_numeral_comparison(proposition)
 
 
 @pytest.mark.parametrize(
-    "proposition", ["0 < x", "2 ^ 10 = 1024", "1 + 1 = 2", "(1) + (2) = 3", "Nat.Prime 7", "2 ∣ 4"]
+    "proposition",
+    [
+        "0 < x",
+        "2 ^ 10 = 1024",
+        "1 + 1 = 2",
+        "(1) + (2) = 3",
+        "Nat.Prime 7",
+        "2 ∣ 4",
+        "0 < (1:ℝ) + 0 * x",
+        "(4:ℝ) = 2 ^ 2",
+        "3 < Real.pi",
+        "(1 : ℝ) / 2 < 1",
+        "0 < 1 ∧ 1 < 2",
+    ],
 )
 def test_other_propositions_are_no_numeral_comparison(proposition: str) -> None:
     assert not is_numeral_comparison(proposition)

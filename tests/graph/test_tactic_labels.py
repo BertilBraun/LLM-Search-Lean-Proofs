@@ -266,6 +266,46 @@ def test_claim_proved_by_a_sibling_is_no_unproved_claim() -> None:
     assert labels_of(record, BARE_HAVE) == (UNKNOWN,)
 
 
+def test_claim_proved_by_a_sibling_under_another_name_is_no_unproved_claim() -> None:
+    builder = GraphBuilder(ROOT)
+    builder.child(builder.root, *CLAIM, text=BARE_HAVE, tactic_goals=(CLAIM,))
+    renamed = f"{CONTEXT}\nh₃ : x = -4\n{TARGET}"
+    sibling = builder.child(builder.root, renamed, text="have h₃ : x = -4 := by linear_combination h₁ - h₀")
+    record = builder.record(builder.child(sibling, text="close"))
+    assert labels_of(record, BARE_HAVE) == (UNKNOWN,)
+
+
+def single_claim_tree(text: str, goals: tuple[str, ...]) -> TreeRecord:
+    builder = GraphBuilder(ROOT)
+    builder.child(builder.root, *goals, text=text, tactic_goals=(goals,))
+    return builder.record(builder.child(builder.root, text="close"))
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "try have h₂ : x = -4",
+        "all_goals have h₂ : x = -4",
+        "any_goals have h₂ : x = -4",
+        "haveI h₂ : x = -4",
+        "letI h₂ : x = -4",
+        "norm_num <;> have h₂ : x = -4",
+    ],
+)
+def test_wrapped_bare_claim_is_an_unproved_claim(text: str) -> None:
+    assert labels_of(single_claim_tree(text, CLAIM), text) == (UNPROVED_CLAIM,)
+
+
+def test_rsuffices_leaving_its_claim_last_is_an_unproved_claim() -> None:
+    text = "rsuffices h₂ : x = -4"
+    assert labels_of(single_claim_tree(text, (AFTER_FIRST_HAVE, CLAIM[0])), text) == (UNPROVED_CLAIM,)
+
+
+def test_a_name_containing_have_makes_no_claim() -> None:
+    text = "apply have_lemma"
+    assert labels_of(single_claim_tree(text, CLAIM), text) == (UNKNOWN,)
+
+
 SUFFICES = "suffices h₂ : x = -4 by linear_combination h₀ - h₂"
 SUFFICED = (f"{CONTEXT}\n⊢ x = -4",)
 

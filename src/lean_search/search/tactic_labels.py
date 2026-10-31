@@ -1,6 +1,7 @@
 """Per-tactic labels of policy samples: the state each executed tactic reached, judged against the proof graph."""
 
 import dataclasses
+import functools
 import re
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
@@ -75,25 +76,34 @@ class TacticLabelCounts:
         return sum(dataclasses.astuple(self))
 
 
-CLAIM_TACTIC = re.compile(r"(?:have|obtain|suffices|replace)(?![\w'!?])")
+# Anywhere in the tactic: wrapped as `try have`, `all_goals have`, `any_goals have` or after `<;>` too.
+CLAIM_TACTIC = re.compile(r"(?<![\w.'])(have|haveI|letI|obtain|suffices|rsuffices|replace)(?![\w'!?])")
+
+# Per goal its hypotheses' types and its target: a state up to the names of its hypotheses.
+type NamelessKey = tuple[tuple[tuple[str, ...], str], ...]
+
+
+def nameless_key(goals: Sequence[str]) -> NamelessKey:
+    return tuple((parts.hypothesis_types, parts.target) for parts in map(goal_parts, goals))
 
 
 @dataclass(frozen=True)
 class Claim:
-    """A proposition the model invented and made the first goal, in the context before its tactic: `have h : A` (a
-    flattened `have h : A := by` too), `obtain ⟨x, hx⟩ : A` and `replace h : A` add it, `suffices h : A by …` replaces
-    the goal with it. The goals of `constructor`, `cases`, `induction`, `by_cases`, `apply` or `refine` are none."""
+    """A proposition the model invented and made a goal, in the context before its tactic: `have h : A` (a flattened
+    `have h : A := by` too, `haveI`, `letI`), `obtain ⟨x, hx⟩ : A` and `replace h : A` add it first, `rsuffices` last,
+    `suffices h : A by …` replaces the goal with it. The goals of `constructor`, `cases`, `induction`, `by_cases`,
+    `apply` or `refine` are none."""
 
     # Normalized.
     goal: str
     # Goals of the state with the claim.
     goals: int
     # The state once the claim is proved, when it added a goal (not `suffices`).
-    continuation: GoalKey | None
+    continuation: NamelessKey | None
 
 
 def claim_of(before: Sequence[str], after: Sequence[str]) -> Claim | None:
-    """The claim a tactic's states have the shape of; `CLAIM_TACTIC` tells whether its tactic made one."""
+    """The claim states have the shape of with the claim first; `claim_made` tells whether a tactic made one."""
     if not before or not after:
         return None
     stated = goal_parts(before[0])
@@ -102,12 +112,27 @@ def claim_of(before: Sequence[str], after: Sequence[str]) -> Claim | None:
         return None
     match len(after) - len(before):
         case 1:
-            continuation = goal_key(after[1:])
+            continuation = nameless_key(after[1:])
         case 0:
             continuation = None
         case _:
             return None
     return Claim(normalize_goal(after[0]), len(after), continuation)
+
+
+def claim_made(text: str, before: Sequence[str], after: Sequence[str]) -> Claim | None:
+    """`rsuffices` is `obtain` then `rotate_left`: its claim is the last goal."""
+    match CLAIM_TACTIC.search(text):
+        case None:
+            return None
+        case found if found[1] == "rsuffices":
+            return claim_of(before, (*after[-1:], *after[:-1]))
+        case _:
+            return claim_of(before, after)
+
+
+def has_claim_shape(before: Sequence[str], after: Sequence[str]) -> bool:
+    return claim_of(before, after) is not None or claim_of(before, (*after[-1:], *after[:-1])) is not None
 
 
 def proves(claim: Claim, goals: Sequence[str]) -> bool:
@@ -118,8 +143,8 @@ def proves(claim: Claim, goals: Sequence[str]) -> bool:
 
 class ClaimProofs:
     """Whether a claim gets proved: a state reachable from it over forward edges (a later state of its block, a
-    descendant, a state a block from either ran through) proves it, or the tree has its continuation anywhere (a
-    sibling's `have h : A := proof`)."""
+    descendant, a state a block from either ran through) proves it, or the tree has its continuation anywhere under
+    any hypothesis name (a sibling's `have h₃ : A := proof`)."""
 
     def __init__(self, record: TreeRecord, successors: Mapping[int, Mapping[int, int]]) -> None:
         """`successors`: `GraphLabels.successors`."""
@@ -128,9 +153,12 @@ class ClaimProofs:
         for edge in record.edges:
             self.states[edge.parent_id].extend(goals for goals in edge.tactic_goals if goals)
         self.own_fewest_goals = [min(len(goals) for goals in states) for states in self.states]
-        self.keys = {goal_key(goals) for states in self.states for goals in states}
         self.reachable: dict[int, dict[int, int]] = {}
         self.fewest_goals: dict[int, int] = {}
+
+    @functools.cached_property
+    def keys(self) -> set[NamelessKey]:
+        return {nameless_key(goals) for states in self.states for goals in states}
 
     def reachable_from(self, node_id: int) -> dict[int, int]:
         if node_id not in self.reachable:
@@ -262,16 +290,12 @@ class TacticGraph:
         befores = [self.record.nodes[edge.parent_id].goals, *states]
         for index, goals in enumerate(states):
             before = befores[index]
-            claim = None if goals is None or before is None else claim_of(before, goals)
-            if claim is None:
+            if goals is None or before is None or not has_claim_shape(before, goals):
                 continue
             texts = tactic_texts(edge) if texts is None else texts
+            claim = claim_made(texts[index], before, goals) if index < len(texts) else None
             later = [state for state in states[index + 1 :] if state is not None]
-            if (
-                index >= len(texts)
-                or CLAIM_TACTIC.match(texts[index]) is None
-                or any(proves(claim, state) for state in later)
-            ):
+            if claim is None or any(proves(claim, state) for state in later):
                 continue
             outcome = dataclasses.replace(outcomes[index], leaves_claim_open=True)
             assert edge.target_id is not None, edge.edge_id
