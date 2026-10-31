@@ -2,11 +2,13 @@ import pytest
 
 from lean_search.lean.hypotheses import (
     accessible_names,
+    adds_only_closed_form_hypotheses,
     adds_only_redundant_hypotheses,
     goal_parts,
     has_inaccessible_names,
     hypothesis_names,
     is_reflexive,
+    mentions,
     renaming_tactic,
 )
 
@@ -88,3 +90,26 @@ CONTEXT = "x e : ℝ\nh₀ : x + e = 7\n⊢ e = 11"
 )
 def test_adds_only_redundant_hypotheses(after: tuple[str, ...], redundant: bool) -> None:
     assert adds_only_redundant_hypotheses((CONTEXT,), after) is redundant
+
+
+@pytest.mark.parametrize(
+    ("after", "closed_form"),
+    [
+        (("x e : ℝ\nh₀ : x + e = 7\nh₄ : 0 < (1:ℝ)\n⊢ e = 11",), True),
+        (("x e : ℝ\nh₀ : x + e = 7\n⊢ 0 < ((0:ℝ))", "x e : ℝ\nh₀ : x + e = 7\nh₄ : 0 < ((0:ℝ))\n⊢ e = 11"), True),
+        (("x e : ℝ\nh₀ : x + e = 7\nh₄ : 0 < x ^ 2 + 1\n⊢ e = 11",), False),
+        (("x e : ℝ\nh₀ : x + e = 7\nh₄ : h₀ = h₀\n⊢ e = 11",), False),
+        (("x e : ℝ\nh₀ : x + e = 7\nh₄ : 0 < (1:ℝ)\n⊢ e = 7 - x",), False),
+    ],
+    ids=["closed", "bare have", "mentions a variable", "only redundant", "target changed"],
+)
+def test_adds_only_closed_form_hypotheses(after: tuple[str, ...], closed_form: bool) -> None:
+    assert adds_only_closed_form_hypotheses((CONTEXT,), after) is closed_form
+
+
+@pytest.mark.parametrize(
+    ("proposition", "name", "mentioned"),
+    [("x.1 < 2", "x", True), ("xs.length = 0", "x", False), ("Real.x = 1", "x", False), ("h₀ = h₁", "h", False)],
+)
+def test_mentions_whole_names_only(proposition: str, name: str, mentioned: bool) -> None:
+    assert mentions(proposition, name) is mentioned

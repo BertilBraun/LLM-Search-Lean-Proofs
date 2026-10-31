@@ -48,3 +48,18 @@ def example_tree() -> TreeRecord:
         tactic_goals=((AFTER_FIRST_HAVE,), (AFTER_SECOND_HAVE,), (SIMPLIFIED,)),
     )
     return builder.record(proof)
+
+
+BARE_HAVE = "have h₂ : x = -4"
+CLAIM = (f"{CONTEXT}\n⊢ x = -4", AFTER_FIRST_HAVE)
+
+
+def claim_tree(*, proved_below: bool = False, on_proof_graph: bool = False) -> TreeRecord:
+    """The root, a policy sample leaving the claim `x = -4` as a new goal, and a proof elsewhere or through it."""
+    builder = GraphBuilder(ROOT)
+    claim = builder.child(builder.root, *CLAIM, text=BARE_HAVE, tactic_goals=(CLAIM,))
+    if proved_below or on_proof_graph:
+        claimed = builder.child(claim, AFTER_FIRST_HAVE, text="linear_combination h₁ - h₀")
+        if on_proof_graph:
+            return builder.record(builder.child(claimed, text="close"))
+    return builder.record(builder.child(builder.root, text="close"))

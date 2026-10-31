@@ -2,14 +2,20 @@ import pytest
 from graph_trees import GraphBuilder
 from tactic_trees import (
     AFTER_FIRST_HAVE,
+    BARE_HAVE,
+    CLAIM,
     CONSTRUCTOR,
+    CONTEXT,
     COPY,
     E_FIRST_THEN_FAILING,
     ERROR,
     FIRST_THEN_FAILING,
     NO_OP,
     PROOF,
+    ROOT,
+    TARGET,
     THROUGH_SECOND_HAVE,
+    claim_tree,
     example_tree,
 )
 
@@ -25,6 +31,7 @@ NO_PROGRESS = TacticLabel.NO_PROGRESS
 REDUNDANT = TacticLabel.REDUNDANT_HYPOTHESIS
 FAILING = TacticLabel.FAILING
 MASKED = TacticLabel.MASKED
+UNPROVED_CLAIM = TacticLabel.UNPROVED_CLAIM
 MIN_EXPANDED_NODES = RewardConfig().off_graph_min_expanded_nodes
 
 
@@ -47,7 +54,7 @@ def labels_of(record: TreeRecord, text: str, min_expanded_nodes: int = MIN_EXPAN
         (NO_OP, (NO_PROGRESS,)),
         (ERROR, (FAILING,)),
         ("", (FAILING,)),
-        (CONSTRUCTOR, (OFF_GRAPH,)),
+        (CONSTRUCTOR, (UNPROVED_CLAIM,)),
         (THROUGH_SECOND_HAVE, (PROOF_GRAPH, PROOF_GRAPH, UNKNOWN)),
     ],
     ids=[
@@ -58,7 +65,7 @@ def labels_of(record: TreeRecord, text: str, min_expanded_nodes: int = MIN_EXPAN
         "no-op",
         "error",
         "unparsed",
-        "dead end",
+        "dead end adding goals",
         "intermediate state",
     ],
 )
@@ -156,3 +163,54 @@ def test_unverified_proof_fails_on_its_last_tactic() -> None:
 
 def test_label_counts_cover_every_label() -> None:
     assert TacticLabelCounts.of(TacticLabel).total == len(TacticLabel)
+
+
+FILLER = f"{CONTEXT}\nh₂ : 0 < (1:ℝ)\n{TARGET}"
+LOCAL_FACT = f"{CONTEXT}\nh₂ : 0 < x ^ 2 + 1\n{TARGET}"
+FALSE_CLAIM = (f"{CONTEXT}\n⊢ 0 < ((0:ℝ))", f"{CONTEXT}\nh₂ : 0 < ((0:ℝ))\n{TARGET}")
+
+
+def test_bare_have_whose_claim_is_never_proved_is_an_unproved_claim() -> None:
+    assert labels_of(claim_tree(), BARE_HAVE) == (UNPROVED_CLAIM,)
+
+
+def test_bare_have_on_the_proof_graph_stays_on_it() -> None:
+    assert labels_of(claim_tree(on_proof_graph=True), BARE_HAVE) == (PROOF_GRAPH,)
+
+
+def test_bare_have_whose_claim_a_descendant_proves_is_no_unproved_claim() -> None:
+    assert labels_of(claim_tree(proved_below=True), BARE_HAVE) == (UNKNOWN,)
+
+
+def test_bare_have_whose_claim_the_block_proves_is_no_unproved_claim() -> None:
+    builder = GraphBuilder(ROOT)
+    text = f"{BARE_HAVE}\nlinear_combination h₁ - h₀\nring_nf"
+    after = f"{CONTEXT}\nh₂ : x = -4\n⊢ e = 11"
+    builder.child(builder.root, after, text=text, tactics=3, tactic_goals=(CLAIM, (AFTER_FIRST_HAVE,), (after,)))
+    record = builder.record(builder.child(builder.root, text="close"))
+    assert labels_of(record, text)[0] == UNKNOWN
+
+
+def single_step_tree(goals: str, proved: bool = False) -> TreeRecord:
+    builder = GraphBuilder(ROOT)
+    child = builder.child(builder.root, goals, text="have", tactic_goals=((goals,),))
+    return builder.record(builder.child(child if proved else builder.root, text="close"))
+
+
+def test_closed_form_filler_off_the_proof_graph_is_redundant() -> None:
+    assert labels_of(single_step_tree(FILLER), "have") == (REDUNDANT,)
+
+
+def test_hypothesis_mentioning_a_local_variable_is_no_filler() -> None:
+    assert labels_of(single_step_tree(LOCAL_FACT), "have") == (UNKNOWN,)
+
+
+def test_closed_form_hypothesis_on_the_proof_graph_stays_on_it() -> None:
+    assert labels_of(single_step_tree(FILLER, proved=True), "have") == (PROOF_GRAPH,)
+
+
+def test_bare_have_of_a_false_closed_form_claim_is_redundant() -> None:
+    builder = GraphBuilder(ROOT)
+    builder.child(builder.root, *FALSE_CLAIM, text="have h₂ : 0 < ((0:ℝ))", tactic_goals=(FALSE_CLAIM,))
+    record = builder.record(builder.child(builder.root, text="close"))
+    assert labels_of(record, "have h₂ : 0 < ((0:ℝ))") == (REDUNDANT,)

@@ -15,8 +15,15 @@ local_share = 0.15
 # cut off at the token cap).
 failure_local = -1.0
 # L of a tactic without progress (unchanged, back to an earlier state) or adding only redundant hypotheses: as low
-# as a failure, so a no-op never beats a genuine attempt.
+# as a failure, so a no-op never beats a genuine attempt. Off the proof graph, a closed-form hypothesis mentioning no
+# variable or hypothesis of the context (`have h1 : 0 < (1:ℝ)`) counts as redundant too (owner, 2026-10-31).
 no_progress_local = -1.0
+# L of a state off the proof graph that added goals (a bare `have h : claim`) nothing in the tree proves: like no
+# progress (owner, 2026-10-31, after the reward hacking of phases 1-10: bare claims at 0 beat real attempts at -1).
+unproved_claim_local = -1.0
+# L of an unknown state (never expanded, or too few expanded nodes below it): scored, no longer left out, below an
+# explored off-graph state (0) and above a failure (-1) (owner, 2026-10-31).
+unknown_local = -0.5
 # L per goal a proof-graph tactic closes.
 goal_closed_bonus = 0.1
 # delta: a proof-graph state earns this per remaining proof-graph step it is closer to a proof than the group's node,

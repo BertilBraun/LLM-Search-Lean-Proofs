@@ -2,12 +2,12 @@ import dataclasses
 
 import pytest
 from graph_trees import GraphBuilder
-from tactic_trees import CONSTRUCTOR, COPY, FIRST_THEN_FAILING, PROOF, example_tree
+from tactic_trees import BARE_HAVE, CONSTRUCTOR, COPY, FIRST_THEN_FAILING, PROOF, claim_tree, example_tree
 
 from lean_search.rl.grpo_groups import GroupSample, PolicyGroup, RewardConfig, TreeGroups, policy_groups
 from lean_search.search import FailureKind, StepSource, TreeRecord
 from lean_search.search.graph_labels import label_graph
-from lean_search.search.tactic_labels import policy_tactics
+from lean_search.search.tactic_labels import TacticLabel, policy_tactics
 from lean_search.value.graph_targets import RemainingStepsReadout, recorded_estimates
 
 READOUT = RemainingStepsReadout()
@@ -68,18 +68,41 @@ def test_redundant_hypothesis_scores_as_a_failure() -> None:
     assert tactic_rewards(COPY) == pytest.approx([-0.15])
 
 
+def test_dead_end_adding_goals_scores_as_an_unproved_claim() -> None:
+    assert tactic_rewards(CONSTRUCTOR) == pytest.approx([-0.15])
+
+
 def test_expanded_off_graph_state_is_neutral_before_the_gate() -> None:
-    assert tactic_rewards(CONSTRUCTOR) == pytest.approx([0.0])
+    builder = GraphBuilder("⊢ p")
+    dead_end = builder.child(builder.root, "⊢ q", text="detour")
+    builder.failure(dead_end)
+    (root,) = groups(builder.record(builder.child(builder.root, text="close")))
+    (detour,) = [sample for sample in root.samples if sample.text == "detour"]
+    assert detour.score == pytest.approx(0.0)
 
 
-def test_off_graph_state_with_live_children_and_too_few_expanded_nodes_earns_nothing() -> None:
+def test_off_graph_state_with_live_children_and_too_few_expanded_nodes_scores_as_unknown() -> None:
     builder = GraphBuilder("⊢ p")
     off_graph = builder.child(builder.root, "⊢ q", text="detour")
     builder.child(off_graph, "⊢ r")
     proof = builder.child(builder.root, text="close")
     (root,) = groups(builder.record(proof))
     (detour,) = [sample for sample in root.samples if sample.text == "detour"]
-    assert detour.tactics[0].parts is None
+    assert detour.score == pytest.approx(-0.5 * 0.15)
+
+
+def claim_sample(on_proof_graph: bool = False) -> GroupSample:
+    (root,) = [group for group in groups(claim_tree(on_proof_graph=on_proof_graph)) if group.node_id == 0]
+    (claim,) = [sample for sample in root.samples if sample.text == BARE_HAVE]
+    return claim
+
+
+def test_unproved_claim_off_the_proof_graph_scores_like_no_progress() -> None:
+    assert claim_sample().score == pytest.approx(-0.15)
+
+
+def test_claim_on_the_proof_graph_keeps_its_label() -> None:
+    assert claim_sample(on_proof_graph=True).tactics[0].label == TacticLabel.PROOF_GRAPH
 
 
 def test_expanded_off_graph_state_earns_its_value_part_after_the_gate() -> None:
@@ -134,6 +157,12 @@ def sweep_proof_tree() -> TreeRecord:
 
 def test_group_without_a_policy_proof_is_left_out() -> None:
     assert tree_groups(sweep_proof_tree()) == TreeGroups(groups=(), without_policy_proof=1)
+
+
+def test_scored_unknown_samples_are_no_policy_proof() -> None:
+    config = dataclasses.replace(CONFIG, require_policy_proof=False)
+    (root,) = groups(sweep_proof_tree(), config)
+    assert not root.has_policy_proof
 
 
 def test_group_without_a_policy_proof_stays_when_not_required() -> None:
