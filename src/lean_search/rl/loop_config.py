@@ -206,8 +206,8 @@ class RetentionConfig:
 class HealthConfig:
     # Relative limits compare with the mean of the first this many phases (version 0's samples, the first updates).
     reference_phases: int = 2
-    # Per token, k3; version 0's is 0. The single-step test at lr 3e-5 measured 0.03-0.08 after 76 steps and the KL
-    # grows phase by phase: 0.5 alerts on a policy far from its start.
+    # Per token, k1's mean over the last pass's reference tokens (`final_first_round_kl_to_reference`); version 0's
+    # is 0. The KL grows phase by phase: 0.5 nats per token alerts on a policy far from its start.
     max_kl_to_starting_policy: float = 0.5
     # Of the last pass's trained tokens; PPO runs usually stay below 0.1-0.2, this loop's small steps far below.
     max_clip_fraction: float = 0.1

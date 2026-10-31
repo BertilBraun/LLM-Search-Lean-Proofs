@@ -692,8 +692,8 @@ at 50k 9 stop on heartbeats and 1 fails fast (median 8.6 s, 133 s), at 100k 5 he
   ×1.17 at T = 0.8).
 - **Optimization** (implemented defaults): PPO-style clipped objective per token, clip range [1 − 0.2, 1 + 0.28];
   old log-probabilities from the trainer's own weights before the phase's first update, logged against the recorded
-  vLLM log-probabilities; KL (k3 estimator) measured to the data-collecting policy and to the starting weights (the
-  latter on 256 sampled sequences per phase while it is only reported), penalty coefficient 0; the mean probability
+  vLLM log-probabilities; KL measured to the data-collecting policy (k3) and to the starting weights (k1, its token
+  mean over 256 sequences spread over the last pass's steps while it is only reported), penalty coefficient 0; the mean probability
   ratio and clip fraction of the positive- and of the negative-advantage tokens logged per pass; loss normalized as Σ token loss / (sequences in the step × 256), so there is no
   per-sequence mean and no length bias; the starting adapter's rank (64), learning rate 3e-5 (single-step test
   below), 64 sequences per

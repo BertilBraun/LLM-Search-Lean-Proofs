@@ -130,10 +130,13 @@ and in older records), carried to every sequence (`PolicySequence.policy_version
 
 ## Trainer (`policy_trainer.py`)
 
-PPO-clipped objective per token, clip [1 − 0.2, 1 + 0.28], loss Σ token loss / (sequences in the step × 256), KL (k3)
-to the data-collecting policy and to the starting policy reported, NLL replay. The KL to the starting policy only feeds
-a metric while `kl_coefficient` is 0, so its log-probabilities are scored on `reference_sequences` (256) sequences per
-phase (a seeded draw; all of them with a KL penalty). Each step and pass also reports the mean probability ratio and
+PPO-clipped objective per token, clip [1 − 0.2, 1 + 0.28], loss Σ token loss / (sequences in the step × 256), KL to
+the data-collecting policy (k3) and to the starting policy (k1 = log π − log π_ref) reported, NLL replay. The KL to the
+starting policy only feeds a metric while `kl_coefficient` is 0 (a penalty would train on k3), so its log-probabilities
+are scored on `reference_sequences` (256) sequences per phase, spread evenly over the last pass's steps (all of them
+with a KL penalty); the phase's value is the token mean of k1 over those sequences' trained tokens. Before 2026-10-31
+the draw repeated the step shuffle's random numbers, so nearly all 256 landed in the last ~4 steps of the first pass,
+and the steps' k3 means (one token the reference preferred by 20+ nats adds e^20) went up to 10^9. Each step and pass also reports the mean probability ratio and
 clip fraction of the positive- and of the negative-advantage tokens (`SignedRatios`, `GrpoTrainingResult.ratios_by_pass`,
 the dashboard's `ratios_by_pass`): an update going the right way lifts the first above 1 and pushes the second below. Log-probabilities divide the logits by
 each sample's recorded temperature (`ExpansionTexts.temperature`; `PolicyDataConfig.default_temperature` for old
@@ -499,7 +502,7 @@ its threshold dashed, and its alert list shows the latest phase's alerts. Thresh
 
 | Check | Signal | Default threshold | Reference |
 |---|---|---|---|
-| `kl_to_starting_policy` | KL (k3, per token) to the starting policy, the median of the last pass's steps (`final_kl_to_reference`; a step's mean has a heavy tail) | > 0.5 | absolute (version 0's is 0; the single-step test at lr 3e-5 measured 0.03-0.08 after 76 steps, and the KL grows phase by phase, so 0.5 flags a policy far from its start) |
+| `kl_to_starting_policy` | KL (k1, per token) to the starting policy, the mean over the last pass's reference tokens of the first round (`final_first_round_kl_to_reference`) | > 0.5 | absolute (version 0's is 0; 0.5 nats per token flags a policy far from its start; phases before 2026-10-31 report a median of k3 step means, which reads 0 or 10^1-10^7) |
 | `clip_fraction` | clip fraction of the last pass's trained tokens | > 0.1 | absolute (PPO runs usually stay below 0.1-0.2) |
 | `distinct_samples` | distinct blocks per policy expansion (of n = 8) | < 0.75 × reference | mean of the first `reference_phases` (2) phases |
 | `explanation_length` | mean explanation tokens of the trained samples | outside 0.5-2 × reference | the first phases |
