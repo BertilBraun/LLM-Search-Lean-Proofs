@@ -8,6 +8,7 @@ from lean_search.rl.policy_trainer import (  # noqa: E402
     chunk_scores,
     clipped_policy_losses,
     kl_estimate,
+    kl_penalties,
     reference_log_ratios,
     token_mean,
 )
@@ -60,6 +61,25 @@ def test_kl_estimate_is_exact_in_expectation() -> None:
     q = torch.tensor([0.2, 0.2, 0.6])
     expected = (p * kl_estimate(q.log() - p.log())).sum()
     assert expected.item() == pytest.approx((p * (p.log() - q.log())).sum().item())
+
+
+def penalty_gradient(log_probability: float, reference_log_probability: float) -> float:
+    policy = torch.tensor([log_probability], requires_grad=True)
+    kl_penalties(policy, torch.tensor([reference_log_probability])).sum().backward()
+    assert policy.grad is not None
+    return policy.grad.item()
+
+
+def test_the_kl_penalty_stays_finite_where_the_reference_prefers_a_token_by_100_nats() -> None:
+    assert math.isfinite(penalty_gradient(-100.0, 0.0))
+
+
+def test_the_kl_penalty_pulls_down_a_token_the_policy_prefers_by_30_nats() -> None:
+    assert penalty_gradient(0.0, -30.0) == pytest.approx(1.0)
+
+
+def test_the_kl_penalty_is_k3_within_its_cap() -> None:
+    assert kl_penalties(torch.tensor([-2.0]), torch.tensor([-1.0])).item() == pytest.approx(math.e - 2)
 
 
 def test_scores_use_fp32_logits_under_bf16_autocast() -> None:

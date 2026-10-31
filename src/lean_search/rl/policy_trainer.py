@@ -52,6 +52,8 @@ from lean_search.training.sft_data import IGNORE_INDEX, TokenizedExample
 SCORE_CHUNK_POSITIONS = 512
 # PEFT's name of the adapter that trains.
 TRAINED_ADAPTER_NAME = "default"
+# k3's e^r overflows fp32 above ~88 nats (a NaN step); below 0 k3 is near linear, so only the top is capped.
+MAX_PENALTY_LOG_RATIO = 20.0
 
 
 class ReferencePolicy(StrEnum):
@@ -195,6 +197,11 @@ def clipped_policy_losses(
 def kl_estimate(log_ratio: torch.Tensor) -> torch.Tensor:
     """k3: with log_ratio = log q(x) - log p(x) for x drawn from p, an unbiased, non-negative estimate of KL(p || q)."""
     return torch.exp(log_ratio) - log_ratio - 1
+
+
+def kl_penalties(log_probabilities: torch.Tensor, reference_log_probabilities: torch.Tensor) -> torch.Tensor:
+    """k3 of KL(policy || reference) per token, at most `MAX_PENALTY_LOG_RATIO` nats of reference preference."""
+    return kl_estimate((reference_log_probabilities - log_probabilities).clamp(max=MAX_PENALTY_LOG_RATIO))
 
 
 def chunk_scores(
@@ -647,7 +654,7 @@ def train_grpo(
             loss = policy_loss
             # With a penalty every sequence has a reference score; without one, 0 * an overflowing k3 would be NaN.
             if config.kl_coefficient:
-                penalty = kl_estimate(reference_values - log_probabilities)
+                penalty = kl_penalties(log_probabilities, reference_values)
                 loss = loss + config.kl_coefficient * (weights * penalty).sum() / normalizer
             loss.backward()
             trained = weights > 0
