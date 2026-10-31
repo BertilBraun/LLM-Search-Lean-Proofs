@@ -12,8 +12,9 @@
 //          series: [{label, path, family, normalize, detail: {name: key}}]
 // reliability (latest records): at, curves: [{label, path, family}] to lists of reliability bins
 // versions (latest record): path to a list of objects, one point per object at its field `x`; series {label, field,
-//          budget ("last" or an index into the record's budgets, for a list field), scale, slot, dashed}
-// section: {title, note, collapsed (the default; the reader's choice is remembered), tiles | charts | table, alerts}
+//          budget ("last" or an index into the record's budgets, for a list field), scale, slot, dashed};
+//          latestReferences: [{path, label, scale}], lines at numbers of the latest record
+// section: {title, note, collapsed (the default; the reader's choice is remembered), tiles | charts | table}
 
 const SAMPLES = "graph.policy_samples.";
 const EDGE_GROUPS = (prefix) => [
@@ -102,9 +103,13 @@ const ELO = 400 / Math.LN10;
 const RATING = {
   elo: {
     title: "Probe rating by version",
-    subtitle: "every finished probe run on one scale (Elo-like, version 0 = 0): policy and the value model it searched with, 16 expansions; dashed: 95% interval over problems",
+    subtitle: "each version's own probe runs on one scale (Elo-like, version 0 = 0): policy and the value model it searched with, at the probe's budget; dashed: 95% interval over problems; lines: the latest pass and the last pass before the reward fix",
     family: "rating", kind: "versions", path: "versions", x: "policy_version", unit: "number",
     references: [{ value: 0, label: "version 0", kind: "baseline" }],
+    latestReferences: [
+      { path: "latest_pass.rating", label: "latest pass", scale: ELO },
+      { path: "against_pre_fix.reference.rating", label: "pre-fix pass", scale: ELO },
+    ],
     series: [
       { label: "rating", field: "rating", scale: ELO },
       { label: "95% low", field: "lower", scale: ELO, slot: 0, dashed: true },
@@ -113,11 +118,11 @@ const RATING = {
   },
   solvedWithin: {
     title: "Probe solved within the budget",
-    subtitle: "share of each version's probe problems proved within 16 and within 1 expansion; dashed: version 0 on the same problems",
+    subtitle: "share of each version's probe problems proved within the probe's budget and within 1 expansion (the root's samples); dashed: version 0 on the same problems",
     family: "rating", kind: "versions", path: "versions", x: "policy_version", unit: "share",
     series: [
-      { label: "within 16", field: "solved_within", budget: "last" },
-      { label: "v0, within 16", field: "baseline_solved_within", budget: "last", slot: 0, dashed: true },
+      { label: "within the budget", field: "solved_within", budget: "last" },
+      { label: "v0, within the budget", field: "baseline_solved_within", budget: "last", slot: 0, dashed: true },
       { label: "within 1", field: "solved_within", budget: 0 },
       { label: "v0, within 1", field: "baseline_solved_within", budget: 0, slot: 2, dashed: true },
     ],
@@ -529,18 +534,17 @@ export const PAGES = [
     sections: [
       {
         title: "Headline: is the prover getting stronger?",
-        note: "Fixed targets only: the same problems at the same budget for every version, never the curriculum's moving one.",
+        note: "Fixed targets only: the same problems at the same budget for every version, never the curriculum's moving one. The probe measures the policy with its value model, the held-out states the policy alone.",
         tiles: "headline",
       },
       {
         title: "Health: is anything going wrong?",
-        note: "The loop running, the GPUs busy, and the reward-hacking habits within the limits the loop alerts on.",
+        note: "The loop running, the GPUs busy, the rollback trigger, and the reward-hacking habits within the limits the loop alerts on; the alerts are at the top.",
         tiles: "health",
-        alerts: true,
       },
       {
         title: "Strength over versions",
-        note: "The headline's history: a rising rating with its interval above 0 is the RL working.",
+        note: "The headline's history. A version's own rating covers one third and moves by about 40 Elo from noise alone; trust the passes.",
         charts: [RATING.elo, RATING.solvedWithin, FIXED.heldOut, FIXED.probeDifference],
       },
       {

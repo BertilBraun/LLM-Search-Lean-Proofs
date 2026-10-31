@@ -30,7 +30,6 @@ from lean_search.monitoring.server import (
 )
 from lean_search.monitoring.store import METRICS_DIRECTORY, MetricsWriter
 from lean_search.monitoring.system_sampler import LEAN_PROCESS_NAMES, record_system
-from lean_search.rl.probe_rating import record_ratings
 
 MINIMUM_PASSWORD_LENGTH = 12
 
@@ -137,6 +136,9 @@ def main() -> None:
             disk_paths = arguments.disk_path or default_disk_paths(arguments.run_directory)
             record_system(arguments.run_directory, arguments.interval, arguments.hourly_price, names, disk_paths)
         case "record-ratings":
+            # Keeps the server and the system sampler off numpy and the search code.
+            from lean_search.rl.probe_rating import record_ratings
+
             record_ratings(arguments.run_directory, arguments.interval)
 
 

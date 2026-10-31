@@ -766,16 +766,28 @@ dashboard warns below `min_free_disk_gib` (50) free.
   `held_out_states`: per-sample success and valid Lean on the 512 per-step evaluation states (`single_step.py`), with
   every probe slot (every 2 hours, a few minutes at 112 REPLs): the hard stop's signal. Each writes
   `evaluations/<target>_v<version>/` (resumable), a `fixed_targets` line and `evaluations.jsonl`.
-- Probe rating (`probe_rating.py`, `dashboard.py record-ratings`, started by `grpo_loop.sh dashboard`): every finished
-  probe run (with a `summary.json`; value arms left out) rated on one scale, logit P(version v proves problem p) =
-  ability_v − difficulty_p, version 0 anchored at 0, weak Gaussian priors (difficulty 0.1, ability 0.01) so that a
-  problem proved by every run keeps a finite estimate; 100 Newton steps on the two diagonal blocks. Consecutive versions
-  search different thirds, and the fit takes each problem's difficulty from every version that searched it, so the
-  parts' difficulty cancels without pairing slots by part. The 95% interval resamples problems (200 bootstraps, ~4 s
-  for 14 runs). Each version also gets its share proved within 1, 2, 4, 8 and 16 expansions (the first proof's
-  expansion) beside version 0's on the same problems. A rating covers the policy with the value model it searched with
-  (`evaluation.value_model`). The recorder rates again whenever the set of finished runs changes and appends a `rating`
-  line; the dashboard's headline reads the latest (on the Elo scale, 400 / ln 10 per logit).
+- Probe rating (`probe_rating.py`, `dashboard.py record-ratings`, started by `grpo_loop.sh dashboard`; reviews W and
+  X): every finished probe run (with a `summary.json`; value arms and runs at another expansion budget left out) rated
+  on one scale, logit P(version v proves problem p) = ability_v − difficulty_p, the lowest version (version 0) anchored
+  at 0 (`anchor_version`), weak Gaussian priors (difficulty 0.1, ability 0.01) so that a problem proved by every run
+  keeps a finite estimate; Newton steps on the two diagonal blocks until they settle. Consecutive versions search
+  different thirds, and the fit takes each problem's difficulty from every version that searched it, so the parts'
+  difficulty cancels without pairing slots by part. The 95% intervals resample problems (200 bootstraps, the
+  difficulty prior counted once per draw so that they shrink as the point fit; ~2 s for 14 runs). They cover the
+  search's noise per problem, not effects shared by a whole run (one run per version): a version's own rating moves by
+  about 40 Elo between runs. So the headline pools a pass, the latest non-rejected run of every third (the whole set
+  once, `latest_pass`), and compares it with the pass before it (`against_previous`) and, for the revert rule above,
+  with the last pass of versions before the reward fix (`against_pre_fix`, once the latest pass is wholly after it;
+  `post_fix_parts` counts its thirds so far), each fitted together with its own interval. Each version also gets its
+  share proved within 1, 2, 4, ... expansions (the first proof's expansion) beside the anchor's on the same problems,
+  its wall-clock stops (counted unproved, as in the probe's solve rate), and the problems of the whole set it is
+  expected to prove (`projected_solved`). The fitted difficulties' spread is recorded: below about 1.5 logits a joint
+  fit like this one overstates ratings (review W simulated up to a quarter). A rating covers the policy with the value
+  model it searched with (`evaluation.value_model`); version 0's runs ran before sampling, later ones beside it. The
+  recorder rates again whenever the finished runs or the loop's markers (`rejected_versions.jsonl`,
+  `reward_fix.json`) change, appends a `rating` line, and logs a failed round to `rating_recorder.log` and retries; it
+  reads the files directly, without the model code. The dashboard shows ratings on the Elo scale (400 / ln 10 per
+  logit) and marks the headline stale when a newer probe slot is not rated yet.
 - `grpo_fixed_sets.py gate-benchmark` searches the gate set once with the starting policy and no value model
   (`grpo/gate_search.toml`, log-probability best-first) and builds the value benchmark from those trees
   (`value/benchmark.py`), the loop's `evaluation.value_benchmark.path`.

@@ -229,22 +229,49 @@ class FixedTargets:
 
 @dataclass(frozen=True)
 class VersionRating:
-    """A version's strength on the probe set (policy and the value model it searched with), against version 0."""
+    """A version's strength on the probe set (policy and the value model it searched with), against the anchor."""
 
     policy_version: int
     value_version: int
     runs: int
     problems: int
-    # Over all its runs: searches (a problem per run) and those that proved it.
+    # Over all its runs: searches (a problem per run), those that proved it, and those stopped on the wall clock.
     searches: int
     solved: int
-    # Rasch ability in logits (version 0: 0) and its 95% bootstrap interval over problems.
+    wall_clock_stops: int
+    # Rejected after a collapse or a drift (`rejected_versions.jsonl`): rated, but left out of every pass.
+    rejected: bool
+    # Rasch ability in logits (the anchor: 0) and its 95% bootstrap interval over problems.
     rating: float
     lower: float
     upper: float
-    # Share of its problems proved within each of `ProbeRatings.budgets` expansions, and version 0's on the same ones.
+    # Problems of the whole probe set a version of this rating is expected to prove.
+    projected_solved: float
+    # Share of its problems proved within each of `ProbeRatings.budgets` expansions, and the anchor's on the same
+    # problems (None when the anchor searched none of them).
     solved_within: tuple[float, ...]
-    baseline_solved_within: tuple[float, ...]
+    baseline_solved_within: tuple[float, ...] | None
+
+
+@dataclass(frozen=True)
+class PassRating:
+    """The last run of every third of the probe set pooled into one ability: the whole set, once."""
+
+    policy_versions: tuple[int, ...]
+    rating: float
+    lower: float
+    upper: float
+    projected_solved: float
+
+
+@dataclass(frozen=True)
+class PassComparison:
+    """The latest pass minus a reference pass, fitted together, with its 95% bootstrap interval over problems."""
+
+    reference: PassRating
+    difference: float
+    lower: float
+    upper: float
 
 
 @dataclass(frozen=True)
@@ -253,13 +280,27 @@ class ProbeRatings:
     estimates each problem's difficulty from every version that searched it."""
 
     family: ClassVar[str] = "rating"
+    # The version every rating is against (version 0 unless its runs are missing).
+    anchor_version: int
+    expansion_budget: int
     budgets: tuple[int, ...]
+    problems: int
+    # The anchor's expected solves of the whole set, and the spread (SD) of the fitted difficulties: below about 1.5
+    # logits a joint fit like this one overstates ratings.
+    baseline_projected_solved: float
+    difficulty_spread: float
     versions: tuple[VersionRating, ...]
-    # The newest rated version, as numbers so that they chart over time.
-    latest_policy_version: int
-    latest_rating: float
-    latest_lower: float
-    latest_upper: float
+    # The latest pass, against the pass before it and against the last pass of versions trained before the reward fix
+    # of 2026-10-31; None until the passes exist and share no run.
+    latest_pass: PassRating | None
+    against_previous: PassComparison | None
+    against_pre_fix: PassComparison | None
+    reward_fix_version: int | None
+    # Of the latest pass's thirds, those searched by a version trained with the reward fix, and all thirds.
+    post_fix_parts: int
+    parts: int
+    runs_rated: int
+    runs_unreadable: int
 
 
 @dataclass(frozen=True)

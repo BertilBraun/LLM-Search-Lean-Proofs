@@ -73,7 +73,7 @@ case "$1" in
         nohup python experiments/dashboard.py serve --run-directory "${run_directory}" --host 0.0.0.0 \
             --port "${DASHBOARD_PORT:-8600}" --config experiments/configs/dashboard/dashboard.toml \
             > "${run_directory}/dashboard.log" 2>&1 &
-        echo "Dashboard on port ${DASHBOARD_PORT:-8600}; logs in ${run_directory}/{system_sampler,dashboard}.log"
+        echo "Dashboard on port ${DASHBOARD_PORT:-8600}; logs in ${run_directory}/{system_sampler,rating_recorder,dashboard}.log"
         ;;
     loop)
         mkdir -p "${run_directory}"

@@ -23,6 +23,8 @@ from lean_search.monitoring.families import (
     LoopState,
     LoopStatus,
     PairedDifference,
+    PassComparison,
+    PassRating,
     PauseSegments,
     PhaseHealth,
     PhaseTiming,
@@ -496,11 +498,12 @@ class DemoRun:
 
     def write_ratings(self, moment: float) -> None:
         """The probe rating after a slot: every rated version again, the newest appended (versions repeat at the
-        start, version 0's baseline runs)."""
+        start, version 0's baseline runs); the last three versions pooled as the latest pass."""
         learned = self.progress(moment)
         rating = 0.0 if not self.ratings else 1.4 * learned + self.noise(0.15)
         first = (0.13, 0.22, 0.29, 0.36, 0.41)
         within = tuple(min(1.0, share * (1 + 0.5 * learned)) for share in first)
+        problems = PROBE_PART_PROBLEMS * len(PROBE_STRATA)
         if self.ratings and self.ratings[-1].policy_version == self.phase:
             self.ratings.pop()
         self.ratings.append(
@@ -508,27 +511,56 @@ class DemoRun:
                 policy_version=self.phase,
                 value_version=self.value_version,
                 runs=1,
-                problems=PROBE_PART_PROBLEMS * len(PROBE_STRATA),
-                searches=PROBE_PART_PROBLEMS * len(PROBE_STRATA),
-                solved=round(PROBE_PART_PROBLEMS * len(PROBE_STRATA) * within[-1]),
+                problems=problems,
+                searches=problems,
+                solved=round(problems * within[-1]),
+                wall_clock_stops=round(abs(self.noise(3))),
+                rejected=False,
                 rating=rating,
                 lower=rating - 0.4,
                 upper=rating + 0.45,
+                projected_solved=PROBE_PARTS * problems / (1 + math.exp(0.35 - rating)),
                 solved_within=within,
                 baseline_solved_within=first,
             )
         )
-        latest = self.ratings[-1]
+        rated = self.ratings[1:]
+        latest = self.pass_rating(rated[-PROBE_PARTS:]) if len(rated) >= PROBE_PARTS else None
+        previous = self.pass_rating(rated[-2 * PROBE_PARTS : -PROBE_PARTS]) if len(rated) >= 2 * PROBE_PARTS else None
         self.writer.write(
             ProbeRatings(
+                anchor_version=0,
+                expansion_budget=16,
                 budgets=(1, 2, 4, 8, 16),
+                problems=PROBE_PARTS * problems,
+                baseline_projected_solved=PROBE_PARTS * problems / (1 + math.exp(0.35)),
+                difficulty_spread=2.0,
                 versions=tuple(self.ratings),
-                latest_policy_version=latest.policy_version,
-                latest_rating=latest.rating,
-                latest_lower=latest.lower,
-                latest_upper=latest.upper,
+                latest_pass=latest,
+                against_previous=None if latest is None or previous is None else self.comparison(latest, previous),
+                against_pre_fix=None,
+                reward_fix_version=None,
+                post_fix_parts=0,
+                parts=PROBE_PARTS,
+                runs_rated=len(self.ratings) + 5,
+                runs_unreadable=0,
             ),
             record_time=moment,
+        )
+
+    @staticmethod
+    def comparison(latest: PassRating, reference: PassRating) -> PassComparison:
+        difference = latest.rating - reference.rating
+        return PassComparison(reference, difference, difference - 0.35, difference + 0.35)
+
+    def pass_rating(self, versions: list[VersionRating]) -> PassRating:
+        rating = sum(version.rating for version in versions) / len(versions)
+        return PassRating(
+            policy_versions=tuple(version.policy_version for version in versions),
+            rating=rating,
+            lower=rating - 0.25,
+            upper=rating + 0.27,
+            projected_solved=sum(version.projected_solved for version in versions) / len(versions),
         )
 
     def write_grpo(self, moment: float) -> None:
