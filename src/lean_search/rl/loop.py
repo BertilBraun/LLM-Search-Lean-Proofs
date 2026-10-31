@@ -110,6 +110,7 @@ from lean_search.rl.health_checks import (
     held_out_rates,
     last_good_version,
     measurements,
+    openings_text,
     phase_health,
     probe_habits_text,
     publish_rollback,
@@ -1327,6 +1328,7 @@ class GrpoLoop:
         for alert in record.alerts:
             self.log(f"Health of phase {phase} ({alert.severity}, {alert.check}): {alert.detail}")
         self.log(habits_text(phase, measured, self.reward_fix_phase()))
+        self.log(openings_text(phase, self.store.phase_entries(phase), self.store.phase_entries(phase - 1)))
         if not record.alerts:
             self.log(f"Health of phase {phase}: no alerts")
         if held_out is None and any(alert.check == HealthCheck.VALID_BLOCKS for alert in record.alerts):
@@ -1350,15 +1352,21 @@ class GrpoLoop:
         self.log(f"The reward fix of 2026-10-31 trains from phase {fix.first_phase}")
 
     def reward_fix_phase(self) -> int | None:
+        """None, with a warning, for a file that cannot be read (truncated, invalid): it only labels log lines."""
         if not self.paths.reward_fix.exists():
             return None
-        return from_json_object(RewardFix, json.loads(self.paths.reward_fix.read_text(encoding="utf-8"))).first_phase
+        try:
+            text = self.paths.reward_fix.read_text(encoding="utf-8")
+            return from_json_object(RewardFix, json.loads(text)).first_phase
+        except (OSError, ValueError) as error:
+            self.log(f"Warning: {self.paths.reward_fix} is unreadable and ignored ({type(error).__name__}: {error})")
+            return None
 
     async def measure_reference_habits(self) -> None:
         """Beside the searches: the reference phases recorded before the block habits existed get them from their
         trees, so the habit checks have their reference; unreadable trees are skipped and counted. Once:
-        `reference_habits.json` marks it done, whatever was measured. Metrics only: an error is logged, never stops the
-        loop."""
+        `reference_habits.json` marks it done, unless no tree could be read. Metrics only: an error is logged, never
+        stops the loop."""
         try:
             health = self.config.health
             records = unmeasured_reference_phases(read_health_history(self.paths.health), health.reference_phases)
@@ -1380,6 +1388,12 @@ class GrpoLoop:
                     if entry.summary.below_band:
                         below_band.append(found)
                 measured.append(dataclasses.replace(record, measured=with_habits(record.measured, habits, below_band)))
+            if unreadable == trees:
+                self.log(
+                    f"Alert: none of the reference phases' {trees:,} trees could be read: their block habits stay "
+                    "unmeasured, the habit checks have no reference; the next start tries again"
+                )
+                return
             for record in measured:
                 append_health(self.paths.health, record)
                 self.writer.write(record)
@@ -1402,14 +1416,21 @@ class GrpoLoop:
             )
 
     async def log_probe_habits(self, name: str, directories: Sequence[Path]) -> None:
-        """The block habits of probe runs' trees, pooled; unreadable trees skipped."""
-        paths = [
-            path for directory in directories for path in sorted(EvaluationPaths(directory).trees.glob("*.json.gz"))
-        ]
-        pooled = await asyncio.to_thread(pooled_habits, paths, self.reward_config.off_graph_min_expanded_nodes)
-        self.log(
-            f"{probe_habits_text(name, pooled.habits)}; {pooled.unreadable_trees} of {pooled.trees} trees unreadable"
-        )
+        """The block habits of probe runs' trees, pooled; unreadable trees skipped. Metrics only: an error is logged,
+        never stops the probe."""
+        try:
+            paths = [
+                path for directory in directories for path in sorted(EvaluationPaths(directory).trees.glob("*.json.gz"))
+            ]
+            pooled = await asyncio.to_thread(pooled_habits, paths, self.reward_config.off_graph_min_expanded_nodes)
+            self.log(
+                f"{probe_habits_text(name, pooled.habits)}; {pooled.unreadable_trees} of {pooled.trees} trees "
+                "unreadable"
+            )
+        except Exception as error:
+            self.log(
+                f"Alert: the block habits of {name} failed ({type(error).__name__}: {error})\n{traceback.format_exc()}"
+            )
 
     async def roll_back(self, phase: int, version: int, searching: bool) -> None:
         """After a collapse: the version's policy adapter published again as a new version (merged on the CPU) and

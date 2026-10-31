@@ -27,6 +27,7 @@ from lean_search.rl.health_checks import (
     healthy_versions,
     held_out_rates,
     measurements,
+    openings_text,
     phase_health,
     probe_habits_text,
     read_health_history,
@@ -37,7 +38,14 @@ from lean_search.rl.health_checks import (
 from lean_search.rl.loop_config import HealthConfig
 from lean_search.rl.training_phase import PhaseOutcome, PolicyOutcome
 from lean_search.rl.tree_store import TreeEntry
-from lean_search.rl.tree_summary import BlockHabits, TreeSummary, pooled_habits, summed_habits, tree_summary
+from lean_search.rl.tree_summary import (
+    BlockHabits,
+    OpeningCount,
+    TreeSummary,
+    pooled_habits,
+    summed_habits,
+    tree_summary,
+)
 from lean_search.search import Accounting, SearchResult, StopReason, TreeRecord, tree_record
 from lean_search.search.records import write_tree
 from lean_search.search.texts import (
@@ -306,6 +314,23 @@ def test_the_habits_line_names_the_first_phase_trained_with_the_reward_fix() -> 
 
 def test_the_probe_habits_line_counts_the_bare_haves() -> None:
     assert "4 open with a bare `have` (50.0% of their open claims proved)" in probe_habits_text("probe", HABITS)
+
+
+OPENINGS = dataclasses.replace(HABITS, openings=(OpeningCount("have", 6), OpeningCount("simp", 4)))
+
+
+def test_the_probe_habits_line_names_the_openings_by_head() -> None:
+    assert "openings `have` 60.0%, `simp` 40.0%" in probe_habits_text("probe", OPENINGS)
+
+
+def test_the_openings_line_shows_each_heads_share_in_the_phase_before() -> None:
+    before = dataclasses.replace(HABITS, openings=(OpeningCount("have", 2), OpeningCount("linarith", 8)))
+    text = openings_text(14, [with_habits(OPENINGS)], [with_habits(before)])
+    assert text == "Openings of phase 14 by head (the phase before): `have` 60.0% (20.0%), `simp` 40.0% (0.0%)"
+
+
+def test_the_openings_line_without_the_phase_before_leaves_its_shares_out() -> None:
+    assert openings_text(1, [with_habits(OPENINGS)], []).endswith("`simp` 40.0% (-)")
 
 
 def test_the_cut_off_share_is_per_policy_sample() -> None:

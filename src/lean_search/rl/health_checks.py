@@ -162,8 +162,28 @@ def probe_habits_text(name: str, habits: BlockHabits) -> str:
         f"{number(binned_median(habits.explanation_character_bins))} characters, "
         f"{number(share(habits.valid_block_tactics, habits.valid_blocks), 2)} tactics per complete block, "
         f"{percent(share(habits.continued_proof_graph_steps, habits.proof_graph_steps))} continue after a "
-        "proof-graph step"
+        f"proof-graph step; openings {opening_shares(habits)}"
     )
+
+
+def opening_shares(habits: BlockHabits) -> str:
+    return ", ".join(f"`{head}` {percent(value)}" for head, value in habits.top_openings(OPENING_HEADS)) or "-"
+
+
+OPENING_HEADS = 8
+
+
+def openings_text(phase: int, entries: Sequence[TreeEntry], previous: Sequence[TreeEntry]) -> str:
+    """The phase's most frequent opening heads by share of the judged samples, and each head's share in `previous`
+    (the phase before): migrations between claim forms (`have`, `obtain`, `suffices`, `try`) show here."""
+    habits = summed_habits(entry.summary.habits for entry in entries)
+    before = summed_habits(entry.summary.habits for entry in previous)
+    shares_before = {item.head: share(item.samples, before.block_samples) for item in before.openings}
+    heads = ", ".join(
+        f"`{head}` {percent(value)} ({percent(shares_before.get(head, 0.0 if before.openings else None))})"
+        for head, value in habits.top_openings(OPENING_HEADS)
+    )
+    return f"Openings of phase {phase} by head (the phase before): {heads or '-'}"
 
 
 def unmeasured_reference_phases(history: Sequence[PhaseHealth], phases: int) -> list[PhaseHealth]:

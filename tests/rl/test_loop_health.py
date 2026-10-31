@@ -16,8 +16,10 @@ from loop_fakes import (
     merge_by_writing,
     record_version_zero,
     run_until,
+    solved_tree,
 )
 
+from lean_search.data import Problem, Split
 from lean_search.expert_iteration.serving import (
     MergedPublisher,
     ModelVersion,
@@ -28,7 +30,7 @@ from lean_search.expert_iteration.serving import (
 from lean_search.monitoring.alerts import AlertThresholds, run_alerts
 from lean_search.monitoring.families import HealthMeasurements, HealthThresholds, PhaseHealth
 from lean_search.monitoring.store import RunReader
-from lean_search.rl.evaluation import EvaluationKind
+from lean_search.rl.evaluation import EvaluationKind, EvaluationPaths
 from lean_search.rl.health_checks import (
     ReferenceHabits,
     RewardFix,
@@ -44,7 +46,9 @@ from lean_search.rl.health_checks import (
 from lean_search.rl.loop import GrpoLoop, LoopProgress, PhaseStage, read_progress, request_evaluation
 from lean_search.rl.training_phase import TrainingPhaseConfig, label_phase_data
 from lean_search.rl.tree_store import TreeStore
-from lean_search.search.records import from_json_object
+from lean_search.search import Accounting, SearchResult, StopReason, tree_record
+from lean_search.search.records import from_json_object, write_tree
+from lean_search.search.tree import EdgeOutcome, StepSource
 
 HELD_OUT_BLOCK = """[evaluation.held_out_states]
 max_expansions = 1
@@ -590,6 +594,78 @@ async def test_an_unreadable_reference_tree_is_skipped_and_counted(tmp_path: Pat
     await started_until(world, world.paths.reference_habits.exists)
     measured = from_json_object(ReferenceHabits, json.loads(world.paths.reference_habits.read_text(encoding="utf-8")))
     assert measured.unreadable_trees == 1
+
+
+async def started_with_every_reference_tree_unreadable(tmp_path: Path) -> tuple[LoopWorld, list[str]]:
+    world = await phase_one_without_habits(tmp_path)
+    for entry in TreeStore(world.paths.trees).phase_entries(1):
+        (world.paths.trees / entry.file).write_bytes(b"not a tree")
+    messages: list[str] = []
+    loop = world.loop()
+    loop.log = messages.append
+    await started_until(world, lambda: any("could be read" in message for message in messages), loop)
+    return world, messages
+
+
+async def test_every_reference_tree_unreadable_writes_no_marker(tmp_path: Path) -> None:
+    world, _ = await started_with_every_reference_tree_unreadable(tmp_path)
+    assert not world.paths.reference_habits.exists()
+
+
+async def test_every_reference_tree_unreadable_logs_an_alert(tmp_path: Path) -> None:
+    _, messages = await started_with_every_reference_tree_unreadable(tmp_path)
+    assert any(message.startswith("Alert: none of the reference phases' ") for message in messages)
+
+
+def with_broken_reward_fix(tmp_path: Path) -> tuple[GrpoLoop, list[str]]:
+    world = loop_world(tmp_path)
+    world.paths.directory.mkdir(parents=True, exist_ok=True)
+    world.paths.reward_fix.write_text('{"first_phase": 3, "recor', encoding="utf-8")
+    messages: list[str] = []
+    loop = world.loop()
+    loop.log = messages.append
+    return loop, messages
+
+
+def test_a_truncated_reward_fix_file_is_ignored(tmp_path: Path) -> None:
+    loop, _ = with_broken_reward_fix(tmp_path)
+    assert loop.reward_fix_phase() is None
+
+
+def test_a_truncated_reward_fix_file_is_warned_about(tmp_path: Path) -> None:
+    loop, messages = with_broken_reward_fix(tmp_path)
+    loop.reward_fix_phase()
+    assert messages[-1].startswith(f"Warning: {loop.paths.reward_fix} is unreadable and ignored")
+
+
+PROBLEM = Problem("test.t0", Split.VALID, "", "theorem t0 : True := by", "", "")
+
+
+def write_unlabelable_probe_tree(directory: Path) -> None:
+    """A failed policy edge without its failure, which labelling refuses."""
+    tree = solved_tree(PROBLEM)
+    tree.add_edge(
+        tree.root,
+        text="simp",
+        source=StepSource.POLICY,
+        log_probability=-1.0,
+        prompt_tokens=0,
+        generated_tokens=0,
+        outcome=EdgeOutcome.FAILED,
+    )
+    result = SearchResult(PROBLEM.name, True, StopReason.PROVED, None, (), (), Accounting(expansions=1), None, 0, 1)
+    trees = EvaluationPaths(directory).trees
+    trees.mkdir(parents=True)
+    write_tree(trees / "t0.json.gz", tree_record(tree, PROBLEM.formal_statement, result))
+
+
+async def test_probe_habits_failing_only_log_an_alert(tmp_path: Path) -> None:
+    write_unlabelable_probe_tree(tmp_path / "probe")
+    messages: list[str] = []
+    loop = loop_world(tmp_path / "loop").loop()
+    loop.log = messages.append
+    await loop.log_probe_habits("probe slot 0", [tmp_path / "probe"])
+    assert messages[0].startswith("Alert: the block habits of probe slot 0 failed")
 
 
 def recorded_reward_fix(world: LoopWorld) -> RewardFix:

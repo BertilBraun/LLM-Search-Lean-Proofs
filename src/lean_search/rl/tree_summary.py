@@ -6,7 +6,7 @@ where the first round failed, so its samples would shift thresholds taken from p
 import dataclasses
 import re
 import zlib
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import pairwise
@@ -23,11 +23,20 @@ from lean_search.search.records import TreeRecord, read_tree
 from lean_search.search.tactic_labels import TacticLabel, TacticOutcome, policy_tactics
 from lean_search.search.tree import Edge, EdgeOutcome, FailureKind, StepSource
 
-BARE_HAVE = re.compile(r"have(?![\w'!?])")
+# Anywhere in the opening: wrapped as `try have`, `all_goals have`, `any_goals have` or after `<;>` too.
+BARE_HAVE = re.compile(r"(?<![\w.'])(?:have|haveI|letI|rsuffices)(?![\w'!?])")
 LINARITH = re.compile(r"n?linarith(?![\w'!?])")
+OPENING_HEAD = re.compile(r"[^\s(\[{⟨]+")
 EXPLANATION_BIN_CHARACTERS = 10
 # The last bin holds every explanation from 1,990 characters on.
 EXPLANATION_BINS = 200
+
+
+@dataclass(frozen=True)
+class OpeningCount:
+    # The opening's first word (`opening_head`): `have`, `nlinarith`, `try`, `·`.
+    head: str
+    samples: int
 
 
 @dataclass(frozen=True)
@@ -35,7 +44,8 @@ class BlockHabits:
     """The habits behind the reward hacking of phases 1-10 (DESIGN.md, 2026-10-31), over the first round's policy
     samples."""
 
-    # Samples with a block Lean judged, and those of them opening with a bare `have h : A` (no `:=`).
+    # Samples with a block Lean judged, and those of them opening with a bare claim: `have h : A` (no `:=`), wrapped
+    # (`try have`, `all_goals have`, after `<;>`), `haveI`, `letI` or `rsuffices`.
     block_samples: int = 0
     bare_have_openings: int = 0
     # Bare-have openings whose block leaves the claim open (`TacticOutcome.leaves_claim_open`), and those of them whose
@@ -56,6 +66,12 @@ class BlockHabits:
     # Tactics reaching a proof-graph state with goals left, and those of them a further tactic of the block follows.
     proof_graph_steps: int = 0
     continued_proof_graph_steps: int = 0
+    # The judged samples by the head of their opening, most frequent first.
+    openings: tuple[OpeningCount, ...] = ()
+
+    def top_openings(self, count: int) -> list[tuple[str, float]]:
+        """The `count` most frequent heads with their share of the judged samples."""
+        return [(item.head, item.samples / self.block_samples) for item in self.openings[:count]]
 
 
 @dataclass(frozen=True)
@@ -149,11 +165,16 @@ def opening(block: str) -> str:
 
 def is_bare_have(first: str) -> bool:
     """`first`: the block's `opening`."""
-    return BARE_HAVE.match(first) is not None and ":=" not in first
+    return BARE_HAVE.search(first) is not None and ":=" not in first
 
 
 def is_proof_have(first: str) -> bool:
-    return BARE_HAVE.match(first) is not None and ":=" in first
+    return BARE_HAVE.search(first) is not None and ":=" in first
+
+
+def opening_head(first: str) -> str:
+    found = OPENING_HEAD.match(first.strip())
+    return "" if found is None else found[0]
 
 
 def is_linarith_opening(first: str) -> bool:
@@ -232,6 +253,7 @@ def block_habits(record: TreeRecord, tactics: Mapping[int, Sequence[TacticOutcom
                 valid_block_tactics=samples * valid * executed.applied_tactics,
                 proof_graph_steps=samples * len(steps),
                 continued_proof_graph_steps=samples * sum(steps),
+                openings=(OpeningCount(opening_head(first_tactic), samples),),
             )
         )
     texts = (
@@ -271,10 +293,15 @@ def summed_habits(habits: Iterable[BlockHabits]) -> BlockHabits:
     counts = {
         item.name: sum(getattr(habit, item.name) for habit in habits)
         for item in dataclasses.fields(BlockHabits)
-        if item.name != "explanation_character_bins"
+        if item.name not in ("explanation_character_bins", "openings")
     }
+    openings: Counter[str] = Counter()
+    for habit in habits:
+        openings.update({item.head: item.samples for item in habit.openings})
     return BlockHabits(
-        **counts, explanation_character_bins=summed_bins(habit.explanation_character_bins for habit in habits)
+        **counts,
+        explanation_character_bins=summed_bins(habit.explanation_character_bins for habit in habits),
+        openings=tuple(OpeningCount(head, samples) for head, samples in openings.most_common()),
     )
 
 

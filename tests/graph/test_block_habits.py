@@ -6,6 +6,7 @@ from lean_search.rl.advantages import CreditMode
 from lean_search.rl.grpo_groups import RewardConfig
 from lean_search.rl.tree_summary import (
     BlockHabits,
+    OpeningCount,
     binned_median,
     block_habits,
     explanation_bins,
@@ -13,6 +14,7 @@ from lean_search.rl.tree_summary import (
     is_linarith_opening,
     is_proof_have,
     opening,
+    opening_head,
     summed_habits,
     tree_summary,
 )
@@ -43,10 +45,47 @@ def filler_tree() -> TreeRecord:
         ("have h₂ : x = -4 := by\n  linarith", False),
         ("haveI : Fact p := ⟨hp⟩", False),
         ("nlinarith [h₀]", False),
+        ("try have h₂ : x = -4", True),
+        ("all_goals have h₂ : x = -4", True),
+        ("norm_num <;> have h₂ : x = -4", True),
+        ("haveI : Fact p", True),
+        ("letI : Fact p", True),
+        ("rsuffices h₂ : x = -4", True),
+        ("apply have_lemma", False),
     ],
 )
 def test_bare_have_opening(block: str, bare: bool) -> None:
     assert is_bare_have(opening(block)) is bare
+
+
+@pytest.mark.parametrize(
+    ("block", "head"),
+    [
+        ("have h₂ : x = -4", "have"),
+        ("nlinarith [sq_nonneg x]", "nlinarith"),
+        ("try have h₂ : x = -4", "try"),
+        ("rw [h₀] at h₁", "rw"),
+        ("obtain ⟨x, hx⟩ : ∃ x, x = 1", "obtain"),
+        ("· simp", "·"),
+    ],
+)
+def test_opening_head(block: str, head: str) -> None:
+    assert opening_head(opening(block)) == head
+
+
+def test_openings_are_counted_by_head() -> None:
+    assert habits(claim_tree()).openings == (OpeningCount("have", 1), OpeningCount("close", 1))
+
+
+def test_summed_openings_merge_heads_most_frequent_first() -> None:
+    first = BlockHabits(block_samples=1, openings=(OpeningCount("simp", 1),))
+    second = BlockHabits(block_samples=3, openings=(OpeningCount("have", 3),))
+    assert summed_habits([first, second, first]).openings == (OpeningCount("have", 3), OpeningCount("simp", 2))
+
+
+def test_top_openings_are_shares_of_the_judged_samples() -> None:
+    found = BlockHabits(block_samples=4, openings=(OpeningCount("have", 3), OpeningCount("simp", 1)))
+    assert found.top_openings(1) == [("have", 0.75)]
 
 
 def test_block_samples_count_every_judged_block() -> None:
