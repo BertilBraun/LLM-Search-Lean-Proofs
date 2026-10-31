@@ -32,6 +32,7 @@ from lean_search.rl.health_checks import (
     append_health,
     clear_health_stop,
     publish_rollback,
+    read_health_history,
     read_health_stop,
     read_rejected_versions,
     roll_back_by_hand,
@@ -530,3 +531,12 @@ async def test_the_phase_timing_counts_the_searches_its_pause_held(tmp_path: Pat
     paused = next(message for message in messages if message.startswith("Phase 1: "))
     held = int(paused.removesuffix(" searches paused").rsplit("; ", 1)[1])
     assert RunReader(world.paths.directory).series("timing").columns["searches_paused"][0] == held
+
+
+async def test_a_restart_measures_the_block_habits_of_reference_phases_recorded_without_them(tmp_path: Path) -> None:
+    world = loop_world(tmp_path)
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=1)
+    append_health(world.paths.health, PhaseHealth(1, 1, HealthMeasurements(), HealthThresholds(0.5, 0.1)))
+    await run_until(world, world.loop(), phases=2)
+    assert read_health_history(world.paths.health)[0].measured.bare_have_share is not None

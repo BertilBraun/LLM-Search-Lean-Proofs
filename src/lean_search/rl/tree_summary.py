@@ -3,16 +3,46 @@ phase trigger (trainable groups), the per-phase budget and health signals and th
 trees. The per-sample health fields count the first round's samples only: the feedback round (`policy.feedback`) runs
 where the first round failed, so its samples would shift thresholds taken from phases without it."""
 
+import re
 from collections import defaultdict
-from dataclasses import dataclass
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass, field
+from itertools import pairwise
 
+from lean_search.lean.hypotheses import adds_only_closed_form_hypotheses
+from lean_search.lean.text import split_tactics
+from lean_search.policy.prompts import visible_explanation
 from lean_search.rl.advantages import CreditMode, group_advantages
 from lean_search.rl.grpo_groups import RewardConfig, policy_groups
 from lean_search.rl.phase_metrics import is_forced, repeats_itself
-from lean_search.search.graph_labels import label_graph
+from lean_search.search.graph_labels import edge_labels, forward_successors, label_graph
 from lean_search.search.records import TreeRecord
-from lean_search.search.tactic_labels import policy_tactics
+from lean_search.search.tactic_labels import ClaimProofs, policy_tactics
 from lean_search.search.tree import Edge, EdgeOutcome, FailureKind, StepSource
+
+BARE_HAVE = re.compile(r"have(?![\w'!?])")
+EXPLANATION_BIN_CHARACTERS = 10
+# The last bin holds every explanation from 1,990 characters on.
+EXPLANATION_BINS = 200
+
+
+@dataclass(frozen=True)
+class BlockHabits:
+    """The habits behind the reward hacking of phases 1-10 (DESIGN.md, 2026-10-31), over the first round's policy
+    samples."""
+
+    # Samples with a block Lean judged, and those of them opening with a bare `have h : A` (no `:=`).
+    block_samples: int = 0
+    bare_have_openings: int = 0
+    # Bare-have openings whose child has more goals than the parent (the claim left open), and those of them whose
+    # claim got proved in the tree (`ClaimProofs`).
+    open_claims: int = 0
+    proved_claims: int = 0
+    # Samples with a tactic adding only closed-form hypotheses to the state before it (`0 < (1:ℝ)`), on the proof
+    # graph or off it.
+    closed_form_fillers: int = 0
+    # Explanation characters (before the opening fence) per sample, in 10-character bins.
+    explanation_character_bins: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -58,6 +88,7 @@ class TreeSummary:
     sampling_versions: tuple[int, ...] = ()
     # The curriculum fed the statement from below its band (`below_band_share`), not from the band.
     below_band: bool = False
+    habits: BlockHabits = field(default_factory=BlockHabits)
 
 
 def executed_edge(record: TreeRecord, edge: Edge) -> Edge:
@@ -91,6 +122,75 @@ def trainable_groups(record: TreeRecord, reward: RewardConfig, credit: CreditMod
     groups = policy_groups(record, labels, tactics, [None] * len(record.nodes), reward).groups
     trained = [group for group in groups if group_advantages(group).has_signal(credit)]
     return TrainableGroups(len(trained), sum(group.feedback for group in trained), labels.remaining_steps[0])
+
+
+def is_bare_have(block: str) -> bool:
+    tactics = split_tactics(block)
+    return bool(tactics) and BARE_HAVE.match(tactics[0]) is not None and ":=" not in tactics[0]
+
+
+def adds_closed_form_filler(record: TreeRecord, edge: Edge) -> bool:
+    states = [record.nodes[edge.parent_id].goals, *edge.tactic_goals]
+    return any(adds_only_closed_form_hypotheses(before, after) for before, after in pairwise(states))
+
+
+def explanation_bins(texts: Iterable[str]) -> tuple[int, ...]:
+    bins = [0] * EXPLANATION_BINS
+    for text in texts:
+        bins[min(len(visible_explanation(text)) // EXPLANATION_BIN_CHARACTERS, EXPLANATION_BINS - 1)] += 1
+    while bins and not bins[-1]:
+        bins.pop()
+    return tuple(bins)
+
+
+def summed_bins(histograms: Iterable[Sequence[int]]) -> tuple[int, ...]:
+    totals: list[int] = []
+    for histogram in histograms:
+        totals.extend([0] * (len(histogram) - len(totals)))
+        for index, count in enumerate(histogram):
+            totals[index] += count
+    return tuple(totals)
+
+
+def binned_median(bins: Sequence[int]) -> float | None:
+    """In characters, interpolated within the median's bin."""
+    half = sum(bins) / 2
+    below = 0
+    for index, count in enumerate(bins):
+        if count and below + count >= half:
+            return EXPLANATION_BIN_CHARACTERS * (index + (half - below) / count)
+        below += count
+    return None
+
+
+def block_habits(record: TreeRecord) -> BlockHabits:
+    claims = ClaimProofs(record, forward_successors(record, edge_labels(record)))
+    block_samples = bare_have_openings = open_claims = proved_claims = closed_form_fillers = 0
+    for edge in record.edges:
+        if edge.source != StepSource.POLICY or edge.feedback:
+            continue
+        executed = executed_edge(record, edge)
+        if not executed.text.strip() or not judged_by_lean(executed):
+            continue
+        block_samples += edge.sample_count
+        closed_form_fillers += edge.sample_count * adds_closed_form_filler(record, executed)
+        if not is_bare_have(executed.text):
+            continue
+        bare_have_openings += edge.sample_count
+        goals_before = len(record.nodes[executed.parent_id].goals)
+        if executed.target_id is None or len(record.nodes[executed.target_id].goals) <= goals_before:
+            continue
+        open_claims += edge.sample_count
+        proved_claims += edge.sample_count * claims.proved(goals_before, (), (executed.target_id,))
+    texts = (
+        completion.text
+        for expansion in record.expansions
+        if not expansion.feedback
+        for completion in expansion.completions
+    )
+    return BlockHabits(
+        block_samples, bare_have_openings, open_claims, proved_claims, closed_form_fillers, explanation_bins(texts)
+    )
 
 
 def tree_summary(
@@ -156,4 +256,5 @@ def tree_summary(
             sorted({version for expansion in record.expansions if (version := expansion.policy_version) is not None})
         ),
         below_band=below_band,
+        habits=block_habits(record),
     )

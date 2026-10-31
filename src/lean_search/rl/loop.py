@@ -49,7 +49,7 @@ import time
 import tomllib
 import traceback
 from collections import deque
-from collections.abc import Callable, Coroutine, Sequence
+from collections.abc import Callable, Coroutine, Iterator, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -100,7 +100,9 @@ from lean_search.rl.fixed_targets import baseline_concurrency, run_target, targe
 from lean_search.rl.health_checks import (
     HeldOutRates,
     append_health,
+    backfilled_habits,
     collapsed,
+    habits_text,
     health_stop_text,
     healthy_versions,
     held_out_rates,
@@ -131,7 +133,7 @@ from lean_search.rl.training_phase import (
     publish_phase,
 )
 from lean_search.rl.tree_store import TreeStore
-from lean_search.rl.tree_summary import tree_summary
+from lean_search.rl.tree_summary import BlockHabits, block_habits, tree_summary
 from lean_search.rl.value_trends import (
     VersionScores,
     benchmark_trend,
@@ -142,7 +144,7 @@ from lean_search.rl.value_trends import (
     worse_than_reference,
 )
 from lean_search.search import CompletedSearch, tree_record
-from lean_search.search.records import from_json_object, to_json
+from lean_search.search.records import from_json_object, read_tree, to_json
 from lean_search.training.resident import HostDirectories
 from lean_search.value.benchmark import BenchmarkScores, ValueBenchmark
 from lean_search.value.bins import Readout
@@ -841,6 +843,7 @@ class GrpoLoop:
         health_stop = read_health_stop(self.paths.health_stop)
         if health_stop is not None:
             raise RuntimeError(health_stop_text(health_stop))
+        await asyncio.to_thread(self.backfill_reference_habits)
         self.heartbeat = asyncio.create_task(self.stopping_on_failure(self.report_status(stop), stop))
         await asyncio.to_thread(self.clear_stale_handoff)
         await self.servers.check()
@@ -1299,6 +1302,7 @@ class GrpoLoop:
         self.writer.write(record)
         for alert in record.alerts:
             self.log(f"Health of phase {phase} ({alert.severity}, {alert.check}): {alert.detail}")
+        self.log(habits_text(phase, measured))
         if not record.alerts:
             self.log(f"Health of phase {phase}: no alerts")
         if held_out is None and any(alert.check == HealthCheck.VALID_BLOCKS for alert in record.alerts):
@@ -1310,6 +1314,23 @@ class GrpoLoop:
         if record.hard_stop:
             self.log(health_stop_text(write_health_stop(self.paths.health_stop, record)))
         return record
+
+    def backfill_reference_habits(self) -> None:
+        """Metrics only: an error is logged, never stops the loop."""
+        try:
+            history = read_health_history(self.paths.health)
+            for record in backfilled_habits(history, self.config.health.reference_phases, self.phase_habits):
+                append_health(self.paths.health, record)
+                self.log(f"{habits_text(record.phase, record.measured)}: measured from its trees, the reference")
+        except Exception as error:
+            self.log(
+                f"Alert: measuring the reference phases' block habits failed ({type(error).__name__}: {error}); "
+                f"their health checks have no reference\n{traceback.format_exc()}"
+            )
+
+    def phase_habits(self, phase: int) -> Iterator[BlockHabits]:
+        for entry in self.store.phase_entries(phase):
+            yield block_habits(read_tree(self.store.directory / entry.file))
 
     async def roll_back(self, phase: int, version: int, searching: bool) -> None:
         """After a collapse: the version's policy adapter published again as a new version (merged on the CPU) and

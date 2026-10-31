@@ -2,8 +2,10 @@
 search budget, each against a threshold; alerts go to loop.log and the dashboard (the `health` family).
 
 Absolute limits: the KL to the starting policy (version 0's is 0) and the clip fraction. Relative limits: distinct
-samples per expansion, explanation length, cut-off samples and the sampled blocks' valid-Lean rate (a free early warning
-that brings the held-out states forward) against the mean of the first `reference_phases` phases; the held-out
+samples per expansion, explanation length, cut-off samples, the sampled blocks' valid-Lean rate (a free early warning
+that brings the held-out states forward) and the block habits of the reward hacking of phases 1-10 (bare-`have`
+openings, their claims proved, the median explanation characters) against the mean of the first `reference_phases`
+phases; the held-out
 valid-Lean rate and per-sample success against version 0's held-out evaluation. One check acts: a held-out valid-Lean
 rate below `stop_held_out_valid_fraction` of version 0's (a collapse). The collapsed version is rejected
 (`reject_version`: no later phase trains on its samples), and the loop publishes the last good version's policy again
@@ -16,7 +18,7 @@ import dataclasses
 import datetime
 import json
 import statistics
-from collections.abc import Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -34,6 +36,7 @@ from lean_search.rl.evaluation import EvaluationSummary
 from lean_search.rl.loop_config import HealthConfig
 from lean_search.rl.training_phase import PhaseOutcome
 from lean_search.rl.tree_store import TreeEntry
+from lean_search.rl.tree_summary import BlockHabits, binned_median, summed_bins
 from lean_search.search.records import from_json_object, to_json
 
 
@@ -69,6 +72,19 @@ def first_round_or_all(first_round: float | None, every_sequence: float) -> floa
     return every_sequence if first_round is None else first_round
 
 
+def with_habits(measured: HealthMeasurements, habits: Sequence[BlockHabits]) -> HealthMeasurements:
+    blocks = sum(habit.block_samples for habit in habits)
+    return dataclasses.replace(
+        measured,
+        bare_have_share=share(sum(habit.bare_have_openings for habit in habits), blocks),
+        claim_proved_rate=share(
+            sum(habit.proved_claims for habit in habits), sum(habit.open_claims for habit in habits)
+        ),
+        closed_form_filler_share=share(sum(habit.closed_form_fillers for habit in habits), blocks),
+        median_explanation_characters=binned_median(summed_bins(habit.explanation_character_bins for habit in habits)),
+    )
+
+
 def measurements(
     outcome: PhaseOutcome | None, entries: Sequence[TreeEntry], held_out: HeldOutRates | None
 ) -> HealthMeasurements:
@@ -79,7 +95,7 @@ def measurements(
     samples = sum(summary.policy_samples for summary in summaries)
     policy = None if outcome is None else outcome.policy
     trained = policy is not None and policy.data.sequences > 0
-    return HealthMeasurements(
+    measured = HealthMeasurements(
         kl_to_starting_policy=first_round_or_all(
             policy.result.final_first_round_kl_to_reference, policy.result.final_kl_to_reference
         )
@@ -101,6 +117,33 @@ def measurements(
             sum(summary.valid_blocks for summary in summaries), sum(summary.judged_blocks for summary in summaries)
         ),
     )
+    return with_habits(measured, [summary.habits for summary in summaries])
+
+
+def percent(value: float | None) -> str:
+    return "-" if value is None else f"{value:.1%}"
+
+
+def habits_text(phase: int, measured: HealthMeasurements) -> str:
+    characters = measured.median_explanation_characters
+    filler = percent(measured.closed_form_filler_share)
+    return (
+        f"Block habits of phase {phase}: {percent(measured.bare_have_share)} open with a bare `have`, "
+        f"{percent(measured.claim_proved_rate)} of their open claims proved, {filler} with closed-form filler, "
+        f"median explanation {'-' if characters is None else f'{characters:.0f}'} characters"
+    )
+
+
+def backfilled_habits(
+    history: Sequence[PhaseHealth], phases: int, habits_of_phase: Callable[[int], Iterable[BlockHabits]]
+) -> list[PhaseHealth]:
+    """The first `phases` phases' records written before the block habits were measured, measured from their trees
+    (`habits_of_phase`), so that the habit checks have their reference."""
+    return [
+        dataclasses.replace(record, measured=with_habits(record.measured, list(habits_of_phase(record.phase))))
+        for record in history
+        if record.phase <= phases and record.measured.bare_have_share is None
+    ]
 
 
 def reference_measurements(history: Sequence[PhaseHealth], phases: int) -> HealthMeasurements | None:
@@ -136,6 +179,11 @@ def health_thresholds(
             if cut_off is None
             else max(cut_off * config.max_cut_off_factor, cut_off + config.min_cut_off_rise),
             min_valid_block_rate=scaled(reference.valid_block_rate, config.min_valid_block_fraction),
+            max_bare_have_share=scaled(reference.bare_have_share, config.max_bare_have_factor),
+            min_claim_proved_rate=scaled(reference.claim_proved_rate, config.min_claim_proved_fraction),
+            min_explanation_characters=scaled(
+                reference.median_explanation_characters, config.min_explanation_characters_fraction
+            ),
         )
     if version_zero is not None:
         thresholds = dataclasses.replace(
@@ -177,6 +225,12 @@ def alert_title(check: HealthCheck, severity: HealthSeverity) -> str:
             return "Search budget may be too small"
         case HealthCheck.VALID_BLOCKS:
             return "Sampled blocks' valid Lean dropping"
+        case HealthCheck.BARE_HAVES:
+            return "Bare-have openings rising"
+        case HealthCheck.CLAIMS_PROVED:
+            return "Open claims proved dropping"
+        case HealthCheck.EXPLANATION_CHARACTERS:
+            return "Explanations shrinking"
 
 
 def health_alert(check: HealthCheck, severity: HealthSeverity, detail: str) -> HealthAlert:
@@ -228,6 +282,26 @@ def health_alerts(
             f"{measured.valid_block_rate:.1%} of the sampled blocks ran completely in Lean < "
             f"{thresholds.min_valid_block_rate:.1%} ({config.min_valid_block_fraction:.0%} of the first phases'): the "
             "held-out states run at the next pause.",
+        )
+    if above(measured.bare_have_share, thresholds.max_bare_have_share):
+        warn(
+            HealthCheck.BARE_HAVES,
+            f"{measured.bare_have_share:.1%} of the blocks open with a bare `have` > "
+            f"{thresholds.max_bare_have_share:.1%} ({config.max_bare_have_factor:g}x the first phases'): claims left "
+            "as new goals, as in the reward hacking of phases 1-10.",
+        )
+    if below(measured.claim_proved_rate, thresholds.min_claim_proved_rate):
+        warn(
+            HealthCheck.CLAIMS_PROVED,
+            f"{measured.claim_proved_rate:.1%} of the claims bare-`have` blocks left open got proved < "
+            f"{thresholds.min_claim_proved_rate:.1%} ({config.min_claim_proved_fraction:.0%} of the first phases').",
+        )
+    if below(measured.median_explanation_characters, thresholds.min_explanation_characters):
+        warn(
+            HealthCheck.EXPLANATION_CHARACTERS,
+            f"Median explanation {measured.median_explanation_characters:.0f} characters < "
+            f"{thresholds.min_explanation_characters:.0f} ({config.min_explanation_characters_fraction:.0%} of the "
+            "first phases'): the visible reasoning shrinks.",
         )
     valid = measured.held_out_valid_rate
     if below(valid, thresholds.stop_held_out_valid_rate):

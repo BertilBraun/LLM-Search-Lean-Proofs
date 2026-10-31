@@ -234,6 +234,12 @@ class HealthConfig:
     # free per-phase early warning) the held-out states run at the next pause. Lower than the held-out warning: the
     # rate falls with longer blocks too.
     min_valid_block_fraction: float = 0.85
+    # Warnings on the reward hacking of phases 1-10, against the reference phases: blocks opening with a bare `have`
+    # above this multiple, their open claims proved below this fraction, the median explanation characters below
+    # this fraction.
+    max_bare_have_factor: float = 1.5
+    min_claim_proved_fraction: float = 0.5
+    min_explanation_characters_fraction: float = 0.7
     # The share of solves in the budget's last quarter, pooled over the last `late_solve_phases` phases, above which
     # a larger `sampling.max_expansions` is suggested.
     max_late_solve_share: float = 0.10

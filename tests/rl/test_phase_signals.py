@@ -20,6 +20,7 @@ from lean_search.rl.grpo_groups import RewardConfig
 from lean_search.rl.health_checks import (
     HeldOutRates,
     append_health,
+    backfilled_habits,
     clear_health_stop,
     health_alerts,
     health_thresholds,
@@ -34,7 +35,7 @@ from lean_search.rl.health_checks import (
 from lean_search.rl.loop_config import HealthConfig
 from lean_search.rl.training_phase import PhaseOutcome, PolicyOutcome
 from lean_search.rl.tree_store import TreeEntry
-from lean_search.rl.tree_summary import TreeSummary, tree_summary
+from lean_search.rl.tree_summary import BlockHabits, TreeSummary, tree_summary
 from lean_search.search import Accounting, SearchResult, StopReason, TreeRecord, tree_record
 from lean_search.search.texts import (
     CharacterSpan,
@@ -239,6 +240,49 @@ def test_the_valid_block_rate_is_per_judged_block() -> None:
     assert measurements(None, entries, None).valid_block_rate == 0.7
 
 
+HABITS = BlockHabits(
+    block_samples=10,
+    bare_have_openings=4,
+    open_claims=2,
+    proved_claims=1,
+    closed_form_fillers=1,
+    explanation_character_bins=(0, 2, 0, 2),
+)
+
+
+def with_habits(habits: BlockHabits) -> TreeEntry:
+    return dataclasses.replace(entry(), summary=TreeSummary(habits=habits))
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("bare_have_share", 0.4),
+        ("claim_proved_rate", 0.5),
+        ("closed_form_filler_share", 0.1),
+        ("median_explanation_characters", 20.0),
+    ],
+)
+def test_the_block_habits_are_measured_over_the_phases_trees(field: str, value: float) -> None:
+    entries = [with_habits(HABITS), with_habits(HABITS)]
+    assert getattr(measurements(None, entries, None), field) == pytest.approx(value)
+
+
+def test_trees_summarized_before_the_block_habits_leave_them_unmeasured() -> None:
+    assert measurements(None, [entry()], None).bare_have_share is None
+
+
+def test_reference_phases_without_block_habits_are_measured_from_their_trees() -> None:
+    (filled,) = backfilled_habits([health_record(1), health_record(3)], 2, lambda phase: [HABITS])
+    assert (filled.phase, filled.measured.bare_have_share) == (1, pytest.approx(0.4))
+
+
+def test_reference_phases_with_block_habits_are_kept() -> None:
+    measured = dataclasses.replace(health_record(1).measured, bare_have_share=0.2)
+    record = dataclasses.replace(health_record(1), measured=measured)
+    assert backfilled_habits([record], 2, lambda phase: [HABITS]) == []
+
+
 def test_the_cut_off_share_is_per_policy_sample() -> None:
     entries = [summarized(10, 100, 50, 3), summarized(10, 100, 50, 1)]
     assert measurements(None, entries, None).cut_off_share == 0.02
@@ -323,12 +367,61 @@ def test_the_valid_block_threshold_is_a_fraction_of_the_first_phases() -> None:
     assert thresholds.min_valid_block_rate == pytest.approx(0.68)
 
 
+def habit_record(phase: int, bare_have_share: float, claim_proved_rate: float, characters: float) -> PhaseHealth:
+    measured = HealthMeasurements(
+        bare_have_share=bare_have_share,
+        claim_proved_rate=claim_proved_rate,
+        median_explanation_characters=characters,
+    )
+    return PhaseHealth(phase, phase, measured, HealthThresholds(0.02, 0.1))
+
+
+HABIT_REFERENCE = reference_measurements([habit_record(1, 0.2, 0.02, 130.0), habit_record(2, 0.3, 0.04, 150.0)], 2)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("max_bare_have_share", 0.375), ("min_claim_proved_rate", 0.015), ("min_explanation_characters", 98.0)],
+)
+def test_the_habit_thresholds_scale_the_first_phases(field: str, value: float) -> None:
+    assert getattr(health_thresholds(CONFIG, HABIT_REFERENCE, None), field) == pytest.approx(value)
+
+
 def test_the_stop_threshold_is_a_fraction_of_version_zeros_valid_lean_rate() -> None:
     assert health_thresholds(CONFIG, None, HeldOutRates(0.8, 0.4)).stop_held_out_valid_rate == pytest.approx(0.56)
 
 
-THRESHOLDS = HealthThresholds(0.02, 0.1, 5.0, 60.0, 240.0, 0.02, 0.72, 0.56, 0.36, 0.68)
-HEALTHY = HealthMeasurements(0.001, 0.05, 6.0, 8.0, 120.0, 0.01, 0.005, 0.78, 0.4, 0.8)
+THRESHOLDS = HealthThresholds(
+    0.02,
+    0.1,
+    5.0,
+    60.0,
+    240.0,
+    0.02,
+    0.72,
+    0.56,
+    0.36,
+    0.68,
+    max_bare_have_share=0.3,
+    min_claim_proved_rate=0.01,
+    min_explanation_characters=100.0,
+)
+HEALTHY = HealthMeasurements(
+    0.001,
+    0.05,
+    6.0,
+    8.0,
+    120.0,
+    0.01,
+    0.005,
+    0.78,
+    0.4,
+    0.8,
+    bare_have_share=0.2,
+    claim_proved_rate=0.02,
+    closed_form_filler_share=0.01,
+    median_explanation_characters=140.0,
+)
 QUIET_BUDGET = BudgetPhase(100, 50, 200, 32, 1, 0.02, 0.02, 3, 0.1)
 
 
@@ -353,10 +446,23 @@ def test_a_healthy_phase_has_no_alerts() -> None:
         ({"held_out_valid_rate": 0.5}, HealthCheck.HELD_OUT_VALID_LEAN),
         ({"held_out_success": 0.3}, HealthCheck.HELD_OUT_SUCCESS),
         ({"valid_block_rate": 0.6}, HealthCheck.VALID_BLOCKS),
+        ({"bare_have_share": 0.4}, HealthCheck.BARE_HAVES),
+        ({"claim_proved_rate": 0.005}, HealthCheck.CLAIMS_PROVED),
+        ({"median_explanation_characters": 90.0}, HealthCheck.EXPLANATION_CHARACTERS),
     ],
 )
 def test_a_signal_beyond_its_threshold_alerts(change: dict[str, float], check: HealthCheck) -> None:
     assert checks(dataclasses.replace(HEALTHY, **change)) == [check]
+
+
+@pytest.mark.parametrize(
+    "change",
+    [{"bare_have_share": 0.4}, {"claim_proved_rate": 0.005}, {"median_explanation_characters": 90.0}],
+    ids=["bare haves", "claims proved", "explanation characters"],
+)
+def test_habit_alerts_are_warnings(change: dict[str, float]) -> None:
+    alerts = health_alerts(dataclasses.replace(HEALTHY, **change), THRESHOLDS, QUIET_BUDGET, CONFIG)
+    assert [alert.severity for alert in alerts] == [HealthSeverity.WARNING]
 
 
 @pytest.mark.parametrize(("valid_rate", "severity"), [(0.6, HealthSeverity.WARNING), (0.5, HealthSeverity.STOP)])
