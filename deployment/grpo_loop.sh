@@ -79,7 +79,8 @@ case "$1" in
         if [[ -n "${BACKGROUND_CPUS:-}" ]]; then
             prefix=("${script_directory}/background.sh")
         fi
-        nohup "${prefix[@]}" python experiments/grpo_loop.py --config "${config}" run \
+        # The bases are cached by init; offline, an unreachable Hub cannot fail a tokenizer load mid-run.
+        HF_HUB_OFFLINE=1 nohup "${prefix[@]}" python experiments/grpo_loop.py --config "${config}" run \
             >> "${run_directory}/loop.out" 2>&1 &
         echo $! > "${run_directory}/loop.pid"
         echo "Loop ${name} started (pid $(cat "${run_directory}/loop.pid")); log ${run_directory}/loop.log"
