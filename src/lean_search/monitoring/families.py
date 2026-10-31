@@ -503,6 +503,25 @@ class HealthMeasurements:
     # Of the phase's distinct policy blocks Lean judged (infrastructure failures left out), those that ran completely:
     # the held-out states' valid-Lean criterion on the training trees, free every phase.
     valid_block_rate: float | None = None
+    # The reward hacking of phases 1-10 (`tree_summary.BlockHabits`, first-round samples with a block): the share
+    # opening with a bare `have h : A`, of those leaving the claim open in their child the share whose claim got
+    # proved, the share with closed-form filler (`0 < (1:ℝ)`), and the median explanation characters before the fence.
+    bare_have_share: float | None = None
+    claim_proved_rate: float | None = None
+    closed_form_filler_share: float | None = None
+    median_explanation_characters: float | None = None
+    # Of the same samples: the shares opening with `have … :=` (a claim with its proof) and with linarith or
+    # nlinarith; the mean tactics of a block run completely; of the tactics reaching a proof-graph state with goals
+    # left, the share a further tactic of their block follows (the continue rate).
+    proof_have_share: float | None = None
+    linarith_opening_share: float | None = None
+    valid_block_tactics: float | None = None
+    continue_rate: float | None = None
+    # The warned habits on the statements the curriculum fed from below its band (`TreeSummary.below_band`), nearer
+    # the reference phases' difficulty; None without such statements.
+    below_band_bare_have_share: float | None = None
+    below_band_claim_proved_rate: float | None = None
+    below_band_median_explanation_characters: float | None = None
 
 
 @dataclass(frozen=True)
@@ -521,6 +540,9 @@ class HealthThresholds:
     stop_held_out_valid_rate: float | None = None
     min_held_out_success: float | None = None
     min_valid_block_rate: float | None = None
+    max_bare_have_share: float | None = None
+    min_claim_proved_rate: float | None = None
+    min_explanation_characters: float | None = None
 
 
 class HealthCheck(StrEnum):
@@ -533,6 +555,9 @@ class HealthCheck(StrEnum):
     HELD_OUT_SUCCESS = "held_out_success"
     SEARCH_BUDGET = "search_budget"
     VALID_BLOCKS = "valid_blocks"
+    BARE_HAVES = "bare_haves"
+    CLAIMS_PROVED = "claims_proved"
+    EXPLANATION_CHARACTERS = "explanation_characters"
 
 
 class HealthSeverity(StrEnum):

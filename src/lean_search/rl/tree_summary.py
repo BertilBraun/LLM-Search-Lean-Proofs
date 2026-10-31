@@ -3,16 +3,75 @@ phase trigger (trainable groups), the per-phase budget and health signals and th
 trees. The per-sample health fields count the first round's samples only: the feedback round (`policy.feedback`) runs
 where the first round failed, so its samples would shift thresholds taken from phases without it."""
 
-from collections import defaultdict
-from dataclasses import dataclass
+import dataclasses
+import re
+import zlib
+from collections import Counter, defaultdict
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
+from itertools import pairwise
+from pathlib import Path
 
+from lean_search.lean.hypotheses import adds_only_closed_form_hypotheses
+from lean_search.lean.text import split_tactics
+from lean_search.policy.prompts import visible_explanation
 from lean_search.rl.advantages import CreditMode, group_advantages
 from lean_search.rl.grpo_groups import RewardConfig, policy_groups
 from lean_search.rl.phase_metrics import is_forced, repeats_itself
-from lean_search.search.graph_labels import label_graph
-from lean_search.search.records import TreeRecord
-from lean_search.search.tactic_labels import policy_tactics
+from lean_search.search.graph_labels import GraphLabels, label_graph
+from lean_search.search.records import TreeRecord, read_tree
+from lean_search.search.tactic_labels import TacticLabel, TacticOutcome, policy_tactics
 from lean_search.search.tree import Edge, EdgeOutcome, FailureKind, StepSource
+
+# Anywhere in the opening: wrapped as `try have`, `all_goals have`, `any_goals have` or after `<;>` too.
+BARE_HAVE = re.compile(r"(?<![\w.'])(?:have|haveI|letI|rsuffices)(?![\w'!?])")
+LINARITH = re.compile(r"n?linarith(?![\w'!?])")
+OPENING_HEAD = re.compile(r"[^\s(\[{⟨]+")
+EXPLANATION_BIN_CHARACTERS = 10
+# The last bin holds every explanation from 1,990 characters on.
+EXPLANATION_BINS = 200
+
+
+@dataclass(frozen=True)
+class OpeningCount:
+    # The opening's first word (`opening_head`): `have`, `nlinarith`, `try`, `·`.
+    head: str
+    samples: int
+
+
+@dataclass(frozen=True)
+class BlockHabits:
+    """The habits behind the reward hacking of phases 1-10 (DESIGN.md, 2026-10-31), over the first round's policy
+    samples."""
+
+    # Samples with a block Lean judged, and those of them opening with a bare claim: `have h : A` (no `:=`), wrapped
+    # (`try have`, `all_goals have`, after `<;>`), `haveI`, `letI` or `rsuffices`.
+    block_samples: int = 0
+    bare_have_openings: int = 0
+    # Bare-have openings whose block leaves the claim open (`TacticOutcome.leaves_claim_open`), and those of them whose
+    # claim the tree proves (no `unproved_claim` label).
+    open_claims: int = 0
+    proved_claims: int = 0
+    # Samples with a tactic adding only closed-form hypotheses to the state before it (`0 < (1:ℝ)`), on the proof
+    # graph or off it.
+    closed_form_fillers: int = 0
+    # Explanation characters (before the opening fence) per sample, in 10-character bins.
+    explanation_character_bins: tuple[int, ...] = ()
+    # Samples opening with `have … :=` (a claim with its proof), and with linarith or nlinarith.
+    proof_have_openings: int = 0
+    linarith_openings: int = 0
+    # Samples whose block ran completely, and their tactics after flattening.
+    valid_blocks: int = 0
+    valid_block_tactics: int = 0
+    # Tactics reaching a proof-graph state with goals left, and those of them a further tactic of the block follows.
+    proof_graph_steps: int = 0
+    continued_proof_graph_steps: int = 0
+    # The judged samples by the head of their opening, most frequent first.
+    openings: tuple[OpeningCount, ...] = ()
+
+    def top_openings(self, count: int) -> list[tuple[str, float]]:
+        """The `count` most frequent heads with their share of the judged samples."""
+        return [(item.head, item.samples / self.block_samples) for item in self.openings[:count]]
 
 
 @dataclass(frozen=True)
@@ -58,6 +117,7 @@ class TreeSummary:
     sampling_versions: tuple[int, ...] = ()
     # The curriculum fed the statement from below its band (`below_band_share`), not from the band.
     below_band: bool = False
+    habits: BlockHabits = field(default_factory=BlockHabits)
 
 
 def executed_edge(record: TreeRecord, edge: Edge) -> Edge:
@@ -83,14 +143,166 @@ class TrainableGroups:
     proof_steps: int | None
 
 
-def trainable_groups(record: TreeRecord, reward: RewardConfig, credit: CreditMode) -> TrainableGroups:
+def trainable_groups(
+    record: TreeRecord,
+    labels: GraphLabels,
+    tactics: Mapping[int, Sequence[TacticOutcome]],
+    reward: RewardConfig,
+    credit: CreditMode,
+) -> TrainableGroups:
     """The groups the trainer would train. μ is left out: it only adds μ · q to off-graph states, which hardly decides
     whether a group has a signal."""
-    labels = label_graph(record)
-    tactics = policy_tactics(record, labels, reward.off_graph_min_expanded_nodes)
     groups = policy_groups(record, labels, tactics, [None] * len(record.nodes), reward).groups
     trained = [group for group in groups if group_advantages(group).has_signal(credit)]
     return TrainableGroups(len(trained), sum(group.feedback for group in trained), labels.remaining_steps[0])
+
+
+def opening(block: str) -> str:
+    """The block's first top-level tactic."""
+    tactics = split_tactics(block)
+    return tactics[0] if tactics else ""
+
+
+def is_bare_have(first: str) -> bool:
+    """`first`: the block's `opening`."""
+    return BARE_HAVE.search(first) is not None and ":=" not in first
+
+
+def is_proof_have(first: str) -> bool:
+    return BARE_HAVE.search(first) is not None and ":=" in first
+
+
+def opening_head(first: str) -> str:
+    found = OPENING_HEAD.match(first.strip())
+    return "" if found is None else found[0]
+
+
+def is_linarith_opening(first: str) -> bool:
+    return LINARITH.match(first) is not None
+
+
+def proof_graph_steps(outcomes: Sequence[TacticOutcome]) -> list[bool]:
+    """Per tactic reaching a proof-graph state with goals left: whether another tactic follows it."""
+    return [
+        index + 1 < len(outcomes)
+        for index, outcome in enumerate(outcomes)
+        if outcome.label == TacticLabel.PROOF_GRAPH and outcome.remaining_steps
+    ]
+
+
+def adds_closed_form_filler(record: TreeRecord, edge: Edge) -> bool:
+    states = [record.nodes[edge.parent_id].goals, *edge.tactic_goals]
+    return any(adds_only_closed_form_hypotheses(before, after) for before, after in pairwise(states))
+
+
+def explanation_bins(texts: Iterable[str]) -> tuple[int, ...]:
+    bins = [0] * EXPLANATION_BINS
+    for text in texts:
+        bins[min(len(visible_explanation(text)) // EXPLANATION_BIN_CHARACTERS, EXPLANATION_BINS - 1)] += 1
+    while bins and not bins[-1]:
+        bins.pop()
+    return tuple(bins)
+
+
+def summed_bins(histograms: Iterable[Sequence[int]]) -> tuple[int, ...]:
+    totals: list[int] = []
+    for histogram in histograms:
+        totals.extend([0] * (len(histogram) - len(totals)))
+        for index, count in enumerate(histogram):
+            totals[index] += count
+    return tuple(totals)
+
+
+def binned_median(bins: Sequence[int]) -> float | None:
+    """In characters, interpolated within the median's bin."""
+    half = sum(bins) / 2
+    below = 0
+    for index, count in enumerate(bins):
+        if count and below + count >= half:
+            return EXPLANATION_BIN_CHARACTERS * (index + (half - below) / count)
+        below += count
+    return None
+
+
+def block_habits(record: TreeRecord, tactics: Mapping[int, Sequence[TacticOutcome]]) -> BlockHabits:
+    """`tactics`: `policy_tactics`."""
+    habits = []
+    for edge in record.edges:
+        if edge.source != StepSource.POLICY or edge.feedback:
+            continue
+        executed = executed_edge(record, edge)
+        if not executed.text.strip() or not judged_by_lean(executed):
+            continue
+        samples = edge.sample_count
+        first = tactics[executed.edge_id][0]
+        first_tactic = opening(executed.text)
+        bare = is_bare_have(first_tactic)
+        open_claim = bare and first.leaves_claim_open
+        valid = ran_completely(executed)
+        steps = proof_graph_steps(tactics[executed.edge_id])
+        habits.append(
+            BlockHabits(
+                block_samples=samples,
+                bare_have_openings=samples * bare,
+                open_claims=samples * open_claim,
+                proved_claims=samples * (open_claim and first.label != TacticLabel.UNPROVED_CLAIM),
+                closed_form_fillers=samples * adds_closed_form_filler(record, executed),
+                proof_have_openings=samples * is_proof_have(first_tactic),
+                linarith_openings=samples * is_linarith_opening(first_tactic),
+                valid_blocks=samples * valid,
+                valid_block_tactics=samples * valid * executed.applied_tactics,
+                proof_graph_steps=samples * len(steps),
+                continued_proof_graph_steps=samples * sum(steps),
+                openings=(OpeningCount(opening_head(first_tactic), samples),),
+            )
+        )
+    texts = (
+        completion.text
+        for expansion in record.expansions
+        if not expansion.feedback
+        for completion in expansion.completions
+    )
+    return summed_habits([*habits, BlockHabits(explanation_character_bins=explanation_bins(texts))])
+
+
+def tree_habits(path: Path, min_expanded_nodes: int) -> BlockHabits | None:
+    """None for a tree file that cannot be read (truncated, corrupt)."""
+    try:
+        record = read_tree(path)
+    except (OSError, EOFError, ValueError, zlib.error):
+        return None
+    return block_habits(record, policy_tactics(record, label_graph(record), min_expanded_nodes))
+
+
+@dataclass(frozen=True)
+class PooledHabits:
+    habits: BlockHabits
+    trees: int
+    unreadable_trees: int
+
+
+def pooled_habits(paths: Sequence[Path], min_expanded_nodes: int) -> PooledHabits:
+    """The trees' block habits summed, unreadable ones skipped."""
+    found = [tree_habits(path, min_expanded_nodes) for path in paths]
+    habits = [item for item in found if item is not None]
+    return PooledHabits(summed_habits(habits), len(found), len(found) - len(habits))
+
+
+def summed_habits(habits: Iterable[BlockHabits]) -> BlockHabits:
+    habits = list(habits)
+    counts = {
+        item.name: sum(getattr(habit, item.name) for habit in habits)
+        for item in dataclasses.fields(BlockHabits)
+        if item.name not in ("explanation_character_bins", "openings")
+    }
+    openings: Counter[str] = Counter()
+    for habit in habits:
+        openings.update({item.head: item.samples for item in habit.openings})
+    return BlockHabits(
+        **counts,
+        explanation_character_bins=summed_bins(habit.explanation_character_bins for habit in habits),
+        openings=tuple(OpeningCount(head, samples) for head, samples in openings.most_common()),
+    )
 
 
 def tree_summary(
@@ -124,7 +336,13 @@ def tree_summary(
     first_round = [expansion for expansion in record.expansions if not expansion.feedback]
     completions = [completion for expansion in first_round for completion in expansion.completions]
     cut_off = [completion for completion in completions if is_forced(completion)]
-    groups = trainable_groups(record, reward, credit) if record.result.proved else TrainableGroups(0, 0, None)
+    labels = label_graph(record)
+    tactics = policy_tactics(record, labels, reward.off_graph_min_expanded_nodes)
+    groups = (
+        trainable_groups(record, labels, tactics, reward, credit)
+        if record.result.proved
+        else TrainableGroups(0, 0, None)
+    )
     accounting = record.result.accounting
     solved_at = record.result.solved_at
     return TreeSummary(
@@ -156,4 +374,5 @@ def tree_summary(
             sorted({version for expansion in record.expansions if (version := expansion.policy_version) is not None})
         ),
         below_band=below_band,
+        habits=block_habits(record, tactics),
     )

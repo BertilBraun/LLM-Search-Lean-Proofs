@@ -21,21 +21,33 @@ from lean_search.rl.health_checks import (
     HeldOutRates,
     append_health,
     clear_health_stop,
+    habits_text,
     health_alerts,
     health_thresholds,
     healthy_versions,
     held_out_rates,
     measurements,
+    openings_text,
     phase_health,
+    probe_habits_text,
     read_health_history,
     reference_measurements,
+    unmeasured_reference_phases,
     write_health_stop,
 )
 from lean_search.rl.loop_config import HealthConfig
 from lean_search.rl.training_phase import PhaseOutcome, PolicyOutcome
 from lean_search.rl.tree_store import TreeEntry
-from lean_search.rl.tree_summary import TreeSummary, tree_summary
+from lean_search.rl.tree_summary import (
+    BlockHabits,
+    OpeningCount,
+    TreeSummary,
+    pooled_habits,
+    summed_habits,
+    tree_summary,
+)
 from lean_search.search import Accounting, SearchResult, StopReason, TreeRecord, tree_record
+from lean_search.search.records import write_tree
 from lean_search.search.texts import (
     CharacterSpan,
     ExpansionTexts,
@@ -239,6 +251,88 @@ def test_the_valid_block_rate_is_per_judged_block() -> None:
     assert measurements(None, entries, None).valid_block_rate == 0.7
 
 
+HABITS = BlockHabits(
+    block_samples=10,
+    bare_have_openings=4,
+    open_claims=2,
+    proved_claims=1,
+    closed_form_fillers=1,
+    explanation_character_bins=(0, 2, 0, 2),
+    proof_have_openings=3,
+    linarith_openings=2,
+    valid_blocks=5,
+    valid_block_tactics=10,
+    proof_graph_steps=4,
+    continued_proof_graph_steps=1,
+)
+
+
+def with_habits(habits: BlockHabits, below_band: bool = False) -> TreeEntry:
+    return dataclasses.replace(entry(), summary=TreeSummary(habits=habits, below_band=below_band))
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("bare_have_share", 0.4),
+        ("claim_proved_rate", 0.5),
+        ("closed_form_filler_share", 0.1),
+        ("median_explanation_characters", 20.0),
+        ("proof_have_share", 0.3),
+        ("linarith_opening_share", 0.2),
+        ("valid_block_tactics", 2.0),
+        ("continue_rate", 0.25),
+    ],
+)
+def test_the_block_habits_are_measured_over_the_phases_trees(field: str, value: float) -> None:
+    entries = [with_habits(HABITS), with_habits(HABITS)]
+    assert getattr(measurements(None, entries, None), field) == pytest.approx(value)
+
+
+def test_trees_summarized_before_the_block_habits_leave_them_unmeasured() -> None:
+    assert measurements(None, [entry()], None).bare_have_share is None
+
+
+def test_the_below_band_habits_count_the_statements_from_below_the_band_only() -> None:
+    entries = [with_habits(HABITS, below_band=True), with_habits(BlockHabits(block_samples=10))]
+    assert measurements(None, entries, None).below_band_bare_have_share == pytest.approx(0.4)
+
+
+def test_a_phase_without_statements_from_below_the_band_has_no_below_band_habits() -> None:
+    assert measurements(None, [with_habits(HABITS)], None).below_band_bare_have_share is None
+
+
+def test_only_reference_phases_without_block_habits_are_measured_again() -> None:
+    measured = dataclasses.replace(health_record(1).measured, bare_have_share=0.2)
+    history = [dataclasses.replace(health_record(1), measured=measured), health_record(2), health_record(3)]
+    assert [record.phase for record in unmeasured_reference_phases(history, 2)] == [2]
+
+
+def test_the_habits_line_names_the_first_phase_trained_with_the_reward_fix() -> None:
+    assert "(the reward fix trains from phase 13)" in habits_text(14, HealthMeasurements(), 13)
+
+
+def test_the_probe_habits_line_counts_the_bare_haves() -> None:
+    assert "4 open with a bare `have` (50.0% of their open claims proved)" in probe_habits_text("probe", HABITS)
+
+
+OPENINGS = dataclasses.replace(HABITS, openings=(OpeningCount("have", 6), OpeningCount("simp", 4)))
+
+
+def test_the_probe_habits_line_names_the_openings_by_head() -> None:
+    assert "openings `have` 60.0%, `simp` 40.0%" in probe_habits_text("probe", OPENINGS)
+
+
+def test_the_openings_line_shows_each_heads_share_in_the_phase_before() -> None:
+    before = dataclasses.replace(HABITS, openings=(OpeningCount("have", 2), OpeningCount("linarith", 8)))
+    text = openings_text(14, [with_habits(OPENINGS)], [with_habits(before)])
+    assert text == "Openings of phase 14 by head (the phase before): `have` 60.0% (20.0%), `simp` 40.0% (0.0%)"
+
+
+def test_the_openings_line_without_the_phase_before_leaves_its_shares_out() -> None:
+    assert openings_text(1, [with_habits(OPENINGS)], []).endswith("`simp` 40.0% (-)")
+
+
 def test_the_cut_off_share_is_per_policy_sample() -> None:
     entries = [summarized(10, 100, 50, 3), summarized(10, 100, 50, 1)]
     assert measurements(None, entries, None).cut_off_share == 0.02
@@ -323,12 +417,61 @@ def test_the_valid_block_threshold_is_a_fraction_of_the_first_phases() -> None:
     assert thresholds.min_valid_block_rate == pytest.approx(0.68)
 
 
+def habit_record(phase: int, bare_have_share: float, claim_proved_rate: float, characters: float) -> PhaseHealth:
+    measured = HealthMeasurements(
+        bare_have_share=bare_have_share,
+        claim_proved_rate=claim_proved_rate,
+        median_explanation_characters=characters,
+    )
+    return PhaseHealth(phase, phase, measured, HealthThresholds(0.02, 0.1))
+
+
+HABIT_REFERENCE = reference_measurements([habit_record(1, 0.2, 0.02, 130.0), habit_record(2, 0.3, 0.04, 150.0)], 2)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("max_bare_have_share", 0.375), ("min_claim_proved_rate", 0.015), ("min_explanation_characters", 98.0)],
+)
+def test_the_habit_thresholds_scale_the_first_phases(field: str, value: float) -> None:
+    assert getattr(health_thresholds(CONFIG, HABIT_REFERENCE, None), field) == pytest.approx(value)
+
+
 def test_the_stop_threshold_is_a_fraction_of_version_zeros_valid_lean_rate() -> None:
     assert health_thresholds(CONFIG, None, HeldOutRates(0.8, 0.4)).stop_held_out_valid_rate == pytest.approx(0.56)
 
 
-THRESHOLDS = HealthThresholds(0.02, 0.1, 5.0, 60.0, 240.0, 0.02, 0.72, 0.56, 0.36, 0.68)
-HEALTHY = HealthMeasurements(0.001, 0.05, 6.0, 8.0, 120.0, 0.01, 0.005, 0.78, 0.4, 0.8)
+THRESHOLDS = HealthThresholds(
+    0.02,
+    0.1,
+    5.0,
+    60.0,
+    240.0,
+    0.02,
+    0.72,
+    0.56,
+    0.36,
+    0.68,
+    max_bare_have_share=0.3,
+    min_claim_proved_rate=0.01,
+    min_explanation_characters=100.0,
+)
+HEALTHY = HealthMeasurements(
+    0.001,
+    0.05,
+    6.0,
+    8.0,
+    120.0,
+    0.01,
+    0.005,
+    0.78,
+    0.4,
+    0.8,
+    bare_have_share=0.2,
+    claim_proved_rate=0.02,
+    closed_form_filler_share=0.01,
+    median_explanation_characters=140.0,
+)
 QUIET_BUDGET = BudgetPhase(100, 50, 200, 32, 1, 0.02, 0.02, 3, 0.1)
 
 
@@ -353,10 +496,40 @@ def test_a_healthy_phase_has_no_alerts() -> None:
         ({"held_out_valid_rate": 0.5}, HealthCheck.HELD_OUT_VALID_LEAN),
         ({"held_out_success": 0.3}, HealthCheck.HELD_OUT_SUCCESS),
         ({"valid_block_rate": 0.6}, HealthCheck.VALID_BLOCKS),
+        ({"bare_have_share": 0.4}, HealthCheck.BARE_HAVES),
+        ({"claim_proved_rate": 0.005}, HealthCheck.CLAIMS_PROVED),
+        ({"median_explanation_characters": 90.0}, HealthCheck.EXPLANATION_CHARACTERS),
     ],
 )
 def test_a_signal_beyond_its_threshold_alerts(change: dict[str, float], check: HealthCheck) -> None:
     assert checks(dataclasses.replace(HEALTHY, **change)) == [check]
+
+
+@pytest.mark.parametrize(
+    "change",
+    [{"bare_have_share": 0.4}, {"claim_proved_rate": 0.005}, {"median_explanation_characters": 90.0}],
+    ids=["bare haves", "claims proved", "explanation characters"],
+)
+def test_habit_alerts_are_warnings(change: dict[str, float]) -> None:
+    alerts = health_alerts(dataclasses.replace(HEALTHY, **change), THRESHOLDS, QUIET_BUDGET, CONFIG)
+    assert [alert.severity for alert in alerts] == [HealthSeverity.WARNING]
+
+
+@pytest.mark.parametrize(
+    ("change", "check"),
+    [
+        ({"below_band_bare_have_share": 0.4}, HealthCheck.BARE_HAVES),
+        ({"below_band_claim_proved_rate": 0.005}, HealthCheck.CLAIMS_PROVED),
+        ({"below_band_median_explanation_characters": 90.0}, HealthCheck.EXPLANATION_CHARACTERS),
+    ],
+    ids=["bare haves", "claims proved", "explanation characters"],
+)
+def test_habit_alerts_compare_the_statements_from_below_the_band(change: dict[str, float], check: HealthCheck) -> None:
+    assert checks(dataclasses.replace(HEALTHY, **change)) == [check]
+
+
+def test_habit_alerts_ignore_the_band_when_the_statements_from_below_it_are_healthy() -> None:
+    assert checks(dataclasses.replace(HEALTHY, bare_have_share=0.4, below_band_bare_have_share=0.2)) == []
 
 
 @pytest.mark.parametrize(("valid_rate", "severity"), [(0.6, HealthSeverity.WARNING), (0.5, HealthSeverity.STOP)])
@@ -460,3 +633,21 @@ def test_a_tree_counts_its_roots_first_round_blocks(field: str, count: int) -> N
 def test_a_tree_records_the_versions_that_sampled_it() -> None:
     tree = dataclasses.replace(record(), expansions=(ExpansionTexts("test.t0", 0, "prompt", (), policy_version=3),))
     assert summary_of(tree).sampling_versions == (3,)
+
+
+def probe_trees(directory: Path) -> list[Path]:
+    """Two readable trees and a truncated one."""
+    paths = [directory / name for name in ("a.json.gz", "b.json.gz", "c.json.gz")]
+    write_tree(paths[0], record())
+    write_tree(paths[1], record())
+    paths[2].write_bytes(b"truncated")
+    return paths
+
+
+def test_pooled_habits_sum_the_readable_trees(tmp_path: Path) -> None:
+    single = pooled_habits(probe_trees(tmp_path)[:1], 4).habits
+    assert pooled_habits(probe_trees(tmp_path), 4).habits == summed_habits([single, single])
+
+
+def test_pooled_habits_count_the_unreadable_trees(tmp_path: Path) -> None:
+    assert pooled_habits(probe_trees(tmp_path), 4).unreadable_trees == 1

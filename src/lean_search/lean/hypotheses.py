@@ -1,4 +1,5 @@
-"""Hypotheses in pretty-printed goals: names, types, redundant additions, and `rename_i` for inaccessible names."""
+"""Hypotheses in pretty-printed goals: names, types, redundant and closed-form (numeral comparison) additions, and
+`rename_i` for inaccessible names."""
 
 import re
 from collections import Counter
@@ -12,6 +13,9 @@ _INACCESSIBLE_NAME = re.compile(rf"[^\s✝]*✝[{_SUPERSCRIPT_DIGITS}]*")
 _OPENING_BRACKETS = "([{⟨"
 _CLOSING_BRACKETS = ")]}⟩"
 _SYMMETRIC_RELATIONS = (" = ", " ↔ ")
+_COMPARISONS = (" = ", " ≠ ", " < ", " ≤ ", " > ", " ≥ ")
+_NUMERAL = re.compile(r"-?\d+(\.\d+)?")
+_NUMBER_TYPES = frozenset({"ℕ", "ℤ", "ℚ", "ℝ", "ℂ"})
 
 
 @dataclass(frozen=True)
@@ -19,6 +23,7 @@ class GoalParts:
     # One whitespace-normalized type per hypothesis name, in context order.
     hypothesis_types: tuple[str, ...]
     target: str
+    hypothesis_names: tuple[str, ...] = ()
 
 
 def normalized_text(lines: Sequence[str]) -> str:
@@ -41,7 +46,8 @@ def goal_parts(goal: str) -> GoalParts:
         elif entries:
             entries[-1][1].append(line)
     types = tuple(normalized_text(type_lines) for names, type_lines in entries for _ in names)
-    return GoalParts(types, normalized_text(target or []))
+    names = tuple(name for entry_names, _ in entries for name in entry_names)
+    return GoalParts(types, normalized_text(target or []), names)
 
 
 def top_level_parts(proposition: str, separator: str) -> list[str]:
@@ -74,32 +80,86 @@ def is_reflexive(proposition: str) -> bool:
     return False
 
 
-def adds_only_redundant_hypotheses(before: Sequence[str], after: Sequence[str]) -> bool:
-    """`after` is `before` plus known or reflexive hypotheses (a flattened `have h : A` also puts `⊢ A` first)."""
-    if not before:
+def is_numeral(term: str) -> bool:
+    """A numeral, or a cast of one: `2`, `-1`, `(1:ℝ)`, `((2 : ℕ) : ℝ)`, `↑3`, in any parentheses."""
+    term = term.strip()
+    if _NUMERAL.fullmatch(term):
+        return True
+    if term.startswith("↑"):
+        return is_numeral(term[1:])
+    if not (term.startswith("(") and term.endswith(")")):
         return False
+    match top_level_parts(term[1:-1], ":"):
+        case [inner]:
+            return is_numeral(inner)
+        case [inner, number_type]:
+            return number_type.strip() in _NUMBER_TYPES and is_numeral(inner)
+        case _:
+            return False
+
+
+def is_numeral_comparison(proposition: str) -> bool:
+    """`0 < (1:ℝ)`, `2 ≤ 3`, `(4:ℕ) = 4`: one comparison or equality of numerals and casts of numerals."""
+    for relation in _COMPARISONS:
+        sides = top_level_parts(proposition, relation)
+        if len(sides) == 2 and all(is_numeral(side) for side in sides):
+            return True
+    return False
+
+
+@dataclass(frozen=True)
+class AddedHypothesis:
+    proposition: str
+    # The goal it was added to, as it was before.
+    before: GoalParts
+
+    @property
+    def known(self) -> bool:
+        return self.proposition in self.before.hypothesis_types or is_reflexive(self.proposition)
+
+    @property
+    def closed_form(self) -> bool:
+        """A comparison of numerals like `0 < (1:ℝ)`, in a context with names: a statement without any is exempt."""
+        return bool(self.before.hypothesis_names) and is_numeral_comparison(self.proposition)
+
+
+def added_hypotheses(before: Sequence[str], after: Sequence[str]) -> tuple[AddedHypothesis, ...] | None:
+    """What `after` adds to `before` when it only adds hypotheses (a flattened `have h : A` also puts `⊢ A` first,
+    A counted as added); None when anything else changed."""
+    if not before:
+        return None
     before_parts = [goal_parts(goal) for goal in before]
     after_parts = [goal_parts(goal) for goal in after]
     first = before_parts[0]
-    if (
-        len(after_parts) == len(before_parts) + 1
-        and after_parts[0].hypothesis_types == first.hypothesis_types
-        and (after_parts[0].target in first.hypothesis_types or is_reflexive(after_parts[0].target))
-    ):
+    added = []
+    if len(after_parts) == len(before_parts) + 1 and after_parts[0].hypothesis_types == first.hypothesis_types:
+        added.append(AddedHypothesis(after_parts[0].target, first))
         after_parts = after_parts[1:]
     if len(after_parts) != len(before_parts):
-        return False
-    added = False
+        return None
     for old, new in zip(before_parts, after_parts, strict=True):
         old_types = Counter(old.hypothesis_types)
         new_types = Counter(new.hypothesis_types)
         if new.target != old.target or old_types - new_types:
-            return False
-        for proposition in (new_types - old_types).elements():
-            if proposition not in old_types and not is_reflexive(proposition):
-                return False
-            added = True
-    return added
+            return None
+        added.extend(AddedHypothesis(proposition, old) for proposition in (new_types - old_types).elements())
+    return tuple(added)
+
+
+def adds_only_redundant_hypotheses(before: Sequence[str], after: Sequence[str]) -> bool:
+    """`after` is `before` plus known or reflexive hypotheses."""
+    added = added_hypotheses(before, after)
+    return bool(added) and all(hypothesis.known for hypothesis in added)
+
+
+def adds_only_closed_form_hypotheses(before: Sequence[str], after: Sequence[str]) -> bool:
+    """`after` is `before` plus closed-form hypotheses, besides known or reflexive ones: filler like `0 < (1:ℝ)`."""
+    added = added_hypotheses(before, after)
+    return (
+        bool(added)
+        and all(hypothesis.known or hypothesis.closed_form for hypothesis in added)
+        and any(hypothesis.closed_form for hypothesis in added)
+    )
 
 
 def hypothesis_names(goal: str) -> list[str]:

@@ -6,7 +6,8 @@ tree with one expansion (`search_theorem` with `start_state`), recorded like the
 
 Which tactics are on the proof graph: the state is provable (its traced proof proves it), and so is every state of
 that proof after it. A tactic is on the proof graph when it closes the goals or reaches the reference proof's next or
-a later state (the per-step evaluation's success criterion, by goal key); other new states are unknown and neutral.
+a later state (the per-step evaluation's success criterion, by goal key); other new states are unknown
+(`RewardConfig.unknown_local`).
 So every state has a known-provable anchor without a further search; a state forms no group when no sample reaches
 the proof graph (`RewardConfig.require_policy_proof`). Remaining steps are the reference proof's (or a found proof's
 tactics, if fewer), so reaching a later reference state earns more progress. A sample succeeds when its block runs
@@ -51,6 +52,9 @@ from lean_search.search.tactic_labels import TacticLabel, TacticOutcome, policy_
 from lean_search.search.tree import Edge, EdgeOutcome, StepSource
 
 POLICY_SOURCE = frozenset({StepSource.POLICY})
+# Labels a reference state (provable by its traced proof) overrides: no tree evidence, or a judgement of the state's
+# text (a claim, closed-form filler) that its reference proof refutes.
+RELABELLED = (TacticLabel.UNKNOWN, TacticLabel.UNPROVED_CLAIM, TacticLabel.REDUNDANT_HYPOTHESIS)
 
 
 @dataclass(frozen=True)
@@ -172,7 +176,7 @@ def reference_labels(
         relabelled = list(outcomes)
         for index, goals in enumerate(edge.tactic_goals):
             key = goal_key(goals)
-            if relabelled[index].label == TacticLabel.UNKNOWN and key in reference_steps:
+            if relabelled[index].label in RELABELLED and key in reference_steps:
                 closed = max(0, len(previous) - len(goals))
                 node_id = relabelled[index].node_id
                 relabelled[index] = TacticOutcome(TacticLabel.PROOF_GRAPH, node_id, closed, reference_steps[key])

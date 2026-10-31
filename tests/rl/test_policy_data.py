@@ -191,17 +191,13 @@ def test_tokens_that_do_not_decode_to_the_text_fall_back_to_sequence_credit() ->
     assert data.metrics.token_mismatch_sequences == 1
 
 
-def test_unknown_only_sample_trains_none_of_its_explanation_and_tactic_tokens() -> None:
+def test_unknown_only_sample_trains_its_explanation_and_tactic_tokens() -> None:
     texts = [ExpansionTexts("p", 0, "prompt", (completion(0, "a"), completion(1, "b"), completion(2, "c")))]
     groups = [
         group(sample("a", PROOF_GRAPH, edge_id=0), sample("b", FAILING, edge_id=1), sample("c", UNKNOWN, edge_id=2))
     ]
     sequence = single_tree_data(groups, texts, PolicyDataConfig()).sequences[2]
-    assert not any(
-        trained
-        for trained, segment in zip(sequence.trained, sequence.segments, strict=True)
-        if segment != TokenSegment.CLOSING
-    )
+    assert all(sequence.trained)
 
 
 def test_closing_tokens_of_a_complete_block_train_with_zero_advantage() -> None:

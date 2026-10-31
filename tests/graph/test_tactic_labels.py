@@ -2,20 +2,27 @@ import pytest
 from graph_trees import GraphBuilder
 from tactic_trees import (
     AFTER_FIRST_HAVE,
+    BARE_HAVE,
+    CLAIM,
     CONSTRUCTOR,
+    CONTEXT,
     COPY,
     E_FIRST_THEN_FAILING,
     ERROR,
     FIRST_THEN_FAILING,
     NO_OP,
     PROOF,
+    ROOT,
+    TARGET,
     THROUGH_SECOND_HAVE,
+    claim_tree,
     example_tree,
 )
 
 from lean_search.rl.grpo_groups import RewardConfig
+from lean_search.rl.single_step import reference_labels
 from lean_search.search import TreeRecord
-from lean_search.search.graph_labels import NodeClass, label_graph
+from lean_search.search.graph_labels import NodeClass, goal_key, label_graph
 from lean_search.search.tactic_labels import TacticLabel, TacticLabelCounts, TacticOutcome, policy_tactics
 
 PROOF_GRAPH = TacticLabel.PROOF_GRAPH
@@ -25,6 +32,7 @@ NO_PROGRESS = TacticLabel.NO_PROGRESS
 REDUNDANT = TacticLabel.REDUNDANT_HYPOTHESIS
 FAILING = TacticLabel.FAILING
 MASKED = TacticLabel.MASKED
+UNPROVED_CLAIM = TacticLabel.UNPROVED_CLAIM
 MIN_EXPANDED_NODES = RewardConfig().off_graph_min_expanded_nodes
 
 
@@ -58,7 +66,7 @@ def labels_of(record: TreeRecord, text: str, min_expanded_nodes: int = MIN_EXPAN
         "no-op",
         "error",
         "unparsed",
-        "dead end",
+        "goal split into a dead end",
         "intermediate state",
     ],
 )
@@ -156,3 +164,210 @@ def test_unverified_proof_fails_on_its_last_tactic() -> None:
 
 def test_label_counts_cover_every_label() -> None:
     assert TacticLabelCounts.of(TacticLabel).total == len(TacticLabel)
+
+
+FILLER = f"{CONTEXT}\nh₂ : 0 < (1:ℝ)\n{TARGET}"
+LOCAL_FACT = f"{CONTEXT}\nh₂ : 0 < x ^ 2 + 1\n{TARGET}"
+FALSE_CLAIM = (f"{CONTEXT}\n⊢ 0 < ((0:ℝ))", f"{CONTEXT}\nh₂ : 0 < ((0:ℝ))\n{TARGET}")
+
+
+def test_bare_have_whose_claim_is_never_proved_is_an_unproved_claim() -> None:
+    assert labels_of(claim_tree(), BARE_HAVE) == (UNPROVED_CLAIM,)
+
+
+def test_bare_have_on_the_proof_graph_stays_on_it() -> None:
+    assert labels_of(claim_tree(on_proof_graph=True), BARE_HAVE) == (PROOF_GRAPH,)
+
+
+def test_bare_have_whose_claim_a_descendant_proves_is_no_unproved_claim() -> None:
+    assert labels_of(claim_tree(proved_below=True), BARE_HAVE) == (UNKNOWN,)
+
+
+def test_bare_have_whose_claim_the_block_proves_is_no_unproved_claim() -> None:
+    builder = GraphBuilder(ROOT)
+    text = f"{BARE_HAVE}\nlinear_combination h₁ - h₀\nring_nf"
+    after = f"{CONTEXT}\nh₂ : x = -4\n⊢ e = 11"
+    builder.child(builder.root, after, text=text, tactics=3, tactic_goals=(CLAIM, (AFTER_FIRST_HAVE,), (after,)))
+    record = builder.record(builder.child(builder.root, text="close"))
+    assert labels_of(record, text)[0] == UNKNOWN
+
+
+def single_step_tree(goals: str, proved: bool = False) -> TreeRecord:
+    builder = GraphBuilder(ROOT)
+    child = builder.child(builder.root, goals, text="have", tactic_goals=((goals,),))
+    return builder.record(builder.child(child if proved else builder.root, text="close"))
+
+
+def test_closed_form_filler_off_the_proof_graph_is_redundant() -> None:
+    assert labels_of(single_step_tree(FILLER), "have") == (REDUNDANT,)
+
+
+def test_hypothesis_mentioning_a_local_variable_is_no_filler() -> None:
+    assert labels_of(single_step_tree(LOCAL_FACT), "have") == (UNKNOWN,)
+
+
+def test_closed_form_hypothesis_on_the_proof_graph_stays_on_it() -> None:
+    assert labels_of(single_step_tree(FILLER, proved=True), "have") == (PROOF_GRAPH,)
+
+
+def test_bare_have_of_a_false_closed_form_claim_is_redundant() -> None:
+    builder = GraphBuilder(ROOT)
+    builder.child(builder.root, *FALSE_CLAIM, text="have h₂ : 0 < ((0:ℝ))", tactic_goals=(FALSE_CLAIM,))
+    record = builder.record(builder.child(builder.root, text="close"))
+    assert labels_of(record, "have h₂ : 0 < ((0:ℝ))") == (REDUNDANT,)
+
+
+SPLIT_STATE = "x : ℝ\n⊢ 0 ≤ x ^ 2 ∧ 0 ≤ x ^ 4"
+SPLIT_GOALS = ("x : ℝ\n⊢ 0 ≤ x ^ 2", "x : ℝ\n⊢ 0 ≤ x ^ 4")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "constructor",
+        "refine ⟨?_, ?_⟩",
+        "cases h",
+        "rcases h with h | h",
+        "induction n",
+        "by_cases h : x = 0",
+        "apply foo",
+    ],
+)
+def test_goal_split_into_an_unexpanded_child_is_unknown(text: str) -> None:
+    builder = GraphBuilder(SPLIT_STATE)
+    builder.child(builder.root, *SPLIT_GOALS, text=text, tactic_goals=(SPLIT_GOALS,))
+    record = builder.record(builder.child(builder.root, text="close"))
+    assert labels_of(record, text) == (UNKNOWN,)
+
+
+def test_have_into_an_unexpanded_child_is_an_unproved_claim() -> None:
+    claim = ("x : ℝ\n⊢ 0 ≤ x ^ 2", "x : ℝ\nh : 0 ≤ x ^ 2\n⊢ 0 ≤ x ^ 2 ∧ 0 ≤ x ^ 4")
+    builder = GraphBuilder(SPLIT_STATE)
+    builder.child(builder.root, *claim, text="have h : 0 ≤ x ^ 2", tactic_goals=(claim,))
+    record = builder.record(builder.child(builder.root, text="close"))
+    assert labels_of(record, "have h : 0 ≤ x ^ 2") == (UNPROVED_CLAIM,)
+
+
+INLINE_ATTEMPT = "have h₂ : x = -4 := by\n  nlinarith"
+
+
+def test_failed_inline_proof_keeps_its_claim_and_failure_labels() -> None:
+    builder = GraphBuilder(ROOT)
+    builder.child(builder.root, *CLAIM, text=INLINE_ATTEMPT, failure_after=1, tactic_goals=(CLAIM,))
+    record = builder.record(builder.child(builder.root, text="close"))
+    assert labels_of(record, INLINE_ATTEMPT)[:2] == (UNPROVED_CLAIM, FAILING)
+
+
+def test_claim_proved_by_a_sibling_is_no_unproved_claim() -> None:
+    builder = GraphBuilder(ROOT)
+    builder.child(builder.root, *CLAIM, text=BARE_HAVE, tactic_goals=(CLAIM,))
+    sibling = builder.child(builder.root, AFTER_FIRST_HAVE, text="have h₂ : x = -4 := by linear_combination h₁ - h₀")
+    record = builder.record(builder.child(sibling, text="close"))
+    assert labels_of(record, BARE_HAVE) == (UNKNOWN,)
+
+
+def test_claim_proved_by_a_sibling_under_another_name_is_no_unproved_claim() -> None:
+    builder = GraphBuilder(ROOT)
+    builder.child(builder.root, *CLAIM, text=BARE_HAVE, tactic_goals=(CLAIM,))
+    renamed = f"{CONTEXT}\nh₃ : x = -4\n{TARGET}"
+    sibling = builder.child(builder.root, renamed, text="have h₃ : x = -4 := by linear_combination h₁ - h₀")
+    record = builder.record(builder.child(sibling, text="close"))
+    assert labels_of(record, BARE_HAVE) == (UNKNOWN,)
+
+
+def single_claim_tree(text: str, goals: tuple[str, ...]) -> TreeRecord:
+    builder = GraphBuilder(ROOT)
+    builder.child(builder.root, *goals, text=text, tactic_goals=(goals,))
+    return builder.record(builder.child(builder.root, text="close"))
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "try have h₂ : x = -4",
+        "all_goals have h₂ : x = -4",
+        "any_goals have h₂ : x = -4",
+        "haveI h₂ : x = -4",
+        "letI h₂ : x = -4",
+        "norm_num <;> have h₂ : x = -4",
+    ],
+)
+def test_wrapped_bare_claim_is_an_unproved_claim(text: str) -> None:
+    assert labels_of(single_claim_tree(text, CLAIM), text) == (UNPROVED_CLAIM,)
+
+
+def test_rsuffices_leaving_its_claim_last_is_an_unproved_claim() -> None:
+    text = "rsuffices h₂ : x = -4"
+    assert labels_of(single_claim_tree(text, (AFTER_FIRST_HAVE, CLAIM[0])), text) == (UNPROVED_CLAIM,)
+
+
+def test_a_name_containing_have_makes_no_claim() -> None:
+    text = "apply have_lemma"
+    assert labels_of(single_claim_tree(text, CLAIM), text) == (UNKNOWN,)
+
+
+SUFFICES = "suffices h₂ : x = -4 by linear_combination h₀ - h₂"
+SUFFICED = (f"{CONTEXT}\n⊢ x = -4",)
+
+
+def test_unproved_suffices_is_an_unproved_claim() -> None:
+    builder = GraphBuilder(ROOT)
+    builder.child(builder.root, *SUFFICED, text=SUFFICES, tactic_goals=(SUFFICED,))
+    record = builder.record(builder.child(builder.root, text="close"))
+    assert labels_of(record, SUFFICES) == (UNPROVED_CLAIM,)
+
+
+def test_suffices_whose_claim_a_descendant_proves_is_no_unproved_claim() -> None:
+    builder = GraphBuilder(ROOT)
+    claimed = builder.child(builder.root, *SUFFICED, text=SUFFICES, tactic_goals=(SUFFICED,))
+    record = builder.record(builder.child(claimed, text="linear_combination h₁ - h₀"))
+    assert labels_of(record, SUFFICES) == (PROOF_GRAPH,)
+
+
+SWAPPED = f"{BARE_HAVE}\nswap\nlinear_combination h₀ - h₂"
+
+
+def swap_tree() -> TreeRecord:
+    """A bare `have`, then `swap` and a closer of the main goal: back to one goal, the claim's."""
+    builder = GraphBuilder(ROOT)
+    claim_goal, main_goal = CLAIM
+    goals = (CLAIM, (main_goal, claim_goal), (claim_goal,))
+    builder.child(builder.root, claim_goal, text=SWAPPED, tactics=3, tactic_goals=goals)
+    return builder.record(builder.child(builder.root, text="close"))
+
+
+def test_claim_left_after_swapping_and_closing_the_main_goal_is_unproved() -> None:
+    assert labels_of(swap_tree(), SWAPPED)[0] == UNPROVED_CLAIM
+
+
+def test_claim_the_block_leaves_open_is_marked() -> None:
+    assert outcomes(claim_tree(proved_below=True), BARE_HAVE)[0].leaves_claim_open
+
+
+def test_claim_the_block_proves_is_not_marked_open() -> None:
+    builder = GraphBuilder(ROOT)
+    text = f"{BARE_HAVE}\nlinear_combination h₁ - h₀"
+    builder.child(builder.root, AFTER_FIRST_HAVE, text=text, tactics=2, tactic_goals=(CLAIM, (AFTER_FIRST_HAVE,)))
+    record = builder.record(builder.child(builder.root, text="close"))
+    assert not outcomes(record, text)[0].leaves_claim_open
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [
+        ("⊢ 2 ^ 10 % 7 = 2", "h : 2 ^ 10 = 1024\n⊢ 2 ^ 10 % 7 = 2"),
+        ("x : ℝ\nh₀ : x = Real.pi / 2\n⊢ 1 < x", "x : ℝ\nh₀ : x = Real.pi / 2\nhπ : 3 < Real.pi\n⊢ 1 < x"),
+    ],
+    ids=["statement without locals", "a constant's fact"],
+)
+def test_useful_closed_fact_off_the_proof_graph_is_unknown(before: str, after: str) -> None:
+    builder = GraphBuilder(before)
+    builder.child(builder.root, after, text="have", tactic_goals=((after,),))
+    assert labels_of(builder.record(builder.child(builder.root, text="close")), "have") == (UNKNOWN,)
+
+
+def test_closed_form_reference_step_is_on_the_reference_proof_graph() -> None:
+    builder = GraphBuilder(ROOT)
+    builder.child(builder.root, FILLER, text="have", tactic_goals=((FILLER,),))
+    _, tactics = reference_labels(builder.record(), {goal_key((FILLER,)): 1}, MIN_EXPANDED_NODES)
+    assert tactics[0][0].label == PROOF_GRAPH

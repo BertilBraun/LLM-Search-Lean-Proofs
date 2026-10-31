@@ -11,6 +11,7 @@ from rl_samples import (
     REDUNDANT,
     REWARDS,
     UNKNOWN,
+    UNPROVED_CLAIM,
     group,
     sample,
 )
@@ -23,9 +24,10 @@ STEP = 0.2
 COST = 0.1
 ON_GRAPH_REWARD = 0.85
 ONE_STEP_REWARD = ON_GRAPH_REWARD + STEP
-OFF_GRAPH_REWARD = 0.0
 NO_PROGRESS_REWARD = -0.15
 FAILING_REWARD = -0.15
+UNKNOWN_REWARD = 0.15 * -0.5
+OFF_GRAPH_REWARD = UNKNOWN_REWARD
 
 
 def example() -> list[float | None]:
@@ -43,11 +45,11 @@ def example() -> list[float | None]:
 
 def test_design_example_signs() -> None:
     signs = ["+" if value > 0 else "-" if value < 0 else "0" for value in example() if value is not None]
-    assert signs == ["+", "+", "+", "+", "-", "-", "-"]
+    assert signs == ["+", "+", "+", "+", "-", "-", "-", "-"]
 
 
-def test_design_example_leaves_the_unknown_and_masked_tactics_untrained() -> None:
-    assert [index for index, value in enumerate(example()) if value is None] == [5, 6, 8]
+def test_design_example_leaves_the_masked_tactics_untrained() -> None:
+    assert [index for index, value in enumerate(example()) if value is None] == [5, 8]
 
 
 @pytest.mark.parametrize(
@@ -58,10 +60,17 @@ def test_design_example_leaves_the_unknown_and_masked_tactics_untrained() -> Non
         ((NO_PROGRESS,), NO_PROGRESS_REWARD),
         ((REDUNDANT,), NO_PROGRESS_REWARD),
         ((FAILING,), FAILING_REWARD),
+        ((UNKNOWN,), UNKNOWN_REWARD),
+        ((UNPROVED_CLAIM,), NO_PROGRESS_REWARD - COST),
+        ((UNPROVED_CLAIM, FAILING, MASKED), NO_PROGRESS_REWARD - COST),
+        ((PROOF_GRAPH, OFF_GRAPH), ONE_STEP_REWARD - COST),
+        ((PROOF_GRAPH, UNPROVED_CLAIM), ONE_STEP_REWARD - 2 * COST),
         ((PROOF_GRAPH, PROOF_GRAPH), ONE_STEP_REWARD + STEP),
         ((PROOF_GRAPH, FAILING, MASKED), ONE_STEP_REWARD - COST),
         ((PROOF_GRAPH, NO_PROGRESS, PROOF_GRAPH), ONE_STEP_REWARD + STEP - COST),
-        ((PROOF_GRAPH, UNKNOWN), ONE_STEP_REWARD),
+        ((PROOF_GRAPH, UNKNOWN), ONE_STEP_REWARD - COST),
+        ((PROOF_GRAPH, UNKNOWN, PROOF_GRAPH), ONE_STEP_REWARD + STEP),
+        ((UNKNOWN, UNKNOWN), UNKNOWN_REWARD),
         ((UNKNOWN, PROOF_GRAPH), ONE_STEP_REWARD),
         ((NO_PROGRESS, PROOF_GRAPH), ONE_STEP_REWARD - COST),
     ],
@@ -71,10 +80,17 @@ def test_design_example_leaves_the_unknown_and_masked_tactics_untrained() -> Non
         "no progress",
         "redundant",
         "failing",
+        "unknown",
+        "claim left open",
+        "failed attempt at a claim",
+        "explored off graph continuation",
+        "claim after progress",
         "two steps",
         "partial",
         "wasted tactic between",
-        "unknown last state",
+        "unverified continuation",
+        "unverified state between",
+        "unknown after unknown",
         "unknown first state",
         "no-op first",
     ],
@@ -101,9 +117,8 @@ def test_closing_a_goal_earns_the_bonus() -> None:
     assert sample("s", PROOF_GRAPH, closed=2).score == pytest.approx(ONE_STEP_REWARD + 0.15 * 0.2)
 
 
-@pytest.mark.parametrize("labels", [(UNKNOWN, UNKNOWN), (UNKNOWN, FAILING, MASKED)], ids=["unknown", "then failing"])
-def test_sample_without_a_known_state_or_first_failure_has_no_score(labels: tuple) -> None:
-    assert sample("s", *labels).score is None
+def test_unknown_sample_scores_half_a_failure() -> None:
+    assert sample("s", UNKNOWN).score == pytest.approx(-0.5 * REWARDS.local_share)
 
 
 def test_baseline_is_the_multiplicity_weighted_mean_score() -> None:
@@ -111,21 +126,23 @@ def test_baseline_is_the_multiplicity_weighted_mean_score() -> None:
     assert advantages.baseline == pytest.approx((3 * ONE_STEP_REWARD + FAILING_REWARD) / 4)
 
 
-def test_unknown_sample_stays_out_of_the_baseline() -> None:
+def test_unknown_sample_counts_in_the_baseline() -> None:
     advantages = group_advantages(group(sample("a", PROOF_GRAPH), sample("b", FAILING), sample("c", UNKNOWN)))
-    assert advantages.baseline == pytest.approx((ONE_STEP_REWARD + FAILING_REWARD) / 2)
+    assert advantages.baseline == pytest.approx((ONE_STEP_REWARD + FAILING_REWARD + UNKNOWN_REWARD) / 3)
 
 
-def test_unknown_sample_gets_no_sequence_advantage() -> None:
-    advantages = group_advantages(group(sample("a", PROOF_GRAPH), sample("b", FAILING), sample("c", UNKNOWN)))
-    assert advantages.samples[2].sequence is None
+def test_unknown_sample_gets_its_score_minus_the_baseline() -> None:
+    advantages = group_advantages(group(sample("a", PROOF_GRAPH), sample("c", UNKNOWN)))
+    assert advantages.samples[1].sequence == pytest.approx((UNKNOWN_REWARD - ONE_STEP_REWARD) / 2)
 
 
 def test_first_tactic_baseline_is_the_multiplicity_weighted_mean_first_state_reward() -> None:
     advantages = group_advantages(
         group(sample("a", PROOF_GRAPH, PROOF_GRAPH, multiplicity=3), sample("b", FAILING), sample("c", UNKNOWN))
     )
-    assert advantages.first_tactic_baseline == pytest.approx((3 * ONE_STEP_REWARD + FAILING_REWARD) / 4)
+    assert advantages.first_tactic_baseline == pytest.approx(
+        (3 * ONE_STEP_REWARD + FAILING_REWARD + UNKNOWN_REWARD) / 5
+    )
 
 
 @pytest.mark.parametrize(
@@ -191,20 +208,34 @@ def test_wasted_later_tactic_after_an_unknown_state_costs_its_tokens_only() -> N
     assert advantages.samples[0].tactics[1] == pytest.approx(-COST)
 
 
-def test_later_tactic_leaving_the_proof_graph_loses_the_state_it_left() -> None:
+def test_explored_off_graph_state_ending_a_block_after_the_proof_graph_costs_its_tokens_only() -> None:
     advantages = group_advantages(group(sample("a", PROOF_GRAPH, OFF_GRAPH), sample("b", FAILING)))
-    assert advantages.samples[0].tactics[1] == pytest.approx(OFF_GRAPH_REWARD - ONE_STEP_REWARD)
+    assert advantages.samples[0].tactics[1] == pytest.approx(-COST)
 
 
-def test_tactic_after_an_unknown_state_is_judged_against_the_last_known_one() -> None:
+def test_explored_off_graph_state_after_an_unknown_first_state_gains_over_it() -> None:
+    advantages = group_advantages(group(sample("a", UNKNOWN, OFF_GRAPH), sample("b", FAILING)))
+    assert advantages.samples[0].tactics[1] == pytest.approx(OFF_GRAPH_REWARD - UNKNOWN_REWARD)
+
+
+def test_unknown_state_ending_a_block_after_the_proof_graph_costs_its_tokens_only() -> None:
+    advantages = group_advantages(group(sample("a", PROOF_GRAPH, UNKNOWN), sample("b", FAILING)))
+    assert advantages.samples[0].tactics[1] == pytest.approx(-COST)
+
+
+def test_unknown_state_before_a_later_proof_graph_state_gains_nothing() -> None:
+    advantages = group_advantages(group(sample("a", PROOF_GRAPH, UNKNOWN, PROOF_GRAPH), sample("b", FAILING)))
+    assert advantages.samples[0].tactics[1] == pytest.approx(0.0)
+
+
+def test_proof_graph_state_after_an_unknown_one_gains_over_the_last_proof_graph_state() -> None:
     advantages = group_advantages(group(sample("a", PROOF_GRAPH, UNKNOWN, PROOF_GRAPH), sample("b", FAILING)))
     assert advantages.samples[0].tactics[2] == pytest.approx(STEP)
 
 
-def test_tactic_without_a_known_earlier_state_is_judged_like_the_first() -> None:
+def test_tactic_after_an_unknown_state_gains_over_it() -> None:
     advantages = group_advantages(group(sample("a", UNKNOWN, PROOF_GRAPH), sample("b", FAILING)))
-    first_tactic_baseline = (ONE_STEP_REWARD + FAILING_REWARD) / 2
-    assert advantages.samples[0].tactics[1] == pytest.approx(ONE_STEP_REWARD - first_tactic_baseline)
+    assert advantages.samples[0].tactics[1] == pytest.approx(ONE_STEP_REWARD - UNKNOWN_REWARD)
 
 
 def test_continuing_correctly_beats_stopping_in_the_explanation() -> None:
@@ -215,8 +246,13 @@ def test_continuing_correctly_beats_stopping_in_the_explanation() -> None:
 
 @pytest.mark.parametrize(
     ("labels", "closing"),
-    [((PROOF_GRAPH, PROOF_GRAPH), 0.0), ((PROOF_GRAPH, UNKNOWN), 0.0), ((PROOF_GRAPH, FAILING, MASKED), None)],
-    ids=["complete", "unknown last state", "failed"],
+    [
+        ((PROOF_GRAPH, PROOF_GRAPH), 0.0),
+        ((PROOF_GRAPH, UNKNOWN), 0.0),
+        ((PROOF_GRAPH, FAILING, MASKED), None),
+        ((PROOF_GRAPH, UNPROVED_CLAIM), 0.0),
+    ],
+    ids=["complete", "unknown last state", "failed", "open claim"],
 )
 def test_closing_tokens_get_zero_after_a_complete_block(labels: tuple, closing: float | None) -> None:
     advantages = group_advantages(group(sample("a", *labels), sample("b", FAILING)))
@@ -225,7 +261,7 @@ def test_closing_tokens_get_zero_after_a_complete_block(labels: tuple, closing: 
 
 @pytest.mark.parametrize(
     ("second", "signal"),
-    [(sample("b", PROOF_GRAPH), False), (sample("b", FAILING), True), (sample("b", UNKNOWN), False)],
+    [(sample("b", PROOF_GRAPH), False), (sample("b", FAILING), True), (sample("b", UNKNOWN), True)],
     ids=["identical", "different", "unknown"],
 )
 def test_group_signal(second: object, signal: bool) -> None:
@@ -243,7 +279,7 @@ def test_equal_scores_with_different_tactics_carry_a_per_tactic_signal_only() ->
     ("first", "second", "share"),
     [
         (sample("a", PROOF_GRAPH, closed=1), sample("b", PROOF_GRAPH), 1.0),
-        (sample("a", PROOF_GRAPH), sample("b", OFF_GRAPH), 0.0),
+        (sample("a", PROOF_GRAPH, steps=(3,)), sample("b", PROOF_GRAPH, steps=(2,)), 0.0),
     ],
     ids=["local only", "global only"],
 )

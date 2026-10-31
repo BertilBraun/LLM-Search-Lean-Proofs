@@ -1,12 +1,15 @@
 """Per-tactic labels of policy samples: the state each executed tactic reached, judged against the proof graph."""
 
 import dataclasses
+import functools
+import re
 from collections import Counter
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
-from lean_search.lean.hypotheses import adds_only_redundant_hypotheses
+from lean_search.lean.hypotheses import adds_only_closed_form_hypotheses, adds_only_redundant_hypotheses, goal_parts
+from lean_search.lean.text import normalize_goal, split_tactics
 from lean_search.search.graph_labels import (
     EdgeKind,
     GoalKey,
@@ -15,6 +18,7 @@ from lean_search.search.graph_labels import (
     ancestor_ids,
     goal_key,
     nodes_by_goal_key,
+    shortest_distances,
 )
 from lean_search.search.records import TreeRecord
 from lean_search.search.tree import Edge, EdgeOutcome, StepSource
@@ -28,8 +32,11 @@ class TacticLabel(StrEnum):
     UNKNOWN = "unknown"
     # Unchanged, or back to an earlier state of its path: the block's own states, the node and its ancestors.
     NO_PROGRESS = "no_progress"
-    # Adds only hypotheses whose types the context already has, or reflexive ones.
+    # Adds only hypotheses whose types the context already has, or reflexive ones; off the proof graph also closed-form
+    # ones: comparisons of numerals (`0 < (1:ℝ)`) in a context with names.
     REDUNDANT_HYPOTHESIS = "redundant_hypothesis"
+    # Would be off graph or unknown, but made a claim (`Claim`: a bare `have h : A`, `suffices`) the tree never proves.
+    UNPROVED_CLAIM = "unproved_claim"
     # The first tactic Lean rejected (timeouts included), an unverified proof's last one, a sample without a block.
     FAILING = "failing"
     # After the first failing tactic: never evaluated.
@@ -45,6 +52,8 @@ class TacticOutcome:
     goals_closed: int = 0
     # On the proof graph: the fewest top-level tactics from the state to a verified proof (0 once proved).
     remaining_steps: int | None = None
+    # Made a claim the rest of its block does not prove, whether the tree proves it or not.
+    leaves_claim_open: bool = False
 
 
 @dataclass(frozen=True)
@@ -54,6 +63,7 @@ class TacticLabelCounts:
     unknown: int = 0
     no_progress: int = 0
     redundant_hypothesis: int = 0
+    unproved_claim: int = 0
     failing: int = 0
     masked: int = 0
 
@@ -66,6 +76,114 @@ class TacticLabelCounts:
         return sum(dataclasses.astuple(self))
 
 
+# Anywhere in the tactic: wrapped as `try have`, `all_goals have`, `any_goals have` or after `<;>` too.
+CLAIM_TACTIC = re.compile(r"(?<![\w.'])(have|haveI|letI|obtain|suffices|rsuffices|replace)(?![\w'!?])")
+
+# Per goal its hypotheses' types and its target: a state up to the names of its hypotheses.
+type NamelessKey = tuple[tuple[tuple[str, ...], str], ...]
+
+
+def nameless_key(goals: Sequence[str]) -> NamelessKey:
+    return tuple((parts.hypothesis_types, parts.target) for parts in map(goal_parts, goals))
+
+
+@dataclass(frozen=True)
+class Claim:
+    """A proposition the model invented and made a goal, in the context before its tactic: `have h : A` (a flattened
+    `have h : A := by` too, `haveI`, `letI`), `obtain ⟨x, hx⟩ : A` and `replace h : A` add it first, `rsuffices` last,
+    `suffices h : A by …` replaces the goal with it. The goals of `constructor`, `cases`, `induction`, `by_cases`,
+    `apply` or `refine` are none."""
+
+    # Normalized.
+    goal: str
+    # Goals of the state with the claim.
+    goals: int
+    # The state once the claim is proved, when it added a goal (not `suffices`).
+    continuation: NamelessKey | None
+
+
+def claim_of(before: Sequence[str], after: Sequence[str]) -> Claim | None:
+    """The claim states have the shape of with the claim first; `claim_made` tells whether a tactic made one."""
+    if not before or not after:
+        return None
+    stated = goal_parts(before[0])
+    opened = goal_parts(after[0])
+    if opened.hypothesis_types != stated.hypothesis_types or opened.target == stated.target:
+        return None
+    match len(after) - len(before):
+        case 1:
+            continuation = nameless_key(after[1:])
+        case 0:
+            continuation = None
+        case _:
+            return None
+    return Claim(normalize_goal(after[0]), len(after), continuation)
+
+
+def claim_made(text: str, before: Sequence[str], after: Sequence[str]) -> Claim | None:
+    """`rsuffices` is `obtain` then `rotate_left`: its claim is the last goal."""
+    match CLAIM_TACTIC.search(text):
+        case None:
+            return None
+        case found if found[1] == "rsuffices":
+            return claim_of(before, (*after[-1:], *after[:-1]))
+        case _:
+            return claim_of(before, after)
+
+
+def has_claim_shape(before: Sequence[str], after: Sequence[str]) -> bool:
+    return claim_of(before, after) is not None or claim_of(before, (*after[-1:], *after[:-1])) is not None
+
+
+def proves(claim: Claim, goals: Sequence[str]) -> bool:
+    """Fewer goals than the claim's state, the claim's goal not among them: closing the main goal after a `swap` does
+    not count."""
+    return len(goals) < claim.goals and claim.goal not in (normalize_goal(goal) for goal in goals)
+
+
+class ClaimProofs:
+    """Whether a claim gets proved: a state reachable from it over forward edges (a later state of its block, a
+    descendant, a state a block from either ran through) proves it, or the tree has its continuation anywhere under
+    any hypothesis name (a sibling's `have h₃ : A := proof`)."""
+
+    def __init__(self, record: TreeRecord, successors: Mapping[int, Mapping[int, int]]) -> None:
+        """`successors`: `GraphLabels.successors`."""
+        self.successors = successors
+        self.states: list[list[tuple[str, ...]]] = [[node.goals] for node in record.nodes]
+        for edge in record.edges:
+            self.states[edge.parent_id].extend(goals for goals in edge.tactic_goals if goals)
+        self.own_fewest_goals = [min(len(goals) for goals in states) for states in self.states]
+        self.reachable: dict[int, dict[int, int]] = {}
+        self.fewest_goals: dict[int, int] = {}
+
+    @functools.cached_property
+    def keys(self) -> set[NamelessKey]:
+        return {nameless_key(goals) for states in self.states for goals in states}
+
+    def reachable_from(self, node_id: int) -> dict[int, int]:
+        if node_id not in self.reachable:
+            self.reachable[node_id] = shortest_distances([node_id], self.successors)
+        return self.reachable[node_id]
+
+    def fewest_goals_from(self, node_id: int) -> int:
+        if node_id not in self.fewest_goals:
+            self.fewest_goals[node_id] = min(self.own_fewest_goals[reached] for reached in self.reachable_from(node_id))
+        return self.fewest_goals[node_id]
+
+    def proved_from(self, claim: Claim, node_id: int) -> bool:
+        return self.fewest_goals_from(node_id) < claim.goals and any(
+            proves(claim, goals) for reached in self.reachable_from(node_id) for goals in self.states[reached]
+        )
+
+    def proved(self, claim: Claim, later_states: Sequence[tuple[str, ...]], node_ids: Iterable[int]) -> bool:
+        """`later_states`: those of the block after the claim; `node_ids`: the nodes the block goes on from."""
+        return (
+            any(proves(claim, goals) for goals in later_states)
+            or claim.continuation in self.keys
+            or any(self.proved_from(claim, node_id) for node_id in node_ids)
+        )
+
+
 class TacticGraph:
     """The states of one labelled search graph by goal key, at tactic granularity."""
 
@@ -74,6 +192,7 @@ class TacticGraph:
         self.labels = labels
         self.min_expanded_nodes = min_expanded_nodes
         self.node_by_key = nodes_by_goal_key(record)
+        self.claims = ClaimProofs(record, labels.successors)
         # Intermediate states of edges on a route to a proof.
         self.proof_graph_keys: set[GoalKey] = set()
         # Proof-graph states by goal key at their fewest remaining steps: nodes and intermediate states alike.
@@ -136,6 +255,7 @@ class TacticGraph:
         earlier_keys = {goal_key(parent.goals)}
         previous: tuple[str, ...] | None = parent.goals
         outcomes = []
+        states: list[tuple[str, ...] | None] = []
         for index in range(count):
             if index >= edge.applied_tactics:
                 outcomes.append(
@@ -156,8 +276,40 @@ class TacticGraph:
                 outcomes.append(self.judge(goals, key, node_id, previous, earlier, earlier_keys, ancestors))
                 earlier.append(goals)
                 earlier_keys.add(key)
+            states.append(goals)
             previous = goals
-        return tuple(outcomes)
+        return self.with_claims(edge, outcomes, states)
+
+    def with_claims(
+        self, edge: Edge, outcomes: Sequence[TacticOutcome], states: Sequence[tuple[str, ...] | None]
+    ) -> tuple[TacticOutcome, ...]:
+        """`states`: those of the applied tactics, None where not recorded. A claim its block leaves open is marked, and
+        off the proof graph one the tree never proves is an unproved claim."""
+        judged = list(outcomes)
+        texts: list[str] | None = None
+        befores = [self.record.nodes[edge.parent_id].goals, *states]
+        for index, goals in enumerate(states):
+            before = befores[index]
+            if goals is None or before is None or not has_claim_shape(before, goals):
+                continue
+            texts = tactic_texts(edge) if texts is None else texts
+            claim = claim_made(texts[index], before, goals) if index < len(texts) else None
+            later = [state for state in states[index + 1 :] if state is not None]
+            if claim is None or any(proves(claim, state) for state in later):
+                continue
+            outcome = dataclasses.replace(outcomes[index], leaves_claim_open=True)
+            assert edge.target_id is not None, edge.edge_id
+            node_ids = {edge.target_id} | {
+                self.node_by_key[key] for key in map(goal_key, later) if key in self.node_by_key
+            }
+            if outcome.node_id is not None:
+                node_ids.add(outcome.node_id)
+            if outcome.label in (TacticLabel.OFF_GRAPH, TacticLabel.UNKNOWN) and not self.claims.proved(
+                claim, later, node_ids
+            ):
+                outcome = TacticOutcome(TacticLabel.UNPROVED_CLAIM, outcome.node_id, leaves_claim_open=True)
+            judged[index] = outcome
+        return tuple(judged)
 
     def tactic_goals(self, edge: Edge, index: int, last: bool) -> tuple[str, ...] | None:
         if edge.tactic_goals:
@@ -189,9 +341,18 @@ class TacticGraph:
             return TacticOutcome(TacticLabel.REDUNDANT_HYPOTHESIS, node_id)
         if self.is_on_proof_graph(key, node_id):
             return TacticOutcome(TacticLabel.PROOF_GRAPH, node_id, closed, self.remaining_steps(key, node_id))
+        if any(adds_only_closed_form_hypotheses(state, goals) for state in earlier):
+            return TacticOutcome(TacticLabel.REDUNDANT_HYPOTHESIS, node_id)
         if self.is_off_graph_evidence(node_id):
             return TacticOutcome(TacticLabel.OFF_GRAPH, node_id)
         return TacticOutcome(TacticLabel.UNKNOWN, node_id)
+
+
+def tactic_texts(edge: Edge) -> list[str]:
+    """The executed tactics' texts; in records without them the block's top-level tactics."""
+    if edge.executed_tactics:
+        return [piece.text for piece in edge.executed_tactics]
+    return split_tactics(edge.text)
 
 
 def policy_tactics(

@@ -19,13 +19,20 @@ class RewardConfig:
     failure_local: float = -1.0
     # L of a tactic without progress or adding only redundant hypotheses: a wasted sample, like a failure.
     no_progress_local: float = -1.0
+    # L of a state off the proof graph with a claim (`have h : A`, `suffices`) nothing in the tree proves; leaving it
+    # open costs c more, so a block anchored on it scores λ · L − c whatever follows.
+    unproved_claim_local: float = -1.0
+    # L of an unknown state (too little evidence) and of an explored off-graph one: below the proof graph, above a
+    # failure. Only a block's first state with a reward scores it; a later unknown one is an unverified continuation.
+    unknown_local: float = -0.5
     # L per goal a tactic on the proof graph closes.
     goal_closed_bonus: float = 0.1
     # δ: a proof-graph state earns this per remaining step it is closer to a proof than the group's node (negative
     # when farther), its global part never below the best off-graph state's (1 − λ) · μ.
     progress_per_step: float = 0.2
-    # c: the advantage of a failing, no-progress or redundant tactic other than the block's anchor; the block's prefix
-    # is kept, so only its tokens are wasted. Against errors alone, continuing pays when P(correct) > c / (c + δ).
+    # c: the advantage of a failing, no-progress or redundant tactic other than the block's anchor (the block's prefix
+    # is kept, so only its tokens are wasted) and of an unknown or off-graph state ending a block after a state with
+    # evidence; an unproved claim costs an error's there plus c. Continuing pays when P(correct) > c / (c + δ).
     wasted_tactic_cost: float = 0.1
     # μ: an expanded off-graph state earns G = μ · q, q its value part; the loop's μ, 0 until set by hand.
     value_share: float = 0.0
@@ -52,17 +59,25 @@ class RewardParts:
         return RewardParts(self.global_part - other.global_part, self.local_part - other.local_part)
 
 
-# Labels of a tactic reaching a state with a reward.
-REACHED_STATE_LABELS = (TacticLabel.PROOF_GRAPH, TacticLabel.OFF_GRAPH)
+# Labels of a tactic reaching a state with a reward, and of those the tree has evidence on.
+REACHED_STATE_LABELS = (
+    TacticLabel.PROOF_GRAPH,
+    TacticLabel.OFF_GRAPH,
+    TacticLabel.UNKNOWN,
+    TacticLabel.UNPROVED_CLAIM,
+)
+EVIDENCE_LABELS = (TacticLabel.PROOF_GRAPH, TacticLabel.OFF_GRAPH)
+NO_GAIN = RewardParts(0.0, 0.0)
 
 
 @dataclass(frozen=True)
 class TacticReward:
     label: TacticLabel
-    # R of the state reached; None for unknown and masked tactics, which earn nothing.
+    # R of the state reached (an unproved claim anchoring its block: c less, `judged_in_block`); None for masked
+    # tactics, which earn nothing.
     parts: RewardParts | None
-    # Judged within the block: R minus the most recent earlier state's R, or −c for a wasted tactic. None with parts:
-    # the block's anchor, judged against the group's first-tactic baseline.
+    # Judged within the block (`judged_in_block`). None with parts: the block's anchor, judged against the group's
+    # first-tactic baseline.
     gain: RewardParts | None = None
 
 
@@ -86,7 +101,7 @@ class GroupSample:
 
     @property
     def score_parts(self) -> RewardParts | None:
-        """The anchor plus every gain: the final state's R minus the wasted costs."""
+        """The anchor plus every gain: the reference state's R minus the wasted costs."""
         score = self.anchor_parts
         if score is None:
             return None
@@ -157,31 +172,61 @@ def tactic_reward(
             best_off_graph = reward_parts(config.value_share, 0.0, config)
             parts = RewardParts(max(on_graph.global_part + progress, best_off_graph.global_part), on_graph.local_part)
         case TacticLabel.OFF_GRAPH:
-            parts = reward_parts(off_graph_global, 0.0, config)
+            parts = reward_parts(off_graph_global, config.unknown_local, config)
         case TacticLabel.NO_PROGRESS | TacticLabel.REDUNDANT_HYPOTHESIS:
             parts = reward_parts(0.0, config.no_progress_local, config)
+        case TacticLabel.UNPROVED_CLAIM:
+            parts = reward_parts(0.0, config.unproved_claim_local, config)
+        case TacticLabel.UNKNOWN:
+            parts = reward_parts(0.0, config.unknown_local, config)
         case TacticLabel.FAILING:
             parts = reward_parts(0.0, config.failure_local, config)
-        case TacticLabel.UNKNOWN | TacticLabel.MASKED:
+        case TacticLabel.MASKED:
             parts = None
     return TacticReward(outcome.label, parts)
 
 
 def judged_in_block(rewards: Sequence[TacticReward], config: RewardConfig) -> tuple[TacticReward, ...]:
-    """The anchor (the first tactic reaching a state with a reward, else the first tactic) keeps no gain; a later
-    state's tactic gains over the most recent earlier state with a reward, any other wasted tactic costs c."""
-    anchor = next((index for index, reward in enumerate(rewards) if reward.label in REACHED_STATE_LABELS), 0)
+    """The anchor, the first tactic reaching a state with a reward (else the first tactic), keeps no gain. After it:
+    - a proof-graph state gains over the reference, the last earlier state with evidence or the anchor;
+    - an unknown or off-graph state after evidence keeps the reference: 0 when a later tactic reaches a state, −c when
+      it ends the block's states (an unverified continuation, never below an error there); after an unknown anchor an
+      off-graph state gains over it, an unknown one 0;
+    - a failing, no-progress or redundant tactic costs c.
+    The block's first unproved claim carries what leaving it open costs, an error's there plus c: its R − c as the
+    anchor, else −2c. Every tactic after it gains 0, whether it proves, fails or wastes: attempting the proof never
+    scores below the bare claim, and no proof tactic takes the claim's blame."""
+    cost = RewardParts(0.0, -config.wasted_tactic_cost)
+    labels = [reward.label for reward in rewards]
+    claim = labels.index(TacticLabel.UNPROVED_CLAIM) if TacticLabel.UNPROVED_CLAIM in labels else len(labels)
+    reached = [index for index, label in enumerate(labels) if label in REACHED_STATE_LABELS]
+    anchor = min(reached, default=0)
+    reference: RewardParts | None = None
+    evidence = False
     judged = []
-    state: RewardParts | None = None
     for index, reward in enumerate(rewards):
         gain = None
         match reward.label:
-            case TacticLabel.FAILING | TacticLabel.NO_PROGRESS | TacticLabel.REDUNDANT_HYPOTHESIS if index != anchor:
-                gain = RewardParts(0.0, -config.wasted_tactic_cost)
-            case TacticLabel.PROOF_GRAPH | TacticLabel.OFF_GRAPH:
+            case TacticLabel.MASKED:
+                pass
+            case _ if index > claim:
+                gain = NO_GAIN
+            case TacticLabel.UNPROVED_CLAIM if index == anchor:
                 assert reward.parts is not None
-                gain = None if state is None else reward.parts - state
-                state = reward.parts
+                reward = dataclasses.replace(reward, parts=reward.parts + cost)
+            case label if index == anchor:
+                if label in REACHED_STATE_LABELS:
+                    reference, evidence = reward.parts, label in EVIDENCE_LABELS
+            case TacticLabel.UNPROVED_CLAIM:
+                gain = cost + cost
+            case TacticLabel.FAILING | TacticLabel.NO_PROGRESS | TacticLabel.REDUNDANT_HYPOTHESIS:
+                gain = cost
+            case TacticLabel.UNKNOWN | TacticLabel.OFF_GRAPH if evidence:
+                gain = NO_GAIN if index < reached[-1] else cost
+            case TacticLabel.PROOF_GRAPH | TacticLabel.OFF_GRAPH | TacticLabel.UNKNOWN:
+                assert reward.parts is not None and reference is not None
+                gain = reward.parts - reference
+                reference, evidence = reward.parts, reward.label in EVIDENCE_LABELS
         judged.append(dataclasses.replace(reward, gain=gain))
     return tuple(judged)
 

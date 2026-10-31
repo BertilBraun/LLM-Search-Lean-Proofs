@@ -88,7 +88,14 @@ def test_edge_kind_counts_cover_every_kind() -> None:
 
 @pytest.mark.parametrize(
     ("field", "count"),
-    [("proof_graph", 6), ("off_graph", 1), ("unknown", 2), ("no_progress", 1), ("redundant_hypothesis", 1)],
+    [
+        ("proof_graph", 6),
+        ("off_graph", 1),
+        ("unproved_claim", 0),
+        ("unknown", 2),
+        ("no_progress", 1),
+        ("redundant_hypothesis", 1),
+    ],
 )
 def test_policy_tactic_counts_of_the_example(field: str, count: int) -> None:
     assert getattr(statistics_of(example_tree()).policy_tactics, field) == count

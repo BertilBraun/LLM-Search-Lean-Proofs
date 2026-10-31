@@ -1,5 +1,6 @@
 import asyncio
 import dataclasses
+import json
 import time
 import tomllib
 from collections.abc import Callable
@@ -15,8 +16,10 @@ from loop_fakes import (
     merge_by_writing,
     record_version_zero,
     run_until,
+    solved_tree,
 )
 
+from lean_search.data import Problem, Split
 from lean_search.expert_iteration.serving import (
     MergedPublisher,
     ModelVersion,
@@ -27,11 +30,14 @@ from lean_search.expert_iteration.serving import (
 from lean_search.monitoring.alerts import AlertThresholds, run_alerts
 from lean_search.monitoring.families import HealthMeasurements, HealthThresholds, PhaseHealth
 from lean_search.monitoring.store import RunReader
-from lean_search.rl.evaluation import EvaluationKind
+from lean_search.rl.evaluation import EvaluationKind, EvaluationPaths
 from lean_search.rl.health_checks import (
+    ReferenceHabits,
+    RewardFix,
     append_health,
     clear_health_stop,
     publish_rollback,
+    read_health_history,
     read_health_stop,
     read_rejected_versions,
     roll_back_by_hand,
@@ -40,7 +46,9 @@ from lean_search.rl.health_checks import (
 from lean_search.rl.loop import GrpoLoop, LoopProgress, PhaseStage, read_progress, request_evaluation
 from lean_search.rl.training_phase import TrainingPhaseConfig, label_phase_data
 from lean_search.rl.tree_store import TreeStore
-from lean_search.search.records import from_json_object
+from lean_search.search import Accounting, SearchResult, StopReason, tree_record
+from lean_search.search.records import from_json_object, write_tree
+from lean_search.search.tree import EdgeOutcome, StepSource
 
 HELD_OUT_BLOCK = """[evaluation.held_out_states]
 max_expansions = 1
@@ -530,3 +538,165 @@ async def test_the_phase_timing_counts_the_searches_its_pause_held(tmp_path: Pat
     paused = next(message for message in messages if message.startswith("Phase 1: "))
     held = int(paused.removesuffix(" searches paused").rsplit("; ", 1)[1])
     assert RunReader(world.paths.directory).series("timing").columns["searches_paused"][0] == held
+
+
+def lose_the_habits_of_phase_one(world: LoopWorld) -> None:
+    """A health line as the loop wrote it before the block habits existed."""
+    append_health(world.paths.health, PhaseHealth(1, 1, HealthMeasurements(), HealthThresholds(0.5, 0.1)))
+
+
+async def phase_one_without_habits(tmp_path: Path) -> LoopWorld:
+    world = loop_world(tmp_path)
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=1)
+    lose_the_habits_of_phase_one(world)
+    return world
+
+
+async def started_until(world: LoopWorld, condition: Callable[[], bool], loop: GrpoLoop | None = None) -> None:
+    stop = asyncio.Event()
+    task = asyncio.create_task((loop or world.loop()).run(stop))
+    await until(condition, task)
+    stop.set()
+    await task
+
+
+def phase_one_lines(world: LoopWorld) -> int:
+    lines = world.paths.health.read_text(encoding="utf-8").splitlines()
+    return sum(json.loads(line)["phase"] == 1 for line in lines if line.strip())
+
+
+async def test_a_restart_measures_the_block_habits_of_reference_phases_recorded_without_them(tmp_path: Path) -> None:
+    world = await phase_one_without_habits(tmp_path)
+    await started_until(world, world.paths.reference_habits.exists)
+    assert read_health_history(world.paths.health)[0].measured.bare_have_share is not None
+
+
+async def test_the_measured_reference_habits_are_on_the_dashboard(tmp_path: Path) -> None:
+    world = await phase_one_without_habits(tmp_path)
+    await started_until(world, world.paths.reference_habits.exists)
+    assert RunReader(world.paths.directory).series("health").columns["measured.bare_have_share"][-1] is not None
+
+
+async def test_the_reference_habits_are_measured_once(tmp_path: Path) -> None:
+    world = await phase_one_without_habits(tmp_path)
+    await started_until(world, world.paths.reference_habits.exists)
+    lose_the_habits_of_phase_one(world)
+    lines = phase_one_lines(world)
+    await run_until(world, world.loop(), phases=2)
+    assert phase_one_lines(world) == lines
+
+
+async def test_an_unreadable_reference_tree_is_skipped_and_counted(tmp_path: Path) -> None:
+    world = await phase_one_without_habits(tmp_path)
+    # A tree more than the phase's own, so one stays readable however many the phase finished.
+    store = TreeStore(world.paths.trees)
+    (entry, *_) = store.phase_entries(1)
+    (record, *_) = store.records(1)
+    broken = store.add(record, 1, entry.policy_version, entry.difficulty, entry.summary)
+    (world.paths.trees / broken.file).write_bytes(b"not a tree")
+    await started_until(world, world.paths.reference_habits.exists)
+    measured = from_json_object(ReferenceHabits, json.loads(world.paths.reference_habits.read_text(encoding="utf-8")))
+    assert measured.unreadable_trees == 1
+
+
+async def started_with_every_reference_tree_unreadable(tmp_path: Path) -> tuple[LoopWorld, list[str]]:
+    world = await phase_one_without_habits(tmp_path)
+    for entry in TreeStore(world.paths.trees).phase_entries(1):
+        (world.paths.trees / entry.file).write_bytes(b"not a tree")
+    messages: list[str] = []
+    loop = world.loop()
+    loop.log = messages.append
+    await started_until(world, lambda: any("could be read" in message for message in messages), loop)
+    return world, messages
+
+
+async def test_every_reference_tree_unreadable_writes_no_marker(tmp_path: Path) -> None:
+    world, _ = await started_with_every_reference_tree_unreadable(tmp_path)
+    assert not world.paths.reference_habits.exists()
+
+
+async def test_every_reference_tree_unreadable_logs_an_alert(tmp_path: Path) -> None:
+    _, messages = await started_with_every_reference_tree_unreadable(tmp_path)
+    assert any(message.startswith("Alert: none of the reference phases' ") for message in messages)
+
+
+def with_broken_reward_fix(tmp_path: Path) -> tuple[GrpoLoop, list[str]]:
+    world = loop_world(tmp_path)
+    world.paths.directory.mkdir(parents=True, exist_ok=True)
+    world.paths.reward_fix.write_text('{"first_phase": 3, "recor', encoding="utf-8")
+    messages: list[str] = []
+    loop = world.loop()
+    loop.log = messages.append
+    return loop, messages
+
+
+def test_a_truncated_reward_fix_file_is_ignored(tmp_path: Path) -> None:
+    loop, _ = with_broken_reward_fix(tmp_path)
+    assert loop.reward_fix_phase() is None
+
+
+def test_a_truncated_reward_fix_file_is_warned_about(tmp_path: Path) -> None:
+    loop, messages = with_broken_reward_fix(tmp_path)
+    loop.reward_fix_phase()
+    assert messages[-1].startswith(f"Warning: {loop.paths.reward_fix} is unreadable and ignored")
+
+
+PROBLEM = Problem("test.t0", Split.VALID, "", "theorem t0 : True := by", "", "")
+
+
+def write_unlabelable_probe_tree(directory: Path) -> None:
+    """A failed policy edge without its failure, which labelling refuses."""
+    tree = solved_tree(PROBLEM)
+    tree.add_edge(
+        tree.root,
+        text="simp",
+        source=StepSource.POLICY,
+        log_probability=-1.0,
+        prompt_tokens=0,
+        generated_tokens=0,
+        outcome=EdgeOutcome.FAILED,
+    )
+    result = SearchResult(PROBLEM.name, True, StopReason.PROVED, None, (), (), Accounting(expansions=1), None, 0, 1)
+    trees = EvaluationPaths(directory).trees
+    trees.mkdir(parents=True)
+    write_tree(trees / "t0.json.gz", tree_record(tree, PROBLEM.formal_statement, result))
+
+
+async def test_probe_habits_failing_only_log_an_alert(tmp_path: Path) -> None:
+    write_unlabelable_probe_tree(tmp_path / "probe")
+    messages: list[str] = []
+    loop = loop_world(tmp_path / "loop").loop()
+    loop.log = messages.append
+    await loop.log_probe_habits("probe slot 0", [tmp_path / "probe"])
+    assert messages[0].startswith("Alert: the block habits of probe slot 0 failed")
+
+
+def recorded_reward_fix(world: LoopWorld) -> RewardFix:
+    return from_json_object(RewardFix, json.loads(world.paths.reward_fix.read_text(encoding="utf-8")))
+
+
+async def test_the_first_start_records_the_first_phase_trained_with_the_reward_fix(tmp_path: Path) -> None:
+    world = loop_world(tmp_path)
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=2)
+    assert recorded_reward_fix(world).first_phase == 1
+
+
+def test_a_start_after_the_training_of_a_phase_records_the_next_phase_for_the_reward_fix(tmp_path: Path) -> None:
+    world = loop_world(tmp_path)
+    write_json_atomically(world.paths.progress, LoopProgress(phase=5, stage=PhaseStage.EVALUATING))
+    world.loop().record_reward_fix()
+    assert recorded_reward_fix(world).first_phase == 6
+
+
+async def test_the_habits_line_names_the_first_phase_trained_with_the_reward_fix(tmp_path: Path) -> None:
+    world = loop_world(tmp_path)
+    record_version_zero(world)
+    messages: list[str] = []
+    loop = world.loop()
+    loop.log = messages.append
+    await run_until(world, loop, phases=1)
+    assert any(
+        message.startswith("Block habits of phase 1 (the reward fix trains from phase 1)") for message in messages
+    )

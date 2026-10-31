@@ -29,6 +29,7 @@ const TACTIC_LABELS = (prefix) => [
   { label: "Unknown", field: `${prefix}unknown` },
   { label: "No progress", field: `${prefix}no_progress` },
   { label: "Redundant hypothesis", field: `${prefix}redundant_hypothesis` },
+  { label: "Unproved claim", field: `${prefix}unproved_claim` },
   { label: "Failing", field: `${prefix}failing` },
   { label: "Masked", field: `${prefix}masked` },
 ];
@@ -331,6 +332,38 @@ const HEALTH = {
       { label: "tokens", field: "measured.mean_explanation_tokens" },
       limit("min", "min_explanation_tokens"),
       limit("max", "max_explanation_tokens"),
+    ],
+  },
+  habits: {
+    title: "Bare claims and filler", subtitle: "first-round blocks opening with a bare `have` (all statements, those from below the band), the share of their open claims proved, blocks with closed-form filler; dashed: the alert thresholds, compared with the below-band values when a phase has them", family: "health", x: "phase", unit: "share",
+    series: [
+      { label: "bare have", field: "measured.bare_have_share" },
+      { label: "bare have, below band", field: "measured.below_band_bare_have_share" },
+      { label: "claims proved", field: "measured.claim_proved_rate" },
+      { label: "claims proved, below band", field: "measured.below_band_claim_proved_rate" },
+      { label: "closed-form filler", field: "measured.closed_form_filler_share" },
+      limit("max bare have", "max_bare_have_share"),
+      limit("min claims proved", "min_claim_proved_rate"),
+    ],
+  },
+  openings: {
+    title: "Block openings and continuing", subtitle: "first-round blocks opening with `have … :=` and with linarith/nlinarith, and the share of proof-graph steps with goals left that their block continues", family: "health", x: "phase", unit: "share",
+    series: [
+      { label: "have … :=", field: "measured.proof_have_share" },
+      { label: "linarith/nlinarith", field: "measured.linarith_opening_share" },
+      { label: "continue rate", field: "measured.continue_rate" },
+    ],
+  },
+  blockLength: {
+    title: "Block length", subtitle: "mean tactics (after flattening) of the first-round blocks that ran completely", family: "health", x: "phase", unit: "number",
+    series: [{ label: "tactics per block", field: "measured.valid_block_tactics" }],
+  },
+  explanationCharacters: {
+    title: "Explanation characters", subtitle: "median before the fence, first-round samples; dashed: the alert threshold", family: "health", x: "phase", unit: "number",
+    series: [
+      { label: "median", field: "measured.median_explanation_characters" },
+      { label: "median, below band", field: "measured.below_band_median_explanation_characters" },
+      limit("min", "min_explanation_characters"),
     ],
   },
   cutOff: {
@@ -707,7 +740,7 @@ export const PAGES = [
     title: "Training",
     families: ["health", "budget"],
     sections: [
-      { title: "Health checks", charts: [HEALTH.kl, HEALTH.clip, HEALTH.heldOut, HEALTH.validBlocks, HEALTH.distinct, HEALTH.explanation, HEALTH.cutOff] },
+      { title: "Health checks", charts: [HEALTH.kl, HEALTH.clip, HEALTH.heldOut, HEALTH.validBlocks, HEALTH.distinct, HEALTH.explanation, HEALTH.explanationCharacters, HEALTH.habits, HEALTH.openings, HEALTH.blockLength, HEALTH.cutOff] },
       {
         title: "Search budget",
         charts: [BUDGET.lateSolves, BUDGET.expansions, BUDGET.meanExpansions, BUDGET.proofSteps, BUDGET.meanProofSteps, BUDGET.difficulty, BUDGET.groups],
