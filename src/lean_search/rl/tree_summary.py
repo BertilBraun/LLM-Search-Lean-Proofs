@@ -5,10 +5,12 @@ where the first round failed, so its samples would shift thresholds taken from p
 
 import dataclasses
 import re
+import zlib
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import pairwise
+from pathlib import Path
 
 from lean_search.lean.hypotheses import adds_only_closed_form_hypotheses
 from lean_search.lean.text import split_tactics
@@ -17,7 +19,7 @@ from lean_search.rl.advantages import CreditMode, group_advantages
 from lean_search.rl.grpo_groups import RewardConfig, policy_groups
 from lean_search.rl.phase_metrics import is_forced, repeats_itself
 from lean_search.search.graph_labels import GraphLabels, label_graph
-from lean_search.search.records import TreeRecord
+from lean_search.search.records import TreeRecord, read_tree
 from lean_search.search.tactic_labels import TacticLabel, TacticOutcome, policy_tactics
 from lean_search.search.tree import Edge, EdgeOutcome, FailureKind, StepSource
 
@@ -238,6 +240,29 @@ def block_habits(record: TreeRecord, tactics: Mapping[int, Sequence[TacticOutcom
         for completion in expansion.completions
     )
     return summed_habits([*habits, BlockHabits(explanation_character_bins=explanation_bins(texts))])
+
+
+def tree_habits(path: Path, min_expanded_nodes: int) -> BlockHabits | None:
+    """None for a tree file that cannot be read (truncated, corrupt)."""
+    try:
+        record = read_tree(path)
+    except (OSError, EOFError, ValueError, zlib.error):
+        return None
+    return block_habits(record, policy_tactics(record, label_graph(record), min_expanded_nodes))
+
+
+@dataclass(frozen=True)
+class PooledHabits:
+    habits: BlockHabits
+    trees: int
+    unreadable_trees: int
+
+
+def pooled_habits(paths: Sequence[Path], min_expanded_nodes: int) -> PooledHabits:
+    """The trees' block habits summed, unreadable ones skipped."""
+    found = [tree_habits(path, min_expanded_nodes) for path in paths]
+    habits = [item for item in found if item is not None]
+    return PooledHabits(summed_habits(habits), len(found), len(found) - len(habits))
 
 
 def summed_habits(habits: Iterable[BlockHabits]) -> BlockHabits:

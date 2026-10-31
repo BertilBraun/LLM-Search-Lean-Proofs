@@ -398,6 +398,13 @@ class DemoRun:
                     claim_proved_rate=0.02 + self.noise(0.002),
                     closed_form_filler_share=0.01 + abs(self.noise(0.003)),
                     median_explanation_characters=143 - 10 * learned + self.noise(4),
+                    proof_have_share=0.08 + 0.01 * learned + self.noise(0.005),
+                    linarith_opening_share=0.07 + self.noise(0.005),
+                    valid_block_tactics=2.4 + 0.1 * learned + self.noise(0.05),
+                    continue_rate=0.55 + self.noise(0.02),
+                    below_band_bare_have_share=0.18 + 0.02 * learned + self.noise(0.01),
+                    below_band_claim_proved_rate=0.03 + self.noise(0.003),
+                    below_band_median_explanation_characters=150 - 8 * learned + self.noise(4),
                 ),
                 thresholds=HealthThresholds(
                     max_kl_to_starting_policy=0.005,

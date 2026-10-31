@@ -49,7 +49,7 @@ import time
 import tomllib
 import traceback
 from collections import deque
-from collections.abc import Callable, Coroutine, Iterator, Sequence
+from collections.abc import Callable, Coroutine, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -89,6 +89,7 @@ from lean_search.rl.budget_signals import budget_phase_record
 from lean_search.rl.evaluation import (
     BaselineDifferences,
     EvaluationKind,
+    EvaluationPaths,
     EvaluationRun,
     EvaluationSummary,
     baseline_difference,
@@ -99,8 +100,9 @@ from lean_search.rl.evaluation import (
 from lean_search.rl.fixed_targets import baseline_concurrency, run_target, target_config
 from lean_search.rl.health_checks import (
     HeldOutRates,
+    ReferenceHabits,
+    RewardFix,
     append_health,
-    backfilled_habits,
     collapsed,
     habits_text,
     health_stop_text,
@@ -109,12 +111,15 @@ from lean_search.rl.health_checks import (
     last_good_version,
     measurements,
     phase_health,
+    probe_habits_text,
     publish_rollback,
     read_health_history,
     read_health_stop,
     read_rejected_versions,
     reject_version,
     rollback_trigger,
+    unmeasured_reference_phases,
+    with_habits,
     write_health_stop,
 )
 from lean_search.rl.loop_config import EvaluationConfig, EvaluationTarget, EvaluationValueModel, GrpoLoopConfig
@@ -133,7 +138,7 @@ from lean_search.rl.training_phase import (
     publish_phase,
 )
 from lean_search.rl.tree_store import TreeStore
-from lean_search.rl.tree_summary import BlockHabits, block_habits, tree_summary
+from lean_search.rl.tree_summary import pooled_habits, tree_habits, tree_summary
 from lean_search.rl.value_trends import (
     VersionScores,
     benchmark_trend,
@@ -144,7 +149,7 @@ from lean_search.rl.value_trends import (
     worse_than_reference,
 )
 from lean_search.search import CompletedSearch, tree_record
-from lean_search.search.records import from_json_object, read_tree, to_json
+from lean_search.search.records import from_json_object, to_json
 from lean_search.training.resident import HostDirectories
 from lean_search.value.benchmark import BenchmarkScores, ValueBenchmark
 from lean_search.value.bins import Readout
@@ -421,6 +426,16 @@ class GrpoLoopPaths:
     def health_stop(self) -> Path:
         """Present after the health check's hard stop; the loop refuses to start until it is cleared."""
         return self.directory / "health_stop.json"
+
+    @property
+    def reference_habits(self) -> Path:
+        """`ReferenceHabits`: the reference phases' block habits were measured from their trees."""
+        return self.directory / "reference_habits.json"
+
+    @property
+    def reward_fix(self) -> Path:
+        """`RewardFix`: the first phase trained with the reward fix of 2026-10-31."""
+        return self.directory / "reward_fix.json"
 
     @property
     def rejected_versions(self) -> Path:
@@ -712,6 +727,7 @@ class GrpoLoop:
         self.beside_sampling_stopped_repls = 0
         # The held-out states' evaluation at a pause, and whether the searches resumed beside its last Lean checks.
         self.held_out_evaluation: asyncio.Task[EvaluationSummary] | None = None
+        self.reference_habits: asyncio.Task[None] | None = None
         self.held_out_beside_sampling = False
         self.host_memory = host_memory
         self.gpu_memory = gpu_memory
@@ -820,7 +836,13 @@ class GrpoLoop:
         finally:
             # Cancelling also stops a training or evaluation job in flight (`loop_services.run_logged`).
             session.cancel()
-            tasks = (self.scoring, self.evaluations_beside_sampling, self.heartbeat, self.held_out_evaluation)
+            tasks = (
+                self.scoring,
+                self.evaluations_beside_sampling,
+                self.heartbeat,
+                self.held_out_evaluation,
+                self.reference_habits,
+            )
             background = [task for task in tasks if task is not None]
             for task in background:
                 task.cancel()
@@ -843,7 +865,7 @@ class GrpoLoop:
         health_stop = read_health_stop(self.paths.health_stop)
         if health_stop is not None:
             raise RuntimeError(health_stop_text(health_stop))
-        await asyncio.to_thread(self.backfill_reference_habits)
+        self.record_reward_fix()
         self.heartbeat = asyncio.create_task(self.stopping_on_failure(self.report_status(stop), stop))
         await asyncio.to_thread(self.clear_stale_handoff)
         await self.servers.check()
@@ -852,6 +874,8 @@ class GrpoLoop:
         self.served_value_weights = current.value_weights
         self.served_version = current.version
         self.searcher.serving(current.version)
+        if not self.paths.reference_habits.exists():
+            self.reference_habits = asyncio.create_task(self.measure_reference_habits())
         if self.progress.stage != PhaseStage.SAMPLING:
             self.log(f"Finishing phase {self.progress.phase} from {self.progress.stage}")
             self.collect(self.progress.phase + 1)
@@ -1302,7 +1326,7 @@ class GrpoLoop:
         self.writer.write(record)
         for alert in record.alerts:
             self.log(f"Health of phase {phase} ({alert.severity}, {alert.check}): {alert.detail}")
-        self.log(habits_text(phase, measured))
+        self.log(habits_text(phase, measured, self.reward_fix_phase()))
         if not record.alerts:
             self.log(f"Health of phase {phase}: no alerts")
         if held_out is None and any(alert.check == HealthCheck.VALID_BLOCKS for alert in record.alerts):
@@ -1315,22 +1339,77 @@ class GrpoLoop:
             self.log(health_stop_text(write_health_stop(self.paths.health_stop, record)))
         return record
 
-    def backfill_reference_habits(self) -> None:
-        """Metrics only: an error is logged, never stops the loop."""
+    def record_reward_fix(self) -> None:
+        """At the first start with the reward fix: the phase training next, which samples went to the old reward."""
+        if self.paths.reward_fix.exists():
+            return
+        progress = self.progress
+        trains = progress.stage in (PhaseStage.SAMPLING, PhaseStage.TRAINING)
+        fix = RewardFix(progress.phase if trains else progress.phase + 1, now())
+        self.paths.reward_fix.write_text(to_json(fix), encoding="utf-8")
+        self.log(f"The reward fix of 2026-10-31 trains from phase {fix.first_phase}")
+
+    def reward_fix_phase(self) -> int | None:
+        if not self.paths.reward_fix.exists():
+            return None
+        return from_json_object(RewardFix, json.loads(self.paths.reward_fix.read_text(encoding="utf-8"))).first_phase
+
+    async def measure_reference_habits(self) -> None:
+        """Beside the searches: the reference phases recorded before the block habits existed get them from their
+        trees, so the habit checks have their reference; unreadable trees are skipped and counted. Once:
+        `reference_habits.json` marks it done, whatever was measured. Metrics only: an error is logged, never stops the
+        loop."""
         try:
-            history = read_health_history(self.paths.health)
-            for record in backfilled_habits(history, self.config.health.reference_phases, self.phase_habits):
+            health = self.config.health
+            records = unmeasured_reference_phases(read_health_history(self.paths.health), health.reference_phases)
+            if not records:
+                return
+            measured = []
+            trees = unreadable = 0
+            for record in records:
+                habits = []
+                below_band = []
+                for entry in self.store.phase_entries(record.phase):
+                    path = self.store.directory / entry.file
+                    found = await asyncio.to_thread(tree_habits, path, self.reward_config.off_graph_min_expanded_nodes)
+                    trees += 1
+                    if found is None:
+                        unreadable += 1
+                        continue
+                    habits.append(found)
+                    if entry.summary.below_band:
+                        below_band.append(found)
+                measured.append(dataclasses.replace(record, measured=with_habits(record.measured, habits, below_band)))
+            for record in measured:
                 append_health(self.paths.health, record)
-                self.log(f"{habits_text(record.phase, record.measured)}: measured from its trees, the reference")
+                self.writer.write(record)
+                self.log(
+                    f"{habits_text(record.phase, record.measured, self.reward_fix_phase())}: measured from its "
+                    "trees, the reference"
+                )
+            phases = tuple(record.phase for record in measured)
+            self.paths.reference_habits.write_text(
+                to_json(ReferenceHabits(phases, trees, unreadable, now())), encoding="utf-8"
+            )
+            self.log(
+                f"Reference phases' block habits measured: phases {list(phases)}, {trees:,} trees, {unreadable:,} "
+                "unreadable skipped"
+            )
         except Exception as error:
             self.log(
                 f"Alert: measuring the reference phases' block habits failed ({type(error).__name__}: {error}); "
                 f"their health checks have no reference\n{traceback.format_exc()}"
             )
 
-    def phase_habits(self, phase: int) -> Iterator[BlockHabits]:
-        for entry in self.store.phase_entries(phase):
-            yield block_habits(read_tree(self.store.directory / entry.file))
+    async def log_probe_habits(self, name: str, directories: Sequence[Path]) -> None:
+        """The block habits of probe runs' trees, pooled; unreadable trees skipped."""
+        paths = [
+            path for directory in directories for path in sorted(EvaluationPaths(directory).trees.glob("*.json.gz"))
+        ]
+        pooled = await asyncio.to_thread(pooled_habits, paths, self.reward_config.off_graph_min_expanded_nodes)
+        self.log(
+            f"{probe_habits_text(name, pooled.habits)}; {pooled.unreadable_trees} of {pooled.trees} trees unreadable"
+        )
 
     async def roll_back(self, phase: int, version: int, searching: bool) -> None:
         """After a collapse: the version's policy adapter published again as a new version (merged on the CPU) and
@@ -1720,7 +1799,11 @@ class GrpoLoop:
         published value model."""
         slot = self.progress.probe_slots
         summary = await self.evaluate(EvaluationRun(EvaluationKind.PROBE, slot), phase)
-        self.log_summaries(f"probe slot {slot} (part {slot % self.config.evaluation.probe_parts})", [summary])
+        name = f"probe slot {slot} (part {slot % self.config.evaluation.probe_parts})"
+        self.log_summaries(name, [summary])
+        directory = self.paths.probe_slot_directory(slot)
+        if directory is not None:
+            await self.log_probe_habits(f"{name} of version {summary.policy_version}", [directory])
         if self.value_arm_due():
             await self.run_value_arm(slot, phase)
             self.save_progress(value_arm_version=value_version(read_versions(self.paths.models)))
@@ -1851,7 +1934,10 @@ class GrpoLoop:
                 slots = sorted({run.slot for run in summaries if run.kind == kind and run.slot is not None})
                 for slot in slots:
                     slot_summaries = [summary for run, summary in summaries.items() if run.slot == slot]
-                    self.log_summaries(f"probe slot {slot} (part {slot % evaluation.probe_parts})", slot_summaries)
+                    name = f"probe slot {slot} (part {slot % evaluation.probe_parts})"
+                    self.log_summaries(name, slot_summaries)
+                    directories = [self.paths.evaluation_directory(run, 0) for run in summaries if run.slot == slot]
+                    await self.log_probe_habits(f"{name} of version 0, its runs pooled", directories)
                 self.save_progress(probe_slots=evaluation.probe_parts)
             else:
                 self.log_summaries(str(kind), [summary for run, summary in summaries.items() if run.kind == kind])

@@ -510,6 +510,18 @@ class HealthMeasurements:
     claim_proved_rate: float | None = None
     closed_form_filler_share: float | None = None
     median_explanation_characters: float | None = None
+    # Of the same samples: the shares opening with `have … :=` (a claim with its proof) and with linarith or
+    # nlinarith; the mean tactics of a block run completely; of the tactics reaching a proof-graph state with goals
+    # left, the share a further tactic of their block follows (the continue rate).
+    proof_have_share: float | None = None
+    linarith_opening_share: float | None = None
+    valid_block_tactics: float | None = None
+    continue_rate: float | None = None
+    # The warned habits on the statements the curriculum fed from below its band (`TreeSummary.below_band`), nearer
+    # the reference phases' difficulty; None without such statements.
+    below_band_bare_have_share: float | None = None
+    below_band_claim_proved_rate: float | None = None
+    below_band_median_explanation_characters: float | None = None
 
 
 @dataclass(frozen=True)

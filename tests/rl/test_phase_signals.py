@@ -20,23 +20,26 @@ from lean_search.rl.grpo_groups import RewardConfig
 from lean_search.rl.health_checks import (
     HeldOutRates,
     append_health,
-    backfilled_habits,
     clear_health_stop,
+    habits_text,
     health_alerts,
     health_thresholds,
     healthy_versions,
     held_out_rates,
     measurements,
     phase_health,
+    probe_habits_text,
     read_health_history,
     reference_measurements,
+    unmeasured_reference_phases,
     write_health_stop,
 )
 from lean_search.rl.loop_config import HealthConfig
 from lean_search.rl.training_phase import PhaseOutcome, PolicyOutcome
 from lean_search.rl.tree_store import TreeEntry
-from lean_search.rl.tree_summary import BlockHabits, TreeSummary, tree_summary
+from lean_search.rl.tree_summary import BlockHabits, TreeSummary, pooled_habits, summed_habits, tree_summary
 from lean_search.search import Accounting, SearchResult, StopReason, TreeRecord, tree_record
+from lean_search.search.records import write_tree
 from lean_search.search.texts import (
     CharacterSpan,
     ExpansionTexts,
@@ -247,11 +250,17 @@ HABITS = BlockHabits(
     proved_claims=1,
     closed_form_fillers=1,
     explanation_character_bins=(0, 2, 0, 2),
+    proof_have_openings=3,
+    linarith_openings=2,
+    valid_blocks=5,
+    valid_block_tactics=10,
+    proof_graph_steps=4,
+    continued_proof_graph_steps=1,
 )
 
 
-def with_habits(habits: BlockHabits) -> TreeEntry:
-    return dataclasses.replace(entry(), summary=TreeSummary(habits=habits))
+def with_habits(habits: BlockHabits, below_band: bool = False) -> TreeEntry:
+    return dataclasses.replace(entry(), summary=TreeSummary(habits=habits, below_band=below_band))
 
 
 @pytest.mark.parametrize(
@@ -261,6 +270,10 @@ def with_habits(habits: BlockHabits) -> TreeEntry:
         ("claim_proved_rate", 0.5),
         ("closed_form_filler_share", 0.1),
         ("median_explanation_characters", 20.0),
+        ("proof_have_share", 0.3),
+        ("linarith_opening_share", 0.2),
+        ("valid_block_tactics", 2.0),
+        ("continue_rate", 0.25),
     ],
 )
 def test_the_block_habits_are_measured_over_the_phases_trees(field: str, value: float) -> None:
@@ -272,15 +285,27 @@ def test_trees_summarized_before_the_block_habits_leave_them_unmeasured() -> Non
     assert measurements(None, [entry()], None).bare_have_share is None
 
 
-def test_reference_phases_without_block_habits_are_measured_from_their_trees() -> None:
-    (filled,) = backfilled_habits([health_record(1), health_record(3)], 2, lambda phase: [HABITS])
-    assert (filled.phase, filled.measured.bare_have_share) == (1, pytest.approx(0.4))
+def test_the_below_band_habits_count_the_statements_from_below_the_band_only() -> None:
+    entries = [with_habits(HABITS, below_band=True), with_habits(BlockHabits(block_samples=10))]
+    assert measurements(None, entries, None).below_band_bare_have_share == pytest.approx(0.4)
 
 
-def test_reference_phases_with_block_habits_are_kept() -> None:
+def test_a_phase_without_statements_from_below_the_band_has_no_below_band_habits() -> None:
+    assert measurements(None, [with_habits(HABITS)], None).below_band_bare_have_share is None
+
+
+def test_only_reference_phases_without_block_habits_are_measured_again() -> None:
     measured = dataclasses.replace(health_record(1).measured, bare_have_share=0.2)
-    record = dataclasses.replace(health_record(1), measured=measured)
-    assert backfilled_habits([record], 2, lambda phase: [HABITS]) == []
+    history = [dataclasses.replace(health_record(1), measured=measured), health_record(2), health_record(3)]
+    assert [record.phase for record in unmeasured_reference_phases(history, 2)] == [2]
+
+
+def test_the_habits_line_names_the_first_phase_trained_with_the_reward_fix() -> None:
+    assert "(the reward fix trains from phase 13)" in habits_text(14, HealthMeasurements(), 13)
+
+
+def test_the_probe_habits_line_counts_the_bare_haves() -> None:
+    assert "4 open with a bare `have` (50.0% of their open claims proved)" in probe_habits_text("probe", HABITS)
 
 
 def test_the_cut_off_share_is_per_policy_sample() -> None:
@@ -465,6 +490,23 @@ def test_habit_alerts_are_warnings(change: dict[str, float]) -> None:
     assert [alert.severity for alert in alerts] == [HealthSeverity.WARNING]
 
 
+@pytest.mark.parametrize(
+    ("change", "check"),
+    [
+        ({"below_band_bare_have_share": 0.4}, HealthCheck.BARE_HAVES),
+        ({"below_band_claim_proved_rate": 0.005}, HealthCheck.CLAIMS_PROVED),
+        ({"below_band_median_explanation_characters": 90.0}, HealthCheck.EXPLANATION_CHARACTERS),
+    ],
+    ids=["bare haves", "claims proved", "explanation characters"],
+)
+def test_habit_alerts_compare_the_statements_from_below_the_band(change: dict[str, float], check: HealthCheck) -> None:
+    assert checks(dataclasses.replace(HEALTHY, **change)) == [check]
+
+
+def test_habit_alerts_ignore_the_band_when_the_statements_from_below_it_are_healthy() -> None:
+    assert checks(dataclasses.replace(HEALTHY, bare_have_share=0.4, below_band_bare_have_share=0.2)) == []
+
+
 @pytest.mark.parametrize(("valid_rate", "severity"), [(0.6, HealthSeverity.WARNING), (0.5, HealthSeverity.STOP)])
 def test_a_held_out_valid_lean_drop_stops_the_loop_only_below_the_stop_threshold(
     valid_rate: float, severity: HealthSeverity
@@ -566,3 +608,21 @@ def test_a_tree_counts_its_roots_first_round_blocks(field: str, count: int) -> N
 def test_a_tree_records_the_versions_that_sampled_it() -> None:
     tree = dataclasses.replace(record(), expansions=(ExpansionTexts("test.t0", 0, "prompt", (), policy_version=3),))
     assert summary_of(tree).sampling_versions == (3,)
+
+
+def probe_trees(directory: Path) -> list[Path]:
+    """Two readable trees and a truncated one."""
+    paths = [directory / name for name in ("a.json.gz", "b.json.gz", "c.json.gz")]
+    write_tree(paths[0], record())
+    write_tree(paths[1], record())
+    paths[2].write_bytes(b"truncated")
+    return paths
+
+
+def test_pooled_habits_sum_the_readable_trees(tmp_path: Path) -> None:
+    single = pooled_habits(probe_trees(tmp_path)[:1], 4).habits
+    assert pooled_habits(probe_trees(tmp_path), 4).habits == summed_habits([single, single])
+
+
+def test_pooled_habits_count_the_unreadable_trees(tmp_path: Path) -> None:
+    assert pooled_habits(probe_trees(tmp_path), 4).unreadable_trees == 1
