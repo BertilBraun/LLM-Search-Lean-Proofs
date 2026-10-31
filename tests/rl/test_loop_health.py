@@ -589,8 +589,12 @@ async def test_the_reference_habits_are_measured_once(tmp_path: Path) -> None:
 
 async def test_an_unreadable_reference_tree_is_skipped_and_counted(tmp_path: Path) -> None:
     world = await phase_one_without_habits(tmp_path)
-    (entry, *_) = TreeStore(world.paths.trees).phase_entries(1)
-    (world.paths.trees / entry.file).write_bytes(b"not a tree")
+    # A tree more than the phase's own, so one stays readable however many the phase finished.
+    store = TreeStore(world.paths.trees)
+    (entry, *_) = store.phase_entries(1)
+    (record, *_) = store.records(1)
+    broken = store.add(record, 1, entry.policy_version, entry.difficulty, entry.summary)
+    (world.paths.trees / broken.file).write_bytes(b"not a tree")
     await started_until(world, world.paths.reference_habits.exists)
     measured = from_json_object(ReferenceHabits, json.loads(world.paths.reference_habits.read_text(encoding="utf-8")))
     assert measured.unreadable_trees == 1
