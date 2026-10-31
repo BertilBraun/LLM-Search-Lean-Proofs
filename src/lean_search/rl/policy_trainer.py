@@ -2,7 +2,6 @@
 
 import contextlib
 import random
-import statistics
 import time
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
@@ -86,7 +85,8 @@ class GrpoConfig:
     # The KL penalty's weight; the KL to the reference is measured and reported either way.
     kl_coefficient: float = 0.0
     reference: ReferencePolicy = ReferencePolicy.STARTING_WEIGHTS
-    # Without a KL penalty the reference only feeds the reported KL: scored on this many sequences (seeded draw).
+    # Without a KL penalty the reference only feeds the reported KL: scored on this many sequences, spread over the
+    # last pass's steps.
     reference_sequences: int = 256
     # A step's loss is sum(weight * token loss) / (its sequences * this): no per-sequence mean, so no length bias.
     normalization_tokens: int = 256
@@ -122,7 +122,8 @@ class GrpoStepRecord:
     learning_rate: float
     loss: float
     policy_loss: float
-    # Means over the step's trained tokens; KLs are k3 estimates.
+    # Means over the step's trained tokens: the KL to the data policy as k3, the KL to the reference as k1 over the
+    # tokens with a reference score.
     kl_to_data_policy: float
     kl_to_reference: float
     clip_fraction: float
@@ -153,7 +154,7 @@ class GrpoTrainingResult:
     training_seconds: float
     peak_memory_gib: float
     trainable_parameters: int
-    # Means over the last pass's steps; the KL to the reference their median.
+    # Means over the last pass's steps; the KL to the reference over its reference tokens (`token_mean`).
     final_kl_to_data_policy: float
     final_kl_to_reference: float
     final_clip_fraction: float
@@ -383,11 +384,20 @@ def sampler_agreement_by_version(
     )
 
 
-def reference_sample(config: GrpoConfig, sequence_count: int) -> list[int]:
-    """The sequences scored under the reference: all of them when the KL penalty trains on it."""
+def reference_sample(config: GrpoConfig, steps: Sequence[GrpoStep], sequence_count: int) -> list[int]:
+    """The sequences scored under the reference: all of them when the KL penalty trains on it, else as evenly over the
+    last pass's steps as their number allows, so that every step measures the KL."""
     if config.kl_coefficient or sequence_count <= config.reference_sequences:
         return list(range(sequence_count))
-    return sorted(random.Random(config.optimization.seed).sample(range(sequence_count), config.reference_sequences))
+    # Not `Random(seed)`: its first draws repeat the step shuffle's, which put the whole sample in the last steps.
+    generator = random.Random(f"reference {config.optimization.seed}")
+    last_pass = [list(step.sequences) for step in steps if step.pass_index == steps[-1].pass_index]
+    for members in last_pass:
+        generator.shuffle(members)
+    generator.shuffle(last_pass)
+    depth = max(len(members) for members in last_pass)
+    spread = [members[level] for level in range(depth) for members in last_pass if level < len(members)]
+    return sorted(spread[: config.reference_sequences])
 
 
 def reference_log_probabilities(
@@ -396,15 +406,15 @@ def reference_log_probabilities(
     scorer: CompletionTokenScores,
     examples: Sequence[TokenizedExample],
     temperatures: Sequence[float],
+    chosen: Sequence[int],
     old: list[torch.Tensor],
     pad_token_id: int,
     device: torch.device,
     ranks: Ranks = SINGLE_PROCESS,
 ) -> list[torch.Tensor | None]:
-    """Per example its reference log-probabilities, None outside `reference_sample`."""
+    """Per example its reference log-probabilities, None outside `chosen` (`reference_sample`)."""
     if config.reference == ReferencePolicy.PHASE_START or config.initial_adapter == config.reference_adapter:
         return list(old)
-    chosen = reference_sample(config, len(examples))
 
     def scored() -> list[torch.Tensor | None]:
         scores = sharded_log_probabilities(
@@ -505,8 +515,16 @@ def mean(values: Sequence[float]) -> float:
     return sum(values) / len(values) if values else 0.0
 
 
-def median(values: Sequence[float]) -> float:
-    return statistics.median(values) if values else 0.0
+def token_mean(means: Sequence[float], tokens: Sequence[int]) -> float | None:
+    """The mean over all tokens of steps with these per-step means over these tokens; None without tokens."""
+    total = sum(tokens)
+    return sum(value * count for value, count in zip(means, tokens, strict=True)) / total if total else None
+
+
+def reference_log_ratios(log_probabilities: torch.Tensor, reference_log_probabilities: torch.Tensor) -> torch.Tensor:
+    """k1 = log p - log q per token drawn from p: its mean is KL(p || q), and unlike k3 = exp(-k1) + k1 - 1 one token
+    the reference prefers by 20 nats adds 20 to the sum rather than e^20."""
+    return log_probabilities - reference_log_probabilities
 
 
 def compile_warm_up(
@@ -578,8 +596,10 @@ def train_grpo(
     )
     agreement = sampler_agreement(sequences, old)
     agreement_by_version = sampler_agreement_by_version(sequences, old)
+    steps = plan_grpo_steps(sequences, config, ranks.world_size)
+    chosen = reference_sample(config, steps, len(sequences))
     reference = reference_log_probabilities(
-        config, saved_module, scorer, examples, temperatures, old, pad_token_id, device, ranks
+        config, saved_module, scorer, examples, temperatures, chosen, old, pad_token_id, device, ranks
     )
     causal_model.train()
     scoring_seconds = time.perf_counter() - scoring_started
@@ -587,7 +607,6 @@ def train_grpo(
     optimizer = torch.optim.AdamW(
         parameters, lr=optimization.learning_rate, weight_decay=optimization.weight_decay, fused=device.type == "cuda"
     )
-    steps = plan_grpo_steps(sequences, config, ranks.world_size)
     warmup_steps = config.warmup_steps or max(1, round(optimization.warmup_fraction * len(steps)))
     scheduler = torch.optim.lr_scheduler.LambdaLR(
         optimizer,
@@ -624,15 +643,18 @@ def train_grpo(
             token_losses = clipped_policy_losses(
                 log_probabilities, old_log_probabilities, advantages, config.clip_low, config.clip_high
             )
-            # Unscored tokens get their own value: a log-ratio of 0, so no KL and no gradient.
-            reference_values = torch.where(reference_scored, reference_values, log_probabilities.detach())
-            kl_to_reference = kl_estimate(reference_values - log_probabilities)
             policy_loss = (weights * token_losses.losses).sum() / normalizer
-            loss = policy_loss + config.kl_coefficient * (weights * kl_to_reference).sum() / normalizer
+            loss = policy_loss
+            # With a penalty every sequence has a reference score; without one, 0 * an overflowing k3 would be NaN.
+            if config.kl_coefficient:
+                penalty = kl_estimate(reference_values - log_probabilities)
+                loss = loss + config.kl_coefficient * (weights * penalty).sum() / normalizer
             loss.backward()
             trained = weights > 0
             first_round = trained & first_round_tensor(batch_sequences, device)
+            referenced = trained & reference_scored
             with torch.no_grad():
+                log_ratios = reference_log_ratios(log_probabilities, reference_values)
                 ratio = torch.exp(log_probabilities - old_log_probabilities)
                 positive = trained & (advantages > 0)
                 negative = trained & (advantages < 0)
@@ -641,7 +663,7 @@ def train_grpo(
                         loss.detach().double(),
                         policy_loss.detach().double(),
                         kl_estimate(log_probabilities - old_log_probabilities)[trained].sum().double(),
-                        kl_to_reference[trained].sum().double(),
+                        log_ratios[referenced].sum().double(),
                         token_losses.clipped[trained].sum().double(),
                         entropies[trained].sum().double(),
                         ratio[trained].sum().double(),
@@ -650,7 +672,7 @@ def train_grpo(
                 )
                 totals[9:16] += torch.stack(
                     [
-                        (trained & reference_scored).sum().double(),
+                        referenced.sum().double(),
                         ratio[positive].sum().double(),
                         token_losses.clipped[positive].sum().double(),
                         positive.sum().double(),
@@ -661,8 +683,8 @@ def train_grpo(
                 )
                 totals[16:] += torch.stack(
                     [
-                        kl_to_reference[first_round].sum().double(),
-                        (first_round & reference_scored).sum().double(),
+                        log_ratios[first_round & referenced].sum().double(),
+                        (first_round & referenced).sum().double(),
                         token_losses.clipped[first_round].sum().double(),
                         first_round.sum().double(),
                     ]
@@ -721,7 +743,10 @@ def train_grpo(
     save_seconds = time.perf_counter() - save_started
     peak_memory = torch.cuda.max_memory_allocated(device) / 2**30 if device.type == "cuda" else 0.0
     last_pass = [record for record in records if record.pass_index == records[-1].pass_index] if records else []
-    first_round_kl = [record.first_round_kl_to_reference for record in last_pass if record.first_round_reference_tokens]
+    # k1's mean over every reference token of the pass: unbiased, and a token moves it only by its log ratio / tokens.
+    kl_to_reference = token_mean(
+        [record.kl_to_reference for record in last_pass], [record.reference_tokens for record in last_pass]
+    )
     first_round_clip = [record.first_round_clip_fraction for record in last_pass if record.first_round_trained_tokens]
     return GrpoTrainingResult(
         steps=len(steps),
@@ -732,9 +757,7 @@ def train_grpo(
         peak_memory_gib=largest(peak_memory, device, ranks),
         trainable_parameters=sum(parameter.numel() for parameter in parameters),
         final_kl_to_data_policy=mean([record.kl_to_data_policy for record in last_pass]),
-        # k3 on tokens the data policy sampled has a heavy tail: a rare token the reference prefers by ~e^10 alone
-        # moves a step's mean by 10^3-10^5 (phase 1 of grpo_loop_v1), so the phase's value is the steps' median.
-        final_kl_to_reference=median([record.kl_to_reference for record in last_pass]),
+        final_kl_to_reference=0.0 if kl_to_reference is None else kl_to_reference,
         final_clip_fraction=mean([record.clip_fraction for record in last_pass]),
         final_entropy=mean([record.entropy for record in last_pass]),
         final_policy_loss=mean([record.policy_loss for record in last_pass]),
@@ -746,7 +769,10 @@ def train_grpo(
         compile_seconds=compile_seconds,
         save_seconds=save_seconds,
         ranks=ranks.world_size,
-        final_first_round_kl_to_reference=median(first_round_kl) if first_round_kl else None,
+        final_first_round_kl_to_reference=token_mean(
+            [record.first_round_kl_to_reference for record in last_pass],
+            [record.first_round_reference_tokens for record in last_pass],
+        ),
         final_first_round_clip_fraction=mean(first_round_clip) if first_round_clip else None,
     )
 

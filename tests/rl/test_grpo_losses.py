@@ -4,7 +4,13 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from lean_search.rl.policy_trainer import chunk_scores, clipped_policy_losses, kl_estimate, median  # noqa: E402
+from lean_search.rl.policy_trainer import (  # noqa: E402
+    chunk_scores,
+    clipped_policy_losses,
+    kl_estimate,
+    reference_log_ratios,
+    token_mean,
+)
 
 
 def gradient(ratio: float, advantage: float) -> float:
@@ -67,5 +73,22 @@ def test_scores_use_fp32_logits_under_bf16_autocast() -> None:
     assert torch.allclose(scores.double(), exact, atol=1e-4)
 
 
-def test_a_steps_kl_spike_leaves_the_phases_kl_to_the_reference_alone() -> None:
-    assert median([0.02, 0.09, 139501.0, 0.03, 0.05]) == 0.05
+def phase_kl_to_reference(log_probabilities: torch.Tensor, reference: torch.Tensor, steps: int) -> float | None:
+    """As the trainer aggregates it: per-step means over the steps' tokens, then their token mean."""
+    parts = reference_log_ratios(log_probabilities, reference).chunk(steps)
+    return token_mean([part.mean().item() for part in parts], [len(part) for part in parts])
+
+
+def test_one_token_the_reference_prefers_by_22_nats_barely_moves_the_phases_kl_to_the_reference() -> None:
+    log_probabilities = torch.full((256 * 300,), -1.0)
+    reference = log_probabilities - 0.03
+    log_probabilities[0], reference[0] = -23.0, -1.0
+    assert phase_kl_to_reference(log_probabilities, reference, steps=229) == pytest.approx(0.03, abs=1e-3)
+
+
+def test_the_phases_kl_to_the_reference_weighs_steps_by_their_reference_tokens() -> None:
+    assert token_mean([0.1, 0.4], [300, 100]) == pytest.approx(0.175)
+
+
+def test_a_phase_without_reference_tokens_has_no_kl_to_the_reference() -> None:
+    assert token_mean([0.0, 0.0], [0, 0]) is None

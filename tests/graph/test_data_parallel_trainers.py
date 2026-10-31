@@ -17,7 +17,7 @@ multiprocessing = pytest.importorskip("torch.multiprocessing")
 
 from lean_search.policy.adapters import ADAPTER_WEIGHTS_FILE  # noqa: E402
 from lean_search.rl.policy_data import PolicyDataConfig, PolicySequence, PolicyTree, build_policy_data  # noqa: E402
-from lean_search.rl.policy_trainer import GrpoConfig, train_grpo  # noqa: E402
+from lean_search.rl.policy_trainer import GrpoConfig, plan_grpo_steps, reference_sample, train_grpo  # noqa: E402
 from lean_search.rl.training_phase import (  # noqa: E402
     PhaseInputs,
     TrainingPhaseConfig,
@@ -132,6 +132,34 @@ def train_policy(model: Path, published: Path, starting: Path, output: Path, ran
         (output / STEP_RECORDS).write_text(json.dumps([dataclasses.asdict(record) for record in records]))
 
 
+@dataclasses.dataclass(frozen=True)
+class ReferencedRun:
+    step_reference_tokens: list[int]
+    # Of the sequences `reference_sample` chose.
+    sample_trained_tokens: int
+
+
+def train_referenced_policy(model: Path, published: Path, starting: Path, output: Path, ranks: Ranks) -> None:
+    """Four steps of four sequences without a KL penalty, four of the sixteen sequences scored under the reference."""
+    config = dataclasses.replace(
+        policy_config(model, published, starting), sequences_per_step=4, kl_coefficient=0.0, reference_sequences=4
+    )
+    records: list[object] = []
+    train_grpo(config, 0, referenced_sequences(), [], CPU, output, records.append, ranks)
+    if ranks.is_main:
+        chosen = reference_sample(config, plan_grpo_steps(referenced_sequences(), config, ranks.world_size), 16)
+        run = ReferencedRun(
+            [record.reference_tokens for record in records],
+            sum(sum(referenced_sequences()[index].trained) for index in chosen),
+        )
+        (output / STEP_RECORDS).write_text(json.dumps(dataclasses.asdict(run)))
+
+
+def referenced_sequences() -> list[PolicySequence]:
+    recorded = policy_sequences()
+    return [recorded[index % len(recorded)] for index in range(16)]
+
+
 def train_value(model: Path, current: Path, output: Path, ranks: Ranks) -> None:
     records: list[object] = []
     config = value_config(model, current)
@@ -188,6 +216,16 @@ def policy_runs(tiny_model: Path, tmp_path_factory: pytest.TempPathFactory) -> R
 
 
 @pytest.fixture(scope="module")
+def referenced_run(tiny_model: Path, tmp_path_factory: pytest.TempPathFactory) -> ReferencedRun:
+    root = tmp_path_factory.mktemp("referenced")
+    published = random_adapter(tiny_model, root / "published", seed=1)
+    starting = random_adapter(tiny_model, root / "starting", seed=2)
+    train = functools.partial(train_referenced_policy, tiny_model, published, starting, root / "run")
+    on_ranks(4, train, root / "rendezvous")
+    return ReferencedRun(**json.loads((root / "run" / STEP_RECORDS).read_text()))
+
+
+@pytest.fixture(scope="module")
 def value_runs(tiny_model: Path, tmp_path_factory: pytest.TempPathFactory) -> Runs:
     root = tmp_path_factory.mktemp("value")
     current = random_adapter(tiny_model, root / "current", seed=3)
@@ -218,6 +256,14 @@ def test_two_ranks_report_the_single_process_policy_step(policy_runs: Runs, fiel
     assert step_records(policy_runs.parallel)[0][field] == pytest.approx(
         step_records(policy_runs.single)[0][field], rel=1e-4
     )
+
+
+def test_on_four_ranks_every_step_measures_the_kl_to_the_reference(referenced_run: ReferencedRun) -> None:
+    assert all(tokens > 0 for tokens in referenced_run.step_reference_tokens)
+
+
+def test_on_four_ranks_every_reference_sequences_trained_tokens_count(referenced_run: ReferencedRun) -> None:
+    assert sum(referenced_run.step_reference_tokens) == referenced_run.sample_trained_tokens
 
 
 def test_two_ranks_take_the_single_process_value_step(value_runs: Runs) -> None:

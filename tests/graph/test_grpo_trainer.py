@@ -14,12 +14,14 @@ from lean_search.rl.policy_data import PolicyDataConfig, PolicySequence, PolicyT
 from lean_search.rl.policy_trainer import (  # noqa: E402
     CompletionTokenScores,
     GrpoConfig,
+    GrpoStep,
     GrpoStepRecord,
     ReferencePolicy,
     compile_warm_up,
     completion_log_probabilities,
     plan_grpo_steps,
     reference_log_probabilities,
+    reference_sample,
     sampler_agreement,
     sampler_agreement_by_version,
     train_grpo,
@@ -101,17 +103,20 @@ def train(config: GrpoConfig, directory: Path) -> list[GrpoStepRecord]:
     return records
 
 
-def summed_log_probabilities(model: Path, adapter: str) -> list[float]:
+def token_log_probabilities(model: Path, adapter: str) -> list[torch.Tensor]:
     saved, causal_model = load_trainable_model(
         str(model), OptimizationConfig(gradient_checkpointing=False), LORA, CPU, adapter
     )
     causal_model.eval()
     examples = [sequence.tokenized for sequence in sequences()]
     temperatures = [sequence.temperature for sequence in sequences()]
-    scores = completion_log_probabilities(
+    return completion_log_probabilities(
         CompletionTokenScores(causal_model), examples, temperatures, 8192, False, 0, CPU
     )
-    return [score.sum().item() for score in scores]
+
+
+def summed_log_probabilities(model: Path, adapter: str) -> list[float]:
+    return [scores.sum().item() for scores in token_log_probabilities(model, adapter)]
 
 
 def test_the_root_group_trains_both_completions_of_both_samples() -> None:
@@ -188,7 +193,8 @@ def reference_after_continuing(
     examples = [sequence.tokenized for sequence in sequences()]
     temperatures = [sequence.temperature for sequence in sequences()]
     scorer = CompletionTokenScores(causal_model)
-    return reference_log_probabilities(config, saved, scorer, examples, temperatures, [], 0, CPU), saved
+    chosen = reference_sample(config, plan_grpo_steps(sequences(), config), len(examples))
+    return reference_log_probabilities(config, saved, scorer, examples, temperatures, chosen, [], 0, CPU), saved
 
 
 def test_the_reference_is_the_starting_adapter(
@@ -224,6 +230,63 @@ def test_reference_scores_a_subsample_unless_the_kl_penalty_trains_on_it(
         tiny_model, perturbed_adapter, starting_adapter, reference_sequences=1, kl_coefficient=kl_coefficient
     )
     assert sum(scores is not None for scores in reference) == scored
+
+
+def test_each_reference_score_measures_its_own_sequence(
+    tiny_model: Path, perturbed_adapter: Path, starting_adapter: Path, tmp_path: Path
+) -> None:
+    """One sequence per step and no update: a step's KL is k1 of its own sequence, or 0 outside the sample."""
+    config = grpo_config(
+        tiny_model,
+        passes=1,
+        initial_adapter=str(perturbed_adapter),
+        reference_adapter=str(starting_adapter),
+        sequences_per_step=1,
+        reference_sequences=2,
+    )
+    config = dataclasses.replace(config, optimization=dataclasses.replace(config.optimization, learning_rate=0.0))
+    published = token_log_probabilities(tiny_model, str(perturbed_adapter))
+    starting = token_log_probabilities(tiny_model, str(starting_adapter))
+    chosen = set(reference_sample(config, plan_grpo_steps(sequences(), config), len(sequences())))
+    trained = [torch.tensor(sequence.trained) for sequence in sequences()]
+    expected = [
+        (published[index] - starting[index])[trained[index]].mean().item() if index in chosen else 0.0
+        for step in plan_grpo_steps(sequences(), config)
+        for index in step.sequences
+    ]
+    assert [record.kl_to_reference for record in train(config, tmp_path / "adapter")] == pytest.approx(
+        expected, abs=1e-3
+    )
+
+
+def many_sequences(count: int) -> list[PolicySequence]:
+    recorded = sequences()
+    return [recorded[index % len(recorded)] for index in range(count)]
+
+
+def phase_steps(tiny_model: Path, count: int, passes: int) -> tuple[GrpoConfig, list[GrpoStep]]:
+    """A loop phase's plan: 64 sequences per step, 256 of them scored under the reference."""
+    config = grpo_config(tiny_model, passes=passes, sequences_per_step=64, reference_sequences=256)
+    return config, plan_grpo_steps(many_sequences(count), config)
+
+
+@pytest.mark.parametrize(("count", "passes"), [(14600, 1), (15100, 2), (7700, 1)])
+def test_the_reference_sample_reaches_every_step_of_the_last_pass(tiny_model: Path, count: int, passes: int) -> None:
+    config, steps = phase_steps(tiny_model, count, passes)
+    chosen = set(reference_sample(config, steps, count))
+    last_pass = [step for step in steps if step.pass_index == passes - 1]
+    assert all(chosen & set(step.sequences) for step in last_pass)
+
+
+def test_the_reference_sample_spreads_evenly_over_the_steps(tiny_model: Path) -> None:
+    config, steps = phase_steps(tiny_model, 14600, 1)
+    chosen = set(reference_sample(config, steps, 14600))
+    assert {len(chosen & set(step.sequences)) for step in steps} == {1, 2}
+
+
+def test_the_reference_sample_is_the_configured_size(tiny_model: Path) -> None:
+    config, steps = phase_steps(tiny_model, 14600, 1)
+    assert len(set(reference_sample(config, steps, 14600))) == 256
 
 
 def test_kl_to_the_starting_weights_is_measured_on_the_subsample(
