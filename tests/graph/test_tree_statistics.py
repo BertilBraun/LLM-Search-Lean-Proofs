@@ -90,8 +90,8 @@ def test_edge_kind_counts_cover_every_kind() -> None:
     ("field", "count"),
     [
         ("proof_graph", 6),
-        ("off_graph", 0),
-        ("unproved_claim", 1),
+        ("off_graph", 1),
+        ("unproved_claim", 0),
         ("unknown", 2),
         ("no_progress", 1),
         ("redundant_hypothesis", 1),

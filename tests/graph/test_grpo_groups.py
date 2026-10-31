@@ -2,8 +2,20 @@ import dataclasses
 
 import pytest
 from graph_trees import GraphBuilder
-from tactic_trees import BARE_HAVE, CONSTRUCTOR, COPY, FIRST_THEN_FAILING, PROOF, claim_tree, example_tree
+from tactic_trees import (
+    BARE_HAVE,
+    CLAIM,
+    CONSTRUCTOR,
+    CONTEXT,
+    COPY,
+    FIRST_THEN_FAILING,
+    PROOF,
+    ROOT,
+    claim_tree,
+    example_tree,
+)
 
+from lean_search.rl.advantages import CreditMode, group_advantages
 from lean_search.rl.grpo_groups import GroupSample, PolicyGroup, RewardConfig, TreeGroups, policy_groups
 from lean_search.search import FailureKind, StepSource, TreeRecord
 from lean_search.search.graph_labels import label_graph
@@ -68,17 +80,27 @@ def test_redundant_hypothesis_scores_as_a_failure() -> None:
     assert tactic_rewards(COPY) == pytest.approx([-0.15])
 
 
-def test_dead_end_adding_goals_scores_as_an_unproved_claim() -> None:
-    assert tactic_rewards(CONSTRUCTOR) == pytest.approx([-0.15])
+def test_goal_split_into_a_dead_end_scores_like_an_unknown_state() -> None:
+    assert tactic_rewards(CONSTRUCTOR) == pytest.approx([-0.5 * 0.15])
 
 
-def test_expanded_off_graph_state_is_neutral_before_the_gate() -> None:
+def test_dead_end_scores_like_an_unknown_state_before_the_gate() -> None:
     builder = GraphBuilder("⊢ p")
     dead_end = builder.child(builder.root, "⊢ q", text="detour")
     builder.failure(dead_end)
     (root,) = groups(builder.record(builder.child(builder.root, text="close")))
     (detour,) = [sample for sample in root.samples if sample.text == "detour"]
-    assert detour.score == pytest.approx(0.0)
+    assert detour.score == pytest.approx(-0.5 * 0.15)
+
+
+def test_explored_off_graph_state_scores_like_an_unknown_state_before_the_gate() -> None:
+    builder = GraphBuilder("⊢ p")
+    node = builder.child(builder.root, "⊢ q 0", text="detour")
+    for index in range(1, CONFIG.off_graph_min_expanded_nodes + 1):
+        node = builder.child(node, f"⊢ q {index}")
+    (root,) = groups(builder.record(builder.child(builder.root, text="close")))
+    (detour,) = [sample for sample in root.samples if sample.text == "detour"]
+    assert detour.score == pytest.approx(-0.5 * 0.15)
 
 
 def test_off_graph_state_with_live_children_and_too_few_expanded_nodes_scores_as_unknown() -> None:
@@ -97,8 +119,48 @@ def claim_sample(on_proof_graph: bool = False) -> GroupSample:
     return claim
 
 
-def test_unproved_claim_off_the_proof_graph_scores_like_no_progress() -> None:
-    assert claim_sample().score == pytest.approx(-0.15)
+def test_bare_claim_left_open_scores_its_claim_and_the_closing_cost() -> None:
+    assert claim_sample().score == pytest.approx(-0.15 - 0.1)
+
+
+INLINE_ATTEMPT = "have h₂ : x = -4 := by\n  nlinarith"
+
+
+def attempt_tree() -> TreeRecord:
+    """A bare `have` and a flattened `have … := by nlinarith` whose nlinarith fails, both at the claim's node."""
+    builder = GraphBuilder(ROOT)
+    claim = builder.child(builder.root, *CLAIM, text=INLINE_ATTEMPT, failure_after=1, tactic_goals=(CLAIM,))
+    builder.duplicate(builder.root, claim, text=BARE_HAVE, tactic_goals=(CLAIM,))
+    return builder.record(builder.child(builder.root, text="close"))
+
+
+def attempt_samples() -> dict[str, GroupSample]:
+    (root,) = groups(attempt_tree())
+    return {sample.text: sample for sample in root.samples}
+
+
+def test_failed_inline_proof_scores_as_one_failing_tactic() -> None:
+    assert attempt_samples()[INLINE_ATTEMPT].score == pytest.approx(-0.15)
+
+
+def test_failed_inline_proof_scores_above_the_bare_claim() -> None:
+    samples = attempt_samples()
+    assert samples[INLINE_ATTEMPT].score > samples[BARE_HAVE].score
+
+
+def test_failed_inline_proof_charges_its_failing_tactic_not_its_claim() -> None:
+    gains = [None if tactic.gain is None else tactic.gain.total for tactic in attempt_samples()[INLINE_ATTEMPT].tactics]
+    assert gains[:2] == [0.0, None]
+
+
+def test_unproved_suffices_scores_like_a_bare_claim() -> None:
+    builder = GraphBuilder(ROOT)
+    suffices = "suffices h₂ : x = -4 by linear_combination h₀ - h₂"
+    builder.child(builder.root, f"{CONTEXT}\n⊢ x = -4", text=suffices, tactic_goals=((f"{CONTEXT}\n⊢ x = -4",),))
+    builder.child(builder.root, *CLAIM, text=BARE_HAVE, tactic_goals=(CLAIM,))
+    (root,) = groups(builder.record(builder.child(builder.root, text="close")))
+    scores = {sample.text: sample.score for sample in root.samples}
+    assert scores[suffices] == pytest.approx(scores[BARE_HAVE])
 
 
 def test_claim_on_the_proof_graph_keeps_its_label() -> None:
@@ -115,7 +177,7 @@ def test_expanded_off_graph_state_earns_its_value_part_after_the_gate() -> None:
     tactics = policy_tactics(record, labels, config.off_graph_min_expanded_nodes)
     (root,) = policy_groups(record, labels, tactics, recorded_estimates(record, READOUT), config).groups
     (detour,) = [sample for sample in root.samples if sample.text == "detour"]
-    expected = 0.85 * 0.15 * READOUT.estimate(4.0).proof_probability
+    expected = 0.85 * 0.15 * READOUT.estimate(4.0).proof_probability + 0.15 * -0.5
     assert detour.tactics[0].parts is not None and detour.tactics[0].parts.total == pytest.approx(expected)
 
 
@@ -159,10 +221,10 @@ def test_group_without_a_policy_proof_is_left_out() -> None:
     assert tree_groups(sweep_proof_tree()) == TreeGroups(groups=(), without_policy_proof=1)
 
 
-def test_scored_unknown_samples_are_no_policy_proof() -> None:
+def test_unknown_and_failing_samples_alone_carry_a_signal() -> None:
     config = dataclasses.replace(CONFIG, require_policy_proof=False)
     (root,) = groups(sweep_proof_tree(), config)
-    assert not root.has_policy_proof
+    assert group_advantages(root).has_signal(CreditMode.PER_TACTIC)
 
 
 def test_group_without_a_policy_proof_stays_when_not_required() -> None:

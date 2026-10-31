@@ -52,6 +52,9 @@ from lean_search.search.tactic_labels import TacticLabel, TacticOutcome, policy_
 from lean_search.search.tree import Edge, EdgeOutcome, StepSource
 
 POLICY_SOURCE = frozenset({StepSource.POLICY})
+# Labels a reference state (provable by its traced proof) overrides: no tree evidence, or a judgement of the state's
+# text (a claim, closed-form filler) that its reference proof refutes.
+RELABELLED = (TacticLabel.UNKNOWN, TacticLabel.UNPROVED_CLAIM, TacticLabel.REDUNDANT_HYPOTHESIS)
 
 
 @dataclass(frozen=True)
@@ -173,7 +176,7 @@ def reference_labels(
         relabelled = list(outcomes)
         for index, goals in enumerate(edge.tactic_goals):
             key = goal_key(goals)
-            if relabelled[index].label in (TacticLabel.UNKNOWN, TacticLabel.UNPROVED_CLAIM) and key in reference_steps:
+            if relabelled[index].label in RELABELLED and key in reference_steps:
                 closed = max(0, len(previous) - len(goals))
                 node_id = relabelled[index].node_id
                 relabelled[index] = TacticOutcome(TacticLabel.PROOF_GRAPH, node_id, closed, reference_steps[key])

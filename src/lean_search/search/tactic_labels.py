@@ -1,12 +1,14 @@
 """Per-tactic labels of policy samples: the state each executed tactic reached, judged against the proof graph."""
 
 import dataclasses
+import re
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
-from lean_search.lean.hypotheses import adds_only_closed_form_hypotheses, adds_only_redundant_hypotheses
+from lean_search.lean.hypotheses import adds_only_closed_form_hypotheses, adds_only_redundant_hypotheses, goal_parts
+from lean_search.lean.text import normalize_goal, split_tactics
 from lean_search.search.graph_labels import (
     EdgeKind,
     GoalKey,
@@ -30,9 +32,9 @@ class TacticLabel(StrEnum):
     # Unchanged, or back to an earlier state of its path: the block's own states, the node and its ancestors.
     NO_PROGRESS = "no_progress"
     # Adds only hypotheses whose types the context already has, or reflexive ones; off the proof graph also closed-form
-    # ones, which mention no variable or hypothesis of the context (`0 < (1:ℝ)`).
+    # ones: comparisons of numerals (`0 < (1:ℝ)`) in a context with names.
     REDUNDANT_HYPOTHESIS = "redundant_hypothesis"
-    # Would be off graph or unknown, but added goals (a bare `have h : A`) that no state reachable from it closes.
+    # Would be off graph or unknown, but made a claim (`Claim`: a bare `have h : A`, `suffices`) the tree never proves.
     UNPROVED_CLAIM = "unproved_claim"
     # The first tactic Lean rejected (timeouts included), an unverified proof's last one, a sample without a block.
     FAILING = "failing"
@@ -49,6 +51,8 @@ class TacticOutcome:
     goals_closed: int = 0
     # On the proof graph: the fewest top-level tactics from the state to a verified proof (0 once proved).
     remaining_steps: int | None = None
+    # Made a claim the rest of its block does not prove, whether the tree proves it or not.
+    leaves_claim_open: bool = False
 
 
 @dataclass(frozen=True)
@@ -71,31 +75,84 @@ class TacticLabelCounts:
         return sum(dataclasses.astuple(self))
 
 
+CLAIM_TACTIC = re.compile(r"(?:have|obtain|suffices|replace)(?![\w'!?])")
+
+
+@dataclass(frozen=True)
+class Claim:
+    """A proposition the model invented and made the first goal, in the context before its tactic: `have h : A` (a
+    flattened `have h : A := by` too), `obtain ⟨x, hx⟩ : A` and `replace h : A` add it, `suffices h : A by …` replaces
+    the goal with it. The goals of `constructor`, `cases`, `induction`, `by_cases`, `apply` or `refine` are none."""
+
+    # Normalized.
+    goal: str
+    # Goals of the state with the claim.
+    goals: int
+    # The state once the claim is proved, when it added a goal (not `suffices`).
+    continuation: GoalKey | None
+
+
+def claim_of(tactic: str, before: Sequence[str], after: Sequence[str]) -> Claim | None:
+    if not before or not after or CLAIM_TACTIC.match(tactic) is None:
+        return None
+    stated = goal_parts(before[0])
+    opened = goal_parts(after[0])
+    if opened.hypothesis_types != stated.hypothesis_types or opened.target == stated.target:
+        return None
+    match len(after) - len(before):
+        case 1:
+            continuation = goal_key(after[1:])
+        case 0:
+            continuation = None
+        case _:
+            return None
+    return Claim(normalize_goal(after[0]), len(after), continuation)
+
+
+def proves(claim: Claim, goals: Sequence[str]) -> bool:
+    """Fewer goals than the claim's state, the claim's goal not among them: closing the main goal after a `swap` does
+    not count."""
+    return len(goals) < claim.goals and claim.goal not in (normalize_goal(goal) for goal in goals)
+
+
 class ClaimProofs:
-    """Whether a state's added goals get proved. Lean works on the first goal, which is the added one, so they are
-    proved once a state reachable from it over forward edges (a later state of its block, a descendant, a state a
-    block from either ran through) has no more goals than the state before the tactic that added them."""
+    """Whether a claim gets proved: a state reachable from it over forward edges (a later state of its block, a
+    descendant, a state a block from either ran through) proves it, or the tree has its continuation anywhere (a
+    sibling's `have h : A := proof`)."""
 
     def __init__(self, record: TreeRecord, successors: Mapping[int, Mapping[int, int]]) -> None:
         """`successors`: `GraphLabels.successors`."""
         self.successors = successors
-        self.own_fewest_goals = [len(node.goals) for node in record.nodes]
+        self.states: list[list[tuple[str, ...]]] = [[node.goals] for node in record.nodes]
         for edge in record.edges:
-            for goals in edge.tactic_goals:
-                if goals:
-                    self.own_fewest_goals[edge.parent_id] = min(self.own_fewest_goals[edge.parent_id], len(goals))
+            self.states[edge.parent_id].extend(goals for goals in edge.tactic_goals if goals)
+        self.own_fewest_goals = [min(len(goals) for goals in states) for states in self.states]
+        self.keys = {goal_key(goals) for states in self.states for goals in states}
+        self.reachable: dict[int, dict[int, int]] = {}
         self.fewest_goals: dict[int, int] = {}
+
+    def reachable_from(self, node_id: int) -> dict[int, int]:
+        if node_id not in self.reachable:
+            self.reachable[node_id] = shortest_distances([node_id], self.successors)
+        return self.reachable[node_id]
 
     def fewest_goals_from(self, node_id: int) -> int:
         if node_id not in self.fewest_goals:
-            reachable = shortest_distances([node_id], self.successors)
-            self.fewest_goals[node_id] = min(self.own_fewest_goals[reached] for reached in reachable)
+            self.fewest_goals[node_id] = min(self.own_fewest_goals[reached] for reached in self.reachable_from(node_id))
         return self.fewest_goals[node_id]
 
-    def proved(self, goals_before: int, later_states: Sequence[tuple[str, ...]], node_ids: Iterable[int]) -> bool:
+    def proved_from(self, claim: Claim, node_id: int) -> bool:
+        return self.fewest_goals_from(node_id) < claim.goals and any(
+            proves(claim, goals) for reached in self.reachable_from(node_id) for goals in self.states[reached]
+        )
+
+    def proved(self, claim: Claim, later_states: Sequence[tuple[str, ...]], node_ids: Iterable[int]) -> bool:
         """`later_states`: those of the block after the claim; `node_ids`: the nodes the block goes on from."""
-        reached = [len(goals) for goals in later_states] + [self.fewest_goals_from(node_id) for node_id in node_ids]
-        return min(reached) <= goals_before
+        return (
+            any(proves(claim, goals) for goals in later_states)
+            or claim.continuation in self.keys
+            or any(self.proved_from(claim, node_id) for node_id in node_ids)
+        )
 
 
 class TacticGraph:
@@ -192,29 +249,36 @@ class TacticGraph:
                 earlier_keys.add(key)
             states.append(goals)
             previous = goals
-        return self.with_unproved_claims(edge, outcomes, states)
+        return self.with_claims(edge, outcomes, states)
 
-    def with_unproved_claims(
+    def with_claims(
         self, edge: Edge, outcomes: Sequence[TacticOutcome], states: Sequence[tuple[str, ...] | None]
     ) -> tuple[TacticOutcome, ...]:
-        """`states`: those of the applied tactics, None where not recorded."""
+        """`states`: those of the applied tactics, None where not recorded. A claim its block leaves open is marked, and
+        off the proof graph one the tree never proves is an unproved claim."""
         judged = list(outcomes)
+        texts = tactic_texts(edge)
         befores = [self.record.nodes[edge.parent_id].goals, *states]
         for index, goals in enumerate(states):
-            outcome = outcomes[index]
             before = befores[index]
-            if (
-                outcome.label not in (TacticLabel.OFF_GRAPH, TacticLabel.UNKNOWN)
-                or goals is None
-                or before is None
-                or len(goals) <= len(before)
-            ):
+            if goals is None or before is None or index >= len(texts):
                 continue
-            assert edge.target_id is not None, edge.edge_id
+            claim = claim_of(texts[index], before, goals)
             later = [state for state in states[index + 1 :] if state is not None]
-            node_ids = {edge.target_id} | ({outcome.node_id} if outcome.node_id is not None else set())
-            if not self.claims.proved(len(before), later, node_ids):
-                judged[index] = TacticOutcome(TacticLabel.UNPROVED_CLAIM, outcome.node_id)
+            if claim is None or any(proves(claim, state) for state in later):
+                continue
+            outcome = dataclasses.replace(outcomes[index], leaves_claim_open=True)
+            assert edge.target_id is not None, edge.edge_id
+            node_ids = {edge.target_id} | {
+                self.node_by_key[key] for key in map(goal_key, later) if key in self.node_by_key
+            }
+            if outcome.node_id is not None:
+                node_ids.add(outcome.node_id)
+            if outcome.label in (TacticLabel.OFF_GRAPH, TacticLabel.UNKNOWN) and not self.claims.proved(
+                claim, later, node_ids
+            ):
+                outcome = TacticOutcome(TacticLabel.UNPROVED_CLAIM, outcome.node_id, leaves_claim_open=True)
+            judged[index] = outcome
         return tuple(judged)
 
     def tactic_goals(self, edge: Edge, index: int, last: bool) -> tuple[str, ...] | None:
@@ -252,6 +316,13 @@ class TacticGraph:
         if self.is_off_graph_evidence(node_id):
             return TacticOutcome(TacticLabel.OFF_GRAPH, node_id)
         return TacticOutcome(TacticLabel.UNKNOWN, node_id)
+
+
+def tactic_texts(edge: Edge) -> list[str]:
+    """The executed tactics' texts; in records without them the block's top-level tactics."""
+    if edge.executed_tactics:
+        return [piece.text for piece in edge.executed_tactics]
+    return split_tactics(edge.text)
 
 
 def policy_tactics(

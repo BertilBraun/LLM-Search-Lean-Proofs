@@ -31,12 +31,14 @@ def sample(
     ]
     outcomes[-1] = TacticOutcome(labels[-1], goals_closed=closed, remaining_steps=outcomes[-1].remaining_steps)
     rewards = [tactic_reward(outcome, REWARDS, NODE_STEPS) for outcome in outcomes]
+    block = judged_in_block(rewards, REWARDS)
     return GroupSample(
         text=text,
         edge_ids=(edge_id,),
         multiplicity=multiplicity,
         kind=EdgeKind.NEW_STATE,
-        tactics=judged_in_block(rewards, REWARDS),
+        tactics=block.tactics,
+        closing=block.closing,
     )
 
 

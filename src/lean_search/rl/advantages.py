@@ -24,7 +24,8 @@ class SampleAdvantages:
     # Per executed tactic: its gain within the block, else (the anchor) its reward minus the first-tactic baseline; None
     # for unknown and masked tactics. They add up to score minus the first-tactic baseline.
     tactics: tuple[float | None, ...]
-    # The closing fence and end of turn: 0 after a complete block (stopping keeps the state reached), else None.
+    # The closing fence and end of turn after a complete block: 0 (stopping keeps the state reached), -c when it stops
+    # on an open claim; None after a failure.
     closing: float | None
 
 
@@ -70,7 +71,7 @@ def sample_advantages(
     return SampleAdvantages(
         None if score is None or baseline is None else score - baseline.total,
         tuple(None if parts is None else parts.total for parts in tactics),
-        0.0 if sample.complete else None,
+        sample.closing.total if sample.complete else None,
     )
 
 

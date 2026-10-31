@@ -1,5 +1,5 @@
-"""Hypotheses in pretty-printed goals: names, types, redundant and closed-form additions, and `rename_i` for
-inaccessible names."""
+"""Hypotheses in pretty-printed goals: names, types, redundant and closed-form (numeral comparison) additions, and
+`rename_i` for inaccessible names."""
 
 import re
 from collections import Counter
@@ -13,7 +13,9 @@ _INACCESSIBLE_NAME = re.compile(rf"[^\s✝]*✝[{_SUPERSCRIPT_DIGITS}]*")
 _OPENING_BRACKETS = "([{⟨"
 _CLOSING_BRACKETS = ")]}⟩"
 _SYMMETRIC_RELATIONS = (" = ", " ↔ ")
-_NAME_CHARACTERS = rf"\w'!?{INACCESSIBLE_MARK}{_SUPERSCRIPT_DIGITS}"
+_COMPARISONS = (" = ", " ≠ ", " < ", " ≤ ", " > ", " ≥ ")
+_NUMERAL = re.compile(r"-?\d+(\.\d+)?")
+_NUMBER_TYPES = frozenset({"ℕ", "ℤ", "ℚ", "ℝ", "ℂ"})
 
 
 @dataclass(frozen=True)
@@ -78,10 +80,31 @@ def is_reflexive(proposition: str) -> bool:
     return False
 
 
-def mentions(proposition: str, name: str) -> bool:
-    """The name occurs as a whole identifier (`x` in `x.1 + y`, not in `xs` or `Real.x`)."""
-    pattern = rf"(?<![{_NAME_CHARACTERS}.]){re.escape(name)}(?![{_NAME_CHARACTERS}])"
-    return re.search(pattern, proposition) is not None
+def is_numeral(term: str) -> bool:
+    """A numeral, or a cast of one: `2`, `-1`, `(1:ℝ)`, `((2 : ℕ) : ℝ)`, `↑3`, in any parentheses."""
+    term = term.strip()
+    if _NUMERAL.fullmatch(term):
+        return True
+    if term.startswith("↑"):
+        return is_numeral(term[1:])
+    if not (term.startswith("(") and term.endswith(")")):
+        return False
+    match top_level_parts(term[1:-1], ":"):
+        case [inner]:
+            return is_numeral(inner)
+        case [inner, number_type]:
+            return number_type.strip() in _NUMBER_TYPES and is_numeral(inner)
+        case _:
+            return False
+
+
+def is_numeral_comparison(proposition: str) -> bool:
+    """`0 < (1:ℝ)`, `2 ≤ 3`, `(4:ℕ) = 4`: one comparison or equality of numerals and casts of numerals."""
+    for relation in _COMPARISONS:
+        sides = top_level_parts(proposition, relation)
+        if len(sides) == 2 and all(is_numeral(side) for side in sides):
+            return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -96,8 +119,8 @@ class AddedHypothesis:
 
     @property
     def closed_form(self) -> bool:
-        """Mentions no variable or hypothesis of the context, like `0 < (1:ℝ)`."""
-        return not any(mentions(self.proposition, name) for name in self.before.hypothesis_names)
+        """A comparison of numerals like `0 < (1:ℝ)`, in a context with names: a statement without any is exempt."""
+        return bool(self.before.hypothesis_names) and is_numeral_comparison(self.proposition)
 
 
 def added_hypotheses(before: Sequence[str], after: Sequence[str]) -> tuple[AddedHypothesis, ...] | None:

@@ -7,8 +7,8 @@ from lean_search.lean.hypotheses import (
     goal_parts,
     has_inaccessible_names,
     hypothesis_names,
+    is_numeral_comparison,
     is_reflexive,
-    mentions,
     renaming_tactic,
 )
 
@@ -108,8 +108,35 @@ def test_adds_only_closed_form_hypotheses(after: tuple[str, ...], closed_form: b
 
 
 @pytest.mark.parametrize(
-    ("proposition", "name", "mentioned"),
-    [("x.1 < 2", "x", True), ("xs.length = 0", "x", False), ("Real.x = 1", "x", False), ("h₀ = h₁", "h", False)],
+    ("before", "after"),
+    [
+        ("⊢ 2 ^ 10 % 7 = 2", "h : 2 ^ 10 = 1024\n⊢ 2 ^ 10 % 7 = 2"),
+        ("⊢ 2 * 3 = 6", "h : (2:ℝ) ≠ 0\n⊢ 2 * 3 = 6"),
+        ("x : ℝ\nh₀ : x = Real.pi / 2\n⊢ 1 < x", "x : ℝ\nh₀ : x = Real.pi / 2\nhπ : 3 < Real.pi\n⊢ 1 < x"),
+        ("a : ZMod 7\n⊢ a ^ 7 = a", "a : ZMod 7\ninst : Fact (Nat.Prime 7)\n⊢ a ^ 7 = a"),
+        (
+            "x : ℝ\n⊢ Real.sqrt 2 * x = 4",
+            "x : ℝ\nh : Real.sqrt 8 = 2 * Real.sqrt 2\n⊢ Real.sqrt 2 * x = 4",
+        ),
+        ("x : ℝ\n⊢ x ^ 2 ≥ 0", "x : ℝ\nh : ∀ (y : ℝ), (y - 1) ^ 2 ≥ 0\n⊢ x ^ 2 ≥ 0"),
+        ("x : ℕ\n⊢ x ^ 10 % 7 = 2", "x : ℕ\nh : 2 ^ 10 = 1024\n⊢ x ^ 10 % 7 = 2"),
+    ],
+    ids=["no locals", "no locals, numerals", "pi", "instance", "square roots", "bound variable", "computation"],
 )
-def test_mentions_whole_names_only(proposition: str, name: str, mentioned: bool) -> None:
-    assert mentions(proposition, name) is mentioned
+def test_useful_facts_are_no_closed_form_filler(before: str, after: str) -> None:
+    assert not adds_only_closed_form_hypotheses((before,), (after,))
+
+
+@pytest.mark.parametrize(
+    "proposition",
+    ["0 < (1:ℝ)", "2 ≤ 3", "(4:ℕ) = 4", "0 < ((0:ℝ))", "((2 : ℕ) : ℝ) ≠ 0", "↑3 > (-1:ℤ)", "(0.5:ℝ) ≥ 0"],
+)
+def test_numeral_comparisons_are_closed_form(proposition: str) -> None:
+    assert is_numeral_comparison(proposition)
+
+
+@pytest.mark.parametrize(
+    "proposition", ["0 < x", "2 ^ 10 = 1024", "1 + 1 = 2", "(1) + (2) = 3", "Nat.Prime 7", "2 ∣ 4"]
+)
+def test_other_propositions_are_no_numeral_comparison(proposition: str) -> None:
+    assert not is_numeral_comparison(proposition)
