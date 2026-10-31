@@ -286,9 +286,10 @@ rollback_window_phases = 4
 # The sampled blocks' valid-Lean rate per phase (free, from the training trees) below 0.85 of the first phases': the
 # held-out states run at the next pause.
 min_valid_block_fraction = 0.85
-# Warnings on the reward hacking of phases 1-10 (owner, 2026-10-31), from the first round's samples against the first
-# phases' (their trees measured again at the first start that lacks them): blocks opening with a bare `have` above
-# 1.5x, their open claims proved below 0.5x, the median explanation characters before the fence below 0.7x.
+# Warnings on the reward hacking of phases 1-10 (owner, 2026-10-31), from the first round's samples (those from below
+# the band when a phase has any) against the first phases' (their trees measured once in the background when their
+# health lines lack them): blocks opening with a bare `have` above 1.5x, their open claims proved below 0.5x, the
+# median explanation characters before the fence below 0.7x.
 max_bare_have_factor = 1.5
 min_claim_proved_fraction = 0.5
 min_explanation_characters_fraction = 0.7
