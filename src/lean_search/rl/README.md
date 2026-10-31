@@ -135,8 +135,9 @@ the data-collecting policy (k3) and to the starting policy (k1 = log π − log 
 `kl_coefficient` > 0 (0.01 in `phase.toml` since 2026-10-31, after the drift of phases 1–10) the loss adds
 `kl_coefficient` × Σ weight · k3 / (sequences × 256), k3 = e^r − r − 1 with r = log π_ref − log π on every trained token
 of every GRPO sequence (feedback rounds and zero-advantage closing tokens included, inserted tokens not), under the same
-normalization as the policy loss. r is capped at 20 nats (`MAX_PENALTY_LOG_RATIO`): e^r overflows fp32 above ~88 and
-one such token would make the step NaN; below 0 k3 is near linear, so a token the policy now prefers far more than the
+normalization as the policy loss. Above 5 nats (`MAX_PENALTY_LOG_RATIO`) k3 continues linearly with its slope there:
+e^r would let one token outweigh a step's GRPO signal (and overflow above ~88), and clamping would leave the most
+drifted tokens no pull (review R); below 0 k3 is near linear, so a token the policy now prefers far more than the
 reference keeps its pull back. Every sequence is then scored under the reference (one more gradient-free forward over
 the phase's sequences, sharded over the ranks and gathered like the old log-probabilities; each rank swaps the
 reference weights in place). Replay examples are not penalised: they are SFT data, not samples of the policy, so k3 on

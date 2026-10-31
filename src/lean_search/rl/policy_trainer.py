@@ -1,6 +1,7 @@
 """GRPO of the policy LoRA: a PPO-clipped objective per sampled token, at the sampling temperature, with replay."""
 
 import contextlib
+import math
 import random
 import time
 from collections.abc import Callable, Iterator, Sequence
@@ -52,8 +53,9 @@ from lean_search.training.sft_data import IGNORE_INDEX, TokenizedExample
 SCORE_CHUNK_POSITIONS = 512
 # PEFT's name of the adapter that trains.
 TRAINED_ADAPTER_NAME = "default"
-# k3's e^r overflows fp32 above ~88 nats (a NaN step); below 0 k3 is near linear, so only the top is capped.
-MAX_PENALTY_LOG_RATIO = 20.0
+# Above this many nats of reference preference k3 continues linearly with its slope there: e^r's gradient would let one
+# token outweigh a step's GRPO signal (e^20 ~ 5e8), and clamping instead would leave the most drifted tokens no pull.
+MAX_PENALTY_LOG_RATIO = 5.0
 
 
 class ReferencePolicy(StrEnum):
@@ -200,8 +202,10 @@ def kl_estimate(log_ratio: torch.Tensor) -> torch.Tensor:
 
 
 def kl_penalties(log_probabilities: torch.Tensor, reference_log_probabilities: torch.Tensor) -> torch.Tensor:
-    """k3 of KL(policy || reference) per token, at most `MAX_PENALTY_LOG_RATIO` nats of reference preference."""
-    return kl_estimate((reference_log_probabilities - log_probabilities).clamp(max=MAX_PENALTY_LOG_RATIO))
+    """k3 of KL(policy || reference) per token, linear beyond `MAX_PENALTY_LOG_RATIO` nats of reference preference."""
+    log_ratio = reference_log_probabilities - log_probabilities
+    capped = log_ratio.clamp(max=MAX_PENALTY_LOG_RATIO)
+    return kl_estimate(capped) + math.expm1(MAX_PENALTY_LOG_RATIO) * (log_ratio - capped)
 
 
 def chunk_scores(

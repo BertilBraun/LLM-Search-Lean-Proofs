@@ -5,6 +5,7 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from lean_search.rl.policy_trainer import (  # noqa: E402
+    MAX_PENALTY_LOG_RATIO,
     chunk_scores,
     clipped_policy_losses,
     kl_estimate,
@@ -72,6 +73,16 @@ def penalty_gradient(log_probability: float, reference_log_probability: float) -
 
 def test_the_kl_penalty_stays_finite_where_the_reference_prefers_a_token_by_100_nats() -> None:
     assert math.isfinite(penalty_gradient(-100.0, 0.0))
+
+
+def test_the_kl_penalty_pulls_up_a_token_the_reference_prefers_by_100_nats_with_its_slope_at_the_cap() -> None:
+    assert penalty_gradient(-100.0, 0.0) == pytest.approx(-math.expm1(MAX_PENALTY_LOG_RATIO))
+
+
+def test_the_kl_penalty_is_continuous_at_its_cap() -> None:
+    below = kl_penalties(torch.tensor([-MAX_PENALTY_LOG_RATIO + 1e-3]), torch.tensor([0.0])).item()
+    above = kl_penalties(torch.tensor([-MAX_PENALTY_LOG_RATIO - 1e-3]), torch.tensor([0.0])).item()
+    assert above - below == pytest.approx(2e-3 * math.expm1(MAX_PENALTY_LOG_RATIO), rel=1e-2)
 
 
 def test_the_kl_penalty_pulls_down_a_token_the_policy_prefers_by_30_nats() -> None:

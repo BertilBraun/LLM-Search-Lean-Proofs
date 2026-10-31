@@ -1060,7 +1060,7 @@ Paper names in the last three rows are from memory and still need checking befor
   NLL on the SFT data doubled and the entropy fell from 0.36 to 0.23. Rolled back to version 4, then a new recipe:
   35% of the statements fed from verified ones below the band (`below_band_share`; not yet fed first, then the least
   recently searched; outside the cohort that moves the band, trained like the rest), a k3 KL penalty of 0.01 to the
-  starting policy on every GRPO sequence (replay not penalised; log ratio capped at 20 nats), and policy lr 3e-5 → 2e-5.
+  starting policy on every GRPO sequence (replay not penalised; k3 linear beyond 5 nats of log ratio), and policy lr 3e-5 → 2e-5.
 - Serving precision: fp16-merged vs bf16-merged vs unmerged LoRA, decided by the node test against fp32.
 - Whether the four-GPU pause with the persistent trainer meets its ~1 min fixed part on the node (smoke cycle: pause
   segments, `compiled_graphs` 0 after the first phase, the wake's memory next to the parked ranks' CUDA contexts, the
