@@ -1,7 +1,8 @@
 """The loop's trees replayed under the reward of 2026-10-31 against the rules phases 1-12 trained with
-(src/lean_search/rl/reward_replay.py), on the CPU: per phase the tactic label shares, the mean scores of bare claims,
-failed attempts at a claim, `have … :=` blocks and real closers with their ordering checks, the samples and groups whose
-advantage changes sign, and the drops.
+(src/lean_search/rl/reward_replay.py), on the CPU: per phase the tactic label shares; the mean scores of bare claims,
+attempts at invented and at provable claims, `have … :=` blocks and real closers, old against new over the same
+samples; the ordering checks as violated pairs of samples within a group, under both rules; the samples, tactics and
+groups whose advantage changes sign; and the drops. Any `FAILS` is a real inversion inside a group.
 
     nice -n 10 python experiments/reward_replay.py --trees /workspace/runs/grpo_loop_v1/trees --workers 6 \
         --output /workspace/runs/grpo_reward_replay

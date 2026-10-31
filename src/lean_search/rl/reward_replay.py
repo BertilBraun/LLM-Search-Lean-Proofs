@@ -1,7 +1,8 @@
 """The loop's trees labelled and scored again offline: the reward of 2026-10-31 against the rules phases 1-12 trained
 with (48af4c8: no unproved claims or closed-form filler, unknown states untrained, explored off graph 0). Per tree the
-tactic labels under both, the mean scores of bare claims, failed attempts at a claim, `have … :=` blocks and real
-closers, the samples and groups whose advantage changes sign, and the drops (tactic advantages ≤ −1)."""
+tactic labels under both; the mean scores of bare claims, attempts at claims, `have … :=` blocks and real closers, old
+against new over the same samples; the ordering checks as pairs of samples within a group; the samples, tactics and
+groups whose advantage changes sign; and the drops (tactic advantages ≤ −1)."""
 
 import dataclasses
 import zlib
@@ -14,7 +15,6 @@ from typing import Any
 from lean_search.lean.hypotheses import adds_only_redundant_hypotheses
 from lean_search.rl.advantages import ZERO_ADVANTAGE, CreditMode, GroupAdvantages, group_advantages
 from lean_search.rl.grpo_groups import (
-    NO_GAIN,
     GroupSample,
     PolicyGroup,
     RewardConfig,
@@ -37,8 +37,10 @@ class Category(StrEnum):
     # Opening with a bare `have h : A`; of those, the blocks ending complete with the claim open.
     BARE_HAVE = "bare have"
     OPEN_BARE_CLAIM = "open bare claim"
-    # The first tactic made a claim and the block failed before proving it.
-    FAILED_ATTEMPT = "failed attempt"
+    # The first tactic made a claim its block leaves open after trying more (failed, or complete with further tactics):
+    # one the tree never proves, and one it proves.
+    INVENTED_ATTEMPT = "attempt at an invented claim"
+    PROVABLE_ATTEMPT = "attempt at a provable claim"
     # Opening with `have … :=` (a claim with its proof).
     PROOF_HAVE = "have … :="
     # Reaching a proof.
@@ -50,20 +52,45 @@ CATEGORIES = tuple(Category)
 
 @dataclass(frozen=True)
 class Scores:
-    """Multiplicity-weighted: the samples, those with an old score, and the scores' sums."""
+    """Multiplicity-weighted: the samples scored under both rules with both sums, and those scored under the new
+    rules only with their sum."""
 
     samples: int = 0
-    old_scored: int = 0
     old_sum: float = 0.0
     new_sum: float = 0.0
+    newly_scored: int = 0
+    newly_scored_sum: float = 0.0
 
     @property
     def old_mean(self) -> float | None:
-        return self.old_sum / self.old_scored if self.old_scored else None
+        return self.old_sum / self.samples if self.samples else None
 
     @property
     def new_mean(self) -> float | None:
         return self.new_sum / self.samples if self.samples else None
+
+    @property
+    def newly_scored_mean(self) -> float | None:
+        return self.newly_scored_sum / self.newly_scored if self.newly_scored else None
+
+
+@dataclass(frozen=True)
+class SignChanges:
+    """Multiplicity-weighted advantages known under both rules whose sign changed (zero counting as one), the flips
+    from positive to negative and back, and the advantages known under the new rules only."""
+
+    changed: int = 0
+    to_negative: int = 0
+    to_positive: int = 0
+    newly_scored: int = 0
+
+
+@dataclass(frozen=True)
+class PairCounts:
+    """Ordered pairs of samples of one group an ordering check compares, weighted by both multiplicities."""
+
+    pairs: int = 0
+    violations: int = 0
 
 
 @dataclass(frozen=True)
@@ -75,26 +102,100 @@ class Drops:
 
 
 @dataclass(frozen=True)
+class ReplaySample:
+    """A group sample as the ordering checks see it, under one rule."""
+
+    score: float | None
+    multiplicity: int
+    labels: tuple[TacticLabel, ...]
+    complete: bool
+    categories: frozenset[Category]
+
+
+@dataclass(frozen=True)
+class CategoryOrdering:
+    """Every sample of `higher` scores above (with `strict` off: at least) every sample of `lower` in its group that
+    is not in `higher` too."""
+
+    higher: Category
+    lower: Category
+    strict: bool
+
+    @property
+    def text(self) -> str:
+        return f"{self.higher} {'>' if self.strict else '≥'} {self.lower}"
+
+    def holds(self, high: ReplaySample, low: ReplaySample) -> bool | None:
+        """None when the pair is not compared."""
+        if self.higher not in high.categories or self.lower not in low.categories or self.higher in low.categories:
+            return None
+        if high.score is None or low.score is None:
+            return None
+        return high.score > low.score if self.strict else high.score >= low.score - ZERO_ADVANTAGE
+
+
+# A valid tactic that is no wasted step and makes no claim.
+VALID_STEP_LABELS = (TacticLabel.PROOF_GRAPH, TacticLabel.OFF_GRAPH, TacticLabel.UNKNOWN)
+
+
+@dataclass(frozen=True)
+class ContinuationOrdering:
+    """A complete block going on from where another block's error is, with the same labels before it, scores at least
+    the error: from there on with valid steps only, or with any tactics after an open claim."""
+
+    @property
+    def text(self) -> str:
+        return "valid continuation ≥ error there"
+
+    def holds(self, valid: ReplaySample, failed: ReplaySample) -> bool | None:
+        if not valid.complete or TacticLabel.FAILING not in failed.labels:
+            return None
+        position = failed.labels.index(TacticLabel.FAILING)
+        if len(valid.labels) <= position or valid.labels[:position] != failed.labels[:position]:
+            return None
+        after_claim = TacticLabel.UNPROVED_CLAIM in failed.labels[:position]
+        if not after_claim and any(label not in VALID_STEP_LABELS for label in valid.labels[position:]):
+            return None
+        if valid.score is None or failed.score is None:
+            return None
+        return valid.score >= failed.score - ZERO_ADVANTAGE
+
+
+ORDERING_CHECKS: tuple[CategoryOrdering | ContinuationOrdering, ...] = (
+    CategoryOrdering(Category.CLOSER, Category.PROOF_HAVE, strict=True),
+    CategoryOrdering(Category.CLOSER, Category.INVENTED_ATTEMPT, strict=True),
+    CategoryOrdering(Category.PROVABLE_ATTEMPT, Category.INVENTED_ATTEMPT, strict=False),
+    CategoryOrdering(Category.INVENTED_ATTEMPT, Category.OPEN_BARE_CLAIM, strict=False),
+    CategoryOrdering(Category.PROOF_HAVE, Category.OPEN_BARE_CLAIM, strict=False),
+    ContinuationOrdering(),
+)
+
+
+def no_pairs() -> tuple[PairCounts, ...]:
+    return tuple(PairCounts() for _ in ORDERING_CHECKS)
+
+
+@dataclass(frozen=True)
 class TreeReplay:
     trees: int = 0
     unreadable_trees: int = 0
     groups: int = 0
-    # Groups with a sample whose advantage changed sign (an advantage under both rules); groups trained under one
-    # rule only.
+    # Groups with a sample or tactic whose advantage changed sign; groups trained under one rule only.
     groups_changed: int = 0
     groups_newly_trainable: int = 0
     groups_no_longer_trainable: int = 0
-    # Multiplicity-weighted samples, those with an advantage under the new rules only, those whose advantage changed
-    # sign (zero counting as one), and of those the flips from positive to negative and back.
+    # Multiplicity-weighted samples; the sign changes of their explanation advantages (score minus baseline) and of
+    # their tactics' advantages.
     samples: int = 0
-    samples_newly_scored: int = 0
-    samples_sign_changed: int = 0
-    samples_to_negative: int = 0
-    samples_to_positive: int = 0
+    sample_signs: SignChanges = field(default_factory=SignChanges)
+    tactic_signs: SignChanges = field(default_factory=SignChanges)
     old_labels: TacticLabelCounts = field(default_factory=TacticLabelCounts)
     new_labels: TacticLabelCounts = field(default_factory=TacticLabelCounts)
     # Per `CATEGORIES`.
     category_scores: tuple[Scores, ...] = tuple(Scores() for _ in CATEGORIES)
+    # Per `ORDERING_CHECKS`, under the new rules and the old.
+    orderings: tuple[PairCounts, ...] = field(default_factory=no_pairs)
+    old_orderings: tuple[PairCounts, ...] = field(default_factory=no_pairs)
     old_drops: Drops = field(default_factory=Drops)
     new_drops: Drops = field(default_factory=Drops)
 
@@ -116,11 +217,15 @@ def added(first: Any, second: Any) -> Any:
     return first + second
 
 
-def total(replays: Sequence[TreeReplay]) -> TreeReplay:
-    result = TreeReplay()
-    for replay in replays:
-        result = added(result, replay)
+def added_all(items: Sequence[Any], empty: Any) -> Any:
+    result = empty
+    for item in items:
+        result = added(result, item)
     return result
+
+
+def total(replays: Sequence[TreeReplay]) -> TreeReplay:
+    return added_all(replays, TreeReplay())
 
 
 def evidence_label(graph: TacticGraph, outcome: TacticOutcome) -> TacticOutcome:
@@ -190,26 +295,27 @@ def old_group(
     for sample in group.samples:
         outcomes = tactics[labels.edges[sample.edge_ids[0]].executed_edge_id]
         rewards = [old_tactic_reward(outcome, config, node_steps) for outcome in outcomes]
-        samples.append(dataclasses.replace(sample, tactics=old_judged_in_block(rewards, config), closing=NO_GAIN))
+        samples.append(dataclasses.replace(sample, tactics=old_judged_in_block(rewards, config)))
     return dataclasses.replace(group, samples=tuple(samples))
 
 
-def categories(sample: GroupSample, outcomes: Sequence[TacticOutcome]) -> list[Category]:
+def categories(sample: GroupSample, outcomes: Sequence[TacticOutcome]) -> frozenset[Category]:
     """`outcomes`: the new labels."""
-    found = []
+    found = set()
     first = outcomes[0]
     first_tactic = opening(sample.text)
     if is_bare_have(first_tactic):
-        found.append(Category.BARE_HAVE)
+        found.add(Category.BARE_HAVE)
         if first.label == TacticLabel.UNPROVED_CLAIM and sample.complete:
-            found.append(Category.OPEN_BARE_CLAIM)
-    if first.leaves_claim_open and not sample.complete:
-        found.append(Category.FAILED_ATTEMPT)
+            found.add(Category.OPEN_BARE_CLAIM)
+    if first.leaves_claim_open and (not sample.complete or len(outcomes) > 1):
+        invented = first.label == TacticLabel.UNPROVED_CLAIM
+        found.add(Category.INVENTED_ATTEMPT if invented else Category.PROVABLE_ATTEMPT)
     if is_proof_have(first_tactic):
-        found.append(Category.PROOF_HAVE)
+        found.add(Category.PROOF_HAVE)
     if any(outcome.label == TacticLabel.PROOF_GRAPH and outcome.remaining_steps == 0 for outcome in outcomes):
-        found.append(Category.CLOSER)
-    return found
+        found.add(Category.CLOSER)
+    return frozenset(found)
 
 
 def sign(value: float | None) -> int | None:
@@ -218,8 +324,14 @@ def sign(value: float | None) -> int | None:
     return 0 if abs(value) <= ZERO_ADVANTAGE else (1 if value > 0 else -1)
 
 
-def sign_changed(old: int | None, new: int | None) -> bool:
-    return old is not None and new is not None and old != new
+def sign_changes(old: float | None, new: float | None, weight: int) -> SignChanges:
+    old_sign, new_sign = sign(old), sign(new)
+    return SignChanges(
+        changed=weight * (old_sign is not None and new_sign is not None and old_sign != new_sign),
+        to_negative=weight * (old_sign == 1 and new_sign == -1),
+        to_positive=weight * (old_sign == -1 and new_sign == 1),
+        newly_scored=weight * (old_sign is None and new_sign is not None),
+    )
 
 
 def drops(groups: Sequence[PolicyGroup], advantages: Sequence[GroupAdvantages]) -> Drops:
@@ -238,27 +350,45 @@ def drops(groups: Sequence[PolicyGroup], advantages: Sequence[GroupAdvantages]) 
     )
 
 
-def sample_replay(
-    sample: GroupSample,
-    old_sample: GroupSample,
-    old_sequence: float | None,
-    new_sequence: float | None,
-    outcomes: Sequence[TacticOutcome],
-) -> TreeReplay:
+def category_scores(sample: GroupSample, old_sample: GroupSample, found: frozenset[Category]) -> tuple[Scores, ...]:
     weight = sample.multiplicity
-    old_sign, new_sign = sign(old_sequence), sign(new_sequence)
-    old_score = old_sample.score
-    assert sample.score is not None
-    scores = Scores(weight, weight * (old_score is not None), weight * (old_score or 0.0), weight * sample.score)
-    found = categories(sample, outcomes)
-    return TreeReplay(
-        samples=weight,
-        samples_newly_scored=weight * (old_sign is None and new_sign is not None),
-        samples_sign_changed=weight * sign_changed(old_sign, new_sign),
-        samples_to_negative=weight * (old_sign == 1 and new_sign == -1),
-        samples_to_positive=weight * (old_sign == -1 and new_sign == 1),
-        category_scores=tuple(scores if category in found else Scores() for category in CATEGORIES),
+    new_score, old_score = sample.score, old_sample.score
+    assert new_score is not None
+    scores = (
+        Scores(newly_scored=weight, newly_scored_sum=weight * new_score)
+        if old_score is None
+        else Scores(weight, weight * old_score, weight * new_score)
     )
+    return tuple(scores if category in found else Scores() for category in CATEGORIES)
+
+
+def ordering_pairs(samples: Sequence[ReplaySample]) -> tuple[PairCounts, ...]:
+    """Per `ORDERING_CHECKS`, over the ordered pairs of distinct samples of one group."""
+    counts = []
+    for check in ORDERING_CHECKS:
+        pairs = violations = 0
+        for first_index, first in enumerate(samples):
+            for second_index, second in enumerate(samples):
+                if first_index == second_index or (holds := check.holds(first, second)) is None:
+                    continue
+                weight = first.multiplicity * second.multiplicity
+                pairs += weight
+                violations += weight * (not holds)
+        counts.append(PairCounts(pairs, violations))
+    return tuple(counts)
+
+
+def replay_samples(group: PolicyGroup, found: Sequence[frozenset[Category]]) -> list[ReplaySample]:
+    return [
+        ReplaySample(
+            sample.score,
+            sample.multiplicity,
+            tuple(tactic.label for tactic in sample.tactics),
+            sample.complete,
+            sample_categories,
+        )
+        for sample, sample_categories in zip(group.samples, found, strict=True)
+    ]
 
 
 def group_replay(
@@ -267,35 +397,43 @@ def group_replay(
     labels: GraphLabels,
     tactics: Mapping[int, Sequence[TacticOutcome]],
 ) -> TreeReplay:
+    """`new_group` and `previous`: the same samples under the new rules and the old."""
     new_advantages = group_advantages(new_group)
     old_advantages = group_advantages(previous)
-    samples = [
-        sample_replay(
-            sample,
-            old_sample,
-            old_sample_advantages.sequence,
-            new_sample_advantages.sequence,
-            tactics[labels.edges[sample.edge_ids[0]].executed_edge_id],
-        )
-        for sample, old_sample, old_sample_advantages, new_sample_advantages in zip(
-            new_group.samples, previous.samples, old_advantages.samples, new_advantages.samples, strict=True
-        )
+    found = [
+        categories(sample, tactics[labels.edges[sample.edge_ids[0]].executed_edge_id]) for sample in new_group.samples
     ]
-    changed = any(
-        sign_changed(sign(old.sequence), sign(new.sequence))
-        for old, new in zip(old_advantages.samples, new_advantages.samples, strict=True)
-    )
+    sample_signs = []
+    tactic_signs = []
+    scores = []
+    for sample, old_sample, old, new, sample_categories in zip(
+        new_group.samples, previous.samples, old_advantages.samples, new_advantages.samples, found, strict=True
+    ):
+        weight = sample.multiplicity
+        sample_signs.append(sign_changes(old.sequence, new.sequence, weight))
+        tactic_signs.extend(
+            sign_changes(old_tactic, new_tactic, weight)
+            for old_tactic, new_tactic in zip(old.tactics, new.tactics, strict=True)
+        )
+        scores.append(category_scores(sample, old_sample, sample_categories))
     old_trained = old_advantages.has_signal(CreditMode.PER_TACTIC)
     new_trained = new_advantages.has_signal(CreditMode.PER_TACTIC)
-    shape = TreeReplay(
+    summed_sample_signs = added_all(sample_signs, SignChanges())
+    summed_tactic_signs = added_all(tactic_signs, SignChanges())
+    return TreeReplay(
         groups=1,
-        groups_changed=changed,
+        groups_changed=bool(summed_sample_signs.changed or summed_tactic_signs.changed),
         groups_newly_trainable=new_trained and not old_trained,
         groups_no_longer_trainable=old_trained and not new_trained,
+        samples=new_group.sample_count,
+        sample_signs=summed_sample_signs,
+        tactic_signs=summed_tactic_signs,
+        category_scores=added_all(scores, tuple(Scores() for _ in CATEGORIES)),
+        orderings=ordering_pairs(replay_samples(new_group, found)),
+        old_orderings=ordering_pairs(replay_samples(previous, found)),
         old_drops=drops([previous], [old_advantages]),
         new_drops=drops([new_group], [new_advantages]),
     )
-    return total([shape, *samples])
 
 
 def tree_replay(record: TreeRecord, config: RewardConfig) -> TreeReplay:
@@ -322,32 +460,6 @@ def file_replay(path: Path, config: RewardConfig) -> TreeReplay:
     return tree_replay(record, config)
 
 
-@dataclass(frozen=True)
-class OrderingCheck:
-    higher: Category
-    lower: Category
-    # Equal means suffice.
-    strict: bool
-
-    def holds(self, replay: TreeReplay) -> bool | None:
-        high, low = replay.scores(self.higher).new_mean, replay.scores(self.lower).new_mean
-        if high is None or low is None:
-            return None
-        return high > low if self.strict else high >= low - ZERO_ADVANTAGE
-
-    @property
-    def text(self) -> str:
-        return f"{self.higher} {'>' if self.strict else '≥'} {self.lower}"
-
-
-ORDERING_CHECKS = (
-    OrderingCheck(Category.CLOSER, Category.PROOF_HAVE, strict=True),
-    OrderingCheck(Category.CLOSER, Category.FAILED_ATTEMPT, strict=True),
-    OrderingCheck(Category.FAILED_ATTEMPT, Category.OPEN_BARE_CLAIM, strict=False),
-    OrderingCheck(Category.PROOF_HAVE, Category.BARE_HAVE, strict=True),
-)
-
-
 def percent(part: float, whole: float) -> str:
     return f"{part / whole:.1%}" if whole else "-"
 
@@ -360,14 +472,25 @@ def label_shares(counts: TacticLabelCounts) -> str:
     return ", ".join(f"{label} {percent(getattr(counts, label.value), counts.total)}" for label in TacticLabel)
 
 
-def check_text(check: OrderingCheck, replay: TreeReplay) -> str:
-    holds = check.holds(replay)
-    return f"{check.text} {'-' if holds is None else 'ok' if holds else 'FAILS'}"
+def orderings_text(counts: Sequence[PairCounts]) -> str:
+    return "; ".join(
+        f"{check.text} {'-' if not found.pairs else 'FAILS' if found.violations else 'ok'} "
+        f"({found.violations:,} of {found.pairs:,} pairs)"
+        for check, found in zip(ORDERING_CHECKS, counts, strict=True)
+    )
+
+
+def signs_text(changes: SignChanges) -> str:
+    return (
+        f"{changes.changed:,} ({changes.to_negative:,} + to -, {changes.to_positive:,} - to +), "
+        f"{changes.newly_scored:,} newly scored"
+    )
 
 
 def report(name: str, replay: TreeReplay) -> str:
     scores = "; ".join(
-        f"{category} {signed(found.old_mean)} -> {signed(found.new_mean)} ({found.samples:,})"
+        f"{category} {signed(found.old_mean)} -> {signed(found.new_mean)} ({found.samples:,}), newly scored "
+        f"{signed(found.newly_scored_mean)} ({found.newly_scored:,})"
         for category, found in zip(CATEGORIES, replay.category_scores, strict=True)
     )
     new, old = replay.new_drops, replay.old_drops
@@ -377,12 +500,12 @@ def report(name: str, replay: TreeReplay) -> str:
             f"{replay.samples:,} samples",
             f"  labels, new: {label_shares(replay.new_labels)}",
             f"  labels, old: {label_shares(replay.old_labels)}",
-            f"  mean score old -> new (samples): {scores}",
-            f"  ordering, new rules: {', '.join(check_text(check, replay) for check in ORDERING_CHECKS)}",
-            f"  sign changes: samples {replay.samples_sign_changed:,} ({replay.samples_to_negative:,} + to -, "
-            f"{replay.samples_to_positive:,} - to +), {replay.samples_newly_scored:,} newly scored; groups "
-            f"{replay.groups_changed:,} with a change, "
-            f"{replay.groups_newly_trainable:,} newly trainable, {replay.groups_no_longer_trainable:,} no longer",
+            f"  mean score old -> new over the samples both score (samples): {scores}",
+            f"  ordering within groups, new rules: {orderings_text(replay.orderings)}",
+            f"  ordering within groups, old rules: {orderings_text(replay.old_orderings)}",
+            f"  sign changes: samples {signs_text(replay.sample_signs)}; tactics {signs_text(replay.tactic_signs)}; "
+            f"groups {replay.groups_changed:,} with a change, {replay.groups_newly_trainable:,} newly trainable, "
+            f"{replay.groups_no_longer_trainable:,} no longer",
             f"  drops (tactic advantage <= {DROP:g}): new {new.count:,} ({percent(new.magnitude, new.total_magnitude)} "
             f"of |tactic advantage|), old {old.count:,} ({percent(old.magnitude, old.total_magnitude)})",
         ]
