@@ -22,7 +22,7 @@ state of any edge reaching it (`graph_labels.nodes_by_goal_key`). The checks, in
 | `redundant_hypothesis` (closed form) | off the proof graph: the state adds only hypotheses that are redundant as above or closed-form: one comparison or equality of numerals and casts of numerals, nothing else (`is_numeral_comparison`: `0 < (1:ℝ)`, `2 ≤ 3`, `(4:ℕ) = 4`; not `3 < Real.pi`, `Fact (Nat.Prime 7)`, `2 ^ 10 = 1024`), and never under a statement without local names (`adds_only_closed_form_hypotheses`) |
 | `off_graph` | a dead end (its expansion produced nothing usable: real evidence however small), or an expanded node off the proof graph with at least `off_graph_min_expanded_nodes` (4) expanded nodes in its subtree, itself included: the n of the value targets' weight n / (n + 4) |
 | `unknown` | anything else: a node never expanded, an expanded off-graph node with live children and fewer expanded nodes (one harvesting or ε expansion is too little evidence to push a sibling down), or a state no node has |
-| `unproved_claim` | an `off_graph` or `unknown` state with a claim the model invented (`Claim`): a `have`, `obtain`, `replace` or `suffices` tactic (`CLAIM_TACTIC`) whose state's first goal is a new target in the context before it, added (`have h : A`, also a flattened `have h : A := by`) or replacing the goal (`suffices h : A by …`); never `constructor`, `cases`, `rcases`, `induction`, `by_cases`, `apply` or `refine` goals. Proved (`ClaimProofs`) when a later state of its block or a state reachable from it over forward edges has fewer goals than the claim's state without the claim's goal (so `have; swap; close the main goal` leaves it unproved), or when the tree has the state after it anywhere (a sibling's `have h : A := proof`). Whether the block itself leaves the claim open is `TacticOutcome.leaves_claim_open` |
+| `unproved_claim` | an `off_graph` or `unknown` state with a claim the model invented (`Claim`, `claim_made`): a tactic with `have`, `haveI`, `letI`, `obtain`, `replace`, `suffices` or `rsuffices` anywhere in it (`CLAIM_TACTIC`: wrapped as `try have`, `all_goals have`, `any_goals have` or after `<;>` too) whose state has a new target in the context before it as its first goal, added (`have h : A`, also a flattened `have h : A := by`) or replacing the goal (`suffices h : A by …`), or as its last (`rsuffices`, `obtain` then `rotate_left`); never `constructor`, `cases`, `rcases`, `induction`, `by_cases`, `apply` or `refine` goals. Proved (`ClaimProofs`) when a later state of its block or a state reachable from it over forward edges has fewer goals than the claim's state without the claim's goal (so `have; swap; close the main goal` leaves it unproved), or when the tree has the state after it anywhere under any hypothesis name (`nameless_key`: a sibling's `have h₃ : A := proof` proves `have h₂ : A`). Whether the block itself leaves the claim open is `TacticOutcome.leaves_claim_open` |
 
 The proof graph is defined at tactic granularity: `label_graph` splits a forward edge at every intermediate tactic
 state that is another node's state, so that node routes to the proof too (and gets exact remaining steps). Records
@@ -57,7 +57,7 @@ farther on it earns what an off-graph state does, and as a first tactic still mo
 | proof graph | 1 | `goal_closed_bonus` (0.1) per goal closed | 0.85 + 0.2 per step of progress + 0.015 per goal, global part ≥ (1 − λ) · μ |
 | off graph | μ · q (`value_share`, 0 until set by hand, "The value model in the loop"; q averages the state's expanded descendants, else its own estimate) | `unknown_local` (−0.5) | −0.075 while μ = 0 |
 | no progress, redundant hypothesis | 0 | `no_progress_local` (−1, as a failure: a no-op wastes the sample too) | −0.15 |
-| unproved claim | 0 | `unproved_claim_local` (−1) | −0.15 |
+| unproved claim | 0 | `unproved_claim_local` (−1) | −0.15, and c more for leaving it open: −0.25 as a block's anchor |
 | unknown | 0 | `unknown_local` (−0.5) | −0.075 |
 | failing | 0 | `failure_local` (−1) | −0.15 |
 | masked | — | — | no reward |
@@ -81,19 +81,26 @@ the first decides only whether the block gets further than the state before it (
 | Tactic | Advantage |
 |---|---|
 | the anchor: the first reaching a state with a reward (proof graph, off graph, unknown, unproved claim), else the first tactic when it failed or made no progress | R − b₁ |
-| a later one reaching a proof-graph or off-graph state (evidence) | R(s_i) − R(s_j), s_j the reference: the most recent earlier evidence state of the block, or the anchor; δ per step gained on the proof graph (plus its goal bonus), the whole drop when it leaves the proof graph for explored off-graph states |
-| a later one reaching an unknown state | after evidence an unverified continuation, the reference kept: 0 when a later tactic reaches a state, −c when it is the block's last state (so never below an error there); after an unknown anchor 0 |
-| a later unproved claim, and any other failing, no-progress or redundant one (a no-op before the anchor included) | −c (`wasted_tactic_cost` = 0.1, a local part in the local share): the prefix is kept, only its tokens are wasted |
-| an unproved claim's tactics up to a failure | one failed attempt: 0 each, the failing tactic judged where the claim was made (the anchor's R of a failure, −0.15, or −c after it) |
-| after an open claim in a complete block | 0 each; the closing tokens get −c |
+| a later one reaching a proof-graph state | R(s_i) − R(s_j), s_j the reference: the most recent earlier evidence state of the block, or the anchor; δ per step gained on the proof graph (plus its goal bonus) |
+| a later one reaching an unknown or explored off-graph state | after evidence an unverified continuation, the reference kept: 0 when a later tactic reaches a state, −c when it is the block's last state (so never below an error there); after an unknown anchor an off-graph state gains over it (0), an unknown one 0 |
+| a later failing, no-progress or redundant one (a no-op before the anchor included) | −c (`wasted_tactic_cost` = 0.1, a local part in the local share): the prefix is kept, only its tokens are wasted |
+| the block's first unproved claim | leaving an invented claim open costs an error there plus c: as the anchor R − c = −0.25, later −2c |
+| every tactic after it, and the closing tokens | 0, whatever they do: an attempt at the proof, a failing proof tactic, a no-op, a second claim |
 | masked | untrained |
 
 A sample's score is its reference state's R minus c per wasted tactic (`GroupSample.score_parts`: the anchor's R
-plus every gain and the closing's); a sample whose first tactic fails or makes no progress, with no state with a
-reward after it, scores that tactic's R (minus c per later wasted one); every sample has a score. The orderings this
-keeps (`tests/rl/test_reward_ordering.py`): proof graph > unknown = explored off graph (−0.075) > failure (−0.15); a
-valid unknown continuation ≥ an error at the same place; a claim proved in its block (−0.075) > a failed attempt at it
-(−0.15) > the bare claim left open (−0.25), and after progress R − c ≥ R − 2c.
+plus every gain); a sample whose first tactic fails or makes no progress, with no state with a reward after it, scores
+that tactic's R (minus c per later wasted one); every sample has a score. The orderings this keeps
+(`tests/rl/test_reward_ordering.py`, over every prefix, the claim prefixes included): proof graph > unknown = explored
+off graph (−0.075) > failure (−0.15) > a block leaving an invented claim open (−0.25, bare, attempted, followed by
+anything; after progress R − 2c); a valid, unknown, off-graph or no-op continuation ≥ an error at the same place; an
+appended error or claim never gains; an attempt at a claim the tree proves (−0.175 when it fails) > one at an invented
+claim (−0.25).
+
+Owner decision 2026-10-31 (review U, option A): the invented claim carries the penalty on its own tokens. Before, a
+failed attempt at it scored −0.15 with the claim's tokens at 0 and the failure's anchor penalty on the proof tactic
+(nlinarith), so an attempt at a provable claim (−0.175) ranked below one at an invented claim, and a valid step or
+no-op after an open claim (−0.25, −0.35) below an error there (−0.15).
 The baseline b is the multiplicity-weighted mean score of the group's samples with a score, the first-tactic baseline
 b₁ the same mean of their anchors' R (`GroupSample.anchor_parts`, `GroupAdvantages.first_tactic_baseline`). The
 explanation gets score − b and a block's tactic advantages add up to score − b₁: b − b₁ is the group's mean progress
@@ -110,13 +117,12 @@ at d ≥ 7 (0.51–0.54 at every d); the local share of the tactic advantages 0.
 (0.14–0.15). Progress is not normalized per group: the wider spread at deep nodes comes from samples that differ by several
 real steps, and dividing δ by d would raise the continue threshold below at deep nodes and push their blocks short.
 
-Stopping after t_i keeps s_i, the reference point of t_{i+1}, so the closing tokens get 0 (−c after stopping on an
-open claim). Continuing gets δ · steps gained when t_{i+1} is correct, −c when it fails, makes no progress, makes an
-unproved claim or reaches an unknown state that ends the block, and the whole drop R(s_i) − R(s_{i+1}) ≈ 0.85 + δ ·
-progress only when it reaches a well-explored off-graph state or a dead end (evidence). So it pays when
-δ · P(correct) − c · P(error or unverified) − drop · P(explored off graph) > 0: P(correct) > c / (c + δ) = 1/3 against
-errors and unknown states alike. Until review T (2026-10-31) an unknown state took the whole drop too, about 11 errors,
-which would have pushed blocks to one tactic. The closing tokens are trained with advantage 0 rather than masked: the loss divides by a fixed sequences × 256 tokens,
+Stopping after t_i keeps s_i, the reference point of t_{i+1}, so the closing tokens get 0. Continuing gets δ · steps
+gained when t_{i+1} is correct, −c when it fails, makes no progress or reaches an unknown or explored off-graph state
+that ends the block, and −2c for an invented claim. So it pays when δ · P(correct) − c · P(error or unverified) > 0:
+P(correct) > c / (c + δ) = 1/3. Until reviews T and U (2026-10-31) an unknown state, then an explored off-graph one,
+took the whole drop R(s_i) − R(s_{i+1}) ≈ 0.85 + δ · progress, about 11 errors, which would have pushed blocks to one
+tactic. The closing tokens are trained with advantage 0 rather than masked: the loss divides by a fixed sequences × 256 tokens,
 so a zero-advantage token adds no gradient and changes no other token's weight; it only keeps the stop decision
 under the KL term (`kl_coefficient`, 0 by default, 0.01 in `phase.toml`) and in the per-token metrics, as a decision with a known neutral
 value. After a failure the closing follows masked tactics and stays untrained.
@@ -125,7 +131,7 @@ value. After a failure the closing follows masked tactics and stays untrained.
 |---|---|---|
 | explanation and opening fence (before the first tactic's span) | score − b | score − b |
 | a tactic's span, and the gap before it (newlines, comments) | the tactic's advantage above; untrained when masked | score − b |
-| after the last tactic (closing fence, end of turn) | 0 after a complete block (−c when it stops on an open claim); untrained after a failure | score − b |
+| after the last tactic (closing fence, end of turn) | 0 after a complete block; untrained after a failure | score − b |
 | inserted by the harness (`SampledTokens.inserted`) | untrained | untrained |
 
 A sample without a span per executed tactic (no usable block, spans not recorded) gets
@@ -556,7 +562,7 @@ its threshold dashed, and its alert list shows the latest phase's alerts. Thresh
 | `explanation_length` | mean explanation tokens of the trained samples | outside 0.5-2 × reference | the first phases |
 | `cut_off_samples` | share of policy samples cut off at the token cap (repetition loops shown with it) | > max(2 × reference, reference + 0.01) | the first phases |
 | `valid_blocks` | share of the phase's distinct policy blocks Lean judged that ran completely (`TreeSummary.valid_blocks`, free) | < 0.85 × reference: the held-out states run at the next pause | the first phases |
-| `bare_haves` | share of the samples with a block that open with a bare `have h : A` (first top-level tactic without `:=`; `TreeSummary.habits`) | > 1.5 × reference (`max_bare_have_factor`) | the first phases |
+| `bare_haves` | share of the samples with a block that open with a bare `have h : A` (first top-level tactic without `:=`, with `have`, `haveI`, `letI` or `rsuffices` anywhere in it: `try have`, `all_goals have`, after `<;>`; `TreeSummary.habits`) | > 1.5 × reference (`max_bare_have_factor`) | the first phases |
 | `claims_proved` | of the bare-`have` samples whose block leaves the claim open (`leaves_claim_open`), the share the tree proves (no `unproved_claim` label) | < 0.5 × reference (`min_claim_proved_fraction`) | the first phases |
 | `explanation_characters` | median explanation characters before the opening fence, per sample (10-character bins, interpolated) | < 0.7 × reference (`min_explanation_characters_fraction`) | the first phases |
 | `held_out_valid_lean` | share of held-out samples whose block runs completely in Lean | < 0.9 × version 0's (warning); **< 0.7 × version 0's: a collapse** (rollback, below) | version 0's held-out evaluation |
@@ -586,12 +592,23 @@ statements fed from below the curriculum's band (`below_band_*`, nearer the refe
 has any, else all statements, with the reference phases'. Trees summarized before 2026-10-31 have none: the loop
 measures the reference phases whose health lines lack them from their trees in the background after the servers start
 (`measure_reference_habits`; unreadable trees skipped and counted), appends those lines once and writes them to the
-dashboard; `reference_habits.json` marks it done, so a restart does not again. Each probe slot logs the block habits of
-its trees too (`Block habits of probe slot <s> ...`: blocks, bare haves and their claims proved, `have … :=`,
-linarith/nlinarith openings, median explanation characters, tactics per complete block, continue rate).
+dashboard; `reference_habits.json` marks it done, so a restart does not again. When no tree could be read it logs an
+alert and writes neither, so the next start tries again. An unreadable `reward_fix.json` is ignored with a warning.
+Each phase also logs its 8 most frequent opening heads with each one's share in the phase before (`Openings of phase
+<k> by head ...`, `BlockHabits.openings`): migrations between claim forms (`have`, `obtain`, `suffices`, `try`) show
+there. Each probe slot logs the block habits of its trees too (`Block habits of probe slot <s> ...`: blocks, bare
+haves and their claims proved, `have … :=`, linarith/nlinarith openings, median explanation characters, tactics per
+complete block, continue rate, openings by head); a failure there is logged as an alert, never stops the probe.
 `experiments/reward_replay.py` replays a loop's tree store on the CPU under the current reward against the rules phases
-1-12 trained with: per phase the label shares, the mean scores of bare claims, failed attempts, `have … :=` blocks and
-closers with their ordering checks, and the samples and groups whose advantage changes sign.
+1-12 trained with, per phase: the label shares; the mean scores of bare claims, attempts at invented and at provable
+claims, `have … :=` blocks and closers, old against new over the samples both score; the ordering checks as violated
+pairs of samples within a group (a closer above `have … :=` blocks and invented attempts, a provable attempt ≥ an
+invented one ≥ the open bare claim, `have … :=` ≥ the open bare claim, a valid continuation ≥ an error after the same
+labels); the sign changes of the explanation and of the tactic advantages; and the drops.
+
+**Revert rule for the reward fix** (review T). By the end of the third phase trained with it (`reward_fix.json`): if
+the probe solves are not above the pre-fix level, and either bare haves have not fallen or mean tactics per complete
+block are down more than 25%, go back to the last pre-fix version and rework the reward before retrying.
 
 **Rollback and hard stop** (decided 2026-10-29 after review G). When the held-out valid-Lean rate falls below
 `stop_held_out_valid_fraction` (0.7; 0 never acts) of version 0's, the loop publishes the last good version's policy

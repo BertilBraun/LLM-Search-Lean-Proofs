@@ -615,7 +615,7 @@ at 50k 9 stop on heartbeats and 1 fails fast (median 8.6 s, 133 s), at 100k 5 he
   | Reaches a proof-graph state (closing the goal included) | 1, + δ per step gained | 0.1 per goal closed | 0.85 + 0.2 per step + 0.015 per goal |
   | Reaches a dead end, or an expanded off-graph state with ≥ 4 expanded nodes in its subtree (itself included) | 0 (+ μ · q once on) | −0.5 (0 until reviews S and T, 2026-10-31) | −0.075 |
   | Reaches a state never expanded, an expanded off-graph state with live children and < 4 expanded nodes in its subtree, or a state no node has | 0 | −0.5 | −0.075 (unknown; untrained and outside the baseline until 2026-10-31) |
-  | Off the proof graph, a claim the model invented (`have`, `obtain … :`, `replace`, `suffices`) the tree never proves (2026-10-31) | 0 | −1 | −0.15 (unproved claim; a block stopping on it −0.25) |
+  | Off the proof graph, a claim the model invented (`have`, `haveI`, `letI`, `obtain … :`, `replace`, `suffices`, `rsuffices`, also wrapped or after `<;>`) the tree never proves (2026-10-31) | 0 | −1 | −0.15 (unproved claim), c more for leaving it open: a block anchored on it −0.25, whatever follows |
   | No progress (unchanged, ancestor, redundant hypothesis; off the proof graph also a numeral comparison like `0 < (1:ℝ)` in a statement with local names, 2026-10-31) | 0 | −1 | −0.15 |
   | First failing tactic (the line Lean's error points to, after flattening) | 0 | −1 | −0.15 |
   | Everything after the failing tactic | — | — | masked (Lean never evaluated it) |
@@ -630,8 +630,9 @@ at 50k 9 stop on heartbeats and 1 fails fast (median 8.6 s, 133 s), at 100k 5 he
   tactic reaching a state with a reward, else its first tactic when that failed or made no progress) gets R − b₁.
   A later tactic reaching a state with evidence (proof graph, off graph) gets `R(s_i) − R(s_j)`, s_j the most
   recent earlier such state of the block or the anchor: δ per step gained on the proof graph (plus its goal bonus),
-  the whole drop when it leaves the proof graph; a later unknown state keeps s_j (0, or −c when it ends the block,
-  2026-10-31). Any other failing, no-progress or redundant tactic (a no-op before the anchor included) gets
+  the whole drop when it leaves the proof graph; a later unknown or explored off-graph state keeps s_j (0, or −c when it
+  ends the block, 2026-10-31). The block's first unproved claim costs an error there plus c (−0.25 as the anchor, −2c
+  later) and every tactic after it gets 0 (2026-10-31). Any other failing, no-progress or redundant tactic (a no-op before the anchor included) gets
   **−c = −0.1** (local part): the prefix is kept, only its tokens are wasted. A sample's score is its reference state's R
   minus c per wasted tactic; a sample whose first tactic fails or makes no progress, with no state with a reward
   after it, scores that tactic's R; since 2026-10-31 every sample has a score. The baseline b is the multiplicity-weighted mean
@@ -646,7 +647,7 @@ at 50k 9 stop on heartbeats and 1 fails fast (median 8.6 s, 133 s), at 100k 5 he
 
   Tokens: a tactic's span and the gap before it get the tactic's advantage (untrained when masked), the
   explanation and the opening fence score − b, the **closing fence and end of turn 0** after a complete block
-  (−c when it stops on an open claim, 2026-10-31; untrained after a failure). The closing tokens are trained at 0 rather than masked: the loss divides by a fixed
+  (untrained after a failure). The closing tokens are trained at 0 rather than masked: the loss divides by a fixed
   token count, so they add no gradient but stay in the KL term and the per-token metrics. Before, they got the last
   tactic's advantage.
 
@@ -1086,6 +1087,18 @@ Paper names in the last three rows are from memory and still need checking befor
   habits add `have … :=` and linarith openings, block length, the continue rate, a below-band comparison for the
   warnings, probe habits and the phase the fix trains from (`reward_fix.json`). (9) `experiments/reward_replay.py`
   replays phases 1–12 under both rules on the CPU before deploying.
+- Owner decisions 2026-10-31 after review U, which found a failed attempt at an invented claim scoring −0.15 with the
+  claim's tokens at 0 and the blame on the proof tactic, below which an attempt at a provable claim (−0.175) and a
+  valid step after an open claim (−0.25) ranked: (1) option A, superseding (2) above: a block leaving an invented
+  claim open scores −0.25 whatever follows it, the claim's tokens carry it, every later tactic and the closing get 0;
+  after progress the claim costs −2c. (2) A later explored off-graph state after evidence is an unverified
+  continuation like unknown (0, or −c at the block's end); as a block's first state −0.075. (3) The replay compares
+  old and new over the same samples, counts violated pairs within groups and tactic sign changes; under the rule
+  review U read, its tree fails two checks. (4) Wrapped claims (`try`, `all_goals`, `any_goals`, `<;>`), `haveI`,
+  `letI` and `rsuffices` fall under the claim rule and the bare-`have` habit. (5) A sibling proves a claim under any
+  hypothesis name; openings by head are logged per phase; unreadable reference trees or `reward_fix.json` only log.
+  Revert rule (review T): by the end of the third phase with the fix, probe solves not above the pre-fix level and
+  bare haves not fallen or tactics per complete block down more than 25% → back to the last pre-fix version.
 - Serving precision: fp16-merged vs bf16-merged vs unmerged LoRA, decided by the node test against fp32.
 - Whether the four-GPU pause with the persistent trainer meets its ~1 min fixed part on the node (smoke cycle: pause
   segments, `compiled_graphs` 0 after the first phase, the wake's memory next to the parked ranks' CUDA contexts, the
