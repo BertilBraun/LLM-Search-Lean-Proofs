@@ -156,8 +156,9 @@ host_directory = "/dev/shm/lean_search"
 # The KL penalty's reference (phase.toml kl_coefficient); unset: [initial] policy_adapter. After an expert-iteration
 # round kept by its decision rule (src/lean_search/rl/README.md, "Expert iteration"), the kept variant's adapter
 # exactly as `grpo_expert_iteration.py compare` prints it, so the penalty does not pull the policy back towards v0;
-# the phase after the round scores the reference for free:
-# kl_reference_policy_adapter = "/workspace/checkpoints/<the kept variant's run_name>/adapter"
+# the phase after the round scores the reference for free. Round 1 (2026-11-01) kept variant B (1e-4, 1 epoch) on the
+# held-out checks alone (owner's choice: no probe), published again as the version after the round's three:
+kl_reference_policy_adapter = "/workspace/checkpoints/grpo_loop_v1_expert_iteration_01b/adapter"
 
 [statements]
 kind = "curriculum"
