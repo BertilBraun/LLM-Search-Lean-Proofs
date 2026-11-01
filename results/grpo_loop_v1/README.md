@@ -95,6 +95,17 @@ Design detail lives in `DESIGN.md` and `src/lean_search/rl/README.md`; the revie
 - **Exhausting the curriculum.** After the round, the curriculum ran through the pool's unfed statements within hours.
   More verified statements, or re-feeding solved ones, is the next constraint.
 
+## Rebuilding the dashboard
+
+The dashboard reads only a run's `metrics/*.jsonl`, which the dataset keeps under `run_logs/metrics/`:
+
+```bash
+python -c "from huggingface_hub import snapshot_download; snapshot_download('BertilBraun/lean4-search-grpo-qwen3.5-4b', repo_type='dataset', allow_patterns=['run_logs/metrics/*'], local_dir='grpo_loop_v1_data')"
+PYTHONPATH=src python experiments/dashboard.py serve --run-directory grpo_loop_v1_data/run_logs --port 8600
+```
+
+Its alerts then say the loop is silent; everything else shows the run as it ended.
+
 ## Cost
 
 One rented 4x RTX 3090 node from 2026-10-29 15:30 to 2026-11-01 ~23:00 UTC, about 80 hours at $0.965/h: about $75. The
