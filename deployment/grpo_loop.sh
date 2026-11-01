@@ -96,7 +96,17 @@ case "$1" in
         ;;
     stop)
         if [[ -f "${run_directory}/loop.pid" ]]; then
-            kill -TERM "$(cat "${run_directory}/loop.pid")" 2>/dev/null || true
+            pid="$(cat "${run_directory}/loop.pid")"
+            kill -TERM "${pid}" 2>/dev/null || true
+            # loop.pid goes only once the loop exited: grpo_loop.py publish-adapter refuses while it names a live one.
+            for _ in $(seq 300); do
+                kill -0 "${pid}" 2>/dev/null || break
+                sleep 1
+            done
+            if kill -0 "${pid}" 2>/dev/null; then
+                echo "The loop (pid ${pid}) still runs after 300 s; loop.pid kept, servers left running" >&2
+                exit 1
+            fi
             rm -f "${run_directory}/loop.pid"
         fi
         "${script_directory}/stop_model.sh" --all

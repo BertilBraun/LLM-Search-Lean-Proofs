@@ -11,6 +11,7 @@
     python experiments/grpo_loop.py --config ... set-value-share 0.15    # μ from the next phase that trains; 0: off
     python experiments/grpo_loop.py --config ... rollback [--version N]  # after a health stop: N's policy, newly
     python experiments/grpo_loop.py --config ... clear-health-stop       # after a health stop: keep the current version
+    python experiments/grpo_loop.py --config ... publish-adapter --policy-adapter PATH --trigger "expert iteration 1"
 
 init records version 0 (the [initial] adapters merged into full weights) and refuses an existing loop. run copies the
 config to $LEAN_SEARCH_RUNS/<name>/loop.toml (the evaluation jobs read it), resumes an interrupted phase, and writes
@@ -19,7 +20,11 @@ asks the running loop to evaluate a fixed target at its next phase pause (the pr
 loop use experiments/grpo_evaluate.py. set-value-share writes μ (value_share in [reward] and [value_targets] of every
 phase) to $LEAN_SEARCH_RUNS/<name>/value_share.json, which the loop reads each time a phase starts training; until it
 is set, μ is 0. After the health check's hard stop (health_stop.json, src/lean_search/rl/README.md, "Health checks")
-the loop refuses to start until rollback or clear-health-stop ran.
+the loop refuses to start until rollback or clear-health-stop ran. publish-adapter publishes a policy adapter trained
+outside the loop (an expert-iteration round, src/lean_search/rl/README.md, "Expert iteration") as the next version,
+with the current value model; the loop stopped in its sampling stage, the adapter on the policy base at the current
+adapter's rank and scale. rollback and publish-adapter merge the new policy on the CPU and reuse the current value
+model's merged weights.
 """
 
 import argparse
@@ -48,6 +53,7 @@ from lean_search.rl.fixed_sets import read_fixed_set
 from lean_search.rl.health_checks import (
     clear_health_stop,
     health_stop_text,
+    publish_adapter_by_hand,
     read_health_stop,
     roll_back_by_hand,
 )
@@ -71,6 +77,7 @@ from lean_search.rl.loop_services import (
     open_trainer,
     open_tree_searcher,
     serve_commands,
+    stopped_loop_refusal,
 )
 from lean_search.rl.renaming import load_renamings
 from lean_search.rl.search_models import served_run_config, training_run_config
@@ -104,6 +111,9 @@ def parse_arguments() -> argparse.Namespace:
     rollback = commands.add_parser("rollback")
     rollback.add_argument("--version", type=int, help="default: the last good version of the health stop")
     commands.add_parser("clear-health-stop")
+    publish = commands.add_parser("publish-adapter")
+    publish.add_argument("--policy-adapter", type=Path, required=True, help="a LoRA adapter on the policy base")
+    publish.add_argument("--trigger", required=True, help='why, e.g. "expert iteration 1 from v25"; never "phase <n>"')
     return parser.parse_args()
 
 
@@ -116,6 +126,13 @@ def publisher(config: GrpoLoopConfig, paths: GrpoLoopPaths) -> MergedPublisher:
     return MergedPublisher(
         config.serving, paths.weights, handoff_merge(HostDirectories(config.host_directory()).handoff)
     )
+
+
+def by_hand_publisher(config: GrpoLoopConfig, paths: GrpoLoopPaths) -> MergedPublisher:
+    """For a publish with the loop stopped: the current version's merges are reused, not merged again."""
+    merged = publisher(config, paths)
+    merged.reuse_merges(read_current(paths.models))
+    return merged
 
 
 def search_run_config(config: GrpoLoopConfig) -> RunConfig:
@@ -240,10 +257,30 @@ def rollback(config: GrpoLoopConfig, paths: GrpoLoopPaths, version: int | None) 
     if version is None and stop is None:
         raise SystemExit("No health stop recorded: name the version to roll back to with --version.")
     target = stop.last_good_version if version is None else version
-    published = roll_back_by_hand(paths.models, publisher(config, paths), target, paths.rejected_versions)
+    published = roll_back_by_hand(paths.models, by_hand_publisher(config, paths), target, paths.rejected_versions)
     print(f"Version {published.version} serves version {target}'s policy ({published.policy_adapter}).")
     if stop is not None:
         print(f"Health stop kept as {clear_health_stop(paths.health_stop)}; start the loop again.")
+
+
+def publish_adapter(config: GrpoLoopConfig, paths: GrpoLoopPaths, adapter: Path, trigger: str) -> None:
+    """With the loop stopped while sampling: the adapter published as the next version with the current value
+    adapter; the next phase continues training it (its trees sampled by both versions)."""
+    refusal = stopped_loop_refusal(paths)
+    if refusal is not None:
+        raise SystemExit(refusal)
+    try:
+        published = publish_adapter_by_hand(
+            paths.models,
+            by_hand_publisher(config, paths),
+            adapter.absolute(),
+            trigger,
+            config.serving.policy_base_model,
+            paths.rejected_versions,
+        )
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
+    print(f"Version {published.version} serves {published.policy_adapter} ({trigger}); start the servers and the loop.")
 
 
 def clear_stop(paths: GrpoLoopPaths) -> None:
@@ -322,6 +359,8 @@ def main() -> None:
             rollback(config, paths, arguments.version)
         case "clear-health-stop":
             clear_stop(paths)
+        case "publish-adapter":
+            publish_adapter(config, paths, arguments.policy_adapter, arguments.trigger)
     sys.stdout.flush()
 
 

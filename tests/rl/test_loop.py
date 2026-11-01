@@ -248,6 +248,23 @@ async def test_searches_hear_each_served_version(tmp_path: Path) -> None:
     assert world.searcher.policy_versions == [0, 1, 2]
 
 
+async def first_phase_reference_adapter(root: Path, toml: str) -> str:
+    world = loop_world(root, toml)
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=1)
+    return tomllib.loads(world.trainer.requests[0].config_text)["policy"]["reference_adapter"]
+
+
+async def test_phase_config_takes_the_configured_kl_reference_adapter(tmp_path: Path) -> None:
+    toml = LOOP_TOML.replace("[training]\n", '[training]\nkl_reference_policy_adapter = "round-1/adapter"\n')
+    assert await first_phase_reference_adapter(tmp_path, toml) == "round-1/adapter"
+
+
+async def test_phase_config_falls_back_to_the_initial_adapter_as_kl_reference(tmp_path: Path) -> None:
+    toml = LOOP_TOML.replace('[initial]\npolicy_adapter = ""', '[initial]\npolicy_adapter = "sft/adapter"')
+    assert await first_phase_reference_adapter(tmp_path, toml) == "sft/adapter"
+
+
 async def test_the_second_phase_continues_from_the_first_phases_adapter(tmp_path: Path) -> None:
     world = loop_world(tmp_path)
     record_version_zero(world)

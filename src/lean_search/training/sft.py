@@ -149,6 +149,21 @@ class GeneratedSample:
 
 
 @dataclass(frozen=True)
+class ValidationSet:
+    """Validation examples whose loss is reported on its own, beside the main validation set's."""
+
+    name: str
+    examples: Sequence[TokenizedExample]
+
+
+@dataclass(frozen=True)
+class SetValidation:
+    name: str
+    examples: int
+    loss: float
+
+
+@dataclass(frozen=True)
 class EvaluationRecord:
     step: int
     validation_loss: float
@@ -158,6 +173,7 @@ class EvaluationRecord:
     generation_examples: int
     evaluation_seconds: float
     mismatches: tuple[GeneratedSample, ...]
+    sets: tuple[SetValidation, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -460,6 +476,7 @@ def evaluate(
     config: EvaluationConfig,
     packing: bool,
     device: torch.device,
+    validation_sets: Sequence[ValidationSet] = (),
 ) -> EvaluationRecord:
     start = time.perf_counter()
     causal_model.eval()
@@ -470,6 +487,16 @@ def evaluate(
         packing,
         tokenizer.pad_token_id,
         device,
+    )
+    sets = tuple(
+        SetValidation(
+            validation_set.name,
+            len(validation_set.examples),
+            validation_metrics(
+                loss_module, validation_set.examples, config.micro_batch_tokens, packing, tokenizer.pad_token_id, device
+            )[0],
+        )
+        for validation_set in validation_sets
     )
     generation_sample = validation[: config.generation_examples]
     generated = generate_tactic_blocks(
@@ -490,6 +517,7 @@ def evaluate(
         generation_examples=len(samples),
         evaluation_seconds=time.perf_counter() - start,
         mismatches=mismatches[:8],
+        sets=sets,
     )
 
 
@@ -502,6 +530,7 @@ def train(
     output_directory: Path,
     on_step: Callable[[StepRecord], None],
     on_evaluation: Callable[[EvaluationRecord], None],
+    validation_sets: Sequence[ValidationSet] = (),
 ) -> TrainingResult:
     optimization = config.optimization
     saved_module, causal_model = load_trainable_model(
@@ -537,6 +566,7 @@ def train(
                 config.evaluation,
                 optimization.packing,
                 context.device,
+                validation_sets,
             )
             evaluations.append(record)
             on_evaluation(record)

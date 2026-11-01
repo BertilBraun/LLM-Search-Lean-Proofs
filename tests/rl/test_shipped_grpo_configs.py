@@ -6,6 +6,7 @@ import pytest
 
 from lean_search.policy.config import FeedbackConfig
 from lean_search.rl.evaluation import EvaluationKind
+from lean_search.rl.expert_iteration_data import ExpertIterationConfig, parse_expert_iteration_config
 from lean_search.rl.fixed_sets import FixedSetsConfig
 from lean_search.rl.fixed_targets import baseline_concurrency, baseline_jobs, target_config
 from lean_search.rl.loop_config import (
@@ -305,3 +306,44 @@ def test_the_loop_feeds_35_percent_from_below_the_curriculum_band() -> None:
 @pytest.mark.parametrize("name", ["grpo/loop_overfit.toml", "grpo/loop_smoke.toml"])
 def test_the_other_loops_run_no_a_b(name: str) -> None:
     assert loop(name).sampling.options_arm.name == ""
+
+
+def expert_iteration(name: str = "expert_iteration_1.toml") -> ExpertIterationConfig:
+    return parse_expert_iteration_config((CONFIGS / "grpo" / name).read_text(encoding="utf-8"))
+
+
+def test_expert_iteration_config_parses() -> None:
+    assert expert_iteration().sft.optimization.learning_rate == 5e-5
+
+
+@pytest.mark.parametrize(
+    ("name", "run_name", "learning_rate", "epochs"),
+    [
+        ("expert_iteration_1_b.toml", "grpo_loop_v1_expert_iteration_01b", 1e-4, 1),
+        ("expert_iteration_1_c.toml", "grpo_loop_v1_expert_iteration_01c", 1e-4, 2),
+    ],
+)
+def test_expert_iteration_variants_differ_only_in_run_name_learning_rate_and_epochs(
+    name: str, run_name: str, learning_rate: float, epochs: int
+) -> None:
+    variant = expert_iteration(name)
+    base = expert_iteration()
+    optimization = dataclasses.replace(base.sft.optimization, learning_rate=learning_rate, epochs=epochs)
+    expected = dataclasses.replace(
+        base, run_name=run_name, sft=dataclasses.replace(base.sft, optimization=optimization)
+    )
+    assert variant == expected
+
+
+def test_expert_iteration_trains_on_the_loops_policy_base() -> None:
+    assert expert_iteration().sft.model == loop("grpo/loop.toml").serving.policy_base_model
+
+
+def test_expert_iteration_replays_the_loops_replay() -> None:
+    replay = expert_iteration().replay
+    training = loop("grpo/loop.toml").training
+    assert (replay.lean_replay, replay.math_replay) == (training.lean_replay, training.math_replay)
+
+
+def test_expert_iteration_reads_the_shipped_loop() -> None:
+    assert expert_iteration().data.loop == loop("grpo/loop.toml").name

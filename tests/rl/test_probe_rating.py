@@ -1,3 +1,4 @@
+import dataclasses
 import json
 from pathlib import Path
 
@@ -9,9 +10,12 @@ from lean_search.monitoring.families import ProbeRatings  # noqa: E402
 from lean_search.rl.probe_rating import (  # noqa: E402
     FinishedRuns,
     LoopMarkers,
+    PairedComparison,
     ProbeOutcome,
     ProbeRun,
+    earlier_references,
     finished_probe_runs,
+    paired_comparison,
     probe_ratings,
     rating_budgets,
     read_markers,
@@ -234,3 +238,39 @@ def test_rejected_versions_are_read_once_each(tmp_path: Path) -> None:
         "".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8"
     )
     assert read_markers(tmp_path).rejected_versions == (5, 10)
+
+
+def whole_set_after_two_slots() -> tuple[list[ProbeRun], ProbeRun]:
+    """Version 1 then version 2 search the first third, version 3 the whole set proving that third."""
+    earlier = [run(1, set(), PARTS[0], part=0, order=1), run(2, set(PARTS[0]), PARTS[0], part=0, order=2)]
+    return earlier, run(3, set(PARTS[0]), order=3)
+
+
+def compared(excluded_versions: tuple[int, ...] = ()) -> PairedComparison:
+    earlier, whole_set = whole_set_after_two_slots()
+    return paired_comparison(whole_set, earlier_references([*earlier, whole_set], whole_set, excluded_versions))
+
+
+def test_the_paired_difference_compares_each_problem_with_its_latest_earlier_run() -> None:
+    overall = compared().overall
+    assert (overall.problems, overall.difference) == (len(PARTS[0]), 0.0)
+
+
+def test_the_paired_difference_never_compares_with_a_rejected_version() -> None:
+    assert compared((2,)).overall.difference == 1.0
+
+
+def test_the_paired_difference_is_split_by_reference_version() -> None:
+    earlier = [run(1, set(), PARTS[0], part=0, order=1), run(2, set(), PARTS[1], part=1, order=2)]
+    whole_set = run(3, set(PARTS[0]), order=3)
+    comparison = paired_comparison(whole_set, earlier)
+    by_version = {item.policy_version: item.difference.difference for item in comparison.by_reference_version}
+    assert by_version == {1: 1.0, 2: 0.0}
+
+
+def test_problems_on_the_wall_clock_cap_leave_the_paired_difference_without_stops() -> None:
+    reference = run(1, set(), PARTS[0], part=0, order=1)
+    stopped = dataclasses.replace(reference.outcomes[0], wall_clock_stop=True)
+    reference = dataclasses.replace(reference, outcomes=(stopped, *reference.outcomes[1:]))
+    comparison = paired_comparison(run(2, set(), order=2), [reference])
+    assert comparison.without_wall_clock_stops.problems == len(PARTS[0]) - 1

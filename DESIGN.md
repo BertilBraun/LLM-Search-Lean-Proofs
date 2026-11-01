@@ -1099,6 +1099,20 @@ Paper names in the last three rows are from memory and still need checking befor
   hypothesis name; openings by head are logged per phase; unreadable reference trees or `reward_fix.json` only log.
   Revert rule (review T): by the end of the third phase with the fix, probe solves not above the pre-fix level and
   bare haves not fallen or tactics per complete block down more than 25% → back to the last pre-fix version.
+- Owner decision 2026-11-01: one expert-iteration round, since GRPO moves slowly (the advantaged tokens' ratio ~1.0005
+  per phase, the probe +3 points over 9 phases). Built, the data built on the node (`src/lean_search/rl/README.md`,
+  "Expert iteration"): the loop's verified proof-graph blocks of the phases since the reward fix, on a shortest route,
+  no claim left open, the recorded prompt and token ids, no rejected version's, deduplicated by state and capped per
+  state, statement and easy share (easy: 7 of 8 first-round samples pooled over the trees). After reviews Y (design)
+  and Z (code): three variants (5e-5 for 1 epoch, 1e-4 for 1, 1e-4 for 2) continue the current policy adapter on raw
+  Qwen3.5-4B with 40% replay by completion tokens, each reporting its expert-iteration and replay validation losses
+  apart; the best two by those losses are published (`grpo_loop.py publish-adapter`, refused unless the adapter
+  continued a version no phase moved on from) and evaluated on the held-out states and the whole probe set; `compare`
+  keeps a version only if the held-out rates stay at 0.9× v0's and within 2 SE of the reference's valid Lean, the paired
+  probe difference is ≥ 0 with its lower bound above −2 points (in effect about +1 point observed: a demand for
+  evidence, not non-inferiority), and the probe trees' distinct blocks per expansion and explanations stay at 0.75×
+  and 0.7× the references'. The SFT at temperature 1 on samples drawn at 0.8 sharpens the policy; accepted, judged by
+  the probe and the diversity checks. Kept, `[training] kl_reference_policy_adapter` moves the KL reference to it.
 - Serving precision: fp16-merged vs bf16-merged vs unmerged LoRA, decided by the node test against fp32.
 - Whether the four-GPU pause with the persistent trainer meets its ~1 min fixed part on the node (smoke cycle: pause
   segments, `compiled_graphs` 0 after the first phase, the wake's memory next to the parked ranks' CUDA contexts, the

@@ -288,6 +288,39 @@ def pooled_habits(paths: Sequence[Path], min_expanded_nodes: int) -> PooledHabit
     return PooledHabits(summed_habits(habits), len(found), len(found) - len(habits))
 
 
+@dataclass(frozen=True)
+class SearchHabits:
+    """Trees' first-round diversity (distinct blocks per policy expansion) and block habits, pooled."""
+
+    trees: int
+    unreadable_trees: int
+    policy_expansions: int
+    distinct_blocks: int
+    habits: BlockHabits
+
+    @property
+    def distinct_blocks_per_expansion(self) -> float:
+        return self.distinct_blocks / max(1, self.policy_expansions)
+
+
+def search_habits(paths: Sequence[Path], reward: RewardConfig) -> SearchHabits:
+    """As each tree's `TreeSummary` counts them; unreadable trees skipped."""
+    summaries = []
+    for path in paths:
+        try:
+            record = read_tree(path)
+        except (OSError, EOFError, ValueError, zlib.error):
+            continue
+        summaries.append(tree_summary(record, reward, CreditMode.PER_TACTIC, 0))
+    return SearchHabits(
+        trees=len(paths),
+        unreadable_trees=len(paths) - len(summaries),
+        policy_expansions=sum(summary.policy_expansions for summary in summaries),
+        distinct_blocks=sum(summary.distinct_blocks for summary in summaries),
+        habits=summed_habits(summary.habits for summary in summaries),
+    )
+
+
 def summed_habits(habits: Iterable[BlockHabits]) -> BlockHabits:
     habits = list(habits)
     counts = {

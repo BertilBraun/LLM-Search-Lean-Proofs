@@ -1,0 +1,82 @@
+# Variant C of the first expert-iteration round of grpo_loop_v1: expert_iteration_1.toml (variant A) at learning rate
+# 1e-4 for 2 epochs, the same data and replay; a copy, the config loader has no inheritance
+# (experiments/grpo_expert_iteration.py; src/lean_search/rl/README.md,
+# "Expert iteration"): the loop's verified proof-graph blocks of the phases since the reward fix, as sampled, fine-tune
+# the current version's policy adapter on raw Qwen3.5-4B with replay; then grpo_loop.py publish-adapter.
+#   python experiments/grpo_expert_iteration.py --config experiments/configs/grpo/expert_iteration_1_c.toml count
+#   HF_HUB_OFFLINE=1 BACKGROUND_CPUS=16 deployment/background.sh python experiments/grpo_expert_iteration.py \
+#       --config experiments/configs/grpo/expert_iteration_1_c.toml build --processes 16
+#   HF_HUB_OFFLINE=1 torchrun --standalone --nproc-per-node 4 experiments/grpo_expert_iteration.py \
+#       --config experiments/configs/grpo/expert_iteration_1_c.toml train
+# The adapter goes to $LEAN_SEARCH_CHECKPOINTS/<run_name>/adapter, outside the phase directories, so the loop's
+# adapter retention never deletes it.
+run_name = "grpo_loop_v1_expert_iteration_01c"
+
+[data]
+loop = "grpo_loop_v1"
+# From the reward fix's first phase (reward_fix.json) through 25; phase 26's partial trees stay GRPO's.
+last_phase = 25
+# Below-band statements are searched again and again: per state at most 2 distinct blocks (by a seeded hash, so block
+# length plays no part), per statement at most 6 states (those on the root's shortest route first).
+blocks_per_state = 2
+states_per_statement = 6
+# Easy states: at least 7 of 8 first-round samples, pooled over every tree, ran a proof-graph block; at most 20% of
+# the examples.
+easy_proof_graph_share = 0.875
+max_easy_share = 0.2
+validation_fraction = 0.05
+seed = "grpo-expert-iteration-1"
+# As phase.toml's [reward] off_graph_min_expanded_nodes.
+off_graph_min_expanded_nodes = 4
+
+# The loop's own replay ([training] lean_replay, math_replay), 30% and 10% of the training completion tokens; the
+# replay validation loss is reported apart from the expert-iteration one.
+[replay]
+lean_replay = "reasoning/visible_student_v3_numbered/train.jsonl"
+math_replay = "reasoning/visible_student_v3_numbered/math.jsonl"
+lean_token_share = 0.3
+math_token_share = 0.1
+validation = "reasoning/visible_student_v3_numbered/validation.jsonl"
+validation_examples = 1000
+seed = "grpo-expert-iteration-1/replay"
+
+[sft]
+# serving.policy_base_model: the adapter continues on the raw base, as every phase does.
+model = "Qwen/Qwen3.5-4B"
+# $LEAN_SEARCH_DATA/grpo_expert_iteration/<data>, written by build.
+data = "grpo_loop_v1_round_1"
+merge = false
+# Filled in by train: the loop's current policy adapter (models/current.json).
+initial_adapter = ""
+
+# Unused with initial_adapter (the adapter keeps its own rank and alpha, 64/64).
+[sft.lora]
+rank = 64
+alpha = 64
+dropout = 0.0
+
+# Half the original SFT's peak (configs/data_rewrite/sft_numbered.toml), its schedule; 4 GPUs x 1 micro-batch of
+# 16,384 tokens: the original's tokens per step.
+[sft.optimization]
+method = "lora"
+learning_rate = 1e-4
+warmup_fraction = 0.03
+minimum_learning_rate_ratio = 0.1
+weight_decay = 0.0
+max_gradient_norm = 1.0
+epochs = 2
+micro_batch_tokens = 16384
+micro_batches_per_step = 1
+gradient_checkpointing = true
+packing = true
+compile_layers = true
+seed = 0
+
+# train sets interval_steps (half the steps: evaluations at the start, halfway and the end) and validation_examples
+# (the whole expert-iteration validation set; the replay's is evaluated apart). No greedy generation: it took 8-10 min
+# per evaluation.
+[sft.evaluation]
+interval_steps = 100
+validation_examples = 2000
+micro_batch_tokens = 16384
+generation_examples = 0

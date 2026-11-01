@@ -17,8 +17,9 @@ closes the phase, writes `health_stop.json` and stops the loop, which refuses to
 import dataclasses
 import datetime
 import json
+import re
 import statistics
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -32,6 +33,7 @@ from lean_search.monitoring.families import (
     HealthThresholds,
     PhaseHealth,
 )
+from lean_search.policy.adapters import ADAPTER_CONFIG_FILE, lora_rank, lora_scale
 from lean_search.rl.evaluation import EvaluationSummary
 from lean_search.rl.loop_config import HealthConfig
 from lean_search.rl.training_phase import PhaseOutcome
@@ -569,23 +571,109 @@ def rollback_trigger(version: int, phase: int | None = None) -> str:
     return f"rollback to v{version}" + ("" if phase is None else f" after phase {phase}")
 
 
-def publish_rollback(paths: LoopPaths, publisher: Publisher, version: int, trigger: str) -> ModelVersion:
-    """The next version: the given version's policy adapter, the current value adapter (the policy collapsed, not the
-    value model). The next phase continues training from that policy adapter."""
-    versions = read_versions(paths)
-    current = versions[-1]
-    target = next(entry for entry in versions if entry.version == version)
-    rolled_back = ModelVersion(
+def publish_policy_adapter(paths: LoopPaths, publisher: Publisher, policy_adapter: str, trigger: str) -> ModelVersion:
+    """The next version: the given policy adapter, the current value adapter. The next phase continues training from
+    that policy adapter."""
+    current = read_versions(paths)[-1]
+    version = ModelVersion(
         version=current.version + 1,
-        policy_adapter=target.policy_adapter,
+        policy_adapter=policy_adapter,
         value_adapter=current.value_adapter,
         published_at=datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds"),
         trigger=trigger,
     )
-    prepared = publisher.prepare(rolled_back)
+    prepared = publisher.prepare(version)
     record_published(paths, prepared)
     publisher.prune(prepared)
     return prepared
+
+
+def publish_rollback(paths: LoopPaths, publisher: Publisher, version: int, trigger: str) -> ModelVersion:
+    """The given version's policy adapter with the current value adapter (the policy collapsed, not the value model)."""
+    target = next(entry for entry in read_versions(paths) if entry.version == version)
+    return publish_policy_adapter(paths, publisher, target.policy_adapter, trigger)
+
+
+# The loop's own publishes (`loop.phase_trigger`), which the reward fix's marker reads too.
+PHASE_TRIGGER = re.compile(r"phase \d+")
+# `rollback_trigger`'s, by hand or after a collapse.
+ROLLBACK_TRIGGER = re.compile(r"rollback to v\d+")
+# Beside an adapter trained outside the loop (`ContinuedVersion`).
+CONTINUED_FROM_FILE = "continued_from.json"
+
+
+@dataclass(frozen=True)
+class ContinuedVersion:
+    """The published version an adapter trained outside the loop continued, written beside it by its training."""
+
+    version: int
+    policy_adapter: str
+
+
+def continued_version(
+    adapter: Path, versions: Sequence[ModelVersion], rejected_versions: Collection[int]
+) -> ContinuedVersion:
+    """Raises ValueError unless the adapter continued a published version's policy that no phase trained on since
+    (publishing it would drop that GRPO progress), that was not rejected and that no rollback replaced since; other
+    adapters published by hand since (a round's other variants) are fine."""
+    path = adapter / CONTINUED_FROM_FILE
+    if not path.exists():
+        raise ValueError(f"{path} is missing: train the adapter with grpo_expert_iteration.py train.")
+    continued = from_json_object(ContinuedVersion, json.loads(path.read_text(encoding="utf-8")))
+    base = next((version for version in versions if version.version == continued.version), None)
+    if base is None or base.policy_adapter != continued.policy_adapter:
+        raise ValueError(f"{adapter} continued {continued}, which is not a published version's policy.")
+    later = [
+        version.version
+        for version in versions
+        if version.version > continued.version and PHASE_TRIGGER.fullmatch(version.trigger)
+    ]
+    if later:
+        raise ValueError(f"{adapter} continued v{continued.version}, but phases published versions {later} since.")
+    if continued.version in rejected_versions:
+        raise ValueError(f"{adapter} continued v{continued.version}, which was rejected (rejected_versions.jsonl).")
+    rollbacks = [
+        version.version
+        for version in versions
+        if version.version > continued.version and ROLLBACK_TRIGGER.match(version.trigger)
+    ]
+    if rollbacks:
+        raise ValueError(
+            f"{adapter} continued v{continued.version}, but rollbacks published versions {rollbacks} since."
+        )
+    return continued
+
+
+def check_continued_adapter(adapter: Path, current_adapter: str, base_model: str) -> None:
+    """A policy adapter the loop can publish and continue: on the policy base, and of the current adapter's rank and
+    scale, which the persistent trainer's resident LoRA parameters and the KL reference's swap keep. Raises ValueError
+    otherwise."""
+    if not (adapter / ADAPTER_CONFIG_FILE).exists():
+        raise ValueError(f"{adapter} holds no LoRA adapter ({ADAPTER_CONFIG_FILE}).")
+    config = json.loads((adapter / ADAPTER_CONFIG_FILE).read_text(encoding="utf-8"))
+    if config["base_model_name_or_path"] != base_model:
+        raise ValueError(f"{adapter} adapts {config['base_model_name_or_path']}, not the policy base {base_model}.")
+    if current_adapter:
+        current = Path(current_adapter)
+        found = (lora_rank(adapter), lora_scale(adapter))
+        expected = (lora_rank(current), lora_scale(current))
+        if found != expected:
+            raise ValueError(f"{adapter} has rank and scale {found}, the current adapter {expected}.")
+
+
+def publish_adapter_by_hand(
+    paths: LoopPaths, publisher: Publisher, adapter: Path, trigger: str, base_model: str, rejected_versions: Path
+) -> ModelVersion:
+    """`grpo_loop.py publish-adapter`, with the loop stopped: an adapter trained outside the loop (an expert-iteration
+    round) as the next version, its trigger naming the version it continued. Raises ValueError for an adapter the loop
+    cannot continue, one trained on a version phases moved on from, or a phase's trigger, which the loop would take for
+    its own publish."""
+    if PHASE_TRIGGER.fullmatch(trigger):
+        raise ValueError(f"The trigger {trigger!r} is a phase's.")
+    versions = read_versions(paths)
+    continued = continued_version(adapter, versions, read_rejected_versions(rejected_versions))
+    check_continued_adapter(adapter, versions[-1].policy_adapter, base_model)
+    return publish_policy_adapter(paths, publisher, str(adapter), f"{trigger}, continuing v{continued.version}")
 
 
 def roll_back_by_hand(paths: LoopPaths, publisher: Publisher, version: int, rejected_versions: Path) -> ModelVersion:

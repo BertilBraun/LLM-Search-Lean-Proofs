@@ -1,6 +1,7 @@
 import asyncio
 import dataclasses
 import json
+import os
 import time
 import tomllib
 from collections.abc import Callable
@@ -32,22 +33,28 @@ from lean_search.monitoring.families import HealthMeasurements, HealthThresholds
 from lean_search.monitoring.store import RunReader
 from lean_search.rl.evaluation import EvaluationKind, EvaluationPaths
 from lean_search.rl.health_checks import (
+    CONTINUED_FROM_FILE,
+    ContinuedVersion,
     ReferenceHabits,
     RewardFix,
     append_health,
     clear_health_stop,
+    publish_adapter_by_hand,
+    publish_policy_adapter,
     publish_rollback,
     read_health_history,
     read_health_stop,
     read_rejected_versions,
+    reject_version,
     roll_back_by_hand,
     rollback_trigger,
 )
 from lean_search.rl.loop import GrpoLoop, LoopProgress, PhaseStage, read_progress, request_evaluation
+from lean_search.rl.loop_services import stopped_loop_refusal
 from lean_search.rl.training_phase import TrainingPhaseConfig, label_phase_data
 from lean_search.rl.tree_store import TreeStore
 from lean_search.search import Accounting, SearchResult, StopReason, tree_record
-from lean_search.search.records import from_json_object, write_tree
+from lean_search.search.records import from_json_object, to_json, write_tree
 from lean_search.search.tree import EdgeOutcome, StepSource
 
 HELD_OUT_BLOCK = """[evaluation.held_out_states]
@@ -405,6 +412,156 @@ async def test_a_rollback_by_hand_after_a_hard_stop_rejects_nothing_new(tmp_path
     world = await stopped_world(tmp_path)
     roll_back_by_hand(world.paths.models, publisher_of(world), 0, world.paths.rejected_versions)
     assert read_rejected_versions(world.paths.rejected_versions) == (1, 3)
+
+
+VERSION_ZERO_CONTINUED = ContinuedVersion(0, "")
+
+
+def lora_adapter(
+    directory: Path,
+    rank: int = 64,
+    base_model: str = "start-policy",
+    continued: ContinuedVersion | None = VERSION_ZERO_CONTINUED,
+) -> Path:
+    """An adapter directory with only its config, as PEFT writes it, and the version its training continued."""
+    directory.mkdir(parents=True)
+    config = {"r": rank, "lora_alpha": rank, "use_rslora": False, "rank_pattern": {}, "alpha_pattern": {}}
+    config["base_model_name_or_path"] = base_model
+    (directory / "adapter_config.json").write_text(json.dumps(config), encoding="utf-8")
+    if continued is not None:
+        (directory / CONTINUED_FROM_FILE).write_text(to_json(continued), encoding="utf-8")
+    return directory
+
+
+def world_at_version_zero(root: Path) -> LoopWorld:
+    world = loop_world(root)
+    record_version_zero(world)
+    return world
+
+
+def publish_by_hand(world: LoopWorld, adapter: Path, trigger: str = "expert iteration 1") -> ModelVersion:
+    return publish_adapter_by_hand(
+        world.paths.models, publisher_of(world), adapter, trigger, "start-policy", world.paths.rejected_versions
+    )
+
+
+def test_publish_adapter_records_the_next_version(tmp_path: Path) -> None:
+    world = world_at_version_zero(tmp_path)
+    adapter = lora_adapter(tmp_path / "round-1")
+    publish_by_hand(world, adapter)
+    current = read_current(world.paths.models)
+    assert (current.version, current.policy_adapter) == (1, str(adapter))
+
+
+def test_publish_adapter_names_the_version_it_continued(tmp_path: Path) -> None:
+    world = world_at_version_zero(tmp_path)
+    assert publish_by_hand(world, lora_adapter(tmp_path / "round-1")).trigger == "expert iteration 1, continuing v0"
+
+
+def test_publish_adapter_refuses_an_adapter_without_the_version_it_continued(tmp_path: Path) -> None:
+    world = world_at_version_zero(tmp_path)
+    with pytest.raises(ValueError, match="continued_from"):
+        publish_by_hand(world, lora_adapter(tmp_path / "round-1", continued=None))
+
+
+async def test_publish_adapter_refuses_an_adapter_of_a_version_a_phase_moved_on_from(tmp_path: Path) -> None:
+    world = world_at_version_zero(tmp_path)
+    await run_until(world, world.loop(), phases=1)
+    with pytest.raises(ValueError, match="phases published"):
+        publish_by_hand(world, lora_adapter(tmp_path / "round-1"))
+
+
+def test_publish_adapter_refuses_an_adapter_of_a_rejected_version(tmp_path: Path) -> None:
+    world = world_at_version_zero(tmp_path)
+    reject_version(world.paths.rejected_versions, 0, "a test")
+    with pytest.raises(ValueError, match="rejected"):
+        publish_by_hand(world, lora_adapter(tmp_path / "round-1"))
+
+
+def test_publish_adapter_refuses_an_adapter_of_a_version_a_rollback_replaced(tmp_path: Path) -> None:
+    world = world_at_version_zero(tmp_path)
+    publish_policy_adapter(world.paths.models, publisher_of(world), "other/adapter", "by hand")
+    publish_rollback(world.paths.models, publisher_of(world), 1, rollback_trigger(1))
+    with pytest.raises(ValueError, match="rollbacks published"):
+        publish_by_hand(world, lora_adapter(tmp_path / "round-1"))
+
+
+def test_a_loop_stopped_while_sampling_lets_a_round_train(tmp_path: Path) -> None:
+    assert stopped_loop_refusal(world_at_version_zero(tmp_path).paths) is None
+
+
+def test_a_loop_stopped_outside_sampling_refuses_a_round(tmp_path: Path) -> None:
+    world = world_at_version_zero(tmp_path)
+    write_json_atomically(world.paths.progress, LoopProgress(phase=3, stage=PhaseStage.PUBLISHING))
+    assert "publishing" in (stopped_loop_refusal(world.paths) or "")
+
+
+def test_a_running_loop_refuses_a_round(tmp_path: Path) -> None:
+    world = world_at_version_zero(tmp_path)
+    (world.paths.directory / "loop.pid").write_text(str(os.getpid()), encoding="utf-8")
+    assert "runs" in (stopped_loop_refusal(world.paths) or "")
+
+
+def test_a_second_variant_of_the_same_version_publishes_after_the_first(tmp_path: Path) -> None:
+    world = world_at_version_zero(tmp_path)
+    publish_by_hand(world, lora_adapter(tmp_path / "round-1"))
+    assert publish_by_hand(world, lora_adapter(tmp_path / "round-1b")).version == 2
+
+
+def test_publish_adapter_keeps_the_current_value_adapter(tmp_path: Path) -> None:
+    world = world_at_version_zero(tmp_path)
+    assert publish_by_hand(world, lora_adapter(tmp_path / "round-1")).value_adapter == "value-v0-adapter"
+
+
+def test_publish_adapter_reuses_the_current_value_models_merge(tmp_path: Path) -> None:
+    world = world_at_version_zero(tmp_path)
+    before = read_current(world.paths.models)
+    publisher = publisher_of(world)
+    publisher.reuse_merges(before)
+    published = publish_adapter_by_hand(
+        world.paths.models,
+        publisher,
+        lora_adapter(tmp_path / "round-1"),
+        "expert iteration 1",
+        "start-policy",
+        world.paths.rejected_versions,
+    )
+    assert published.value_weights == before.value_weights
+
+
+def test_publish_adapter_refuses_an_adapter_of_another_rank(tmp_path: Path) -> None:
+    world = world_at_version_zero(tmp_path)
+    publish_by_hand(world, lora_adapter(tmp_path / "round-1"))
+    with pytest.raises(ValueError, match="rank"):
+        publish_by_hand(world, lora_adapter(tmp_path / "round-2", rank=32))
+
+
+def test_publish_adapter_refuses_an_adapter_on_another_base(tmp_path: Path) -> None:
+    world = world_at_version_zero(tmp_path)
+    with pytest.raises(ValueError, match="policy base"):
+        publish_by_hand(world, lora_adapter(tmp_path / "round-1", base_model="other-base"))
+
+
+def test_publish_adapter_refuses_a_phase_trigger(tmp_path: Path) -> None:
+    world = world_at_version_zero(tmp_path)
+    with pytest.raises(ValueError, match="phase"):
+        publish_by_hand(world, lora_adapter(tmp_path / "round-1"), trigger="phase 2")
+
+
+async def test_the_next_phase_continues_the_published_adapter(tmp_path: Path) -> None:
+    world = world_at_version_zero(tmp_path)
+    await run_until(world, world.loop(), phases=1)
+    publish_policy_adapter(world.paths.models, publisher_of(world), "round-1/adapter", "expert iteration 1")
+    await run_until(world, world.loop(), phases=2)
+    assert tomllib.loads(world.trainer.requests[-1].config_text)["policy"]["initial_adapter"] == "round-1/adapter"
+
+
+async def test_rollback_after_publish_adapter_rejects_the_published_version(tmp_path: Path) -> None:
+    world = world_at_version_zero(tmp_path)
+    await run_until(world, world.loop(), phases=1)
+    publish_policy_adapter(world.paths.models, publisher_of(world), "round-1/adapter", "expert iteration 1")
+    roll_back_by_hand(world.paths.models, publisher_of(world), 1, world.paths.rejected_versions)
+    assert read_rejected_versions(world.paths.rejected_versions) == (2,)
 
 
 def tree_sampling_versions(world: LoopWorld, phase: int) -> set[int | None]:
