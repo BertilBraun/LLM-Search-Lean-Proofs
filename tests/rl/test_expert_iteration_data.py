@@ -17,17 +17,22 @@ from lean_search.rl.expert_iteration_data import (
     ProofGraphCompletion,
     ReplayConfig,
     SpaceRequirement,
+    TrainingSummary,
     TreeCompletions,
+    ValidationPoint,
     data_summary,
     examples_within_completion_tokens,
     proof_graph_completions,
     read_completions,
+    replay_loss_change,
     replay_token_budgets,
+    screened,
     selected_completions,
     space_shortages,
     training_data,
     write_completions,
 )
+from lean_search.rl.health_checks import ContinuedVersion
 from lean_search.rl.policy_data import PolicyDataConfig, build_policy_data
 from lean_search.rl.training_phase import TrainingPhaseConfig, label_phase_data
 from lean_search.search import (
@@ -404,3 +409,41 @@ def test_training_data_trains_on_every_part(tmp_path: Path) -> None:
 
 def test_space_shortages_name_a_directory_without_the_space(tmp_path: Path) -> None:
     assert space_shortages([SpaceRequirement(tmp_path, 1e12, "a test")]) != []
+
+
+def training_summary(run_name: str, replay_losses: tuple[float, ...]) -> TrainingSummary:
+    curve = tuple(ValidationPoint(step, 1.0, loss) for step, loss in enumerate(replay_losses))
+    return TrainingSummary(
+        run_name,
+        ContinuedVersion(26, "v26"),
+        5e-5,
+        1,
+        2,
+        1,
+        1,
+        1,
+        (0.6, 0.3, 0.1),
+        1,
+        1.0,
+        curve,
+        replay_loss_change(curve),
+    )
+
+
+def test_the_replay_loss_change_is_over_the_first_evaluation() -> None:
+    assert training_summary("a", (1.0, 1.02, 1.05)).replay_loss_change == pytest.approx(0.05)
+
+
+SCREENED = screened(
+    ["a.toml", "b.toml", "c.toml"],
+    [training_summary("a", (1.0, 1.01)), training_summary("b", (1.0, 1.05)), training_summary("c", (1.0, 1.02))],
+    0.03,
+)
+
+
+def test_a_variant_whose_replay_loss_rose_too_much_does_not_survive_the_screen() -> None:
+    assert [variant.survives for variant in SCREENED.variants] == [True, False, True]
+
+
+def test_the_screen_publishes_the_gentlest_survivor_first_and_the_strongest_second() -> None:
+    assert (SCREENED.first.config, SCREENED.second.config) == ("a.toml", "c.toml")

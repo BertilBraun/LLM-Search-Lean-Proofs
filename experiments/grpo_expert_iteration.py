@@ -7,7 +7,9 @@ current policy adapter on the loop's own verified proof-graph blocks as sampled,
     HF_HUB_OFFLINE=1 python experiments/grpo_expert_iteration.py --config ... train --dry-run
     HF_HUB_OFFLINE=1 torchrun --standalone --nproc-per-node 4 experiments/grpo_expert_iteration.py \
         --config experiments/configs/grpo/expert_iteration_1.toml train
-    python experiments/grpo_expert_iteration.py --config ... compare --version N [--against M]
+    python experiments/grpo_expert_iteration.py --config experiments/configs/grpo/expert_iteration_1.toml screen \
+        --variants experiments/configs/grpo/expert_iteration_1_b.toml experiments/configs/grpo/expert_iteration_1_c.toml
+    python experiments/grpo_expert_iteration.py --config ... compare --version N [--against M] [--held-out-only]
 
 The trees are those of [data] loop's phases from the reward fix's first phase (reward_fix.json) to [data] last_phase;
 only samples of the version that phase published or later count, never a rejected version's. count reads only the
@@ -19,8 +21,10 @@ shares, evaluating at the start, halfway and at the end on the expert-iteration 
 --dry-run assembles the data and prints the steps without a GPU. The adapter goes to
 $LEAN_SEARCH_CHECKPOINTS/<run_name>/adapter (refused if it exists) with continued_from.json (the version it continued,
 which publish-adapter checks), training_summary.json (both validation curves) beside it, the steps to
-$LEAN_SEARCH_RUNS/<run_name>/. compare judges a published round (rl/expert_iteration_decision.py) against the loop's
-runs of the version it continued and before, or against another published version with --against.
+$LEAN_SEARCH_RUNS/<run_name>/; train refuses unless the loop is stopped in its sampling stage. screen reads the
+variants' training summaries and names the variants to publish. compare judges a published round
+(rl/expert_iteration_decision.py) against the loop's runs of the version it continued and before, or against another
+published version with --against; --held-out-only judges its held-out states alone, before its probe runs.
 """
 
 import argparse
@@ -54,15 +58,28 @@ from lean_search.rl.expert_iteration_data import (
     FilterCounts,
     SpaceRequirement,
     TrainingData,
+    TrainingSummary,
     TreeCompletions,
+    ValidationPoint,
     data_summary,
     file_completions,
     parse_expert_iteration_config,
+    replay_loss_change,
+    screened,
     space_shortages,
     training_data,
     write_completions,
 )
-from lean_search.rl.expert_iteration_decision import HeldOutRun, RoundEvidence, median_explanation, round_checks
+from lean_search.rl.expert_iteration_decision import (
+    Check,
+    HeldOutRun,
+    RoundEvidence,
+    against_verdict,
+    held_out_checks,
+    median_explanation,
+    round_checks,
+    state_validities,
+)
 from lean_search.rl.fixed_sets import read_fixed_set
 from lean_search.rl.grpo_groups import RewardConfig
 from lean_search.rl.health_checks import (
@@ -75,6 +92,7 @@ from lean_search.rl.health_checks import (
 )
 from lean_search.rl.loop import GrpoLoopPaths, read_progress
 from lean_search.rl.loop_config import GrpoLoopConfig, load_loop_config
+from lean_search.rl.loop_services import stopped_loop_refusal
 from lean_search.rl.policy_data import PolicyTokenizer
 from lean_search.rl.probe_rating import (
     DifferenceInterval,
@@ -112,6 +130,8 @@ MIN_FREE_SHARED_MEMORY_GIB = 8.0
 HELD_OUT_DIRECTORY = re.compile(r"held_out_states_v(\d{4})")
 TRAINING_SUMMARY_FILE = "training_summary.json"
 REPLAY_VALIDATION = "replay"
+# A variant whose replay validation loss rose more than this over its first evaluation forgot (`screen`).
+MAX_REPLAY_LOSS_RISE = 0.03
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -123,9 +143,12 @@ def parse_arguments() -> argparse.Namespace:
     build.add_argument("--processes", type=int, default=8)
     training = commands.add_parser("train")
     training.add_argument("--dry-run", action="store_true", help="assemble the data and plan the steps, then stop")
+    screen = commands.add_parser("screen", help="--config is the gentlest variant")
+    screen.add_argument("--variants", type=Path, nargs="+", required=True, help="the other configs, gentlest first")
     compare = commands.add_parser("compare")
     compare.add_argument("--version", type=int, required=True, help="the published round's version")
     compare.add_argument("--against", type=int, help="another published version, head to head on the whole probe set")
+    compare.add_argument("--held-out-only", action="store_true", help="only the held-out checks; exits 1 on a failure")
     return parser.parse_args()
 
 
@@ -289,7 +312,8 @@ def build(config: ExpertIterationConfig, processes: int) -> None:
             for index, tree in enumerate(executor.map(tree_completions, tasks, chunksize=4), start=1):
                 selector.add(tree)
                 if index % 250 == 0:
-                    print(f"{index:,} trees, {len(selector.blocks):,} states, {time.monotonic() - started:.0f} s")
+                    elapsed = time.monotonic() - started
+                    print(f"{index:,} trees, {len(selector.blocks):,} states, {elapsed:.0f} s", flush=True)
     except BrokenProcessPool as error:
         raise SystemExit(f"A build worker died ({error}), killed for memory perhaps; nothing was written.") from error
     selected = selector.selected()
@@ -366,33 +390,6 @@ def append_json_line(path: Path, record: object) -> None:
         handle.write(json.dumps(dataclasses.asdict(record), ensure_ascii=False) + "\n")
 
 
-@dataclass(frozen=True)
-class ValidationPoint:
-    step: int
-    expert_iteration_loss: float
-    # None without a replay validation set.
-    replay_loss: float | None
-
-
-@dataclass(frozen=True)
-class TrainingSummary:
-    """Beside the adapter: what the run trained on and its two validation curves, to screen variants on."""
-
-    run_name: str
-    continued: ContinuedVersion
-    learning_rate: float
-    epochs: int
-    steps: int
-    expert_iteration_examples: int
-    lean_replay_examples: int
-    math_replay_examples: int
-    # Of the training completion tokens: expert iteration, Lean replay, math replay.
-    completion_token_shares: tuple[float, float, float]
-    tokens: int
-    training_seconds: float
-    curve: tuple[ValidationPoint, ...]
-
-
 def completion_token_shares(data: TrainingData) -> tuple[float, float, float]:
     parts = [data.expert_iteration, data.lean_replay, data.math_replay]
     tokens = [sum(example.completion_token_count for example in part) for part in parts]
@@ -405,9 +402,15 @@ def validation_point(record: EvaluationRecord) -> ValidationPoint:
     return ValidationPoint(record.step, record.validation_loss, replay)
 
 
-def training_refusals(config: ExpertIterationConfig, current: ModelVersion, adapter_directory: Path) -> list[str]:
-    """Before any GPU time: an existing adapter, an adapter the loop could not continue, too little disk or tmpfs."""
+def training_refusals(
+    config: ExpertIterationConfig, paths: GrpoLoopPaths, current: ModelVersion, adapter_directory: Path
+) -> list[str]:
+    """Before any GPU time: the loop not stopped while sampling (publish-adapter would refuse the adapter), an existing
+    adapter, an adapter the loop could not continue, too little disk or tmpfs."""
     refusals = []
+    loop_refusal = stopped_loop_refusal(paths)
+    if loop_refusal is not None:
+        refusals.append(loop_refusal)
     if adapter_directory.exists():
         refusals.append(f"{adapter_directory} exists: choose another run_name.")
     try:
@@ -429,7 +432,7 @@ def run_training(config: ExpertIterationConfig, dry_run: bool) -> None:
     paths = loop_paths(config)
     adapter_directory = CHECKPOINTS_DIRECTORY / config.run_name / "adapter"
     current = read_current(paths.models)
-    refusals = training_refusals(config, current, adapter_directory)
+    refusals = training_refusals(config, paths, current, adapter_directory)
     # The dry run goes on beside the running loop, whose persistent trainer still fills the tmpfs.
     if refusals and not dry_run:
         raise SystemExit("\n".join(refusals))
@@ -509,20 +512,23 @@ def run_training(config: ExpertIterationConfig, dry_run: bool) -> None:
         tokens=result.tokens,
         training_seconds=result.training_seconds,
         curve=tuple(validation_point(record) for record in result.evaluations),
+        replay_loss_change=replay_loss_change(tuple(validation_point(record) for record in result.evaluations)),
     )
     text = json.dumps(dataclasses.asdict(summary), indent=1, ensure_ascii=False) + "\n"
+    change = summary.replay_loss_change
+    print(f"Replay validation loss change over the first evaluation: {'-' if change is None else f'{change:+.1%}'}")
     (adapter_directory.parent / TRAINING_SUMMARY_FILE).write_text(text, encoding="utf-8", newline="\n")
     print(text, flush=True)
 
 
 def held_out_run(paths: GrpoLoopPaths, version: int) -> HeldOutRun:
-    summary_path = paths.evaluations / f"held_out_states_v{version:04d}" / "summary.json"
+    directory = paths.evaluations / f"held_out_states_v{version:04d}"
+    summary_path = EvaluationPaths(directory).summary
     if not summary_path.exists():
         raise SystemExit(f"{summary_path} is missing: run grpo_evaluate.py --target held_out_states first.")
-    summary = from_json_object(EvaluationSummary, json.loads(summary_path.read_text(encoding="utf-8")))
-    rates = held_out_rates(summary)
+    rates = held_out_rates(from_json_object(EvaluationSummary, json.loads(summary_path.read_text(encoding="utf-8"))))
     assert rates is not None, summary_path
-    return HeldOutRun(rates, summary.samples)
+    return HeldOutRun(rates, state_validities(sorted(EvaluationPaths(directory).trees.glob("*.json.gz"))))
 
 
 def latest_held_out_version(paths: GrpoLoopPaths, at_most: int, rejected: tuple[int, ...]) -> int:
@@ -532,7 +538,10 @@ def latest_held_out_version(paths: GrpoLoopPaths, at_most: int, rejected: tuple[
         for directory in paths.evaluations.glob("held_out_states_v*")
         if (found := HELD_OUT_DIRECTORY.fullmatch(directory.name)) and (directory / "summary.json").exists()
     ]
-    return max(version for version in versions if version <= at_most and version not in rejected)
+    eligible = [version for version in versions if version <= at_most and version not in rejected]
+    if not eligible:
+        raise SystemExit(f"No held-out run of a version up to {at_most} that was not rejected: nothing to compare to.")
+    return max(eligible)
 
 
 def whole_set_run(runs: tuple[ProbeRun, ...], version: int) -> ProbeRun:
@@ -549,10 +558,10 @@ def probe_tree_habits(paths: GrpoLoopPaths, run_names: tuple[str, ...]) -> Searc
     return search_habits(trees, RewardConfig())
 
 
-def interval_text(interval: DifferenceInterval) -> str:
+def interval_text(interval: DifferenceInterval, items: str = "problems") -> str:
     return (
         f"{100 * interval.difference:+.1f} [{100 * interval.lower:+.1f}, {100 * interval.upper:+.1f}] points on "
-        f"{interval.problems} problems"
+        f"{interval.problems} {items}"
     )
 
 
@@ -580,42 +589,58 @@ def habits_rows(reference: SearchHabits, candidate: SearchHabits) -> list[list[s
     ]
 
 
-def compare(config: ExpertIterationConfig, version: int, against: int | None) -> None:
+def checks_table(checks: tuple[Check, ...]) -> str:
+    return markdown_table(["Check", "passed", ""], [[check.name, check.passed, check.detail] for check in checks])
+
+
+def compare(config: ExpertIterationConfig, version: int, against: int | None, held_out_only: bool) -> None:
     """Without --against the references are the loop's runs of the version the round continued and of earlier ones,
-    never another round's or a rejected version's; with it, version `against`'s held-out and whole-set probe runs."""
+    never another round's or a rejected version's; with it, version `against`'s held-out and whole-set probe runs.
+    --held-out-only judges the held-out states alone and exits 1 when they fail: the probe is then not worth running."""
     paths = loop_paths(config)
     health = load_loop_config(paths.config).health
     versions = {entry.version: entry for entry in read_versions(paths.models)}
     markers = read_markers(paths.directory)
-    found = finished_probe_runs(paths.evaluations)
-    candidate = whole_set_run(found.runs, version)
     continued = ContinuedVersion(version, versions[version].policy_adapter)
     continued_path = Path(versions[version].policy_adapter) / CONTINUED_FROM_FILE
     if continued_path.exists():
         continued = from_json_object(ContinuedVersion, json.loads(continued_path.read_text(encoding="utf-8")))
+    reference_version = (
+        latest_held_out_version(paths, continued.version, markers.rejected_versions) if against is None else against
+    )
+    version_zero, reference_held_out, candidate_held_out = (
+        held_out_run(paths, number) for number in (0, reference_version, version)
+    )
+    held_out = [version_zero, reference_held_out, candidate_held_out]
+    held_out_row = [f"{run.rates.valid_rate:.1%} / {run.rates.success:.1%}" for run in held_out]
+    headers = ["Held-out states", "version 0", f"version {reference_version}", f"version {version}"]
+    print(markdown_table(headers, [["valid Lean / success", *held_out_row]]))
+    if held_out_only:
+        checks = held_out_checks(version_zero, reference_held_out, candidate_held_out, health)
+        print(checks_table(checks))
+        if not all(check.passed for check in checks):
+            raise SystemExit(f"Version {version} fails the held-out checks: skip its probe.")
+        print(f"Version {version} passes the held-out checks: run its whole probe set.")
+        return
+    found = finished_probe_runs(paths.evaluations)
+    candidate = whole_set_run(found.runs, version)
     if against is None:
-        reference_version = latest_held_out_version(paths, continued.version, markers.rejected_versions)
         references = [
             run
             for run in earlier_references(found.runs, candidate, markers.rejected_versions)
             if run.policy_version <= continued.version
         ]
     else:
-        reference_version = against
         references = [whole_set_run(found.runs, against)]
     paired = paired_comparison(candidate, references)
     evidence = RoundEvidence(
-        version_zero=held_out_run(paths, 0),
-        reference_held_out=held_out_run(paths, reference_version),
-        candidate_held_out=held_out_run(paths, version),
+        version_zero=version_zero,
+        reference_held_out=reference_held_out,
+        candidate_held_out=candidate_held_out,
         paired=paired,
         reference_habits=probe_tree_habits(paths, paired.reference_runs),
         candidate_habits=probe_tree_habits(paths, (candidate.name,)),
     )
-    held_out = [evidence.version_zero, evidence.reference_held_out, evidence.candidate_held_out]
-    held_out_row = [f"{run.rates.valid_rate:.1%} / {run.rates.success:.1%}" for run in held_out]
-    headers = ["Held-out states", "version 0", f"version {reference_version}", f"version {version}"]
-    print(markdown_table(headers, [["valid Lean / success", *held_out_row]]))
     probe_rows = [
         ["All problems", interval_text(paired.overall)],
         ["Neither on the wall-clock cap", interval_text(paired.without_wall_clock_stops)],
@@ -640,7 +665,7 @@ def compare(config: ExpertIterationConfig, version: int, against: int | None) ->
     habits = habits_rows(evidence.reference_habits, evidence.candidate_habits)
     print(markdown_table(["Probe trees' first round", "references", f"version {version}"], habits))
     checks = round_checks(evidence, health)
-    print(markdown_table(["Check", "passed", ""], [[check.name, check.passed, check.detail] for check in checks]))
+    print(checks_table(checks))
     kept = all(check.passed for check in checks)
     adapter = versions[version].policy_adapter
     match against:
@@ -648,10 +673,41 @@ def compare(config: ExpertIterationConfig, version: int, against: int | None) ->
             print(f"Keep version {version}: set [training] kl_reference_policy_adapter = {json.dumps(adapter)}.")
         case None:
             print(f"Roll back: grpo_loop.py rollback --version {continued.version} (the version the round continued).")
-        case _ if kept:
-            print(f"Version {version} beats version {against}: kl_reference_policy_adapter = {json.dumps(adapter)}.")
         case _:
-            print(f"Version {against} stays ahead of version {version}: grpo_loop.py rollback --version {against}.")
+            print(against_verdict(version, against, kept, continued.version))
+
+
+def screen(config_paths: list[Path]) -> None:
+    """The variants' training summaries, the gentlest config first: those whose replay loss rose too much drop."""
+    configs = [parse_expert_iteration_config(path.read_text(encoding="utf-8")) for path in config_paths]
+    summaries = []
+    for config in configs:
+        summary_path = CHECKPOINTS_DIRECTORY / config.run_name / TRAINING_SUMMARY_FILE
+        if not summary_path.exists():
+            raise SystemExit(f"{summary_path} is missing: train {config.run_name} first.")
+        summaries.append(from_json_object(TrainingSummary, json.loads(summary_path.read_text(encoding="utf-8"))))
+    found = screened([str(path) for path in config_paths], summaries, MAX_REPLAY_LOSS_RISE)
+    rows = [
+        [
+            variant.summary.run_name,
+            f"{variant.summary.learning_rate:g}",
+            variant.summary.epochs,
+            " / ".join(f"{point.expert_iteration_loss:.4f}" for point in variant.summary.curve),
+            " / ".join(f"{point.replay_loss:.4f}" for point in variant.summary.curve if point.replay_loss is not None),
+            "-" if variant.summary.replay_loss_change is None else f"{variant.summary.replay_loss_change:+.1%}",
+            variant.survives,
+        ]
+        for variant in found.variants
+    ]
+    headers = ["run", "learning rate", "epochs", "expert-iteration loss", "replay loss", "replay change", "survives"]
+    print(markdown_table(headers, rows))
+    print(f"A survivor's replay loss rose at most {MAX_REPLAY_LOSS_RISE:.0%} over its first evaluation.")
+    for role, variant in (("first (the default)", found.first), ("second", found.second)):
+        if variant is not None:
+            adapter = CHECKPOINTS_DIRECTORY / variant.summary.run_name / "adapter"
+            print(f"Publish {role}: {variant.config}, publish-adapter --policy-adapter {adapter}")
+    if found.first is None:
+        print("No variant survives: keep the version the round continued (no publish).")
 
 
 def main() -> None:
@@ -664,8 +720,10 @@ def main() -> None:
             build(config, arguments.processes)
         case "train":
             run_training(config, arguments.dry_run)
+        case "screen":
+            screen([arguments.config, *arguments.variants])
         case "compare":
-            compare(config, arguments.version, arguments.against)
+            compare(config, arguments.version, arguments.against, arguments.held_out_only)
 
 
 if __name__ == "__main__":

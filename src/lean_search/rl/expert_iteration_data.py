@@ -20,6 +20,7 @@ from lean_search.expert_iteration.mixing import is_held_out
 from lean_search.policy.prompts import render_prompt, visible_explanation
 from lean_search.reasoning.dataset import read_examples as read_reasoning_examples
 from lean_search.reasoning.dataset import tokenize_reasoning_example
+from lean_search.rl.health_checks import ContinuedVersion
 from lean_search.rl.policy_data import CompletionTokens, PolicyTokenizer, completion_tokens
 from lean_search.search.graph_labels import (
     EdgeKind,
@@ -596,6 +597,76 @@ class DataSummary:
     # The explanation's characters before the fence: 10th percentile, median, 90th percentile.
     explanation_characters: tuple[int, ...]
     policy_versions: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class ValidationPoint:
+    step: int
+    expert_iteration_loss: float
+    # None without a replay validation set.
+    replay_loss: float | None
+
+
+@dataclass(frozen=True)
+class TrainingSummary:
+    """Beside the adapter: what the run trained on and its two validation curves, to screen variants on."""
+
+    run_name: str
+    continued: ContinuedVersion
+    learning_rate: float
+    epochs: int
+    steps: int
+    expert_iteration_examples: int
+    lean_replay_examples: int
+    math_replay_examples: int
+    # Of the training completion tokens: expert iteration, Lean replay, math replay.
+    completion_token_shares: tuple[float, float, float]
+    tokens: int
+    training_seconds: float
+    curve: tuple[ValidationPoint, ...]
+    # The final replay validation loss over the first evaluation's (at the start) minus 1.
+    replay_loss_change: float | None
+
+
+def replay_loss_change(curve: Sequence[ValidationPoint]) -> float | None:
+    first, last = curve[0].replay_loss, curve[-1].replay_loss
+    return None if first is None or last is None else last / first - 1
+
+
+@dataclass(frozen=True)
+class ScreenedVariant:
+    config: str
+    summary: TrainingSummary
+    survives: bool
+
+
+@dataclass(frozen=True)
+class Screen:
+    variants: tuple[ScreenedVariant, ...]
+    # Of the survivors in the given order (the gentlest first): the gentlest, published first as the default, and
+    # the strongest, published second; None when too few survive.
+    first: ScreenedVariant | None
+    second: ScreenedVariant | None
+
+
+def screened(configs: Sequence[str], summaries: Sequence[TrainingSummary], max_replay_loss_rise: float) -> Screen:
+    """`summaries` from the gentlest variant to the strongest: a variant whose replay loss rose more than
+    `max_replay_loss_rise` forgot and is dropped. Its expert-iteration loss ranks nothing: the policy's own samples
+    fit better the more a variant sharpens."""
+    variants = tuple(
+        ScreenedVariant(
+            config,
+            summary,
+            summary.replay_loss_change is not None and summary.replay_loss_change <= max_replay_loss_rise,
+        )
+        for config, summary in zip(configs, summaries, strict=True)
+    )
+    survivors = [variant for variant in variants if variant.survives]
+    return Screen(
+        variants,
+        survivors[0] if survivors else None,
+        survivors[-1] if len(survivors) > 1 else None,
+    )
 
 
 @dataclass(frozen=True)

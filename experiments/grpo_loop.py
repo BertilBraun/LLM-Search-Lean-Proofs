@@ -60,7 +60,6 @@ from lean_search.rl.health_checks import (
 from lean_search.rl.loop import (
     GrpoLoop,
     GrpoLoopPaths,
-    PhaseStage,
     ValueBenchmarkScoring,
     read_progress,
     read_value_share,
@@ -69,18 +68,16 @@ from lean_search.rl.loop import (
 )
 from lean_search.rl.loop_config import GrpoLoopConfig, StatementSourceKind, load_loop_config
 from lean_search.rl.loop_services import (
-    EVERY_RECORD,
     ServedValueScorer,
     SubprocessEvaluations,
     VllmServers,
     check_policy_server,
-    earlier_jobs_text,
     gpu_memory_text,
     host_memory_text,
-    live_children,
     open_trainer,
     open_tree_searcher,
     serve_commands,
+    stopped_loop_refusal,
 )
 from lean_search.rl.renaming import load_renamings
 from lean_search.rl.search_models import served_run_config, training_run_config
@@ -266,24 +263,12 @@ def rollback(config: GrpoLoopConfig, paths: GrpoLoopPaths, version: int | None) 
         print(f"Health stop kept as {clear_health_stop(paths.health_stop)}; start the loop again.")
 
 
-def running_loop(paths: GrpoLoopPaths) -> str | None:
-    """What of the loop still runs: its process (deployment/grpo_loop.sh's loop.pid) or a job it started."""
-    pid_file = paths.directory / "loop.pid"
-    if pid_file.exists() and Path(f"/proc/{pid_file.read_text().strip()}").exists():
-        return f"The loop runs (pid {pid_file.read_text().strip()}): deployment/grpo_loop.sh stop, then wait for it."
-    jobs = live_children(paths.children, EVERY_RECORD)
-    return earlier_jobs_text(jobs) if jobs else None
-
-
 def publish_adapter(config: GrpoLoopConfig, paths: GrpoLoopPaths, adapter: Path, trigger: str) -> None:
     """With the loop stopped while sampling: the adapter published as the next version with the current value
     adapter; the next phase continues training it (its trees sampled by both versions)."""
-    running = running_loop(paths)
-    if running is not None:
-        raise SystemExit(running)
-    progress = read_progress(paths.progress)
-    if progress.stage != PhaseStage.SAMPLING:
-        raise SystemExit(f"The loop stopped in its {progress.stage} stage; publish only after a stop while sampling.")
+    refusal = stopped_loop_refusal(paths)
+    if refusal is not None:
+        raise SystemExit(refusal)
     try:
         published = publish_adapter_by_hand(
             paths.models,
@@ -291,6 +276,7 @@ def publish_adapter(config: GrpoLoopConfig, paths: GrpoLoopPaths, adapter: Path,
             adapter.absolute(),
             trigger,
             config.serving.policy_base_model,
+            paths.rejected_versions,
         )
     except ValueError as error:
         raise SystemExit(str(error)) from error

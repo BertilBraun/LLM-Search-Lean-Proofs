@@ -4,13 +4,20 @@ import pytest
 
 pytest.importorskip("numpy")
 
-from lean_search.rl.expert_iteration_decision import HeldOutRun, RoundEvidence, round_checks  # noqa: E402
+from lean_search.rl.expert_iteration_decision import (  # noqa: E402
+    HeldOutRun,
+    RoundEvidence,
+    StateValidity,
+    against_verdict,
+    held_out_checks,
+    round_checks,
+)
 from lean_search.rl.health_checks import HeldOutRates  # noqa: E402
 from lean_search.rl.loop_config import HealthConfig  # noqa: E402
 from lean_search.rl.probe_rating import DifferenceInterval, PairedComparison  # noqa: E402
 from lean_search.rl.tree_summary import BlockHabits, SearchHabits  # noqa: E402
 
-SAMPLES = 4096
+STATES = 512
 
 
 def paired(difference: float, lower: float) -> PairedComparison:
@@ -18,15 +25,17 @@ def paired(difference: float, lower: float) -> PairedComparison:
     return PairedComparison(interval, interval, (), 0, 0, ())
 
 
-def habits(distinct_blocks_per_expansion: float, explanation_bin: int) -> SearchHabits:
-    """100 expansions; every explanation in one 10-character bin."""
+def habits(distinct_blocks_per_expansion: float, explanation_bin: int, expansions: int = 100) -> SearchHabits:
+    """Every explanation in one 10-character bin."""
     bins = tuple(100 if index == explanation_bin else 0 for index in range(explanation_bin + 1))
-    distinct = round(100 * distinct_blocks_per_expansion)
-    return SearchHabits(10, 0, 100, distinct, BlockHabits(block_samples=800, explanation_character_bins=bins))
+    distinct = round(expansions * distinct_blocks_per_expansion)
+    return SearchHabits(10, 0, expansions, distinct, BlockHabits(block_samples=800, explanation_character_bins=bins))
 
 
-def held_out(valid_rate: float, success: float) -> HeldOutRun:
-    return HeldOutRun(HeldOutRates(valid_rate, success), SAMPLES)
+def held_out(valid_rate: float, success: float, changes: tuple[int, ...] = (0,)) -> HeldOutRun:
+    """512 states of 8 samples, 6 of them valid plus `changes` in turn per state."""
+    states = tuple(StateValidity(f"s{index}", 8, 6 + changes[index % len(changes)]) for index in range(STATES))
+    return HeldOutRun(HeldOutRates(valid_rate, success), states)
 
 
 PASSING = RoundEvidence(
@@ -56,9 +65,9 @@ def test_a_round_passing_every_check_is_kept() -> None:
             id="success",
         ),
         pytest.param(
-            dataclasses.replace(PASSING, candidate_held_out=held_out(0.75, 0.45)),
-            "held-out valid Lean against the reference",
-            id="valid Lean 2 SE below the reference",
+            dataclasses.replace(PASSING, candidate_held_out=held_out(0.8, 0.45, (-1, 0, 0, 0))),
+            "held-out valid Lean against the reference, paired per state",
+            id="a valid sample lost on every fourth state",
         ),
         pytest.param(
             dataclasses.replace(PASSING, paired=paired(0.01, -0.03)), "probe paired solve difference", id="lower bound"
@@ -80,3 +89,25 @@ def test_a_round_passing_every_check_is_kept() -> None:
 )
 def test_a_round_failing_one_check_fails_only_that_check(evidence: RoundEvidence, failed: str) -> None:
     assert failed_checks(evidence) == {failed}
+
+
+def test_per_state_noise_around_the_references_validity_passes_the_paired_check() -> None:
+    candidate = held_out(0.8, 0.45, (1, -1))
+    checks = held_out_checks(PASSING.version_zero, PASSING.reference_held_out, candidate, HealthConfig())
+    assert all(check.passed for check in checks)
+
+
+def test_the_diversity_checks_fail_without_reference_trees() -> None:
+    evidence = dataclasses.replace(PASSING, reference_habits=habits(0.0, 0, expansions=0))
+    assert failed_checks(evidence) == {"distinct blocks per expansion", "median explanation characters"}
+
+
+@pytest.mark.parametrize(
+    ("beats", "rule"),
+    [
+        pytest.param(True, "keep 28 if it passes its own compare;", id="beats"),
+        pytest.param(False, "keep 28 only if it passes its own compare and 27 fails its own;", id="does not beat"),
+    ],
+)
+def test_the_head_to_head_verdict_states_the_winner_rule(beats: bool, rule: str) -> None:
+    assert rule in against_verdict(28, 27, beats, 26)

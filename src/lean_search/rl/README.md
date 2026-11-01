@@ -848,13 +848,22 @@ the loop's current policy adapter (`models/current.json`, read at train time) on
 (the loss is normalised over completion tokens), no greedy generation. Three evaluations (the start, halfway, the end),
 each reporting the expert-iteration validation loss and the replay validation loss (1,000 examples of the starting
 policy's SFT validation set) apart: the first falls as the round fits its data, the second is the forgetting signal.
-`train` refuses before any GPU time when the adapter directory exists, when the current adapter is on another base
-than `[sft] model`, and with less than 20 GiB free next to the checkpoints (the adapter and the publish's merge) or 8
-GiB in `/dev/shm` (NCCL; the persistent trainer's parked bases must be gone). The adapter goes to
+`train` refuses before any GPU time unless the loop is stopped in its sampling stage (`loop_services.
+stopped_loop_refusal`, the check `publish-adapter` makes: an adapter trained in another stage could not be published),
+when the adapter directory exists, when the current adapter is on another base than `[sft] model`, and with less than
+20 GiB free next to the checkpoints (the adapter and the publish's merge) or 8 GiB in `/dev/shm` (NCCL; the persistent
+trainer's parked bases must be gone); the dry run prints each as "would refuse". The adapter goes to
 `$LEAN_SEARCH_CHECKPOINTS/<run_name>/adapter` (outside the phase directories: the retention never deletes it) with
-`continued_from.json` (the version it continued), and `training_summary.json` beside it: the completion-token shares
-and the two validation curves, to screen the variants on. At ~5M tokens an epoch (the expert-iteration tokens plus
-the replay's) and 7-9k tokens/s, an epoch takes 10-15 min plus ~5 min loading.
+`continued_from.json` (the version it continued), and `training_summary.json` beside it: the completion-token shares,
+the two validation curves and the replay loss's change over the first evaluation, which `train` also prints. At ~5M
+tokens an epoch (the expert-iteration tokens plus the replay's) and 7-9k tokens/s, an epoch takes 10-15 min plus ~5
+min loading.
+
+**Screen** (`screen --variants B C`, `--config` A; the configs from the gentlest to the strongest): a variant whose
+final replay validation loss exceeds its first evaluation's (at the start of training, the same for all three) by more
+than 3% forgot and drops. The expert-iteration loss ranks nothing: the policy's own samples fit better the more a
+variant sharpens. Of the survivors the gentlest is published first (version F, the default) and the strongest second
+(version S), so that the two probes bracket the dose; `screen` prints the table and the two adapters.
 
 **Sharpening.** The examples were sampled at temperature 0.8, and the SFT fits them with plain logits (temperature 1):
 fitting samples of p^(1/0.8) moves p towards p^1.25, so served at 0.8 again the policy samples more sharply than the
@@ -869,7 +878,8 @@ version with the current value adapter, merged on the CPU (3-5 min), the current
 It refuses while the loop or one of its jobs runs (`loop.pid`, which `grpo_loop.sh stop` removes only once the loop
 exited, and `children/`), outside the sampling stage, without `continued_from.json` or when a phase published a
 version after the one the adapter continued (its GRPO progress would be dropped; other variants of the same round may
-publish one after another), for an adapter on another base than `serving.policy_base_model` or of another rank or
+publish one after another), when that version was rejected or a rollback published a version after it, for an
+adapter on another base than `serving.policy_base_model` or of another rank or
 scale than the current adapter (the persistent trainer loads it into its resident LoRA parameters, the KL reference's
 swap asserts both), and for a phase's trigger ("phase <n>", which the loop's publish and the reward fix's marker read).
 
@@ -881,7 +891,8 @@ restarts near 0 (from then on it measures the drift from the round, not from v0)
 
 **Decision** (`compare --version <k>`, `compare --version <k> --against <m>`; `expert_iteration_decision.round_checks`).
 With the servers on version k, its held-out states (`grpo_evaluate.py --target held_out_states`) and then its whole
-probe set (`--target probe`, no slot: `probe_v<k>`); skip the probe when the held-out states already fail. Without
+probe set (`--target probe`, no slot: `probe_v<k>`); `compare --version <k> --held-out-only` judges the held-out
+states alone (and exits 1 when they fail), so that the probe is skipped for a version they already reject. Without
 `--against`, the references are the loop's own runs up to the version the round continued (`continued_from.json`):
 each problem's latest earlier probe run of such a version that is not rejected, and the newest held-out run of one.
 With `--against m`, version m's held-out run and whole-set probe run, paired per problem. `compare` prints the held-out
@@ -890,17 +901,22 @@ search stopped on the wall-clock cap, and per reference version, with the wall-c
 joint-scale ratings of k (and m) and of the latest pass; and from the probe trees' first round the distinct blocks per
 expansion, the median explanation characters, the bare-have share and the tactics per complete block of the
 references and of k. It keeps k only if every check passes: held-out valid Lean and success at least 0.9 of version
-0's (`[health]` fractions); held-out valid Lean at least the reference's minus 2 per-sample standard errors; the paired
-difference at least 0 with its lower 95% bound above -2 points; distinct blocks per expansion at least 0.75 and the
-median explanation at least 0.7 of the references' (the loop's own health thresholds, applied before the restart).
+0's (`[health]` fractions); held-out valid Lean against the reference paired per state (the same 512 states: the mean
+per-state difference of valid-Lean rates, bootstrapped over states, its lower 95% bound above -2 points; a state's 8
+samples are correlated through its difficulty, so independent binomials would fail an equal candidate about one time
+in five); the probe's paired difference at least 0 with its lower 95% bound above -2 points; distinct blocks per
+expansion at least 0.75 and the median explanation at least 0.7 of the references' (the loop's own health thresholds,
+applied before the restart; both fail when the references have no readable trees).
 What the probe rule means: the whole set has ~500 problems with about 63 discordant between two runs, so the paired
 difference's 95% half-width is about 3 points, and a lower bound above -2 points needs about +1 point observed. It
 demands evidence of a gain rather than testing non-inferiority: by the true effect, it keeps a round with probability
 about 9% at -1 point, 24% at 0, 60% at +1.5 and 89% at +3. Without `--against` the references mix the last thirds'
 versions, on average a little below the continued version (about 0.7 points at the loop's trend), which leans towards
 keeping; the per-reference-version rows show it, and a rating below the latest pass while the paired difference is
-positive is a reason to roll back. On keeping, `compare` prints the adapter path for `kl_reference_policy_adapter`;
-otherwise the `rollback` to run.
+positive is a reason to roll back (the operator's judgement, not a coded check). Two variants are two looks: if both
+are truly neutral, at least one passes its own `compare` with probability about 30-38% (the looks share their
+references), against 24% for one. On keeping, `compare` prints the adapter path for `kl_reference_policy_adapter`;
+otherwise the `rollback` to run; with `--against` it states the winner rule below for the outcome it found.
 
 **Rollbacks after the round.** A later held-out collapse rolls back to the last version with a healthy held-out line
 in health.jsonl, never to the round's (the offline held-out run writes none), and `kl_reference_policy_adapter` would
@@ -910,7 +926,9 @@ held_out_states`) so that the round's successor gets a healthy line soon.
 
 **The round on the node.** No version numbers are fixed in advance: `publish-adapter` prints each version it
 publishes, `compare` the rollback target. Every command that loads a model or tokenizer runs with `HF_HUB_OFFLINE=1`
-(the node has no route to the Hub; the bases are cached).
+(the node has no route to the Hub; the bases are cached). The loop is off about 4.5-5 h: the three trainings about 1
+h, each published variant 1.5-1.8 h (publish, servers, held-out states, whole probe), the three compares 10-20 min;
+less when a variant's held-out states fail and its probe is skipped. The watchdog covers the whole window.
 
 1. While the loop samples: `python experiments/grpo_expert_iteration.py --config
    experiments/configs/grpo/expert_iteration_1.toml count`, then `HF_HUB_OFFLINE=1 BACKGROUND_CPUS=16
@@ -918,27 +936,31 @@ publishes, `compare` the rollback target. Every command that loads a model or to
    and C read A's data; read its README.md: held out 0, the easy share, the below-band share, block lengths and
    explanations like the phases'), and `HF_HUB_OFFLINE=1 python experiments/grpo_expert_iteration.py --config ... train
    --dry-run` (its "would refuse" line for `/dev/shm` is expected while the persistent trainer runs).
-2. Stop the loop right after a phase publishes (`loop.log`: "Published version <k>"), in the first minutes of the next
-   sampling stage, so that the next phase holds almost no samples of the version before the round:
-   `deployment/grpo_loop.sh stop` waits until the loop exited (at most 5 min; it stops the servers too). Never stop it during a pause. The phase
-   that just published may postdate `[data] last_phase`; the round still continues version k, which `train` reads.
+2. Stop the loop at the start of a sampling stage, after the phase's pause is over (`loop.log`: "Phase <k> pause:
+   ...", or `grpo_loop.py status` shows the sampling stage; "Published version <k>" comes earlier, while the phase still
+   evaluates), in its first minutes, so that the next phase holds almost no samples of the version before the round:
+   `deployment/grpo_loop.sh stop` waits until the loop exited (at most 5 min; it stops the servers too). Never stop it
+   during a pause: `train` and `publish-adapter` refuse a loop stopped outside its sampling stage. The phase that just
+   published may postdate `[data] last_phase`; the round still continues version k, which `train` reads.
 3. Train the three variants back to back: `HF_HUB_OFFLINE=1 torchrun --standalone --nproc-per-node 4
    experiments/grpo_expert_iteration.py --config experiments/configs/grpo/expert_iteration_1.toml train`, then with
    `expert_iteration_1_b.toml` and `expert_iteration_1_c.toml` (about 15-20, 15-20 and 30 min).
-4. Screen them on `$LEAN_SEARCH_CHECKPOINTS/<run_name>/training_summary.json`: discard a variant whose final replay
-   loss rose more than a few percent over its step-0 value; of the rest, the lowest final expert-iteration loss is the
-   first, the next the second.
+4. `python experiments/grpo_expert_iteration.py --config experiments/configs/grpo/expert_iteration_1.toml screen
+   --variants experiments/configs/grpo/expert_iteration_1_b.toml experiments/configs/grpo/expert_iteration_1_c.toml`:
+   the gentlest survivor is published first, the strongest second; one survivor is published alone (skip step 6 and
+   take it as the winner if it passes its own compare), none ends the round (start the loop again, nothing published).
 5. `HF_HUB_OFFLINE=1 python experiments/grpo_loop.py --config experiments/configs/grpo/loop.toml publish-adapter
-   --policy-adapter $LEAN_SEARCH_CHECKPOINTS/<first run_name>/adapter --trigger "expert iteration 1 <variant>"`: it
-   prints version F. Then `HF_HUB_OFFLINE=1 deployment/grpo_loop.sh servers` and `check`; `HF_HUB_OFFLINE=1 python
+   --policy-adapter <the first adapter screen printed> --trigger "expert iteration 1 <variant>"`: it prints version F.
+   Then `HF_HUB_OFFLINE=1 deployment/grpo_loop.sh servers` and `check`; `HF_HUB_OFFLINE=1 python
    experiments/grpo_evaluate.py --loop-directory $LEAN_SEARCH_RUNS/grpo_loop_v1 --target held_out_states --concurrency
-   112 --phase <the last phase that closed>` (~5 min) and, if it passes `compare`'s held-out checks, the same with
-   `--target probe` (75-90 min).
+   112 --phase <the last phase that closed>` (~5 min); `compare --version F --held-out-only`, and only if it passes the
+   same `grpo_evaluate.py` with `--target probe` (75-90 min).
 6. The same for the second variant (version S): `publish-adapter`, then `deployment/grpo_loop.sh stop` (stops the
-   servers serving F) and `servers`, `check`, the held-out states and the whole probe set.
+   servers serving F) and `servers`, `check`, the held-out states, `compare --version S --held-out-only` and only if it
+   passes the whole probe set. A variant that fails its held-out checks fails its own compare.
 7. `python experiments/grpo_expert_iteration.py --config ... compare --version F`, `compare --version S` and `compare
-   --version S --against F`. The winner: S if it passes its own compare and beats F; else F if it passes its own; else
-   none.
+   --version S --against F`. The winner: S if S passes its own compare and (F fails its own or S beats F head to
+   head); else F if F passes its own; else neither (roll back to the version the round continued).
 8. S won: nothing to publish (it is current). F won: `HF_HUB_OFFLINE=1 python experiments/grpo_loop.py --config
    experiments/configs/grpo/loop.toml rollback --version F` (publishes F's policy as a new version and rejects S, which
    sampled nothing). None won: `rollback --version <the version the round continued>`. With a winner, set

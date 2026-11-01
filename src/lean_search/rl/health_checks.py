@@ -19,7 +19,7 @@ import datetime
 import json
 import re
 import statistics
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -596,6 +596,8 @@ def publish_rollback(paths: LoopPaths, publisher: Publisher, version: int, trigg
 
 # The loop's own publishes (`loop.phase_trigger`), which the reward fix's marker reads too.
 PHASE_TRIGGER = re.compile(r"phase \d+")
+# `rollback_trigger`'s, by hand or after a collapse.
+ROLLBACK_TRIGGER = re.compile(r"rollback to v\d+")
 # Beside an adapter trained outside the loop (`ContinuedVersion`).
 CONTINUED_FROM_FILE = "continued_from.json"
 
@@ -608,9 +610,12 @@ class ContinuedVersion:
     policy_adapter: str
 
 
-def continued_version(adapter: Path, versions: Sequence[ModelVersion]) -> ContinuedVersion:
-    """Raises ValueError unless the adapter continued a published version's policy that no phase trained on since:
-    publishing it would otherwise drop that GRPO progress."""
+def continued_version(
+    adapter: Path, versions: Sequence[ModelVersion], rejected_versions: Collection[int]
+) -> ContinuedVersion:
+    """Raises ValueError unless the adapter continued a published version's policy that no phase trained on since
+    (publishing it would drop that GRPO progress), that was not rejected and that no rollback replaced since; other
+    adapters published by hand since (a round's other variants) are fine."""
     path = adapter / CONTINUED_FROM_FILE
     if not path.exists():
         raise ValueError(f"{path} is missing: train the adapter with grpo_expert_iteration.py train.")
@@ -625,6 +630,17 @@ def continued_version(adapter: Path, versions: Sequence[ModelVersion]) -> Contin
     ]
     if later:
         raise ValueError(f"{adapter} continued v{continued.version}, but phases published versions {later} since.")
+    if continued.version in rejected_versions:
+        raise ValueError(f"{adapter} continued v{continued.version}, which was rejected (rejected_versions.jsonl).")
+    rollbacks = [
+        version.version
+        for version in versions
+        if version.version > continued.version and ROLLBACK_TRIGGER.match(version.trigger)
+    ]
+    if rollbacks:
+        raise ValueError(
+            f"{adapter} continued v{continued.version}, but rollbacks published versions {rollbacks} since."
+        )
     return continued
 
 
@@ -646,7 +662,7 @@ def check_continued_adapter(adapter: Path, current_adapter: str, base_model: str
 
 
 def publish_adapter_by_hand(
-    paths: LoopPaths, publisher: Publisher, adapter: Path, trigger: str, base_model: str
+    paths: LoopPaths, publisher: Publisher, adapter: Path, trigger: str, base_model: str, rejected_versions: Path
 ) -> ModelVersion:
     """`grpo_loop.py publish-adapter`, with the loop stopped: an adapter trained outside the loop (an expert-iteration
     round) as the next version, its trigger naming the version it continued. Raises ValueError for an adapter the loop
@@ -655,7 +671,7 @@ def publish_adapter_by_hand(
     if PHASE_TRIGGER.fullmatch(trigger):
         raise ValueError(f"The trigger {trigger!r} is a phase's.")
     versions = read_versions(paths)
-    continued = continued_version(adapter, versions)
+    continued = continued_version(adapter, versions, read_rejected_versions(rejected_versions))
     check_continued_adapter(adapter, versions[-1].policy_adapter, base_model)
     return publish_policy_adapter(paths, publisher, str(adapter), f"{trigger}, continuing v{continued.version}")
 

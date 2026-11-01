@@ -56,9 +56,11 @@ from lean_search.rl.loop import (
     GIB,
     PHASE_OUTCOME_FILE,
     GrpoLoopPaths,
+    PhaseStage,
     ReleasedLeanMemory,
     TrainingRequest,
     read_phase_outcome,
+    read_progress,
 )
 from lean_search.rl.loop_config import GrpoLoopConfig, LoopTrainingConfig
 from lean_search.rl.renaming import StatementRenamings, search_problem
@@ -243,6 +245,22 @@ async def stop_job(process: asyncio.subprocess.Process, marker: str) -> None:
     signal_group(process.pid, signal.SIGKILL)
     signal_processes(marked_processes(marker), signal.SIGKILL)
     await process.wait()
+
+
+def stopped_loop_refusal(paths: GrpoLoopPaths) -> str | None:
+    """Why the loop is not stopped in its sampling stage, as work outside it (an expert-iteration round's training and
+    publish) needs: its process (deployment/grpo_loop.sh's loop.pid) or a job it started still runs, or it stopped in
+    another stage, whose publish or evaluations a restart must finish first. None when it is."""
+    pid_file = paths.directory / "loop.pid"
+    if pid_file.exists() and Path(f"/proc/{pid_file.read_text().strip()}").exists():
+        return f"The loop runs (pid {pid_file.read_text().strip()}): deployment/grpo_loop.sh stop, then wait for it."
+    jobs = live_children(paths.children, EVERY_RECORD)
+    if jobs:
+        return earlier_jobs_text(jobs)
+    stage = read_progress(paths.progress).stage
+    if stage != PhaseStage.SAMPLING:
+        return f"The loop stopped in its {stage} stage; stop it again once its phase's pause is logged."
+    return None
 
 
 def earlier_jobs_text(running: Sequence[LiveJob]) -> str:
