@@ -154,9 +154,10 @@ paused_repl_memory_gib = 0.0
 persistent = true
 host_directory = "/dev/shm/lean_search"
 # The KL penalty's reference (phase.toml kl_coefficient); unset: [initial] policy_adapter. After an expert-iteration
-# round kept by its decision rule (src/lean_search/rl/README.md, "Expert iteration"), its adapter (the path published),
-# so the penalty does not pull the policy back towards v0; the phase after the round scores the reference for free:
-# kl_reference_policy_adapter = "/workspace/checkpoints/grpo_loop_v1_expert_iteration_01/adapter"
+# round kept by its decision rule (src/lean_search/rl/README.md, "Expert iteration"), the kept variant's adapter
+# exactly as `grpo_expert_iteration.py compare` prints it, so the penalty does not pull the policy back towards v0;
+# the phase after the round scores the reference for free:
+# kl_reference_policy_adapter = "/workspace/checkpoints/<the kept variant's run_name>/adapter"
 
 [statements]
 kind = "curriculum"

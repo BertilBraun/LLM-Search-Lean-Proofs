@@ -22,6 +22,7 @@ import numpy as np
 from lean_search.monitoring.families import PassComparison, PassRating, ProbeRatings, VersionRating
 from lean_search.monitoring.store import MetricsWriter
 from lean_search.search.records import read_results
+from lean_search.search.search import StopReason
 
 # Weak priors, so that a version or problem solved every time (or never) keeps a finite estimate.
 DIFFICULTY_PRIOR = 0.1
@@ -37,6 +38,8 @@ class ProbeOutcome:
     proved: bool
     # The expansions its first proof took; None when unproved.
     expansions_to_proof: int | None
+    # The search stopped on the per-problem wall-clock cap.
+    wall_clock_stop: bool = False
 
 
 @dataclass(frozen=True)
@@ -82,6 +85,7 @@ def read_probe_run(directory: Path) -> ProbeRun:
                 result.problem_name,
                 result.proved,
                 (result.solved_at or result.accounting).expansions if result.proved else None,
+                result.stop_reason == StopReason.WALL_CLOCK_BUDGET,
             )
             for result in read_results(directory / "results.jsonl")
         ),
@@ -335,37 +339,89 @@ def probe_ratings(found: FinishedRuns, markers: LoopMarkers, seed: int = 0) -> P
 
 
 @dataclass(frozen=True)
-class PairedDifference:
-    """A run's solves minus, per problem, the latest earlier run's of another version, over the problems both have."""
-
+class DifferenceInterval:
     problems: int
-    # Mean per-problem difference (solved 1, else 0) and its 95% bootstrap interval over problems.
+    # Mean per-problem difference of solves (1 or 0) and its 95% bootstrap interval over problems; NaN without any.
     difference: float
     lower: float
     upper: float
 
 
-def paired_solve_difference(
-    runs: Sequence[ProbeRun], run: ProbeRun, excluded_versions: Collection[int], seed: int = 0
-) -> PairedDifference:
-    """`runs` in the order they finished (`finished_probe_runs`); runs of `excluded_versions` (the rejected ones) are
-    never the reference."""
-    latest: dict[str, bool] = {}
-    for earlier in runs:
-        if earlier.finished_at >= run.finished_at:
-            break
-        if earlier.policy_version != run.policy_version and earlier.policy_version not in excluded_versions:
-            latest |= {outcome.problem: outcome.proved for outcome in earlier.outcomes}
-    differences = np.array(
-        [
-            float(outcome.proved) - float(latest[outcome.problem])
-            for outcome in run.outcomes
-            if outcome.problem in latest
-        ]
-    )
-    draws = np.random.default_rng(seed).choice(differences, size=(BOOTSTRAP_SAMPLES, len(differences)))
+def difference_interval(differences: Sequence[float], seed: int) -> DifferenceInterval:
+    if not differences:
+        return DifferenceInterval(0, float("nan"), float("nan"), float("nan"))
+    values = np.asarray(differences)
+    draws = np.random.default_rng(seed).choice(values, size=(BOOTSTRAP_SAMPLES, len(values)))
     lower, upper = np.percentile(draws.mean(axis=1), [2.5, 97.5])
-    return PairedDifference(len(differences), float(differences.mean()), float(lower), float(upper))
+    return DifferenceInterval(len(values), float(values.mean()), float(lower), float(upper))
+
+
+@dataclass(frozen=True)
+class ReferenceDifference:
+    policy_version: int
+    difference: DifferenceInterval
+
+
+@dataclass(frozen=True)
+class PairedComparison:
+    """A run's solves minus, per problem, its reference's: the last of the reference runs that searched it."""
+
+    overall: DifferenceInterval
+    # On the problems where neither search stopped on the wall-clock cap.
+    without_wall_clock_stops: DifferenceInterval
+    by_reference_version: tuple[ReferenceDifference, ...]
+    wall_clock_stops: int
+    reference_wall_clock_stops: int
+    # The runs that are some problem's reference.
+    reference_runs: tuple[str, ...]
+
+
+def earlier_references(runs: Sequence[ProbeRun], run: ProbeRun, excluded_versions: Collection[int]) -> list[ProbeRun]:
+    """`runs` in the order they finished (`finished_probe_runs`): those before `run` of other versions, never of
+    `excluded_versions` (the rejected ones)."""
+    return [
+        earlier
+        for earlier in runs
+        if earlier.finished_at < run.finished_at
+        and earlier.policy_version != run.policy_version
+        and earlier.policy_version not in excluded_versions
+    ]
+
+
+def paired_comparison(run: ProbeRun, references: Sequence[ProbeRun], seed: int = 0) -> PairedComparison:
+    latest: dict[str, tuple[ProbeOutcome, ProbeRun]] = {}
+    for reference in references:
+        latest |= {outcome.problem: (outcome, reference) for outcome in reference.outcomes}
+    pairs = [(outcome, *latest[outcome.problem]) for outcome in run.outcomes if outcome.problem in latest]
+    versions = sorted({reference.policy_version for _, _, reference in pairs})
+    return PairedComparison(
+        overall=difference_interval([own.proved - other.proved for own, other, _ in pairs], seed),
+        without_wall_clock_stops=difference_interval(
+            [
+                own.proved - other.proved
+                for own, other, _ in pairs
+                if not own.wall_clock_stop and not other.wall_clock_stop
+            ],
+            seed,
+        ),
+        by_reference_version=tuple(
+            ReferenceDifference(
+                version,
+                difference_interval(
+                    [
+                        own.proved - other.proved
+                        for own, other, reference in pairs
+                        if reference.policy_version == version
+                    ],
+                    seed,
+                ),
+            )
+            for version in versions
+        ),
+        wall_clock_stops=sum(own.wall_clock_stop for own, _, _ in pairs),
+        reference_wall_clock_stops=sum(other.wall_clock_stop for _, other, _ in pairs),
+        reference_runs=tuple(sorted({reference.name for _, _, reference in pairs})),
+    )
 
 
 def record_ratings(run_directory: Path, interval_seconds: float) -> None:

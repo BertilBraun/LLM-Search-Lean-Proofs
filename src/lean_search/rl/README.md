@@ -808,91 +808,148 @@ inverse changes restore them), so a value model trained on numbered names sees w
 turns it on for the named arm (value v0), the loop leaves it off because its value model trains on its own renamed
 trees.
 
-## Expert iteration (`expert_iteration_data.py`, `experiments/grpo_expert_iteration.py`)
+## Expert iteration (`expert_iteration_data.py`, `expert_iteration_decision.py`, `experiments/grpo_expert_iteration.py`)
 
 One rejection-sampling fine-tuning round between GRPO phases (owner decision 2026-11-01: GRPO moves slowly, the
 advantaged tokens' ratio ~1.0005 per phase, the probe +3 points over 9 phases). The data is the loop's own verified
-blocks, exactly as sampled; the round is published as the next loop version and GRPO continues from it.
+blocks, exactly as sampled; the round is published as the next loop version and GRPO continues from it. Three
+variants train on the same data (`experiments/configs/grpo/expert_iteration_1.toml`: A, 5e-5 for 1 epoch;
+`expert_iteration_1_b.toml`: B, 1e-4 for 1 epoch; `expert_iteration_1_c.toml`: C, 1e-4 for 2 epochs), screened on their
+two validation losses; the best two are published and evaluated, the winner kept.
 
-**Data** (`build`, a CPU process pool, the loop may keep sampling). The trees of the phases from the reward fix's first
-phase (`reward_fix.json`) to `[data] last_phase` (`experiments/configs/grpo/expert_iteration_1.toml`), labelled with
-the loop's own `label_graph` and `policy_tactics`. A recorded sample is an example when its node is on the proof graph,
-it is a first-round sample (not the feedback round's) of a version from the one the fix's first phase published on
-(`probe_rating.read_markers`), never a rejected version's, its every tactic is on the proof graph, none leaves a claim
-open, and it is on a shortest route: its last state is as many steps closer to a proof as it has tactics. The example
-is the recorded prompt's ids plus the recorded token ids, the loop's `PolicySequence.tokenized`; samples tokenized
-again, forced at the token cap or whose tokens do not decode to their text are dropped. Trees of the probe, gate and
-miniF2F statements and states equal to a held-out state are dropped too (both counts should be 0). Then: one example
-per state across trees, at most `blocks_per_state` (2) distinct blocks per state and `states_per_statement` (6) states
-per statement (those on the root's shortest route first), both by a seeded hash so that block length plays no part;
-easy states (every first-round sample a proof-graph block, which GRPO gives no advantage) at most `max_easy_share`
-(20%) of the examples; 5% of the statements for validation (`mixing.is_held_out`). `count` reads only the tree index
-(the solved trees and their shortest proofs per phase). The build's README.md gives the count per filter, the selection,
-block lengths, explanation characters, the easy share, the share ending in an end of turn and the prompts unlike the
-replay's (`render_prompt` with visible reasoning).
+**Data** (`build`, a CPU process pool beside the sampling loop). The trees of the phases from the reward fix's first
+phase (`reward_fix.json`) to `[data] last_phase`, labelled with the loop's own `label_graph` and `policy_tactics`. A
+recorded sample is an example when its node is on the proof graph, it is a first-round sample (not the feedback
+round's) of a version from the one the fix's first phase published on (`probe_rating.read_markers`), never a rejected
+version's, its every tactic is on the proof graph, none leaves a claim open, and it is on a shortest route: its last
+state is as many steps closer to a proof as it has tactics. The example is the recorded prompt's ids plus the recorded
+token ids, the loop's `PolicySequence.tokenized`; samples tokenized again, forced at the token cap or whose tokens do
+not decode to their text are dropped. Trees of the probe, gate and miniF2F statements and states equal to a held-out
+state are dropped too (both counts should be 0). Then: one example per state across trees, at most `blocks_per_state`
+(2) distinct blocks per state and `states_per_statement` (6) states per statement (those on the root's shortest route
+first), both by a seeded hash so that block length plays no part; easy states at most `max_easy_share` (20%) of the
+examples, a state being easy when at least `easy_proof_graph_share` (7 of 8) of its first-round samples, pooled over
+every tree that searched it (the below-band statements are searched again and again), ran a proof-graph block (GRPO
+gives those little advantage); 5% of the statements for validation (`mixing.is_held_out`). `CompletionSelector`
+selects as the workers' trees arrive, keeping per state only the blocks the caps can keep, so the parent's memory stays
+bounded; a worker that dies (killed for memory) fails the build with nothing written. `count` reads only the tree index
+(every tree of the phases, whichever version sampled it); both tolerate the half-written last index line of the
+running loop. The build's README.md gives the count per filter, the selection, the pooled easy states, block lengths,
+explanation characters, the easy share, the share from below the band, the share ending in an end of turn and the
+prompts unlike the replay's (`render_prompt` with visible reasoning). The node's first build (phases from the fix to
+25): 2,947 solved trees, 13,168 blocks kept before the caps, 6,826 training and 292 validation examples, 2.9M tokens
+(1.28M completion), in ~80 s on 16 processes.
 
-**Training** (`train`, torchrun on the 4 GPUs with the loop stopped): `training/sft.py` continues the loop's current
-policy adapter (`models/current.json`, read at train time: version numbers differ from phase numbers after the
-rollbacks) on raw Qwen3.5-4B, as every phase does (rank and alpha stay the adapter's, 64/64): learning rate 5e-5,
-warmup 0.03, cosine to 0.1, 1 epoch, 4 GPUs x 1 micro-batch of 16,384 packed tokens (the original SFT's tokens per
-step), the loop's Lean and math replay at 30% and 10% of the training tokens, the validation loss every quarter of the
-steps on the expert-iteration validation set plus 1,000 replay validation examples, no greedy generation. The adapter
-goes to `$LEAN_SEARCH_CHECKPOINTS/grpo_loop_v1_expert_iteration_01/adapter`, outside the phase directories: the
-retention never deletes it.
+**Training** (`train`, torchrun on the 4 GPUs with the loop stopped; `train --dry-run` on the CPU beside the loop
+assembles the data and prints the examples, the completion-token shares and the steps). `training/sft.py` continues
+the loop's current policy adapter (`models/current.json`, read at train time) on raw Qwen3.5-4B, as every phase does
+(rank and alpha stay the adapter's, 64/64): warmup 0.03, cosine to 0.1, 4 GPUs x 1 micro-batch of 16,384 packed tokens
+(the original SFT's tokens per step), the loop's Lean and math replay at 30% and 10% of the training completion tokens
+(the loss is normalised over completion tokens), no greedy generation. Three evaluations (the start, halfway, the end),
+each reporting the expert-iteration validation loss and the replay validation loss (1,000 examples of the starting
+policy's SFT validation set) apart: the first falls as the round fits its data, the second is the forgetting signal.
+`train` refuses before any GPU time when the adapter directory exists, when the current adapter is on another base
+than `[sft] model`, and with less than 20 GiB free next to the checkpoints (the adapter and the publish's merge) or 8
+GiB in `/dev/shm` (NCCL; the persistent trainer's parked bases must be gone). The adapter goes to
+`$LEAN_SEARCH_CHECKPOINTS/<run_name>/adapter` (outside the phase directories: the retention never deletes it) with
+`continued_from.json` (the version it continued), and `training_summary.json` beside it: the completion-token shares
+and the two validation curves, to screen the variants on. At ~5M tokens an epoch (the expert-iteration tokens plus
+the replay's) and 7-9k tokens/s, an epoch takes 10-15 min plus ~5 min loading.
+
+**Sharpening.** The examples were sampled at temperature 0.8, and the SFT fits them with plain logits (temperature 1):
+fitting samples of p^(1/0.8) moves p towards p^1.25, so served at 0.8 again the policy samples more sharply than the
+round's filter alone would make it (about like the version before it at 0.64 after a full fit). The owner accepts the
+sharpening; whether it helps is decided by the probe, and its cost to diversity by `compare`'s check of distinct blocks
+per expansion and explanation lengths. Per-sample held-out success may rise from the sharpening alone.
 
 **Publishing** (`grpo_loop.py publish-adapter --policy-adapter PATH --trigger "..."`, health_checks.py
 `publish_adapter_by_hand` on `publish_policy_adapter`, which `publish_rollback` uses too): the adapter as the next
 version with the current value adapter, merged on the CPU (3-5 min), the current value model's merged weights reused
-(`MergedPublisher.reuse_merges`; `rollback` reuses them too). It refuses while the loop or one of its jobs runs
-(`loop.pid`, `children/`), outside the sampling stage, for an adapter on another base than `serving.policy_base_model`
-or of another rank or scale than the current adapter (the persistent trainer loads it into its resident LoRA
-parameters, the KL reference's swap asserts both), and for a phase's trigger ("phase <n>", which the loop's publish and
-the reward fix's marker read). The next phase continues the published adapter and trains on its interrupted phase's
-trees, sampled by both versions. A later `rollback --version <the version before>` rejects the round's version like any
-other.
+(`MergedPublisher.reuse_merges`; `rollback` reuses them too); its trigger is the given one plus ", continuing v<k>".
+It refuses while the loop or one of its jobs runs (`loop.pid`, which `grpo_loop.sh stop` removes only once the loop
+exited, and `children/`), outside the sampling stage, without `continued_from.json` or when a phase published a
+version after the one the adapter continued (its GRPO progress would be dropped; other variants of the same round may
+publish one after another), for an adapter on another base than `serving.policy_base_model` or of another rank or
+scale than the current adapter (the persistent trainer loads it into its resident LoRA parameters, the KL reference's
+swap asserts both), and for a phase's trigger ("phase <n>", which the loop's publish and the reward fix's marker read).
 
 **KL reference** (`[training] kl_reference_policy_adapter`, empty: `[initial] policy_adapter`): with the round kept, set
-it to the round's adapter, the exact path published, so the penalty (0.01) anchors on a policy trained on verified data
-instead of pulling back towards v0 and undoing the round; the first phase after the round then scores its reference for
-free (the reference is the adapter it starts from), and the dashboard's KL to the starting policy restarts near 0.
+it to the kept version's adapter, exactly as `compare` prints it, so the penalty (0.01) anchors on a policy trained on
+verified data instead of pulling back towards v0 and undoing the round; the first phase after the round then scores its
+reference for free (the reference is the adapter it starts from), and the dashboard's KL to the starting policy
+restarts near 0 (from then on it measures the drift from the round, not from v0).
 
-**Decision** (`compare --version <round's version>`): with the servers on the round's version, the held-out states
-(`grpo_evaluate.py --target held_out_states`) and the whole probe set (`--target probe`, no slot: `probe_v<version>`).
-Keep the round if the held-out valid Lean and success are at least `[health] min_held_out_valid_fraction` and
-`min_held_out_success_fraction` (0.9) of version 0's, and the probe's paired solve difference against each problem's
-latest earlier run (`probe_rating.paired_solve_difference`, rejected versions never the reference) is at least 0 with
-its lower 95% bound above -2 points (the run-to-run noise per third); else `rollback --version <the version before>`
-and leave `kl_reference_policy_adapter` unset. A whole-set run rates the version on the joint scale (the rating
-recorder picks it up) but forms no pass. A later held-out collapse rolls back to the last version with a healthy
-held-out line in health.jsonl, never to the round's: the offline held-out run writes none.
+**Decision** (`compare --version <k>`, `compare --version <k> --against <m>`; `expert_iteration_decision.round_checks`).
+With the servers on version k, its held-out states (`grpo_evaluate.py --target held_out_states`) and then its whole
+probe set (`--target probe`, no slot: `probe_v<k>`); skip the probe when the held-out states already fail. Without
+`--against`, the references are the loop's own runs up to the version the round continued (`continued_from.json`):
+each problem's latest earlier probe run of such a version that is not rejected, and the newest held-out run of one.
+With `--against m`, version m's held-out run and whole-set probe run, paired per problem. `compare` prints the held-out
+valid Lean and success of version 0, the reference and k; the paired solve difference overall, on the problems neither
+search stopped on the wall-clock cap, and per reference version, with the wall-clock stops of both sides; the
+joint-scale ratings of k (and m) and of the latest pass; and from the probe trees' first round the distinct blocks per
+expansion, the median explanation characters, the bare-have share and the tactics per complete block of the
+references and of k. It keeps k only if every check passes: held-out valid Lean and success at least 0.9 of version
+0's (`[health]` fractions); held-out valid Lean at least the reference's minus 2 per-sample standard errors; the paired
+difference at least 0 with its lower 95% bound above -2 points; distinct blocks per expansion at least 0.75 and the
+median explanation at least 0.7 of the references' (the loop's own health thresholds, applied before the restart).
+What the probe rule means: the whole set has ~500 problems with about 63 discordant between two runs, so the paired
+difference's 95% half-width is about 3 points, and a lower bound above -2 points needs about +1 point observed. It
+demands evidence of a gain rather than testing non-inferiority: by the true effect, it keeps a round with probability
+about 9% at -1 point, 24% at 0, 60% at +1.5 and 89% at +3. Without `--against` the references mix the last thirds'
+versions, on average a little below the continued version (about 0.7 points at the loop's trend), which leans towards
+keeping; the per-reference-version rows show it, and a rating below the latest pass while the paired difference is
+positive is a reason to roll back. On keeping, `compare` prints the adapter path for `kl_reference_policy_adapter`;
+otherwise the `rollback` to run.
 
-**The round on the node** (about 2-2.5 h with the loop off, 45 min of it training):
+**Rollbacks after the round.** A later held-out collapse rolls back to the last version with a healthy held-out line
+in health.jsonl, never to the round's (the offline held-out run writes none), and `kl_reference_policy_adapter` would
+still name the round's adapter: then choose by hand, `rollback --version <the round's version>` or unset the setting.
+Request a held-out evaluation at the first pause after the restart (`grpo_loop.py request-evaluation --target
+held_out_states`) so that the round's successor gets a healthy line soon.
 
-1. While phase 26 samples: `python experiments/grpo_expert_iteration.py --config
-   experiments/configs/grpo/expert_iteration_1.toml count` (seconds), then `HF_HUB_OFFLINE=1 BACKGROUND_CPUS=16
-   deployment/background.sh python experiments/grpo_expert_iteration.py --config ... build --processes 16` (10-20 min;
-   read its README.md: held out 0, the easy share, block lengths and explanations like the phases').
-2. In the sampling stage only, never during a pause: `deployment/grpo_loop.sh stop` (1-2 min; searches in flight are
-   lost), and wait until `loop.log` shows the stop and `nvidia-smi` shows free GPUs.
-3. `HF_HUB_OFFLINE=1 torchrun --standalone --nproc-per-node 4 experiments/grpo_expert_iteration.py --config ... train`
-   (40-50 min).
-4. `HF_HUB_OFFLINE=1 python experiments/grpo_loop.py --config experiments/configs/grpo/loop.toml publish-adapter
-   --policy-adapter /workspace/checkpoints/grpo_loop_v1_expert_iteration_01/adapter --trigger "expert iteration 1 from
-   v25"` (3-5 min CPU merge).
-5. `HF_HUB_OFFLINE=1 deployment/grpo_loop.sh servers`, then `check` (4-6 min).
-6. `HF_HUB_OFFLINE=1 python experiments/grpo_evaluate.py --loop-directory /workspace/runs/grpo_loop_v1 --target
-   held_out_states --concurrency 112 --phase 25` (~5 min), then the same with `--target probe` (60-80 min).
-7. `python experiments/grpo_expert_iteration.py --config ... compare --version 26`. Kept: uncomment
-   `kl_reference_policy_adapter` in `loop.toml` (the path of step 4). Else: `python experiments/grpo_loop.py --config
-   experiments/configs/grpo/loop.toml rollback --version 25` (with `HF_HUB_OFFLINE=1`; the loop serves the new version
-   when it starts). Then
-   `deployment/grpo_loop.sh loop`.
+**The round on the node.** No version numbers are fixed in advance: `publish-adapter` prints each version it
+publishes, `compare` the rollback target. Every command that loads a model or tokenizer runs with `HF_HUB_OFFLINE=1`
+(the node has no route to the Hub; the bases are cached).
 
-Every command that loads a model or tokenizer runs with `HF_HUB_OFFLINE=1`: the node has no route to the Hub, and the
-bases are cached. After the restart, phase 26's sampler agreement by age (`sampler_by_age`) for the round's samples should look like
-earlier phases' (the format and the bf16 merge), and the bare-have warnings should stay quiet. On the node only: the
-round's adapter has the current adapter's keys (`saved_adapter_weights` of both), the tokenizer's decode of recorded
-tokens matches as in the loop (the build's `token_mismatch` near 0).
+1. While the loop samples: `python experiments/grpo_expert_iteration.py --config
+   experiments/configs/grpo/expert_iteration_1.toml count`, then `HF_HUB_OFFLINE=1 BACKGROUND_CPUS=16
+   deployment/background.sh python experiments/grpo_expert_iteration.py --config ... build --processes 16` (once: B
+   and C read A's data; read its README.md: held out 0, the easy share, the below-band share, block lengths and
+   explanations like the phases'), and `HF_HUB_OFFLINE=1 python experiments/grpo_expert_iteration.py --config ... train
+   --dry-run` (its "would refuse" line for `/dev/shm` is expected while the persistent trainer runs).
+2. Stop the loop right after a phase publishes (`loop.log`: "Published version <k>"), in the first minutes of the next
+   sampling stage, so that the next phase holds almost no samples of the version before the round:
+   `deployment/grpo_loop.sh stop` waits until the loop exited (at most 5 min; it stops the servers too). Never stop it during a pause. The phase
+   that just published may postdate `[data] last_phase`; the round still continues version k, which `train` reads.
+3. Train the three variants back to back: `HF_HUB_OFFLINE=1 torchrun --standalone --nproc-per-node 4
+   experiments/grpo_expert_iteration.py --config experiments/configs/grpo/expert_iteration_1.toml train`, then with
+   `expert_iteration_1_b.toml` and `expert_iteration_1_c.toml` (about 15-20, 15-20 and 30 min).
+4. Screen them on `$LEAN_SEARCH_CHECKPOINTS/<run_name>/training_summary.json`: discard a variant whose final replay
+   loss rose more than a few percent over its step-0 value; of the rest, the lowest final expert-iteration loss is the
+   first, the next the second.
+5. `HF_HUB_OFFLINE=1 python experiments/grpo_loop.py --config experiments/configs/grpo/loop.toml publish-adapter
+   --policy-adapter $LEAN_SEARCH_CHECKPOINTS/<first run_name>/adapter --trigger "expert iteration 1 <variant>"`: it
+   prints version F. Then `HF_HUB_OFFLINE=1 deployment/grpo_loop.sh servers` and `check`; `HF_HUB_OFFLINE=1 python
+   experiments/grpo_evaluate.py --loop-directory $LEAN_SEARCH_RUNS/grpo_loop_v1 --target held_out_states --concurrency
+   112 --phase <the last phase that closed>` (~5 min) and, if it passes `compare`'s held-out checks, the same with
+   `--target probe` (75-90 min).
+6. The same for the second variant (version S): `publish-adapter`, then `deployment/grpo_loop.sh stop` (stops the
+   servers serving F) and `servers`, `check`, the held-out states and the whole probe set.
+7. `python experiments/grpo_expert_iteration.py --config ... compare --version F`, `compare --version S` and `compare
+   --version S --against F`. The winner: S if it passes its own compare and beats F; else F if it passes its own; else
+   none.
+8. S won: nothing to publish (it is current). F won: `HF_HUB_OFFLINE=1 python experiments/grpo_loop.py --config
+   experiments/configs/grpo/loop.toml rollback --version F` (publishes F's policy as a new version and rejects S, which
+   sampled nothing). None won: `rollback --version <the version the round continued>`. With a winner, set
+   `kl_reference_policy_adapter` in `loop.toml` to the path `compare` printed for it. Then `deployment/grpo_loop.sh
+   loop` (it serves the current version as it starts) and `grpo_loop.py request-evaluation --target held_out_states`.
+
+After the restart, the first phase trains its few samples of the version before the round as if the round had sampled
+them (no sampler correction; PPO's clipping bounds them): its `sampler_agreement_by_version` rows of that version
+diverge, as expected, while the round's own samples should look like earlier phases' (the format and the bf16 merge);
+the bare-have warnings should stay quiet. On the node only: the round's adapter has the current adapter's keys
+(`saved_adapter_weights` of both).
 
 ## Cheap tests
 

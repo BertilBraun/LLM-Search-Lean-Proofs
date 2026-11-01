@@ -594,6 +594,40 @@ def publish_rollback(paths: LoopPaths, publisher: Publisher, version: int, trigg
     return publish_policy_adapter(paths, publisher, target.policy_adapter, trigger)
 
 
+# The loop's own publishes (`loop.phase_trigger`), which the reward fix's marker reads too.
+PHASE_TRIGGER = re.compile(r"phase \d+")
+# Beside an adapter trained outside the loop (`ContinuedVersion`).
+CONTINUED_FROM_FILE = "continued_from.json"
+
+
+@dataclass(frozen=True)
+class ContinuedVersion:
+    """The published version an adapter trained outside the loop continued, written beside it by its training."""
+
+    version: int
+    policy_adapter: str
+
+
+def continued_version(adapter: Path, versions: Sequence[ModelVersion]) -> ContinuedVersion:
+    """Raises ValueError unless the adapter continued a published version's policy that no phase trained on since:
+    publishing it would otherwise drop that GRPO progress."""
+    path = adapter / CONTINUED_FROM_FILE
+    if not path.exists():
+        raise ValueError(f"{path} is missing: train the adapter with grpo_expert_iteration.py train.")
+    continued = from_json_object(ContinuedVersion, json.loads(path.read_text(encoding="utf-8")))
+    base = next((version for version in versions if version.version == continued.version), None)
+    if base is None or base.policy_adapter != continued.policy_adapter:
+        raise ValueError(f"{adapter} continued {continued}, which is not a published version's policy.")
+    later = [
+        version.version
+        for version in versions
+        if version.version > continued.version and PHASE_TRIGGER.fullmatch(version.trigger)
+    ]
+    if later:
+        raise ValueError(f"{adapter} continued v{continued.version}, but phases published versions {later} since.")
+    return continued
+
+
 def check_continued_adapter(adapter: Path, current_adapter: str, base_model: str) -> None:
     """A policy adapter the loop can publish and continue: on the policy base, and of the current adapter's rank and
     scale, which the persistent trainer's resident LoRA parameters and the KL reference's swap keep. Raises ValueError
@@ -615,12 +649,15 @@ def publish_adapter_by_hand(
     paths: LoopPaths, publisher: Publisher, adapter: Path, trigger: str, base_model: str
 ) -> ModelVersion:
     """`grpo_loop.py publish-adapter`, with the loop stopped: an adapter trained outside the loop (an expert-iteration
-    round) as the next version. Raises ValueError for an adapter the loop cannot continue or a phase's trigger, which
-    the loop would take for its own publish."""
-    if re.fullmatch(r"phase \d+", trigger):
+    round) as the next version, its trigger naming the version it continued. Raises ValueError for an adapter the loop
+    cannot continue, one trained on a version phases moved on from, or a phase's trigger, which the loop would take for
+    its own publish."""
+    if PHASE_TRIGGER.fullmatch(trigger):
         raise ValueError(f"The trigger {trigger!r} is a phase's.")
-    check_continued_adapter(adapter, read_versions(paths)[-1].policy_adapter, base_model)
-    return publish_policy_adapter(paths, publisher, str(adapter), trigger)
+    versions = read_versions(paths)
+    continued = continued_version(adapter, versions)
+    check_continued_adapter(adapter, versions[-1].policy_adapter, base_model)
+    return publish_policy_adapter(paths, publisher, str(adapter), f"{trigger}, continuing v{continued.version}")
 
 
 def roll_back_by_hand(paths: LoopPaths, publisher: Publisher, version: int, rejected_versions: Path) -> ModelVersion:

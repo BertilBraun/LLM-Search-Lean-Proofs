@@ -32,6 +32,8 @@ from lean_search.monitoring.families import HealthMeasurements, HealthThresholds
 from lean_search.monitoring.store import RunReader
 from lean_search.rl.evaluation import EvaluationKind, EvaluationPaths
 from lean_search.rl.health_checks import (
+    CONTINUED_FROM_FILE,
+    ContinuedVersion,
     ReferenceHabits,
     RewardFix,
     append_health,
@@ -49,7 +51,7 @@ from lean_search.rl.loop import GrpoLoop, LoopProgress, PhaseStage, read_progres
 from lean_search.rl.training_phase import TrainingPhaseConfig, label_phase_data
 from lean_search.rl.tree_store import TreeStore
 from lean_search.search import Accounting, SearchResult, StopReason, tree_record
-from lean_search.search.records import from_json_object, write_tree
+from lean_search.search.records import from_json_object, to_json, write_tree
 from lean_search.search.tree import EdgeOutcome, StepSource
 
 HELD_OUT_BLOCK = """[evaluation.held_out_states]
@@ -409,12 +411,22 @@ async def test_a_rollback_by_hand_after_a_hard_stop_rejects_nothing_new(tmp_path
     assert read_rejected_versions(world.paths.rejected_versions) == (1, 3)
 
 
-def lora_adapter(directory: Path, rank: int = 64, base_model: str = "start-policy") -> Path:
-    """An adapter directory with only its config, as PEFT writes it."""
+VERSION_ZERO_CONTINUED = ContinuedVersion(0, "")
+
+
+def lora_adapter(
+    directory: Path,
+    rank: int = 64,
+    base_model: str = "start-policy",
+    continued: ContinuedVersion | None = VERSION_ZERO_CONTINUED,
+) -> Path:
+    """An adapter directory with only its config, as PEFT writes it, and the version its training continued."""
     directory.mkdir(parents=True)
     config = {"r": rank, "lora_alpha": rank, "use_rslora": False, "rank_pattern": {}, "alpha_pattern": {}}
     config["base_model_name_or_path"] = base_model
     (directory / "adapter_config.json").write_text(json.dumps(config), encoding="utf-8")
+    if continued is not None:
+        (directory / CONTINUED_FROM_FILE).write_text(to_json(continued), encoding="utf-8")
     return directory
 
 
@@ -433,7 +445,31 @@ def test_publish_adapter_records_the_next_version(tmp_path: Path) -> None:
     adapter = lora_adapter(tmp_path / "round-1")
     publish_by_hand(world, adapter)
     current = read_current(world.paths.models)
-    assert (current.version, current.policy_adapter, current.trigger) == (1, str(adapter), "expert iteration 1")
+    assert (current.version, current.policy_adapter) == (1, str(adapter))
+
+
+def test_publish_adapter_names_the_version_it_continued(tmp_path: Path) -> None:
+    world = world_at_version_zero(tmp_path)
+    assert publish_by_hand(world, lora_adapter(tmp_path / "round-1")).trigger == "expert iteration 1, continuing v0"
+
+
+def test_publish_adapter_refuses_an_adapter_without_the_version_it_continued(tmp_path: Path) -> None:
+    world = world_at_version_zero(tmp_path)
+    with pytest.raises(ValueError, match="continued_from"):
+        publish_by_hand(world, lora_adapter(tmp_path / "round-1", continued=None))
+
+
+async def test_publish_adapter_refuses_an_adapter_of_a_version_a_phase_moved_on_from(tmp_path: Path) -> None:
+    world = world_at_version_zero(tmp_path)
+    await run_until(world, world.loop(), phases=1)
+    with pytest.raises(ValueError, match="phases published"):
+        publish_by_hand(world, lora_adapter(tmp_path / "round-1"))
+
+
+def test_a_second_variant_of_the_same_version_publishes_after_the_first(tmp_path: Path) -> None:
+    world = world_at_version_zero(tmp_path)
+    publish_by_hand(world, lora_adapter(tmp_path / "round-1"))
+    assert publish_by_hand(world, lora_adapter(tmp_path / "round-1b")).version == 2
 
 
 def test_publish_adapter_keeps_the_current_value_adapter(tmp_path: Path) -> None:

@@ -1,4 +1,5 @@
-# The first expert-iteration round of grpo_loop_v1 (experiments/grpo_expert_iteration.py; src/lean_search/rl/README.md,
+# Variant A of the first expert-iteration round of grpo_loop_v1 (B and C: expert_iteration_1_b.toml, _c.toml;
+# experiments/grpo_expert_iteration.py; src/lean_search/rl/README.md,
 # "Expert iteration"): the loop's verified proof-graph blocks of the phases since the reward fix, as sampled, fine-tune
 # the current version's policy adapter on raw Qwen3.5-4B with replay; then grpo_loop.py publish-adapter.
 #   python experiments/grpo_expert_iteration.py --config experiments/configs/grpo/expert_iteration_1.toml count
@@ -18,14 +19,17 @@ last_phase = 25
 # length plays no part), per statement at most 6 states (those on the root's shortest route first).
 blocks_per_state = 2
 states_per_statement = 6
-# States where every first-round sample ran a proof-graph block: at most 20% of the examples.
+# Easy states: at least 7 of 8 first-round samples, pooled over every tree, ran a proof-graph block; at most 20% of
+# the examples.
+easy_proof_graph_share = 0.875
 max_easy_share = 0.2
 validation_fraction = 0.05
 seed = "grpo-expert-iteration-1"
 # As phase.toml's [reward] off_graph_min_expanded_nodes.
 off_graph_min_expanded_nodes = 4
 
-# The loop's own replay ([training] lean_replay, math_replay), ~30% and ~10% of the training tokens.
+# The loop's own replay ([training] lean_replay, math_replay), 30% and 10% of the training completion tokens; the
+# replay validation loss is reported apart from the expert-iteration one.
 [replay]
 lean_replay = "reasoning/visible_student_v3_numbered/train.jsonl"
 math_replay = "reasoning/visible_student_v3_numbered/math.jsonl"
@@ -67,8 +71,9 @@ packing = true
 compile_layers = true
 seed = 0
 
-# train sets interval_steps (a quarter of the steps) and validation_examples (all of them: the expert-iteration
-# validation set, then the replay's). No greedy generation: it took 8-10 min per evaluation.
+# train sets interval_steps (half the steps: evaluations at the start, halfway and the end) and validation_examples
+# (the whole expert-iteration validation set; the replay's is evaluated apart). No greedy generation: it took 8-10 min
+# per evaluation.
 [sft.evaluation]
 interval_steps = 100
 validation_examples = 2000

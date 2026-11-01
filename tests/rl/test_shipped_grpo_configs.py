@@ -308,12 +308,31 @@ def test_the_other_loops_run_no_a_b(name: str) -> None:
     assert loop(name).sampling.options_arm.name == ""
 
 
-def expert_iteration() -> ExpertIterationConfig:
-    return parse_expert_iteration_config((CONFIGS / "grpo/expert_iteration_1.toml").read_text(encoding="utf-8"))
+def expert_iteration(name: str = "expert_iteration_1.toml") -> ExpertIterationConfig:
+    return parse_expert_iteration_config((CONFIGS / "grpo" / name).read_text(encoding="utf-8"))
 
 
 def test_expert_iteration_config_parses() -> None:
     assert expert_iteration().sft.optimization.learning_rate == 5e-5
+
+
+@pytest.mark.parametrize(
+    ("name", "run_name", "learning_rate", "epochs"),
+    [
+        ("expert_iteration_1_b.toml", "grpo_loop_v1_expert_iteration_01b", 1e-4, 1),
+        ("expert_iteration_1_c.toml", "grpo_loop_v1_expert_iteration_01c", 1e-4, 2),
+    ],
+)
+def test_expert_iteration_variants_differ_only_in_run_name_learning_rate_and_epochs(
+    name: str, run_name: str, learning_rate: float, epochs: int
+) -> None:
+    variant = expert_iteration(name)
+    base = expert_iteration()
+    optimization = dataclasses.replace(base.sft.optimization, learning_rate=learning_rate, epochs=epochs)
+    expected = dataclasses.replace(
+        base, run_name=run_name, sft=dataclasses.replace(base.sft, optimization=optimization)
+    )
+    assert variant == expected
 
 
 def test_expert_iteration_trains_on_the_loops_policy_base() -> None:
