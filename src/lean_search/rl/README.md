@@ -879,15 +879,17 @@ held-out line in health.jsonl, never to the round's: the offline held-out run wr
 4. `HF_HUB_OFFLINE=1 python experiments/grpo_loop.py --config experiments/configs/grpo/loop.toml publish-adapter
    --policy-adapter /workspace/checkpoints/grpo_loop_v1_expert_iteration_01/adapter --trigger "expert iteration 1 from
    v25"` (3-5 min CPU merge).
-5. `deployment/grpo_loop.sh servers`, then `check` (4-6 min).
-6. `python experiments/grpo_evaluate.py --loop-directory /workspace/runs/grpo_loop_v1 --target held_out_states
-   --concurrency 112 --phase 25` (~5 min), then the same with `--target probe` (60-80 min).
+5. `HF_HUB_OFFLINE=1 deployment/grpo_loop.sh servers`, then `check` (4-6 min).
+6. `HF_HUB_OFFLINE=1 python experiments/grpo_evaluate.py --loop-directory /workspace/runs/grpo_loop_v1 --target
+   held_out_states --concurrency 112 --phase 25` (~5 min), then the same with `--target probe` (60-80 min).
 7. `python experiments/grpo_expert_iteration.py --config ... compare --version 26`. Kept: uncomment
    `kl_reference_policy_adapter` in `loop.toml` (the path of step 4). Else: `python experiments/grpo_loop.py --config
-   experiments/configs/grpo/loop.toml rollback --version 25` (the loop serves the new version when it starts). Then
+   experiments/configs/grpo/loop.toml rollback --version 25` (with `HF_HUB_OFFLINE=1`; the loop serves the new version
+   when it starts). Then
    `deployment/grpo_loop.sh loop`.
 
-After the restart, phase 26's sampler agreement by age (`sampler_by_age`) for the round's samples should look like
+Every command that loads a model or tokenizer runs with `HF_HUB_OFFLINE=1`: the node has no route to the Hub, and the
+bases are cached. After the restart, phase 26's sampler agreement by age (`sampler_by_age`) for the round's samples should look like
 earlier phases' (the format and the bf16 merge), and the bare-have warnings should stay quiet. On the node only: the
 round's adapter has the current adapter's keys (`saved_adapter_weights` of both), the tokenizer's decode of recorded
 tokens matches as in the loop (the build's `token_mismatch` near 0).
