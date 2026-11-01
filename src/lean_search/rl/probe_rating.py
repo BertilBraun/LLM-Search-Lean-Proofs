@@ -13,7 +13,7 @@ import sys
 import time
 import traceback
 from collections import Counter
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -332,6 +332,40 @@ def probe_ratings(found: FinishedRuns, markers: LoopMarkers, seed: int = 0) -> P
         runs_rated=len(runs),
         runs_unreadable=found.unreadable,
     )
+
+
+@dataclass(frozen=True)
+class PairedDifference:
+    """A run's solves minus, per problem, the latest earlier run's of another version, over the problems both have."""
+
+    problems: int
+    # Mean per-problem difference (solved 1, else 0) and its 95% bootstrap interval over problems.
+    difference: float
+    lower: float
+    upper: float
+
+
+def paired_solve_difference(
+    runs: Sequence[ProbeRun], run: ProbeRun, excluded_versions: Collection[int], seed: int = 0
+) -> PairedDifference:
+    """`runs` in the order they finished (`finished_probe_runs`); runs of `excluded_versions` (the rejected ones) are
+    never the reference."""
+    latest: dict[str, bool] = {}
+    for earlier in runs:
+        if earlier.finished_at >= run.finished_at:
+            break
+        if earlier.policy_version != run.policy_version and earlier.policy_version not in excluded_versions:
+            latest |= {outcome.problem: outcome.proved for outcome in earlier.outcomes}
+    differences = np.array(
+        [
+            float(outcome.proved) - float(latest[outcome.problem])
+            for outcome in run.outcomes
+            if outcome.problem in latest
+        ]
+    )
+    draws = np.random.default_rng(seed).choice(differences, size=(BOOTSTRAP_SAMPLES, len(differences)))
+    lower, upper = np.percentile(draws.mean(axis=1), [2.5, 97.5])
+    return PairedDifference(len(differences), float(differences.mean()), float(lower), float(upper))
 
 
 def record_ratings(run_directory: Path, interval_seconds: float) -> None:

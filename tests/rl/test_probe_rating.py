@@ -12,6 +12,7 @@ from lean_search.rl.probe_rating import (  # noqa: E402
     ProbeOutcome,
     ProbeRun,
     finished_probe_runs,
+    paired_solve_difference,
     probe_ratings,
     rating_budgets,
     read_markers,
@@ -234,3 +235,20 @@ def test_rejected_versions_are_read_once_each(tmp_path: Path) -> None:
         "".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8"
     )
     assert read_markers(tmp_path).rejected_versions == (5, 10)
+
+
+def whole_set_after_two_slots() -> tuple[list[ProbeRun], ProbeRun]:
+    """Version 1 then version 2 search the first third, version 3 the whole set proving that third."""
+    earlier = [run(1, set(), PARTS[0], part=0, order=1), run(2, set(PARTS[0]), PARTS[0], part=0, order=2)]
+    return earlier, run(3, set(PARTS[0]), order=3)
+
+
+def test_the_paired_difference_compares_each_problem_with_its_latest_earlier_run() -> None:
+    earlier, whole_set = whole_set_after_two_slots()
+    difference = paired_solve_difference([*earlier, whole_set], whole_set, ())
+    assert (difference.problems, difference.difference) == (len(PARTS[0]), 0.0)
+
+
+def test_the_paired_difference_never_compares_with_a_rejected_version() -> None:
+    earlier, whole_set = whole_set_after_two_slots()
+    assert paired_solve_difference([*earlier, whole_set], whole_set, (2,)).difference == 1.0

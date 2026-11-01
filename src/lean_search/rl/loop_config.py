@@ -104,6 +104,9 @@ class LoopTrainingConfig:
     # Paused searches' REPL processes above this private memory (0: all) stop before the training job starts, to
     # leave host memory to its ranks; they replay their proof states later. A large value keeps them.
     paused_repl_memory_gib: float = 0.0
+    # The policy adapter (on serving.policy_base_model) the KL penalty pulls towards, e.g. an expert-iteration round's
+    # (rl/README.md, "Expert iteration"); empty: [initial] policy_adapter. Same rank and scale as the trained adapter.
+    kl_reference_policy_adapter: str = ""
 
 
 @dataclass(frozen=True)
@@ -269,6 +272,10 @@ class GrpoLoopConfig:
     def host_directory(self) -> Path:
         """The persistent training job's host memory for this loop (`training.resident.HostDirectories`)."""
         return Path(self.training.host_directory) / self.name
+
+    def reference_policy_adapter(self) -> str:
+        """The KL reference's adapter: `training.kl_reference_policy_adapter`, else the starting policy's."""
+        return self.training.kl_reference_policy_adapter or self.initial.policy_adapter
 
 
 def parse_loop_config(text: str) -> GrpoLoopConfig:

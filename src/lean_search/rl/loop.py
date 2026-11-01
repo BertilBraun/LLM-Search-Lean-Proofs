@@ -518,16 +518,16 @@ def value_published_by(versions: list[ModelVersion], phase: int) -> bool:
 def phase_config_text(
     template: str,
     policy_base_model: str,
-    starting_policy_adapter: str,
+    reference_policy_adapter: str,
     current: ModelVersion,
     phase: int,
     value_share: float,
     value_adapter: str | None,
     rejected_versions: tuple[int, ...] = (),
 ) -> str:
-    """The template with the published policy adapter to continue from (on the policy base), the starting policy's
-    adapter as the KL reference, μ, per-phase seeds and the rejected versions, whose samples the phase drops;
-    `value_adapter` is the value adapter to continue (None: the value model does not train)."""
+    """The template with the published policy adapter to continue from (on the policy base), the KL reference's adapter
+    (`GrpoLoopConfig.reference_policy_adapter`), μ, per-phase seeds and the rejected versions, whose samples the phase
+    drops; `value_adapter` is the value adapter to continue (None: the value model does not train)."""
     table = tomllib.loads(template)
     table["excluded_policy_versions"] = list(rejected_versions)
     for section in ("reward", "value_targets"):
@@ -535,7 +535,7 @@ def phase_config_text(
     policy = table["policy"]
     policy["model"] = policy_base_model
     policy["initial_adapter"] = current.policy_adapter
-    policy["reference_adapter"] = starting_policy_adapter
+    policy["reference_adapter"] = reference_policy_adapter
     policy.setdefault("optimization", {})["seed"] = phase
     table.setdefault("policy_replay", {})["seed"] = f"grpo-replay/{phase}"
     if value_adapter is None:
@@ -1495,7 +1495,7 @@ class GrpoLoop:
         config_text = phase_config_text(
             self.phase_template,
             self.config.serving.policy_base_model,
-            self.config.initial.policy_adapter,
+            self.config.reference_policy_adapter(),
             current,
             phase,
             value_share,

@@ -239,6 +239,11 @@ class MergedPublisher:
         self.merged[adapter] = directory
         return directory
 
+    def reuse_merges(self, version: ModelVersion) -> None:
+        """A new publisher takes the served version's merged weights for its adapters instead of merging them again."""
+        self.merged[version.policy_adapter] = Path(version.policy_weights)
+        self.merged[version.value_adapter] = Path(version.value_weights)
+
     def prune(self, current: ModelVersion) -> None:
         """Deletes merged weights the current version does not serve (~13 GB a version with a 4B policy), except
         version 0's: the baselines' weights, which a missed baseline evaluation can still be served from."""

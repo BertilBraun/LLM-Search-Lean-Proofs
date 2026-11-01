@@ -808,6 +808,90 @@ inverse changes restore them), so a value model trained on numbered names sees w
 turns it on for the named arm (value v0), the loop leaves it off because its value model trains on its own renamed
 trees.
 
+## Expert iteration (`expert_iteration_data.py`, `experiments/grpo_expert_iteration.py`)
+
+One rejection-sampling fine-tuning round between GRPO phases (owner decision 2026-11-01: GRPO moves slowly, the
+advantaged tokens' ratio ~1.0005 per phase, the probe +3 points over 9 phases). The data is the loop's own verified
+blocks, exactly as sampled; the round is published as the next loop version and GRPO continues from it.
+
+**Data** (`build`, a CPU process pool, the loop may keep sampling). The trees of the phases from the reward fix's first
+phase (`reward_fix.json`) to `[data] last_phase` (`experiments/configs/grpo/expert_iteration_1.toml`), labelled with
+the loop's own `label_graph` and `policy_tactics`. A recorded sample is an example when its node is on the proof graph,
+it is a first-round sample (not the feedback round's) of a version from the one the fix's first phase published on
+(`probe_rating.read_markers`), never a rejected version's, its every tactic is on the proof graph, none leaves a claim
+open, and it is on a shortest route: its last state is as many steps closer to a proof as it has tactics. The example
+is the recorded prompt's ids plus the recorded token ids, the loop's `PolicySequence.tokenized`; samples tokenized
+again, forced at the token cap or whose tokens do not decode to their text are dropped. Trees of the probe, gate and
+miniF2F statements and states equal to a held-out state are dropped too (both counts should be 0). Then: one example
+per state across trees, at most `blocks_per_state` (2) distinct blocks per state and `states_per_statement` (6) states
+per statement (those on the root's shortest route first), both by a seeded hash so that block length plays no part;
+easy states (every first-round sample a proof-graph block, which GRPO gives no advantage) at most `max_easy_share`
+(20%) of the examples; 5% of the statements for validation (`mixing.is_held_out`). `count` reads only the tree index
+(the solved trees and their shortest proofs per phase). The build's README.md gives the count per filter, the selection,
+block lengths, explanation characters, the easy share, the share ending in an end of turn and the prompts unlike the
+replay's (`render_prompt` with visible reasoning).
+
+**Training** (`train`, torchrun on the 4 GPUs with the loop stopped): `training/sft.py` continues the loop's current
+policy adapter (`models/current.json`, read at train time: version numbers differ from phase numbers after the
+rollbacks) on raw Qwen3.5-4B, as every phase does (rank and alpha stay the adapter's, 64/64): learning rate 5e-5,
+warmup 0.03, cosine to 0.1, 1 epoch, 4 GPUs x 1 micro-batch of 16,384 packed tokens (the original SFT's tokens per
+step), the loop's Lean and math replay at 30% and 10% of the training tokens, the validation loss every quarter of the
+steps on the expert-iteration validation set plus 1,000 replay validation examples, no greedy generation. The adapter
+goes to `$LEAN_SEARCH_CHECKPOINTS/grpo_loop_v1_expert_iteration_01/adapter`, outside the phase directories: the
+retention never deletes it.
+
+**Publishing** (`grpo_loop.py publish-adapter --policy-adapter PATH --trigger "..."`, health_checks.py
+`publish_adapter_by_hand` on `publish_policy_adapter`, which `publish_rollback` uses too): the adapter as the next
+version with the current value adapter, merged on the CPU (3-5 min), the current value model's merged weights reused
+(`MergedPublisher.reuse_merges`; `rollback` reuses them too). It refuses while the loop or one of its jobs runs
+(`loop.pid`, `children/`), outside the sampling stage, for an adapter on another base than `serving.policy_base_model`
+or of another rank or scale than the current adapter (the persistent trainer loads it into its resident LoRA
+parameters, the KL reference's swap asserts both), and for a phase's trigger ("phase <n>", which the loop's publish and
+the reward fix's marker read). The next phase continues the published adapter and trains on its interrupted phase's
+trees, sampled by both versions. A later `rollback --version <the version before>` rejects the round's version like any
+other.
+
+**KL reference** (`[training] kl_reference_policy_adapter`, empty: `[initial] policy_adapter`): with the round kept, set
+it to the round's adapter, the exact path published, so the penalty (0.01) anchors on a policy trained on verified data
+instead of pulling back towards v0 and undoing the round; the first phase after the round then scores its reference for
+free (the reference is the adapter it starts from), and the dashboard's KL to the starting policy restarts near 0.
+
+**Decision** (`compare --version <round's version>`): with the servers on the round's version, the held-out states
+(`grpo_evaluate.py --target held_out_states`) and the whole probe set (`--target probe`, no slot: `probe_v<version>`).
+Keep the round if the held-out valid Lean and success are at least `[health] min_held_out_valid_fraction` and
+`min_held_out_success_fraction` (0.9) of version 0's, and the probe's paired solve difference against each problem's
+latest earlier run (`probe_rating.paired_solve_difference`, rejected versions never the reference) is at least 0 with
+its lower 95% bound above -2 points (the run-to-run noise per third); else `rollback --version <the version before>`
+and leave `kl_reference_policy_adapter` unset. A whole-set run rates the version on the joint scale (the rating
+recorder picks it up) but forms no pass. A later held-out collapse rolls back to the last version with a healthy
+held-out line in health.jsonl, never to the round's: the offline held-out run writes none.
+
+**The round on the node** (about 2-2.5 h with the loop off, 45 min of it training):
+
+1. While phase 26 samples: `python experiments/grpo_expert_iteration.py --config
+   experiments/configs/grpo/expert_iteration_1.toml count` (seconds), then `HF_HUB_OFFLINE=1 BACKGROUND_CPUS=16
+   deployment/background.sh python experiments/grpo_expert_iteration.py --config ... build --processes 16` (10-20 min;
+   read its README.md: held out 0, the easy share, block lengths and explanations like the phases').
+2. In the sampling stage only, never during a pause: `deployment/grpo_loop.sh stop` (1-2 min; searches in flight are
+   lost), and wait until `loop.log` shows the stop and `nvidia-smi` shows free GPUs.
+3. `HF_HUB_OFFLINE=1 torchrun --standalone --nproc-per-node 4 experiments/grpo_expert_iteration.py --config ... train`
+   (40-50 min).
+4. `HF_HUB_OFFLINE=1 python experiments/grpo_loop.py --config experiments/configs/grpo/loop.toml publish-adapter
+   --policy-adapter /workspace/checkpoints/grpo_loop_v1_expert_iteration_01/adapter --trigger "expert iteration 1 from
+   v25"` (3-5 min CPU merge).
+5. `deployment/grpo_loop.sh servers`, then `check` (4-6 min).
+6. `python experiments/grpo_evaluate.py --loop-directory /workspace/runs/grpo_loop_v1 --target held_out_states
+   --concurrency 112 --phase 25` (~5 min), then the same with `--target probe` (60-80 min).
+7. `python experiments/grpo_expert_iteration.py --config ... compare --version 26`. Kept: uncomment
+   `kl_reference_policy_adapter` in `loop.toml` (the path of step 4). Else: `python experiments/grpo_loop.py --config
+   experiments/configs/grpo/loop.toml rollback --version 25` (the loop serves the new version when it starts). Then
+   `deployment/grpo_loop.sh loop`.
+
+After the restart, phase 26's sampler agreement by age (`sampler_by_age`) for the round's samples should look like
+earlier phases' (the format and the bf16 merge), and the bare-have warnings should stay quiet. On the node only: the
+round's adapter has the current adapter's keys (`saved_adapter_weights` of both), the tokenizer's decode of recorded
+tokens matches as in the loop (the build's `token_mismatch` near 0).
+
 ## Cheap tests
 
 - **Smoke cycle** (`grpo/loop_smoke.toml`, `phase_smoke.toml`; `deployment/README.md`, "GRPO loop" step 3): the loop on
