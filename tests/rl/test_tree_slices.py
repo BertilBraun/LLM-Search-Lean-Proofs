@@ -1,10 +1,11 @@
+import dataclasses
 import json
 import random
 from pathlib import Path
 
 import pytest
 
-from lean_search.rl.tree_slices import MANIFEST_FILE, slice_by_tokens, write_slices
+from lean_search.rl.tree_slices import MANIFEST_FILE, character_band, slice_by_tokens, write_slices
 from lean_search.rl.tree_store import TreeEntry, TreeStore
 from lean_search.rl.tree_summary import TreeSummary
 
@@ -21,7 +22,7 @@ def entry(sequence: int, tokens: int, finished_time: float, proved: bool = False
         proofs=int(proved),
         expansions=4,
         policy_version=0,
-        difficulty=10.0,
+        difficulty=5.0 + 4 * sequence,
         wall_seconds=60.0,
         # Sequence numbers count starts; finish times are out of that order.
         finished_time=finished_time,
@@ -77,7 +78,7 @@ def written(tmp_path: Path) -> Path:
     (trees / "phase_0001").mkdir(parents=True)
     for tree in ENTRIES:
         (trees / tree.file).write_bytes(b"tree")
-    write_slices(trees, slice_by_tokens(ENTRIES, 4), tmp_path / "slices")
+    write_slices(trees, slice_by_tokens(ENTRIES, 4), tmp_path / "slices", len(ENTRIES))
     return tmp_path / "slices"
 
 
@@ -104,4 +105,38 @@ def test_the_manifest_records_every_slices_tokens(tmp_path: Path) -> None:
 def test_slices_are_cut_once(tmp_path: Path) -> None:
     slices = written(tmp_path)
     with pytest.raises(ValueError, match="exists"):
-        write_slices(tmp_path / "trees", slice_by_tokens(ENTRIES, 4), slices)
+        write_slices(tmp_path / "trees", slice_by_tokens(ENTRIES, 4), slices, len(ENTRIES))
+
+
+@pytest.mark.parametrize(
+    ("difficulty", "band"), [(4.99, "0-499"), (15.0, "1500-1999"), (45.0, "4500+"), (None, "unknown")]
+)
+def test_a_trees_character_band_is_its_difficulty_times_100(difficulty: float | None, band: str) -> None:
+    assert character_band(dataclasses.replace(entry(0, 1, 0.0), difficulty=difficulty)) == band
+
+
+def manifest_slices(tmp_path: Path) -> list[dict]:
+    return json.loads((written(tmp_path) / MANIFEST_FILE).read_text(encoding="utf-8"))["slices"]
+
+
+def test_the_manifest_counts_every_slices_trees_by_character_band(tmp_path: Path) -> None:
+    records = manifest_slices(tmp_path)
+    by_band = [sum(count["trees"] for count in record["by_character_band"]) for record in records]
+    assert by_band == [record["trees"] for record in records]
+
+
+def test_the_manifest_records_each_slices_difficulty_range(tmp_path: Path) -> None:
+    first = manifest_slices(tmp_path)[0]
+    members = slice_by_tokens(ENTRIES, 4)[0]
+    expected = (min(tree.difficulty for tree in members), max(tree.difficulty for tree in members))
+    assert (first["difficulty_low"], first["difficulty_high"]) == expected
+
+
+def test_a_statement_searched_again_counts_as_seen_before(tmp_path: Path) -> None:
+    trees = tmp_path / "trees"
+    (trees / "phase_0001").mkdir(parents=True)
+    repeated = [dataclasses.replace(tree, problem_name="same") for tree in ENTRIES]
+    for tree in repeated:
+        (trees / tree.file).write_bytes(b"tree")
+    manifest = write_slices(trees, slice_by_tokens(repeated, 2), tmp_path / "slices", len(repeated))
+    assert [record.statements_seen_before for record in manifest.slices] == [0, 1]

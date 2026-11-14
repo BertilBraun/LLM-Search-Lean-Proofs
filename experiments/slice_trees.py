@@ -6,15 +6,18 @@ DESIGN.md, "Follow-up study: controlled arms", "Step 2").
 
 Reads the run's tree index (trees/index.jsonl, every tree of every phase directory) and writes output/slice_k/ (links
 to the tree files and the slice's index.jsonl), one per slice, and output/manifest.json: per slice its trees, generated
-tokens and solved share. A slice directory is what `grpo_phase.py --trees` and the expert-iteration builder take,
-e.g. --trees <output>/slice_4 for one slice, or slice_1 ... slice_4 for four. Refuses an existing output.
+tokens, solved share, difficulty range, statements per character band, below-band share and statements seen in an
+earlier slice. A slice directory is what `grpo_phase.py --trees` and the expert-iteration builder's tree_directories
+take, e.g. slice_4 for one slice, or slice_1 ... slice_4 for four. Refuses while the run's loop is running, when the
+index changes while being read, and an existing output.
 """
 
 import argparse
 from pathlib import Path
 
+from lean_search.rl.probe_evaluation import running_loops
 from lean_search.rl.tree_slices import slice_by_tokens, write_slices
-from lean_search.rl.tree_store import TreeStore
+from lean_search.rl.tree_store import INDEX_FILE, TreeStore
 from lean_search.search.summary import markdown_table
 
 
@@ -26,17 +29,41 @@ def parse_arguments() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def loop_running(run_directory: Path) -> bool:
+    """The run's loop process (loop.pid) or a job it started still runs."""
+    entries = running_loops(run_directory.parent).running
+    return any(entry.startswith((f"{run_directory.name} ", f"{run_directory.name}'s ")) for entry in entries)
+
+
 def main() -> None:
     arguments = parse_arguments()
-    entries = TreeStore(arguments.trees).entries
+    trees = arguments.trees.resolve()
+    if loop_running(trees.parent):
+        raise SystemExit(f"The loop of {trees.parent} still runs: stop it before cutting its trees.")
+    index = trees / INDEX_FILE
+    before = index.read_bytes()
+    entries = TreeStore(trees).entries
     if not entries:
-        raise SystemExit(f"No tree index entries under {arguments.trees}.")
-    manifest = write_slices(arguments.trees, slice_by_tokens(entries, arguments.slices), arguments.output)
+        raise SystemExit(f"No tree index entries under {trees}.")
+    slices = slice_by_tokens(entries, arguments.slices)
+    if index.read_bytes() != before:
+        raise SystemExit(f"{index} changed while it was read: a loop still writes there.")
+    manifest = write_slices(trees, slices, arguments.output, len(before.splitlines()))
     rows = [
-        [record.slice, record.trees, f"{record.generated_tokens:,}", f"{record.solved_share:.1%}", record.directory]
+        [
+            record.slice,
+            record.trees,
+            f"{record.generated_tokens:,}",
+            f"{record.solved_share:.1%}",
+            f"{record.difficulty_low}-{record.difficulty_high}",
+            f"{record.below_band_share:.1%}",
+            record.statements_seen_before,
+            ", ".join(f"{count.band}: {count.trees}" for count in record.by_character_band),
+        ]
         for record in manifest.slices
     ]
-    print(markdown_table(["slice", "trees", "generated tokens", "solved", "directory"], rows))
+    headers = ["slice", "trees", "tokens", "solved", "difficulty", "below band", "seen before", "by proof characters"]
+    print(markdown_table(headers, rows))
     print(f"{manifest.trees} trees, {manifest.generated_tokens:,} generated tokens; {arguments.output}/manifest.json")
 
 

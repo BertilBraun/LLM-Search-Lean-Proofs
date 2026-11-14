@@ -5,6 +5,11 @@ The token count is what each tree's summary in the run's index records (`TreeSum
 own accounting); a cut falls at the tree boundary nearest to k / N of the total. A slice is a directory of links to
 its tree files, as `grpo_phase.py --trees` and the expert-iteration builder read a phase's directory, with its own
 index.jsonl (the entries, their files relative to the slice).
+
+With the policy fixed, slices differ in what was searched: the curriculum's band rises across them, and the stop drops
+the slow searches still in flight from the last. Each slice's record therefore says what it holds (difficulty range,
+statements per character band, solved and below-band shares, statements already searched in an earlier slice), so a
+one-slice against four-slice comparison can be described for what it is.
 """
 
 import bisect
@@ -15,10 +20,14 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from lean_search.rl.fixed_sets import character_strata, character_stratum
 from lean_search.rl.tree_store import INDEX_FILE, TreeEntry
 from lean_search.search.records import to_json
 
 MANIFEST_FILE = "manifest.json"
+# Probe v2's bands of proof characters; the follow-up curriculum's difficulty is characters / 100.
+CHARACTER_EDGES = (500, 1000, 1500, 2000, 3000, 4500)
+CHARACTERS_PER_DIFFICULTY = 100
 
 
 def finish_order(entries: Sequence[TreeEntry]) -> list[TreeEntry]:
@@ -47,6 +56,14 @@ def slice_by_tokens(entries: Sequence[TreeEntry], count: int) -> tuple[tuple[Tre
 
 
 @dataclass(frozen=True)
+class BandCount:
+    # Proof characters (difficulty x 100), probe v2's bands; "unknown" without a recorded difficulty.
+    band: str
+    trees: int
+    solved: int
+
+
+@dataclass(frozen=True)
 class SliceRecord:
     slice: int
     directory: str
@@ -56,11 +73,23 @@ class SliceRecord:
     solved_share: float
     first_finished_time: float
     last_finished_time: float
+    # The curriculum difficulty range searched; None without recorded difficulties.
+    difficulty_low: float | None
+    difficulty_high: float | None
+    by_character_band: tuple[BandCount, ...]
+    below_band_share: float
+    statements: int
+    # Statements also searched in an earlier slice.
+    statements_seen_before: int
+    trainable_groups: int
+    mean_expansions: float
 
 
 @dataclass(frozen=True)
 class SliceManifest:
     trees_directory: str
+    # The index as read: its lines (one per tree), checked unchanged while the slices were cut.
+    index_lines: int
     trees: int
     generated_tokens: int
     slices: tuple[SliceRecord, ...]
@@ -70,12 +99,54 @@ def slice_directory_name(number: int) -> str:
     return f"slice_{number}"
 
 
-def write_slices(trees_directory: Path, slices: Sequence[Sequence[TreeEntry]], output: Path) -> SliceManifest:
+def character_band(entry: TreeEntry) -> str:
+    if entry.difficulty is None:
+        return "unknown"
+    return character_stratum(round(entry.difficulty * CHARACTERS_PER_DIFFICULTY), CHARACTER_EDGES)
+
+
+def slice_record(number: int, directory: Path, members: Sequence[TreeEntry], seen_before: set[str]) -> SliceRecord:
+    solved = sum(entry.proved for entry in members)
+    difficulties = [entry.difficulty for entry in members if entry.difficulty is not None]
+    bands = [*character_strata(CHARACTER_EDGES), "unknown"]
+    by_band = tuple(
+        BandCount(
+            band,
+            sum(character_band(entry) == band for entry in members),
+            sum(character_band(entry) == band and entry.proved for entry in members),
+        )
+        for band in bands
+    )
+    names = {entry.problem_name for entry in members}
+    return SliceRecord(
+        slice=number,
+        directory=str(directory),
+        trees=len(members),
+        generated_tokens=sum(entry.summary.generated_tokens for entry in members),
+        solved=solved,
+        solved_share=solved / len(members) if members else 0.0,
+        first_finished_time=members[0].finished_time if members else 0.0,
+        last_finished_time=members[-1].finished_time if members else 0.0,
+        difficulty_low=min(difficulties) if difficulties else None,
+        difficulty_high=max(difficulties) if difficulties else None,
+        by_character_band=tuple(count for count in by_band if count.trees),
+        below_band_share=sum(entry.summary.below_band for entry in members) / len(members) if members else 0.0,
+        statements=len(names),
+        statements_seen_before=len(names & seen_before),
+        trainable_groups=sum(entry.summary.trainable_groups for entry in members),
+        mean_expansions=sum(entry.expansions for entry in members) / len(members) if members else 0.0,
+    )
+
+
+def write_slices(
+    trees_directory: Path, slices: Sequence[Sequence[TreeEntry]], output: Path, index_lines: int
+) -> SliceManifest:
     """Slice k's links under output/slice_k/ (absolute, to the trees' files), its index and the manifest; refuses an
     existing output, so the slices stay as first cut."""
     if output.exists():
         raise ValueError(f"{output} exists: the slices are cut once.")
     records = []
+    seen: set[str] = set()
     for number, members in enumerate(slices, start=1):
         directory = output / slice_directory_name(number)
         directory.mkdir(parents=True)
@@ -85,21 +156,11 @@ def write_slices(trees_directory: Path, slices: Sequence[Sequence[TreeEntry]], o
             os.symlink((trees_directory / entry.file).resolve(), link)
             lines.append(to_json(dataclasses.replace(entry, file=link.name)) + "\n")
         (directory / INDEX_FILE).write_text("".join(lines), encoding="utf-8")
-        solved = sum(entry.proved for entry in members)
-        records.append(
-            SliceRecord(
-                slice=number,
-                directory=str(directory),
-                trees=len(members),
-                generated_tokens=sum(entry.summary.generated_tokens for entry in members),
-                solved=solved,
-                solved_share=solved / len(members) if members else 0.0,
-                first_finished_time=members[0].finished_time if members else 0.0,
-                last_finished_time=members[-1].finished_time if members else 0.0,
-            )
-        )
+        records.append(slice_record(number, directory, members, seen))
+        seen |= {entry.problem_name for entry in members}
     manifest = SliceManifest(
         trees_directory=str(trees_directory),
+        index_lines=index_lines,
         trees=sum(record.trees for record in records),
         generated_tokens=sum(record.generated_tokens for record in records),
         slices=tuple(records),
