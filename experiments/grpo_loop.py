@@ -48,6 +48,7 @@ from lean_search.expert_iteration.serving import (
     record_published,
 )
 from lean_search.monitoring.store import MetricsWriter
+from lean_search.policy.expander import load_tokenizer
 from lean_search.rl.evaluation import EvaluationKind
 from lean_search.rl.fixed_sets import read_fixed_set
 from lean_search.rl.health_checks import (
@@ -138,7 +139,7 @@ def by_hand_publisher(config: GrpoLoopConfig, paths: GrpoLoopPaths) -> MergedPub
 def search_run_config(config: GrpoLoopConfig) -> RunConfig:
     """The search template on the loop's servers at the loop's budget, one REPL per concurrent search."""
     template = served_run_config(load_run_config(REPOSITORY_DIRECTORY / config.sampling.search_config), config.serving)
-    return training_run_config(template, config.sampling)
+    return training_run_config(template, config.sampling, config.seed_offset)
 
 
 def statement_source(config: GrpoLoopConfig, paths: GrpoLoopPaths) -> StatementSource:
@@ -148,7 +149,7 @@ def statement_source(config: GrpoLoopConfig, paths: GrpoLoopPaths) -> StatementS
             held_out = {entry.name for path in statements.held_out for entry in read_fixed_set(DATA_DIRECTORY / path)}
             searched = [entry.problem_name for entry in TreeStore(paths.trees).entries]
             return CurriculumStatements(
-                statements.curriculum,
+                config.curriculum(),
                 DATA_DIRECTORY,
                 paths.curriculum,
                 held_out,
@@ -252,6 +253,7 @@ async def run(config: GrpoLoopConfig, paths: GrpoLoopPaths) -> None:
             value_readout=search_run_config(config).value.readout,
             value_benchmark=value_benchmark_scoring(config),
             gpu_memory=functools.partial(gpu_memory_text, config),
+            decoder=load_tokenizer(search_run_config(config).policy.tokenizer),
         )
         await loop.run(stop)
 
@@ -316,6 +318,8 @@ def status(paths: GrpoLoopPaths) -> None:
     stop = read_health_stop(paths.health_stop)
     if stop is not None:
         print(health_stop_text(stop))
+    if paths.finished.exists():
+        print(f"finished: {paths.finished.read_text(encoding='utf-8')} (the servers stay up until grpo_loop.sh stop)")
 
 
 def report(paths: GrpoLoopPaths) -> None:

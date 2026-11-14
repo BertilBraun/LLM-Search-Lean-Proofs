@@ -3,6 +3,7 @@
 import contextlib
 import math
 import random
+import statistics
 import time
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
@@ -21,6 +22,7 @@ from lean_search.rl.policy_data import (
     PolicySequence,
     SamplerAgreement,
     SignedRatios,
+    UpdateSize,
     VersionSamplerAgreement,
 )
 from lean_search.training.data_parallel import (
@@ -147,6 +149,38 @@ class GrpoStepRecord:
     first_round_clip_fraction: float = 0.0
     first_round_reference_tokens: int = 0
     first_round_trained_tokens: int = 0
+    # The KL penalty's term of `loss` (kl_coefficient times the weighted k3 over the normalizer).
+    kl_penalty: float = 0.0
+
+
+def parameter_snapshot(parameters: Sequence[torch.nn.Parameter]) -> list[torch.Tensor]:
+    return [parameter.detach().to("cpu", torch.float32, copy=True) for parameter in parameters]
+
+
+def update_size(
+    records: Sequence[GrpoStepRecord],
+    replay_weight: float,
+    parameters: Sequence[torch.nn.Parameter],
+    start: Sequence[torch.Tensor],
+) -> UpdateSize | None:
+    """None without a step. `start`: `parameter_snapshot` before the first step."""
+    if not records:
+        return None
+    change = math.sqrt(
+        sum(
+            float((parameter.detach().to("cpu", torch.float32) - before).square().sum())
+            for parameter, before in zip(parameters, start, strict=True)
+        )
+    )
+    size = math.sqrt(sum(float(before.square().sum()) for before in start))
+    return UpdateSize(
+        parameter_change_norm=change,
+        relative_parameter_change=change / size if size else None,
+        mean_gradient_norm=statistics.fmean(record.gradient_norm for record in records),
+        mean_absolute_policy_loss=statistics.fmean(abs(record.policy_loss) for record in records),
+        mean_kl_penalty=statistics.fmean(record.kl_penalty for record in records),
+        mean_replay_loss=replay_weight * statistics.fmean(record.replay_nll for record in records),
+    )
 
 
 @dataclass(frozen=True)
@@ -180,6 +214,8 @@ class GrpoTrainingResult:
     # first-round tokens (and in older outcomes).
     final_first_round_kl_to_reference: float | None = None
     final_first_round_clip_fraction: float | None = None
+    # The main rank's (`update_size`); None without a step, on the other ranks and in older outcomes.
+    update: UpdateSize | None = None
 
 
 def clipped_policy_losses(
@@ -615,6 +651,8 @@ def train_grpo(
     causal_model.train()
     scoring_seconds = time.perf_counter() - scoring_started
     parameters = trainable_parameters(saved_module)
+    # The main rank's host copy (the LoRA, ~0.5 GB) measures the phase's parameter change.
+    start = parameter_snapshot(parameters) if ranks.is_main else []
     optimizer = torch.optim.AdamW(
         parameters, lr=optimization.learning_rate, weight_decay=optimization.weight_decay, fused=device.type == "cuda"
     )
@@ -743,6 +781,7 @@ def train_grpo(
             first_round_clip_fraction=first_round_clipped / max(1.0, first_round_tokens),
             first_round_reference_tokens=int(first_round_reference_tokens),
             first_round_trained_tokens=int(first_round_tokens),
+            kl_penalty=loss - policy_loss,
         )
         records.append(record)
         if ranks.is_main:
@@ -785,6 +824,7 @@ def train_grpo(
             [record.first_round_reference_tokens for record in last_pass],
         ),
         final_first_round_clip_fraction=mean(first_round_clip) if first_round_clip else None,
+        update=update_size(records, config.replay_weight, parameters, start) if ranks.is_main else None,
     )
 
 

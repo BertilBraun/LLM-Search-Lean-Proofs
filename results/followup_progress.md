@@ -2,7 +2,7 @@
 
 Kept current by the orchestrator. Details live in the linked files.
 
-**Last update:** 2026-11-14, 17:55 UTC.
+**Last update:** 2026-11-14, 18:10 UTC.
 
 ## Where we are
 
@@ -22,33 +22,27 @@ Step 0 is done on the node; step 1 has started with the probe draw and the two a
 | Package: expert iteration inside the loop | only after step 2, if that arm goes on | |
 | Watchdog | every 15 minutes while this session is open | |
 
-## Pause and node restart (2026-11-14, 15:25 to 17:50 UTC)
+## Node stability (2026-11-14) — decision needed from the owner
 
-The orchestrating session and all its subagents were stopped by a usage limit from about 15:25 to 17:50 UTC. In that
-window the node sat idle and kept billing (about $2.2).
+| Time (UTC) | Event |
+|---|---|
+| 13:07 | value server on GPU 0 segfaults at a fresh start |
+| 14:58 | value server on GPU 0 segfaults, 11 min after an in-place weight swap |
+| 15:09 | policy server on GPU 3 segfaults, 83 s after a swap |
+| 15:20 | the host machine reboots (uptime from 1 day 9 h to 1 min) |
+| 15:29 | the host machine reboots again |
 
-- **The node's container restarted at 15:30 UTC** (cause being clarified: host or agent). Servers started after that
-  were gone again by 17:52; no GPU process was left. Data on the node is intact.
-- **Anchor run 1 is still at 271 of 2,000 statements.** It is being restarted on fresh servers without a swap, with a
-  small supervisor script on the node that restarts a dead server and resumes the run without an agent.
-- **Open question for the owner:** this host has now shown three server segfaults and one container restart in six
-  hours. If it stays unstable, moving to another node (about an hour of rebuild on a good network) may be cheaper than
-  fighting it; a recommendation follows with the next report.
-- **Resumed:** the fix round of the study tooling, the re-reviews of the token-budget and health package, the
-  server-crash diagnosis with failure-tolerant probe runs.
-
-## Open problem (2026-11-14, 15:20 UTC)
-
-**Model servers segfault after an in-place weight swap.** Anchor run 1 crashed twice, each time minutes after the
-probe tool swapped weights into the running servers (14:58 value server on GPU 0; 15:09 policy server on GPU 3). The
-same servers ran 1.5 hours under load without a swap and without a crash. The loop publishes new versions through the
-same swap, so the arms would be hit too.
-
-- Now: the anchor runs restart on fresh servers without any swap (v0's weights are already what the servers load).
-  271 of 2,000 statements of run 1 are kept.
-- In parallel: diagnosis from the crash logs and the old run's logs; a restart-based way to bring a checkpoint up as a
-  fallback; probe runs that survive a server failure (today one failed request ends a 2,000-statement run).
-- Probe v2 is drawn: 2,000 statements, 33 twins held out; copies in `node_backup/2026-11-14/probe_v2/`.
+- **Diagnosis** (crash logs, the server library's source, the old run's logs): the host is the leading suspect, the swap
+  second. The old run did 31 swaps in 80 hours with the same versions and no server died. No file-lifetime defect.
+- **Recommendation:** move the closed-loop arms to another node. An arm runs 30 hours or more; a host reboot kills its
+  trainer mid-phase. A rebuild takes about an hour on a decent network. Step 1's evaluations can go on here meanwhile.
+- **Now running (since 17:59 UTC):** anchor run 1, resumed from 271 statements, on fresh servers without any swap,
+  under a supervisor on the node that restarts dead servers and resumes the run by itself, also after a reboot. These
+  runs are the control: a server death without a swap points at the host.
+- **Pause:** the session and its subagents were stopped by a usage limit from about 15:25 to 17:50 UTC; the node was
+  idle in that time (about $2.2).
+- **In progress:** probe runs that survive a server failure, a restart-based way to bring a checkpoint up, the
+  re-reviews of the token-budget and health package; the study tooling's fixes are done and wait for re-review.
 
 ## Node results (2026-11-14)
 

@@ -193,9 +193,18 @@ def solved_tree(problem: Problem, policy_version: int | None = None) -> SearchTr
 class FakeSearcher:
     """Every search proves its statement at once (after its `server_failures`), sampled by the version served when the
     gate let it through; requests wait while paused. The trees of `malformed` statements hold a failed edge without its
-    failure, which labelling refuses."""
+    failure, which labelling refuses. Each search takes `search_seconds` and generates `tokens_per_search` tokens, a
+    failed one too."""
 
-    def __init__(self, server_failures: dict[str, int] | None = None, malformed: frozenset[str] = frozenset()) -> None:
+    def __init__(
+        self,
+        server_failures: dict[str, int] | None = None,
+        malformed: frozenset[str] = frozenset(),
+        tokens_per_search: int = 0,
+        search_seconds: float = 0.001,
+    ) -> None:
+        self.tokens_per_search = tokens_per_search
+        self.search_seconds = search_seconds
         self.open = asyncio.Event()
         self.open.set()
         self.searched: list[str] = []
@@ -230,14 +239,14 @@ class FakeSearcher:
 
     async def proving_search(self, problem: Problem) -> CompletedSearch:
         await self.open.wait()
-        await asyncio.sleep(0.001)
+        await asyncio.sleep(self.search_seconds)
         self.searched.append(problem.name)
         if self.servers_down:
             raise httpx.ConnectError(f"{sorted(self.servers_down)} down")
         if self.server_failures.get(problem.name, 0) > 0:
             self.server_failures[problem.name] -= 1
             raise httpx.ConnectError("policy server down")
-        accounting = Accounting(expansions=1, nodes=2, edges=2, proofs=1)
+        accounting = Accounting(expansions=1, nodes=2, edges=2, generated_tokens=self.tokens_per_search, proofs=1)
         result = SearchResult(
             problem.name, True, StopReason.PROVED, "trivial", ("trivial",), (), accounting, None, 0, 1
         )
@@ -268,6 +277,9 @@ class FakeSearcher:
 
     def paused_seconds(self) -> float:
         return self.paused_total
+
+    def generated_tokens(self, problem_name: str) -> int:
+        return self.tokens_per_search
 
     async def release_lean_memory(self, above_bytes: int) -> ReleasedLeanMemory:
         self.memory_releases.append(above_bytes)

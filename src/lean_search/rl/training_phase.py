@@ -530,6 +530,37 @@ def grpo_phase_record(
         proof_success_failing_tail_share=data.proof_success_failing_tail_share,
         proof_success_no_closer_share=data.proof_success_no_closer_share,
         sampling_seconds=sampling_seconds,
+        optimizer_steps=result.steps,
+        update=result.update,
+    )
+
+
+def percent_of_start(relative: float | None) -> str:
+    return "-" if relative is None else f"{relative:.3%}"
+
+
+def policy_update_text(phase: int, policy: PolicyOutcome) -> str:
+    """The update's size, to compare step sizes between arms."""
+    result = policy.result
+    update = result.update
+    size = (
+        "its size not measured"
+        if update is None
+        else (
+            f"parameter change {update.parameter_change_norm:.4g} "
+            f"({percent_of_start(update.relative_parameter_change)} of the start), mean gradient norm "
+            f"{update.mean_gradient_norm:.4g}, per step |policy loss| "
+            f"{update.mean_absolute_policy_loss:.4g}, KL penalty {update.mean_kl_penalty:.4g}, replay "
+            f"{update.mean_replay_loss:.4g}"
+        )
+    )
+    positive = result.ratios_by_pass[-1].positive.mean_ratio if result.ratios_by_pass else None
+    ratio = "-" if positive is None else f"{positive:.4f}"
+    kl = result.final_first_round_kl_to_reference
+    return (
+        f"Policy update of phase {phase}: {result.steps} optimizer steps, {result.trained_tokens:,} trained tokens, "
+        f"{policy.replay_examples} replay examples; {size}; KL to the start {'-' if kl is None else f'{kl:.4g}'}, "
+        f"positive tokens' ratio to the phase start {ratio}"
     )
 
 
