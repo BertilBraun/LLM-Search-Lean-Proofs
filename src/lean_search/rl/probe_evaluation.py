@@ -2,25 +2,28 @@
 adapter, value v0 or no value model, over the probe set with a given search config, concurrency and wall cap.
 
 The run's directory holds what a loop's probe run holds (results.jsonl, summary.json, trees, config.toml),
-checkpoint.json (the checkpoint and its identity, which `probe_rating` groups runs by) and, once finished, run.json:
-the share of searches stopped on the wall clock against the maximum, in total and per stratum, and where it ran.
-`probe_rating.finished_probe_runs` rates only runs whose run.json says accepted.
+checkpoint.json (the checkpoint, the search settings and their identity, which `probe_rating` pools runs by, and
+whether the run is the rating's anchor), sessions.jsonl (one line per session: the results it started from and the
+weights it served; a session spoiled by a loop that started beside it is discarded on resume) and, once finished,
+run.json: the share of searches stopped on the wall clock against the maximum, in total and per stratum, and where it
+ran. `probe_rating.finished_probe_runs` rates only runs whose run.json says accepted.
 
-The servers are the loop config's, already running; the adapters are merged once per content (a digest of their files)
-and swapped into them in place, as the loop does at a publish. One run at a time holds them (`serving_lock`), never
-while a loop runs (`running_loops`).
+The servers are the loop config's, already running; every session merges the adapters (once per content: a digest of
+their weight and config files) and swaps them into the servers in place, as the loop does at a publish, so a resumed
+run never searches with what the servers held before. One run at a time holds the servers (the node's serving lock,
+`policy.serving_lock`), never while a loop runs (`running_loops`).
 """
 
 import asyncio
-import contextlib
 import dataclasses
-import fcntl
+import datetime
 import hashlib
 import importlib.metadata
+import json
 import os
 import shutil
 import socket
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -32,10 +35,15 @@ from lean_search.rl.loop_services import EVERY_RECORD, live_children
 from lean_search.rl.search_models import evaluation_run_config, run_config_text, served_run_config
 from lean_search.rl.search_options import without_search_options
 from lean_search.search import PriorityKind, RunConfig, SearchResult, StopReason
+from lean_search.search.records import from_json_object, to_json
 
 # The value version recorded for a run without a value model.
 NO_VALUE_VERSION = -1
 MERGED_MARKER = "merged_from.txt"
+# A merge kept after its run (--keep-merge); any other merge left by a dead run is removed at the next start.
+KEPT_MARKER = "kept.txt"
+# The files that make an adapter: what its digest covers.
+ADAPTER_FILES = ("adapter_config.json", "*.safetensors")
 # An adapter's merge into a base model's weights at a directory (lean_search.policy.adapters.merge_adapter).
 Merge = Callable[[str, Path, Path], None]
 
@@ -55,8 +63,8 @@ class ValueFreePriority:
 class ProbeEvaluationConfig:
     # A loop config: its [serving] (the servers, their model names and base models) and [initial] value_adapter (v0).
     loop_config: str
-    # The search template; harvesting, exploration and search options are off. `--search-config` replaces it per run,
-    # and then its own expansion budget holds (else `probe.max_expansions`).
+    # The search template; harvesting, exploration and search options are off. The budget rule: a run given
+    # --search-config searches at that file's own max_expansions, every other run at `probe.max_expansions`.
     search_config: str
     # Under $LEAN_SEARCH_DATA.
     probe_set: str = "grpo/fixed_sets/probe_v2.jsonl"
@@ -64,7 +72,7 @@ class ProbeEvaluationConfig:
     value_free_priority: ValueFreePriority = field(default_factory=ValueFreePriority)
     # A run is accepted only with a smaller share of searches stopped on the wall clock (strictly below).
     max_wall_clock_stop_share: float = 0.01
-    # Under $LEAN_SEARCH_RUNS the runs (probe_<name>/), under $LEAN_SEARCH_CHECKPOINTS the merges and the lock.
+    # Under $LEAN_SEARCH_RUNS the runs (probe_<name>/), under $LEAN_SEARCH_CHECKPOINTS the merges.
     output: str = "probe_evaluations"
 
 
@@ -80,21 +88,28 @@ class ProbeCheckpoint:
     value_digest: str
     # The first this many problems of the probe set, strata in turn (a pilot); 0: all.
     problems: int
-    # The rating's labels (`probe_rating`: the lowest is the anchor): the phase, and -1 / 0 / given for the value model.
+    # The rating's labels: the phase, and -1 / 0 / given for the value model.
     policy_version: int
     value_version: int
 
     @property
-    def identity(self) -> str:
-        """What `probe_rating` pools runs by: two runs of one identity are repeats of one checkpoint."""
+    def label(self) -> str:
         value = f"value {self.value_digest[:12]}" if self.value_digest else "no value model"
         pilot = f"/first {self.problems}" if self.problems else ""
         return f"{self.arm}/phase {self.phase}/policy {self.policy_digest[:12]}/{value}{pilot}"
 
 
+def run_identity(checkpoint: ProbeCheckpoint, run_config_sha256: str, max_expansions: int, wall_seconds: float) -> str:
+    """What `probe_rating` pools runs by: two runs of one identity are repeats of one checkpoint searched alike (the
+    search config, budget, wall cap and concurrency all inside the run config's digest)."""
+    return f"{checkpoint.label}/search {run_config_sha256[:12]} ({max_expansions} expansions, {wall_seconds:g} s cap)"
+
+
 @dataclass(frozen=True)
 class ProbeRunStart:
     identity: str
+    # The rating's anchor (`probe_rating`): v0's policy with value v0 at the standard settings, named explicitly.
+    anchor: bool
     checkpoint: ProbeCheckpoint
     search_config: str
     # sha256 of the run config as searched (served, at the probe's budget, cap and concurrency).
@@ -134,11 +149,13 @@ class ProbeRunRecord:
     accepted: bool
 
 
-def directory_digest(directory: Path) -> str:
-    """sha256 over the directory's files (relative path and content), so a file rewritten in place changes it."""
+def adapter_digest(directory: Path) -> str:
+    """sha256 over the adapter's weight and config files (name and content): a file rewritten in place changes it,
+    another file in the directory does not."""
     digest = hashlib.sha256()
-    for path in sorted(file for file in directory.rglob("*") if file.is_file()):
-        digest.update(path.relative_to(directory).as_posix().encode() + b"\0")
+    files = sorted({file for pattern in ADAPTER_FILES for file in directory.glob(pattern) if file.is_file()})
+    for path in files:
+        digest.update(path.name.encode() + b"\0")
         with path.open("rb") as handle:
             for block in iter(lambda: handle.read(1 << 20), b""):
                 digest.update(block)
@@ -200,9 +217,21 @@ def run_directory(runs_root: Path, name: str) -> Path:
     return runs_root / f"probe_{name}"
 
 
+def merge_directory(weights_root: Path, base_model: str, digest: str) -> Path:
+    return weights_root / hashlib.sha256(f"{base_model}\n{digest}".encode()).hexdigest()[:24]
+
+
+def checkpoint_merges(serving: ServingConfig, checkpoint: ProbeCheckpoint, weights_root: Path) -> list[Path]:
+    """Where the checkpoint's merges go, whether or not they exist yet."""
+    merges = [merge_directory(weights_root, serving.policy_base_model, checkpoint.policy_digest)]
+    if checkpoint.value_adapter:
+        merges.append(merge_directory(weights_root, serving.value_base_model, checkpoint.value_digest))
+    return merges
+
+
 def merged_weights(base_model: str, adapter: Path, digest: str, weights_root: Path, merge: Merge) -> Path:
     """The adapter merged into the base once per base and content: an adapter rewritten in place is merged again."""
-    directory = weights_root / hashlib.sha256(f"{base_model}\n{digest}".encode()).hexdigest()[:24]
+    directory = merge_directory(weights_root, base_model, digest)
     if not (directory / MERGED_MARKER).exists():
         temporary = directory.with_name(directory.name + ".tmp")
         shutil.rmtree(temporary, ignore_errors=True)
@@ -264,49 +293,112 @@ async def serve_checkpoint(
     return ServedWeights(policy, value)
 
 
-def remove_merges(served: ServedWeights) -> None:
-    for directory in (served.policy, served.value):
-        if directory is not None:
-            shutil.rmtree(directory, ignore_errors=True)
+def remove_merges(directories: Sequence[Path]) -> None:
+    """The merges and any half-written ones beside them."""
+    for directory in directories:
+        shutil.rmtree(directory, ignore_errors=True)
+        shutil.rmtree(directory.with_name(directory.name + ".tmp"), ignore_errors=True)
 
 
-def running_loops(runs_root: Path) -> list[str]:
+def keep_merges(directories: Sequence[Path]) -> None:
+    for directory in directories:
+        (directory / KEPT_MARKER).write_text("kept by --keep-merge\n", encoding="utf-8")
+
+
+def remove_stale_merges(weights_root: Path) -> list[Path]:
+    """Under the serving lock, nobody else merges: every merge not kept on purpose is a dead run's."""
+    stale = [
+        directory
+        for directory in sorted(weights_root.glob("*"))
+        if directory.is_dir() and not (directory / KEPT_MARKER).exists()
+    ]
+    for directory in stale:
+        shutil.rmtree(directory, ignore_errors=True)
+    return stale
+
+
+@dataclass(frozen=True)
+class LoopActivity:
+    running: tuple[str, ...]
+    # loop.pid files that could not be read, treated as not running (no live job of that loop).
+    notes: tuple[str, ...]
+
+
+def running_loops(runs_root: Path) -> LoopActivity:
     """The loops under `runs_root` whose process (loop.pid) or a job they started (children/) still runs."""
     running = []
+    notes = []
     for pid_file in sorted(runs_root.glob("*/loop.pid")):
-        process_id = pid_file.read_text(encoding="utf-8").strip()
-        if Path(f"/proc/{process_id}").exists():
+        try:
+            process_id = pid_file.read_text(encoding="utf-8").strip()
+        except OSError:
+            process_id = ""
+        if not process_id.isdigit():
+            notes.append(f"{pid_file} is empty or unreadable: treated as not running (no live job checked below)")
+        elif Path(f"/proc/{process_id}").exists():
             running.append(f"{pid_file.parent.name} (pid {process_id})")
     for children in sorted(runs_root.glob("*/children")):
         jobs = live_children(children, EVERY_RECORD)
         if jobs:
             running.append(f"{children.parent.name}'s jobs {[job.process_ids for job in jobs]}")
-    return running
+    return LoopActivity(tuple(running), tuple(notes))
 
 
-class ServingBusyError(RuntimeError):
-    pass
+@dataclass(frozen=True)
+class ProbeSession:
+    session: str
+    # results.jsonl lines when the session started; the weights it served.
+    results_before: int
+    policy_digest: str
+    value_digest: str
+    # A loop started beside it: its results may come from another checkpoint.
+    spoiled: bool = False
 
 
-@contextlib.contextmanager
-def serving_lock(path: Path) -> Iterator[None]:
-    """Held for a whole run: the servers serve one checkpoint at a time. Raises ServingBusyError while another
-    process holds it (its PID in the file)."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a+", encoding="utf-8") as handle:
-        try:
-            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as error:
-            handle.seek(0)
-            raise ServingBusyError(f"Another probe evaluation (pid {handle.read().strip()}) holds {path}.") from error
-        handle.seek(0)
-        handle.truncate()
-        handle.write(str(os.getpid()))
-        handle.flush()
-        try:
-            yield
-        finally:
-            fcntl.flock(handle, fcntl.LOCK_UN)
+SESSIONS_FILE = "sessions.jsonl"
+
+
+def read_sessions(directory: Path) -> list[ProbeSession]:
+    path = directory / SESSIONS_FILE
+    if not path.exists():
+        return []
+    lines = path.read_text(encoding="utf-8").splitlines()
+    return [from_json_object(ProbeSession, json.loads(line)) for line in lines if line.strip()]
+
+
+def append_session(directory: Path, session: ProbeSession) -> None:
+    with (directory / SESSIONS_FILE).open("a", encoding="utf-8") as handle:
+        handle.write(to_json(session) + "\n")
+
+
+def start_session(directory: Path, checkpoint: ProbeCheckpoint, results: Path) -> ProbeSession:
+    count = len(results.read_text(encoding="utf-8").splitlines()) if results.exists() else 0
+    started = datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds")
+    session = ProbeSession(f"{started} pid {os.getpid()}", count, checkpoint.policy_digest, checkpoint.value_digest)
+    append_session(directory, session)
+    return session
+
+
+def mark_spoiled(directory: Path, session: ProbeSession) -> None:
+    append_session(directory, dataclasses.replace(session, spoiled=True))
+
+
+def discard_spoiled_results(directory: Path, results: Path, trees: Path) -> int:
+    """Cuts results.jsonl back to where the first spoiled session started (its trees and the summary go too) and
+    forgets the sessions from there on; returns the results discarded."""
+    sessions = read_sessions(directory)
+    spoiled = [session.results_before for session in sessions if session.spoiled]
+    if not spoiled:
+        return 0
+    cut_at = min(spoiled)
+    lines = results.read_text(encoding="utf-8").splitlines(keepends=True) if results.exists() else []
+    for line in lines[cut_at:]:
+        (trees / f"{json.loads(line)['problem_name']}.json.gz").unlink(missing_ok=True)
+    results.write_text("".join(lines[:cut_at]), encoding="utf-8")
+    (directory / "summary.json").unlink(missing_ok=True)
+    kept = [session for session in sessions if session.results_before < cut_at and not session.spoiled]
+    (directory / SESSIONS_FILE).write_text("".join(to_json(session) + "\n" for session in kept), encoding="utf-8")
+    return len(lines) - cut_at
 
 
 def package_version(name: str) -> str:

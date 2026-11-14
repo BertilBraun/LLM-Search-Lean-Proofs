@@ -14,6 +14,7 @@ from fake_vllm import FakeVllmServer
 
 from lean_search.data import Problem, Split
 from lean_search.expert_iteration.loop_config import ServerEndpoint, ServingConfig
+from lean_search.policy.serving_lock import ServingBusyError, lock_holder, serving_lock
 from lean_search.rl.evaluation import EvaluationKind, EvaluationProblem, EvaluationSummary
 from lean_search.rl.loop_config import EvaluationTarget, load_loop_config
 from lean_search.rl.probe_evaluation import (
@@ -23,22 +24,26 @@ from lean_search.rl.probe_evaluation import (
     ProbeRunStart,
     RunEnvironment,
     ServedWeights,
-    ServingBusyError,
     StratumStops,
     ValueFreePriority,
+    adapter_digest,
     default_value_version,
-    directory_digest,
+    discard_spoiled_results,
+    keep_merges,
+    mark_spoiled,
     probe_run_config,
+    remove_stale_merges,
     resolve_value_adapter,
     run_directory,
+    run_identity,
     run_record,
     running_loops,
     serve_checkpoint,
-    serving_lock,
+    start_session,
     stops_by_stratum,
 )
 from lean_search.search import Accounting, PriorityKind, SearchResult, StopReason, load_run_config
-from lean_search.search.records import from_json_object
+from lean_search.search.records import from_json_object, to_json
 
 REPOSITORY_DIRECTORY = Path(__file__).resolve().parents[2]
 CONFIG_PATH = REPOSITORY_DIRECTORY / "experiments/configs/grpo/followup/probe_evaluation.toml"
@@ -55,7 +60,18 @@ def checkpoint(
     return ProbeCheckpoint(arm, 0, "/policy", policy_digest, value_adapter, value_digest, 0, 0, 0)
 
 
-START = ProbeRunStart(checkpoint().identity, checkpoint(), "search.toml", "c" * 64, 56, 7200.0, 16, "probe.jsonl", "")
+START = ProbeRunStart(
+    run_identity(checkpoint(), "c" * 64, 16, 7200.0),
+    False,
+    checkpoint(),
+    "search.toml",
+    "c" * 64,
+    56,
+    7200.0,
+    16,
+    "probe.jsonl",
+    "",
+)
 ENVIRONMENT = RunEnvironment("node", "leanprover/lean4:v4.9.0", "0.11.0", "2.8.0")
 
 
@@ -126,14 +142,33 @@ def test_a_run_lies_where_the_probe_rating_looks(tmp_path: Path) -> None:
     ids=["another arm", "another policy", "no value model"],
 )
 def test_checkpoints_that_differ_have_different_identities(other: ProbeCheckpoint) -> None:
-    assert other.identity != checkpoint().identity
+    assert run_identity(other, "c" * 64, 16, 7200.0) != run_identity(checkpoint(), "c" * 64, 16, 7200.0)
+
+
+@pytest.mark.parametrize(
+    ("digest", "expansions", "wall_seconds"),
+    [("d" * 64, 16, 7200.0), ("c" * 64, 1024, 7200.0), ("c" * 64, 16, 14400.0)],
+    ids=["another search config", "another budget", "a doubled cap"],
+)
+def test_one_checkpoint_searched_otherwise_has_another_identity(
+    digest: str, expansions: int, wall_seconds: float
+) -> None:
+    assert run_identity(checkpoint(), digest, expansions, wall_seconds) != START.identity
+
+
+def test_another_file_beside_the_adapter_leaves_its_digest(tmp_path: Path) -> None:
+    (tmp_path / "adapter_model.safetensors").write_bytes(b"weights")
+    (tmp_path / "adapter_config.json").write_text("{}", encoding="utf-8")
+    first = adapter_digest(tmp_path)
+    (tmp_path / "notes.txt").write_text("evaluated", encoding="utf-8")
+    assert adapter_digest(tmp_path) == first
 
 
 def test_a_rewritten_adapter_file_changes_the_digest(tmp_path: Path) -> None:
     (tmp_path / "adapter_model.safetensors").write_bytes(b"first")
-    first = directory_digest(tmp_path)
+    first = adapter_digest(tmp_path)
     (tmp_path / "adapter_model.safetensors").write_bytes(b"second")
-    assert directory_digest(tmp_path) != first
+    assert adapter_digest(tmp_path) != first
 
 
 def summary(problems: int, stops: int) -> EvaluationSummary:
@@ -171,14 +206,81 @@ def test_wall_clock_stops_are_counted_per_stratum() -> None:
 def test_a_live_loop_process_is_found(tmp_path: Path) -> None:
     (tmp_path / "arm_a").mkdir()
     (tmp_path / "arm_a" / "loop.pid").write_text(str(os.getpid()), encoding="utf-8")
-    assert running_loops(tmp_path) == [f"arm_a (pid {os.getpid()})"]
+    assert running_loops(tmp_path).running == (f"arm_a (pid {os.getpid()})",)
 
 
 def test_a_loop_whose_process_ended_is_not_running(tmp_path: Path) -> None:
     ended = subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"], capture_output=True, text=True)
     (tmp_path / "arm_a").mkdir()
     (tmp_path / "arm_a" / "loop.pid").write_text(ended.stdout.strip(), encoding="utf-8")
-    assert running_loops(tmp_path) == []
+    assert running_loops(tmp_path).running == ()
+
+
+def test_an_empty_loop_pid_counts_as_not_running(tmp_path: Path) -> None:
+    (tmp_path / "arm_a").mkdir()
+    (tmp_path / "arm_a" / "loop.pid").write_text("", encoding="utf-8")
+    assert running_loops(tmp_path).running == ()
+
+
+def test_an_empty_loop_pid_is_reported(tmp_path: Path) -> None:
+    (tmp_path / "arm_a").mkdir()
+    (tmp_path / "arm_a" / "loop.pid").write_text("", encoding="utf-8")
+    assert len(running_loops(tmp_path).notes) == 1
+
+
+def test_a_held_lock_names_its_holder(tmp_path: Path) -> None:
+    with serving_lock(tmp_path / "serving.lock"):
+        assert lock_holder(tmp_path / "serving.lock") == str(os.getpid())
+
+
+def test_a_released_lock_has_no_holder(tmp_path: Path) -> None:
+    with serving_lock(tmp_path / "serving.lock"):
+        pass
+    assert lock_holder(tmp_path / "serving.lock") is None
+
+
+def write_results(path: Path, names: list[str]) -> None:
+    with path.open("a", encoding="utf-8") as handle:
+        for name in names:
+            handle.write(json.dumps({"problem_name": name}) + "\n")
+
+
+def spoiled_run(tmp_path: Path) -> Path:
+    """Two results of a clean session, then a session a loop spoiled after two more."""
+    results = tmp_path / "results.jsonl"
+    start_session(tmp_path, checkpoint(), results)
+    write_results(results, ["s.a", "s.b"])
+    spoiled = start_session(tmp_path, checkpoint(), results)
+    write_results(results, ["s.c", "s.d"])
+    mark_spoiled(tmp_path, spoiled)
+    return results
+
+
+def test_a_spoiled_sessions_results_are_discarded_on_resume(tmp_path: Path) -> None:
+    results = spoiled_run(tmp_path)
+    discard_spoiled_results(tmp_path, results, tmp_path / "trees")
+    assert [json.loads(line)["problem_name"] for line in results.read_text().splitlines()] == ["s.a", "s.b"]
+
+
+def test_a_discarded_session_is_not_discarded_twice(tmp_path: Path) -> None:
+    results = spoiled_run(tmp_path)
+    discard_spoiled_results(tmp_path, results, tmp_path / "trees")
+    start_session(tmp_path, checkpoint(), results)
+    write_results(results, ["s.c"])
+    assert discard_spoiled_results(tmp_path, results, tmp_path / "trees") == 0
+
+
+def test_a_merge_left_by_a_dead_run_is_removed(tmp_path: Path) -> None:
+    (tmp_path / "left").mkdir()
+    remove_stale_merges(tmp_path)
+    assert not (tmp_path / "left").exists()
+
+
+def test_a_kept_merge_stays(tmp_path: Path) -> None:
+    (tmp_path / "kept").mkdir()
+    keep_merges([tmp_path / "kept"])
+    remove_stale_merges(tmp_path)
+    assert (tmp_path / "kept").exists()
 
 
 def test_a_second_holder_of_the_serving_lock_is_refused(tmp_path: Path) -> None:
@@ -229,9 +331,9 @@ def history(tmp_path_factory: pytest.TempPathFactory) -> Iterator[ServeHistory]:
             "A",
             8,
             str(policy),
-            directory_digest(policy),
+            adapter_digest(policy),
             str(value_adapter or ""),
-            directory_digest(value_adapter) if value_adapter else "",
+            adapter_digest(value_adapter) if value_adapter else "",
             0,
             8,
             1 if value_adapter else NO_VALUE_VERSION,
@@ -276,8 +378,6 @@ def test_the_served_merge_holds_the_rewritten_adapter(history: ServeHistory) -> 
 
 
 def test_the_run_start_reads_back(tmp_path: Path) -> None:
-    from lean_search.search.records import to_json
-
     (tmp_path / "checkpoint.json").write_text(to_json(START), encoding="utf-8")
     loaded = from_json_object(ProbeRunStart, json.loads((tmp_path / "checkpoint.json").read_text(encoding="utf-8")))
     assert loaded == START

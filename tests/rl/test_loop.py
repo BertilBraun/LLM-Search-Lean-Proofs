@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import dataclasses
 import json
 import tomllib
@@ -25,6 +26,7 @@ from lean_search.expert_iteration.pool import problem_name
 from lean_search.expert_iteration.serving import ModelVersion, read_current, read_versions, write_json_atomically
 from lean_search.monitoring.families import PauseSegments, ValueArmResult
 from lean_search.monitoring.store import RunReader
+from lean_search.policy.serving_lock import ServingBusyError, serving_lock, serving_lock_path
 from lean_search.rl.evaluation import EvaluationKind, EvaluationRun, EvaluationSummary
 from lean_search.rl.fixed_targets import baseline_concurrency
 from lean_search.rl.loop import (
@@ -1252,3 +1254,13 @@ def test_one_training_gpu_starts_a_single_process(tmp_path: Path) -> None:
 
 def test_the_training_job_merges_the_new_adapters(tmp_path: Path) -> None:
     assert "--merge-adapters" in training_arguments(tmp_path, LOOP_TOML)
+
+
+async def test_the_loop_refuses_to_start_while_a_probe_evaluation_holds_the_servers(tmp_path: Path) -> None:
+    world = loop_world(tmp_path)
+    record_version_zero(world)
+    loop = world.loop()
+    # run_until raises once the loop stopped on a failure; the failure is the refusal.
+    with serving_lock(serving_lock_path(world.paths.checkpoints_root)), contextlib.suppress(RuntimeError):
+        await run_until(world, loop, phases=1)
+    assert isinstance(loop.failure, ServingBusyError)

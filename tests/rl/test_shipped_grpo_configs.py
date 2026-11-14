@@ -417,7 +417,7 @@ def test_the_followup_base_differs_from_the_loop_only_in_the_followups_settings(
         held_out_states=EvaluationTarget(1, 120.0, 56, every_hours=0.01, at_start=True, baseline_concurrency=56),
     )
     health = dataclasses.replace(
-        old.health, reference_phases=1, rollback_window_phases=0, early_resume_valid_fraction=2.0
+        old.health, reference_phases=1, rollback_window_phases=0, resume_beside_held_out_states=False
     )
     expected = dataclasses.replace(
         old,
@@ -478,7 +478,7 @@ def test_version_zeros_held_out_baseline_runs_at_the_pauses_concurrency() -> Non
 
 
 def test_the_followup_searches_wait_for_the_held_out_states_last_checks() -> None:
-    assert followup().health.early_resume_valid_fraction > 1.0
+    assert not followup().health.resume_beside_held_out_states
 
 
 def test_the_followup_sampling_concurrency_is_a_placeholder_within_the_new_nodes_quota() -> None:

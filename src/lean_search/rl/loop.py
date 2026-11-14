@@ -84,6 +84,7 @@ from lean_search.monitoring.families import (
 from lean_search.monitoring.store import MetricsWriter
 from lean_search.policy.adapters import handed_off_weights
 from lean_search.policy.server_control import PhaseSeconds
+from lean_search.policy.serving_lock import refuse_while_served, serving_lock_path
 from lean_search.rl.advantages import CreditMode
 from lean_search.rl.budget_signals import budget_phase_record
 from lean_search.rl.evaluation import (
@@ -859,6 +860,8 @@ class GrpoLoop:
             raise RuntimeError("The loop stopped on a failure; a restart resumes it") from self.failure
 
     async def session(self, stop: asyncio.Event) -> None:
+        # A probe evaluation swaps its checkpoint into the same servers.
+        refuse_while_served(serving_lock_path(self.paths.checkpoints_root), "the loop")
         # Waking the servers into the GPU memory of an orphaned training job would fail the wake or the next training.
         earlier = self.trainer.earlier_jobs()
         if earlier is not None:
@@ -1885,10 +1888,11 @@ class GrpoLoop:
         self.held_out_evaluation = task
         check_seconds = min(self.config.training.check_seconds, GENERATION_CHECK_SECONDS)
         floor = await asyncio.to_thread(self.early_resume_floor)
+        resume_beside = self.config.health.resume_beside_held_out_states
         held_back = False
         valid_rate: float | None = None
         while not task.done():
-            if self.paused and self.evaluations.generation_finished(run):
+            if self.paused and resume_beside and self.evaluations.generation_finished(run):
                 valid_rate = self.evaluations.valid_rate_so_far(run)
                 if valid_rate is not None and valid_rate >= floor:
                     break

@@ -298,9 +298,8 @@ min_held_out_success_fraction = 0.9
 stop_held_out_valid_fraction = 0.7
 # The follow-up stops at the first collapse: a rollback is an automatic recipe change, the owner looks first.
 rollback_window_phases = 0
-# Never reached (a valid rate is at most 1, v0's about 0.57): the searches wait for the held-out states' last Lean
-# checks instead of resuming beside them.
-early_resume_valid_fraction = 2.0
+# The searches wait for the held-out states' last Lean checks instead of resuming beside them (nothing beside an arm).
+resume_beside_held_out_states = false
 # The sampled blocks' valid-Lean rate per phase (free, from the training trees) below 0.85 of the first phases': the
 # held-out states run at the next pause.
 min_valid_block_fraction = 0.85

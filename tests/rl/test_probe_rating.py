@@ -282,6 +282,26 @@ def test_runs_of_one_version_with_different_identities_are_rated_apart() -> None
     assert len(ratings(with_value, without_value).versions) == 2
 
 
+def test_the_run_marked_as_anchor_is_the_anchor_whatever_sorts_first() -> None:
+    without_value = dataclasses.replace(run(0, set(PROBLEMS[:20]), order=1), identity="v0/phase 0/no value model")
+    with_value = dataclasses.replace(run(0, set(PROBLEMS[:30]), order=2), identity="v0/phase 0/value v0", anchor=True)
+    assert ratings(without_value, with_value).anchor_identity == "v0/phase 0/value v0"
+
+
+def test_the_anchor_rates_zero() -> None:
+    without_value = dataclasses.replace(run(0, set(PROBLEMS[:20]), order=1), identity="v0/phase 0/no value model")
+    with_value = dataclasses.replace(run(0, set(PROBLEMS[:30]), order=2), identity="v0/phase 0/value v0", anchor=True)
+    rated = {rating.identity: rating.rating for rating in ratings(without_value, with_value).versions}
+    assert rated["v0/phase 0/value v0"] == 0.0
+
+
+def test_two_anchors_are_refused() -> None:
+    first = dataclasses.replace(run(0, set(PROBLEMS[:20]), order=1), identity="first", anchor=True)
+    second = dataclasses.replace(run(0, set(PROBLEMS[:30]), order=2), identity="second", anchor=True)
+    with pytest.raises(ValueError, match="anchor"):
+        ratings(first, second)
+
+
 def test_a_loops_runs_of_one_version_are_pooled_as_before() -> None:
     assert ratings(run(0, set(PROBLEMS[:30]), order=1), run(0, set(PROBLEMS[:20]), order=2)).versions[0].runs == 2
 

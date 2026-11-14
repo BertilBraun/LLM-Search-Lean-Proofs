@@ -60,6 +60,8 @@ class ProbeRun:
     outcomes: tuple[ProbeOutcome, ...]
     # A standalone run's checkpoint identity; empty for a loop's run.
     identity: str = ""
+    # A standalone run marked as the rating's anchor (probe_evaluate.py --anchor: v0 with value v0).
+    anchor: bool = False
 
     @property
     def key(self) -> tuple[int, str]:
@@ -85,8 +87,8 @@ def read_probe_run(directory: Path) -> ProbeRun:
     """summary.json (rl/evaluation.py's EvaluationSummary) and results.jsonl of a finished evaluation, and a
     standalone run's identity from checkpoint.json (rl/probe_evaluation.py's ProbeRunStart)."""
     summary = json.loads((directory / "summary.json").read_text(encoding="utf-8"))
-    start = directory / "checkpoint.json"
-    identity = json.loads(start.read_text(encoding="utf-8"))["identity"] if start.exists() else ""
+    start_path = directory / "checkpoint.json"
+    start = json.loads(start_path.read_text(encoding="utf-8")) if start_path.exists() else {}
     return ProbeRun(
         name=directory.name,
         policy_version=summary["policy_version"],
@@ -104,7 +106,8 @@ def read_probe_run(directory: Path) -> ProbeRun:
             )
             for result in read_results(directory / "results.jsonl")
         ),
-        identity=identity,
+        identity=start.get("identity", ""),
+        anchor=start.get("anchor", False),
     )
 
 
@@ -259,12 +262,17 @@ class Rater:
 
 
 def probe_ratings(found: FinishedRuns, markers: LoopMarkers, seed: int = 0) -> ProbeRatings:
-    """The lowest version (version 0, whose runs come first) is the anchor at 0; runs at another expansion budget than
-    the most common one are left out, and passes leave out the anchor and the rejected versions."""
+    """The anchor at 0: the runs marked as it (probe_evaluate.py --anchor; ValueError when they name more than one
+    checkpoint), else the lowest version (a loop's version 0, whose runs come first). Runs at another expansion budget
+    than the most common one are left out, and passes leave out the anchor and the rejected versions."""
     expansion_budget = Counter(run.expansion_budget for run in found.runs).most_common(1)[0][0]
     runs = [run for run in found.runs if run.expansion_budget == expansion_budget]
     rater = Rater(runs, seed)
-    version_names = sorted({run.key for run in runs})
+    pinned = sorted({run.key for run in runs if run.anchor})
+    if len(pinned) > 1:
+        raise ValueError(f"Runs mark several checkpoints as the anchor: {pinned}")
+    keys = sorted({run.key for run in runs})
+    version_names = [*pinned, *(key for key in keys if key not in pinned)]
     version_index = {key: index for index, key in enumerate(version_names)}
     by_version = [version_index[run.key] for run in runs]
     point = rater.fit(by_version)

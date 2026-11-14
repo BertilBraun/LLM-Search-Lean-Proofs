@@ -236,6 +236,8 @@ class HealthConfig:
     # The searches resume beside the held-out states' last Lean checks only while the states finished so far reach
     # this fraction of version 0's valid rate: above the collapse line, as the slow states left are the less valid ones.
     early_resume_valid_fraction: float = 0.8
+    # False: the searches never resume beside the held-out states' last Lean checks; they wait for the result.
+    resume_beside_held_out_states: bool = True
     # Below this fraction of the reference phases' valid-block rate (the sampled blocks that run completely in Lean, a
     # free per-phase early warning) the held-out states run at the next pause. Lower than the held-out warning: the
     # rate falls with longer blocks too.
