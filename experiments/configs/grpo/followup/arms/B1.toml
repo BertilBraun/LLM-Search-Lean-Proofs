@@ -1,0 +1,12 @@
+# Arm B1, graph credit spread over the sequence (DESIGN.md, "Follow-up study: controlled arms", "Arms"): every sampled
+# token gets the sample's score minus the baseline (grpo/phase_sequence_credit.toml's credit). The follow-up base and
+# its phase template changed only in the lines below (experiments/followup_arm.py writes the loop's configs).
+[loop]
+name = "followup_B1"
+
+[phase.policy.data]
+credit = "sequence"
+
+[phase.policy.optimization]
+# Step 2's choice among 2e-5, 5e-5 and 1e-4 (experiments/rank_learning_rates.py).
+learning_rate = "PLACEHOLDER: step 2's learning rate for B1"

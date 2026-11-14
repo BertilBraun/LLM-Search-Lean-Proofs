@@ -1,4 +1,4 @@
-"""Writes the TOML the loop generates from templates (scalars, arrays of scalars and nested tables)."""
+"""Writes the TOML the loop generates from templates (scalars, arrays, nested tables; tables inside an array inline)."""
 
 import json
 from collections.abc import Mapping
@@ -15,8 +15,10 @@ def toml_value(value: object) -> str:
             return json.dumps(value, ensure_ascii=False)
         case list() | tuple():
             return "[" + ", ".join(toml_value(element) for element in value) + "]"
+        case Mapping():
+            return "{" + ", ".join(f"{key} = {toml_value(element)}" for key, element in value.items()) + "}"
         case _:
-            raise ValueError(f"Not a TOML scalar or array: {value!r}")
+            raise ValueError(f"Not a TOML value: {value!r}")
 
 
 def toml_text(table: Mapping[str, object], prefix: str = "") -> str:
