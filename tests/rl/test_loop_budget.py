@@ -1,10 +1,13 @@
 """Phases on a generated-token budget, the run's end, the tokens of searches without a tree, and the seed offset."""
 
 import asyncio
+import contextlib
 import dataclasses
 import json
+import os
 import tomllib
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -20,16 +23,26 @@ from loop_fakes import (
     statement,
 )
 
+from lean_search.data import Problem
 from lean_search.expert_iteration.pool import pool_problem, problem_name
-from lean_search.expert_iteration.serving import ModelVersion
+from lean_search.expert_iteration.serving import ModelVersion, read_versions
+from lean_search.monitoring.families import LoopState
 from lean_search.monitoring.store import RunReader
 from lean_search.rl.evaluation import EvaluationKind
-from lean_search.rl.loop import GrpoLoop, evaluation_due, phase_config_text
+from lean_search.rl.loop import GrpoLoop, PhaseStage, evaluation_due, phase_config_text
 from lean_search.rl.loop_config import EvaluationTarget, SamplingConfig, parse_loop_config
 from lean_search.rl.search_models import training_run_config
 from lean_search.rl.tree_store import SearchEnd, TreeStore
 from lean_search.rl.tree_summary import TreeSummary
-from lean_search.search import Accounting, SearchResult, StopReason, load_run_config, tree_record
+from lean_search.search import (
+    Accounting,
+    CompletedSearch,
+    SearchResult,
+    StopReason,
+    load_run_config,
+    tree_record,
+)
+from lean_search.search.texts import SampledCompletion, SampledTokens
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 TOKENS_PER_SEARCH = 100
@@ -41,11 +54,36 @@ TOKEN_TOML = LOOP_TOML.replace("concurrency = 2\n", "concurrency = 1\n").replace
 PHASE_TREES = [3, 2, 3, 2]
 
 
-def token_world(root: Path, toml: str = TOKEN_TOML, searcher: FakeSearcher | None = None) -> LoopWorld:
-    searcher = searcher or FakeSearcher(tokens_per_search=TOKENS_PER_SEARCH, search_seconds=0.01)
-    world = loop_world(root, toml=toml, searcher=searcher)
+class CheckedSearcher(FakeSearcher):
+    """Each search ends only once the loop's watch checked the phase after it started (the sampling progress saved
+    again, or the phase paused), so no second tree lands before a check: the phase boundaries do not hang on the event
+    loop's timing, as at the node's 30 s checks against searches of minutes."""
+
+    def __init__(self, server_failures: dict[str, int] | None = None, malformed: frozenset[str] = frozenset()) -> None:
+        super().__init__(server_failures, malformed, tokens_per_search=TOKENS_PER_SEARCH, search_seconds=0.0)
+        self.loop: GrpoLoop | None = None
+
+    async def proving_search(self, problem: Problem) -> CompletedSearch:
+        assert self.loop is not None
+        seen = self.loop.progress
+        while self.loop.progress is seen:
+            await asyncio.sleep(0)
+        return await super().proving_search(problem)
+
+
+@dataclass
+class CheckedWorld(LoopWorld):
+    def loop(self, statement_count: int = 6) -> GrpoLoop:
+        loop = super().loop(statement_count)
+        if isinstance(self.searcher, CheckedSearcher):
+            self.searcher.loop = loop
+        return loop
+
+
+def token_world(root: Path, toml: str = TOKEN_TOML, searcher: FakeSearcher | None = None) -> CheckedWorld:
+    world = loop_world(root, toml=toml, searcher=searcher or CheckedSearcher())
     record_version_zero(world)
-    return world
+    return CheckedWorld(**{item.name: getattr(world, item.name) for item in dataclasses.fields(world)})
 
 
 def phase_trees(world: LoopWorld, phases: int) -> list[int]:
@@ -173,7 +211,7 @@ def test_lost_tokens_are_kept_apart(tmp_path: Path) -> None:
     store.add_without_tree("t", 1, 100, SearchEnd.SUMMARY_FAILED)
     store.add_without_tree("u", 1, 50, SearchEnd.SERVER_FAILURE)
     store.add_without_tree("v", 1, 20, SearchEnd.STOPPED)
-    assert TreeStore(tmp_path).lost_tokens(1) == 70
+    assert TreeStore(tmp_path).lost_tokens(1, 1) == 70
 
 
 FAILING = problem_name(statement(0).statement)
@@ -183,9 +221,8 @@ FAILING_TOML = TOKEN_TOML.replace(
 )
 
 
-def failing_world(root: Path) -> LoopWorld:
-    searcher = FakeSearcher({FAILING: 1}, tokens_per_search=TOKENS_PER_SEARCH, search_seconds=0.01)
-    return token_world(root, FAILING_TOML, searcher)
+def failing_world(root: Path, toml: str = FAILING_TOML) -> CheckedWorld:
+    return token_world(root, toml, CheckedSearcher({FAILING: 1}))
 
 
 async def test_a_search_a_server_failed_is_recorded_with_its_tokens(tmp_path: Path) -> None:
@@ -209,8 +246,7 @@ async def test_the_phase_record_holds_the_lost_tokens(tmp_path: Path) -> None:
 
 
 async def test_a_tree_whose_summary_fails_counts_towards_the_phase(tmp_path: Path) -> None:
-    searcher = FakeSearcher(malformed=frozenset({MALFORMED}), tokens_per_search=TOKENS_PER_SEARCH, search_seconds=0.01)
-    world = token_world(tmp_path, searcher=searcher)
+    world = token_world(tmp_path, searcher=CheckedSearcher(malformed=frozenset({MALFORMED})))
     await run_until(world, world.loop(), phases=1)
     assert phase_trees(world, 1) == [PHASE_TREES[0] - 1]
 
@@ -250,7 +286,8 @@ async def test_a_long_token_phase_alerts_once(tmp_path: Path) -> None:
     assert sum(message.startswith(ALERT) for message in messages) == 1
 
 
-END_TOML = TOKEN_TOML.replace("phase_generated_tokens = 250\n", "phase_generated_tokens = 250\nmax_phases = 2\n")
+END_SETTINGS = "phase_generated_tokens = 250\nmax_phases = 2\n"
+END_TOML = TOKEN_TOML.replace("phase_generated_tokens = 250\n", END_SETTINGS)
 
 
 async def test_the_run_ends_after_its_last_phase(tmp_path: Path) -> None:
@@ -388,3 +425,216 @@ def test_a_seed_offset_moves_the_exploration_seed(seed_offset: int, moved: bool)
     template = load_run_config(REPOSITORY / "experiments/configs/grpo/search/visible_student_v2.toml")
     searched = training_run_config(template, SamplingConfig("template.toml"), seed_offset)
     assert (searched.search.exploration.seed != template.search.exploration.seed) == moved
+
+
+def in_stage(loop: GrpoLoop, phase: int, stage: PhaseStage) -> bool:
+    return loop.progress.phase == phase and loop.progress.stage == stage
+
+
+async def restart_in_training(root: Path) -> CheckedWorld:
+    """Stopped while phase 2 trains, restarted, run to 4 phases."""
+    world = token_world(root)
+    world.trainer.train_seconds = 0.05
+    loop = world.loop()
+    await run_while(
+        loop,
+        lambda: (
+            not (
+                in_stage(loop, 2, PhaseStage.TRAINING) and any(request.phase == 2 for request in world.trainer.requests)
+            )
+        ),
+    )
+    world.trainer.train_seconds = 0.0
+    world.searcher.open.set()
+    await run_until(world, world.loop(), phases=4)
+    return world
+
+
+async def test_a_restart_in_training_publishes_each_phase_once(tmp_path: Path) -> None:
+    world = await restart_in_training(tmp_path)
+    triggers = [version.trigger for version in read_versions(world.paths.models)]
+    assert triggers == ["initial", "phase 1", "phase 2", "phase 3", "phase 4"]
+
+
+async def test_a_restart_in_training_keeps_the_token_boundaries(tmp_path: Path) -> None:
+    world = await restart_in_training(tmp_path)
+    assert phase_trees(world, 4) == PHASE_TREES
+
+
+HELD_OUT_AT_EACH_PAUSE = TOKEN_TOML.replace(
+    HELD_OUT_BLOCK, HELD_OUT_BLOCK.replace("at_start = false", "at_start = true\nat_each_pause = true")
+)
+
+
+async def restart_in_evaluating(root: Path) -> CheckedWorld:
+    """Stopped while phase 1's held-out states run (the searches resumed beside their last checks), restarted."""
+    lean_checks = asyncio.Event()
+    world = token_world(root, HELD_OUT_AT_EACH_PAUSE)
+    world.evaluations.lean_checks = lean_checks
+    loop = world.loop()
+    await run_while(loop, lambda: not (in_stage(loop, 1, PhaseStage.EVALUATING) and world.evaluations.generated))
+    lean_checks.set()
+    world.searcher.open.set()
+    await run_until(world, world.loop(), phases=4)
+    return world
+
+
+async def test_a_restart_in_evaluating_trains_each_phase_once(tmp_path: Path) -> None:
+    world = await restart_in_evaluating(tmp_path)
+    assert [request.phase for request in world.trainer.requests] == [1, 2, 3, 4]
+
+
+async def test_a_restart_in_evaluating_keeps_the_token_boundaries(tmp_path: Path) -> None:
+    world = await restart_in_evaluating(tmp_path)
+    assert phase_trees(world, 4) == PHASE_TREES
+
+
+def last_state(world: LoopWorld) -> str:
+    lines = (world.paths.directory / "metrics" / "status.jsonl").read_text(encoding="utf-8").splitlines()
+    return json.loads(lines[-1])["fields"]["state"]
+
+
+async def test_a_run_that_ends_by_itself_is_finished_not_stopped(tmp_path: Path) -> None:
+    world = token_world(tmp_path, END_TOML)
+    await run_to_its_end(world.loop())
+    assert last_state(world) == LoopState.FINISHED
+
+
+async def test_a_finished_run_records_its_last_phase(tmp_path: Path) -> None:
+    world = token_world(tmp_path, END_TOML)
+    await run_to_its_end(world.loop())
+    assert json.loads(world.paths.finished.read_text(encoding="utf-8"))["last_phase"] == 2
+
+
+@pytest.mark.parametrize(("own", "kept"), [(True, False), (False, True)], ids=["its own", "another process's"])
+async def test_a_finished_run_removes_its_own_pid_file(tmp_path: Path, own: bool, kept: bool) -> None:
+    world = token_world(tmp_path, END_TOML)
+    world.paths.pid.write_text(str(os.getpid() if own else os.getpid() + 1), encoding="utf-8")
+    await run_to_its_end(world.loop())
+    assert world.paths.pid.exists() == kept
+
+
+async def test_the_end_line_says_the_servers_are_up_and_how_to_stop_them(tmp_path: Path) -> None:
+    world = token_world(tmp_path, END_TOML)
+    messages: list[str] = []
+    loop = world.loop()
+    loop.log = messages.append
+    await run_to_its_end(loop)
+    assert any("servers are still up" in message and "grpo_loop.sh stop" in message for message in messages)
+
+
+async def test_the_end_line_reports_the_runs_lost_share(tmp_path: Path) -> None:
+    world = failing_world(tmp_path, FAILING_TOML.replace("phase_generated_tokens = 250\n", END_SETTINGS))
+    messages: list[str] = []
+    loop = world.loop()
+    loop.log = messages.append
+    await run_to_its_end(loop)
+    finished = next(message for message in messages if message.startswith("The run finished"))
+    assert "100 lost to server failures and stops (16.7% of what the searches generated)" in finished
+
+
+async def test_a_stopped_run_is_stopped_not_finished(tmp_path: Path) -> None:
+    world = token_world(tmp_path)
+    await run_until(world, world.loop(), phases=1)
+    assert last_state(world) == LoopState.STOPPED
+
+
+async def failure_of(world: LoopWorld) -> BaseException | None:
+    loop = world.loop()
+    with contextlib.suppress(RuntimeError):
+        await run_until(world, loop, phases=2)
+    return loop.failure
+
+
+async def test_a_token_budget_is_refused_in_a_run_that_closed_phases_without_it(tmp_path: Path) -> None:
+    world = loop_world(tmp_path)
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=1)
+    failure = await failure_of(loop_world(tmp_path, TOKEN_TOML))
+    assert "minutes and groups" in str(failure)
+
+
+async def test_another_token_budget_is_refused_in_a_run(tmp_path: Path) -> None:
+    world = token_world(tmp_path)
+    await run_until(world, world.loop(), phases=1)
+    other = TOKEN_TOML.replace("phase_generated_tokens = 250\n", "phase_generated_tokens = 300\n")
+    failure = await failure_of(loop_world(tmp_path, other))
+    assert "would move every phase boundary" in str(failure)
+
+
+async def test_a_phase_losing_more_than_its_share_of_the_budget_alerts(tmp_path: Path) -> None:
+    world = failing_world(tmp_path)
+    messages: list[str] = []
+    loop = world.loop()
+    loop.log = messages.append
+    await run_until(world, loop, phases=1)
+    assert any(message.startswith("Alert: phase 1 lost 100 generated tokens") for message in messages)
+
+
+@pytest.mark.parametrize(
+    "settings",
+    ["max_generated_tokens = 500\n", "phase_generated_tokens = 250\nmax_generated_tokens = 600\n"],
+    ids=["on minutes", "not a multiple of the budget"],
+)
+def test_a_token_total_that_would_end_inside_a_phase_is_refused(settings: str) -> None:
+    with pytest.raises(ValueError, match="max_generated_tokens"):
+        parse_loop_config(LOOP_TOML.replace("check_seconds = 0.01\n", f"check_seconds = 0.01\n{settings}"))
+
+
+@pytest.mark.parametrize(
+    ("settings", "last"),
+    [
+        ("phase_generated_tokens = 250\nmax_generated_tokens = 750\n", 3),
+        ("phase_generated_tokens = 250\nmax_generated_tokens = 750\nmax_phases = 2\n", 2),
+        ("phase_generated_tokens = 250\nmax_generated_tokens = 200\n", None),
+        ("phase_generated_tokens = 250\n", None),
+    ],
+    ids=["a multiple of the budget", "the earlier of the two", "sampling only", "no end"],
+)
+def test_the_last_phase(settings: str, last: int | None) -> None:
+    config = parse_loop_config(LOOP_TOML.replace("check_seconds = 0.01\n", f"check_seconds = 0.01\n{settings}"))
+    assert config.training.last_phase() == last
+
+
+class FailingDecoder:
+    def decode(self, token_ids: Sequence[int], *, skip_special_tokens: bool) -> str:
+        raise RuntimeError("the tokenizer failed")
+
+
+class SampledSearcher(CheckedSearcher):
+    """Each tree with one first-round sample whose tokens were recorded."""
+
+    async def proving_search(self, problem: Problem) -> CompletedSearch:
+        completed = await super().proving_search(problem)
+        assert completed.tree is not None
+        sample = SampledCompletion(0, "Idea", (), tokens=SampledTokens((1, 2)))
+        completed.tree.expansion_texts[0] = dataclasses.replace(
+            completed.tree.expansion_texts[0], completions=(sample,)
+        )
+        return completed
+
+
+async def habitless_world(root: Path) -> tuple[CheckedWorld, list[str]]:
+    """Phase 1 run with a decoder that fails on every sample."""
+    world = token_world(root, searcher=SampledSearcher())
+    messages: list[str] = []
+    loop = world.loop()
+    loop.decoder = FailingDecoder()
+    loop.log = messages.append
+    await run_until(world, loop, phases=1)
+    return world, messages
+
+
+async def test_trees_whose_habits_failed_still_train(tmp_path: Path) -> None:
+    world, _ = await habitless_world(tmp_path)
+    assert phase_trees(world, 1) == PHASE_TREES[:1]
+
+
+async def test_the_phase_record_counts_the_trees_without_habits(tmp_path: Path) -> None:
+    world, _ = await habitless_world(tmp_path)
+    assert phase_records(world)[0]["trees_without_habits"] == PHASE_TREES[0]
+
+
+async def test_a_phase_with_trees_without_habits_alerts(tmp_path: Path) -> None:
+    _, messages = await habitless_world(tmp_path)
+    assert any(message.startswith("Alert: 3 of phase 1's 3 trees have no block habits") for message in messages)

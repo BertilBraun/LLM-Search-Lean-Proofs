@@ -13,6 +13,7 @@
 #   deployment/grpo_loop.sh status               # progress, versions, trees, the last phase, μ
 #   deployment/grpo_loop.sh value-share 0.15     # μ from the next phase that starts training (0: off; starts at 0)
 #   deployment/grpo_loop.sh stop                 # stops the loop (SIGTERM: saves its state, stops its job), servers
+#                                                # (also after a run finished by itself: its servers stay up)
 #
 # LOOP_CONFIG (default experiments/configs/grpo/loop.toml) picks the loop, e.g. loop_smoke.toml for the smoke cycle or
 # loop_overfit.toml for the overfit test.

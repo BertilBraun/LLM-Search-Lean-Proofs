@@ -318,6 +318,8 @@ def status(paths: GrpoLoopPaths) -> None:
     stop = read_health_stop(paths.health_stop)
     if stop is not None:
         print(health_stop_text(stop))
+    if paths.finished.exists():
+        print(f"finished: {paths.finished.read_text(encoding='utf-8')} (the servers stay up until grpo_loop.sh stop)")
 
 
 def report(paths: GrpoLoopPaths) -> None:

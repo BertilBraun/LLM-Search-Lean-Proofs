@@ -21,7 +21,6 @@ from lean_search.rl.loop_config import (
     HealthConfig,
     StatementSourceKind,
     load_loop_config,
-    parse_loop_config,
 )
 from lean_search.rl.policy_trainer import GrpoConfig, ReferencePolicy
 from lean_search.rl.search_options import OptionsArmConfig, SearchOptions
@@ -432,8 +431,10 @@ def test_the_followup_base_differs_from_the_loop_only_in_the_followups_settings(
     expected = dataclasses.replace(
         old,
         name="grpo_followup_base",
-        sampling=dataclasses.replace(old.sampling, concurrency=56, options_arm=OptionsArmConfig()),
-        training=dataclasses.replace(old.training, kl_reference_policy_adapter=""),
+        sampling=dataclasses.replace(old.sampling, concurrency=84, options_arm=OptionsArmConfig()),
+        training=dataclasses.replace(
+            old.training, kl_reference_policy_adapter="", phase_generated_tokens=12_000_000, max_phases=16
+        ),
         statements=statements,
         evaluation=evaluation,
         retention=dataclasses.replace(old.retention, adapter_versions=0),
@@ -482,10 +483,9 @@ def test_the_followup_held_out_states_are_due_at_every_pause() -> None:
     assert followup().evaluation.held_out_states.at_each_pause
 
 
-def test_an_arm_on_the_followup_base_may_end_its_phases_on_generated_tokens() -> None:
-    text = (CONFIGS / "grpo/followup/base.toml").read_text(encoding="utf-8")
-    arm = text.replace("check_seconds = 30.0\n", "check_seconds = 30.0\nphase_generated_tokens = 12_000_000\n")
-    assert parse_loop_config(arm).training.phase_generated_tokens == 12_000_000
+def test_the_followup_arms_end_after_16_phases_of_12m_generated_tokens() -> None:
+    training = followup().training
+    assert (training.phase_generated_tokens, training.last_phase()) == (12_000_000, 16)
 
 
 def test_version_zeros_held_out_baseline_runs_at_the_pauses_concurrency() -> None:
@@ -497,12 +497,13 @@ def test_the_followup_searches_wait_for_the_held_out_states_last_checks() -> Non
     assert not followup().health.resume_beside_held_out_states
 
 
-def test_the_followup_sampling_concurrency_is_a_placeholder_within_the_new_nodes_quota() -> None:
-    assert followup().sampling.concurrency <= 56
+def test_the_followup_samples_at_the_probes_concurrency_from_the_throughput_test() -> None:
+    probe = tomllib.loads((CONFIGS / "grpo/followup/probe_evaluation.toml").read_text(encoding="utf-8"))["probe"]
+    assert followup().sampling.concurrency == probe["concurrency"] == 84
 
 
-def test_the_followup_held_out_concurrency_is_a_placeholder_within_the_new_nodes_quota() -> None:
-    assert followup().evaluation.held_out_states.concurrency <= 56
+def test_the_followup_held_out_states_keep_their_concurrency() -> None:
+    assert followup().evaluation.held_out_states.concurrency == 56
 
 
 def test_the_followup_keeps_every_adapter() -> None:

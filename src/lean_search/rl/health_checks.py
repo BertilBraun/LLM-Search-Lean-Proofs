@@ -95,11 +95,14 @@ def with_habits(
         below_band_bare_have_share=share(easier.bare_have_openings, easier.block_samples),
         below_band_claim_proved_rate=share(easier.proved_claims, easier.open_claims),
         below_band_median_explanation_characters=binned_median(easier.explanation_character_bins),
-        failing_after_proof_graph_share=share(every.failing_after_proof_graph, every.block_samples),
-        unproved_claim_after_proof_graph_share=share(every.unproved_claim_after_proof_graph, every.block_samples),
-        below_band_failing_after_proof_graph_share=share(easier.failing_after_proof_graph, easier.block_samples),
+        proof_graph_samples=every.proof_graph_samples,
+        proof_graph_sample_share=share(every.proof_graph_samples, every.block_samples),
+        failing_after_proof_graph_share=share(every.failing_after_proof_graph, every.proof_graph_samples),
+        unproved_claim_after_proof_graph_share=share(every.unproved_claim_after_proof_graph, every.proof_graph_samples),
+        below_band_proof_graph_samples=easier.proof_graph_samples or None,
+        below_band_failing_after_proof_graph_share=share(easier.failing_after_proof_graph, easier.proof_graph_samples),
         below_band_unproved_claim_after_proof_graph_share=share(
-            easier.unproved_claim_after_proof_graph, easier.block_samples
+            easier.unproved_claim_after_proof_graph, easier.proof_graph_samples
         ),
     )
 
@@ -161,8 +164,9 @@ def habits_text(phase: int, measured: HealthMeasurements, reward_fix_phase: int 
         f"{percent(measured.closed_form_filler_share)} with closed-form filler, median explanation "
         f"{number(measured.median_explanation_characters)} characters ({number(measured.mean_explanation_tokens)} "
         f"tokens on average), {number(measured.valid_block_tactics, 2)} tactics per complete block, "
-        f"{percent(measured.continue_rate)} continue after a proof-graph step, after it "
-        f"{percent(measured.failing_after_proof_graph_share)} run a failing tactic and "
+        f"{percent(measured.continue_rate)} continue after a proof-graph step; "
+        f"{percent(measured.proof_graph_sample_share)} reach the proof graph, of those "
+        f"{percent(measured.failing_after_proof_graph_share)} then run a failing tactic and "
         f"{percent(measured.unproved_claim_after_proof_graph_share)} end in an unproved claim"
     )
 
@@ -240,6 +244,11 @@ def scaled(value: float | None, factor: float) -> float | None:
     return None if value is None else value * factor
 
 
+def raised(value: float | None, factor: float, rise: float) -> float | None:
+    """The larger of `factor` times the value and the value plus `rise`: a floor for rare events."""
+    return None if value is None else max(value * factor, value + rise)
+
+
 def health_thresholds(
     config: HealthConfig, reference: HealthMeasurements | None, version_zero: HeldOutRates | None
 ) -> HealthThresholds:
@@ -262,11 +271,15 @@ def health_thresholds(
             min_explanation_characters=scaled(
                 reference.median_explanation_characters, config.min_explanation_characters_fraction
             ),
-            max_failing_after_proof_graph_share=scaled(
-                reference.failing_after_proof_graph_share, config.max_after_proof_graph_factor
+            max_failing_after_proof_graph_share=raised(
+                reference.failing_after_proof_graph_share,
+                config.max_after_proof_graph_factor,
+                config.min_failing_after_proof_graph_rise,
             ),
-            max_unproved_claim_after_proof_graph_share=scaled(
-                reference.unproved_claim_after_proof_graph_share, config.max_after_proof_graph_factor
+            max_unproved_claim_after_proof_graph_share=raised(
+                reference.unproved_claim_after_proof_graph_share,
+                config.max_after_proof_graph_factor,
+                config.min_unproved_claim_after_proof_graph_rise,
             ),
         )
     if version_zero is not None:
@@ -401,25 +414,30 @@ def health_alerts(
             f"Median explanation{where} {characters:.0f} characters < {thresholds.min_explanation_characters:.0f} "
             f"({config.min_explanation_characters_fraction:.0%} of the first phases'): the visible reasoning shrinks.",
         )
+    reached, _ = compared(measured.below_band_proof_graph_samples, measured.proof_graph_samples)
+    enough = reached is not None and reached >= config.min_proof_graph_samples
     failing, where = compared(
         measured.below_band_failing_after_proof_graph_share, measured.failing_after_proof_graph_share
     )
-    if above(failing, thresholds.max_failing_after_proof_graph_share):
+    if enough and above(failing, thresholds.max_failing_after_proof_graph_share):
         warn(
             HealthCheck.FAILING_AFTER_PROOF_GRAPH,
-            f"{failing:.1%} of the blocks{where} run a failing tactic after a proof-graph tactic > "
-            f"{thresholds.max_failing_after_proof_graph_share:.1%} ({config.max_after_proof_graph_factor:g}x the first "
-            "phases'): a tail credit that stops at the proof graph does not charge.",
+            f"{failing:.1%} of the {reached:,} samples{where} reaching the proof graph then run a failing tactic > "
+            f"{thresholds.max_failing_after_proof_graph_share:.1%} (the first phases' x "
+            f"{config.max_after_proof_graph_factor:g}, at least + {config.min_failing_after_proof_graph_rise:.0%}): a "
+            "tail that a credit stopping at the proof graph leaves uncharged.",
         )
     unproved, where = compared(
         measured.below_band_unproved_claim_after_proof_graph_share, measured.unproved_claim_after_proof_graph_share
     )
-    if above(unproved, thresholds.max_unproved_claim_after_proof_graph_share):
+    if enough and above(unproved, thresholds.max_unproved_claim_after_proof_graph_share):
         warn(
             HealthCheck.UNPROVED_CLAIM_AFTER_PROOF_GRAPH,
-            f"{unproved:.1%} of the blocks{where} end in a claim the tree never proves after a proof-graph tactic > "
-            f"{thresholds.max_unproved_claim_after_proof_graph_share:.1%} ({config.max_after_proof_graph_factor:g}x "
-            "the first phases'): a tail credit that stops at the proof graph does not charge.",
+            f"{unproved:.1%} of the {reached:,} samples{where} reaching the proof graph end in a claim the tree never "
+            f"proves > {thresholds.max_unproved_claim_after_proof_graph_share:.1%} (the first phases' x "
+            f"{config.max_after_proof_graph_factor:g}, at least + "
+            f"{config.min_unproved_claim_after_proof_graph_rise:.0%}): a tail that a credit stopping at the proof "
+            "graph leaves uncharged.",
         )
     valid = measured.held_out_valid_rate
     if below(valid, thresholds.stop_held_out_valid_rate):

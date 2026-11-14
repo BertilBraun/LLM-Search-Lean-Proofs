@@ -4,6 +4,7 @@ import dataclasses
 from collections.abc import Sequence
 
 import pytest
+import torch
 from loop_fakes import solved_tree, zero
 
 from lean_search.data import Problem, Split
@@ -12,7 +13,8 @@ from lean_search.rl.advantages import CreditMode
 from lean_search.rl.grpo_groups import RewardConfig
 from lean_search.rl.health_checks import HeldOutRates, measurements, phase_health
 from lean_search.rl.loop_config import HealthConfig
-from lean_search.rl.policy_trainer import GrpoStepRecord, LossShares, loss_shares
+from lean_search.rl.policy_data import UpdateSize
+from lean_search.rl.policy_trainer import GrpoStepRecord, parameter_snapshot, update_size
 from lean_search.rl.training_phase import PhaseOutcome, PolicyOutcome, policy_update_text
 from lean_search.rl.tree_store import TreeEntry
 from lean_search.rl.tree_summary import (
@@ -105,7 +107,8 @@ def test_a_block_ending_in_an_unproved_claim_after_the_proof_graph(
 
 
 HABITS = BlockHabits(
-    block_samples=20,
+    block_samples=200,
+    proof_graph_samples=20,
     failing_after_proof_graph=4,
     unproved_claim_after_proof_graph=2,
     explanation_token_samples=4,
@@ -113,8 +116,9 @@ HABITS = BlockHabits(
 )
 
 
-def tree_entry(habits: BlockHabits = HABITS) -> TreeEntry:
-    return TreeEntry(0, "p", 1, "f", False, 0, 1, 0, None, 0.0, 0.0, TreeSummary(habits=habits))
+def tree_entry(habits: BlockHabits = HABITS, below_band: bool = False) -> TreeEntry:
+    summary = TreeSummary(habits=habits, below_band=below_band)
+    return TreeEntry(0, "p", 1, "f", False, 0, 1, 0, None, 0.0, 0.0, summary)
 
 
 def grpo_outcome(mean_explanation_tokens: float) -> PhaseOutcome:
@@ -136,10 +140,22 @@ def test_the_mean_explanation_tokens_come_from_the_trees_whatever_trained(outcom
 
 @pytest.mark.parametrize(
     ("field", "value"),
-    [("failing_after_proof_graph_share", 0.2), ("unproved_claim_after_proof_graph_share", 0.1)],
+    [
+        ("proof_graph_sample_share", 0.02),
+        ("failing_after_proof_graph_share", 0.2),
+        ("unproved_claim_after_proof_graph_share", 0.1),
+        ("below_band_failing_after_proof_graph_share", 0.2),
+        ("below_band_unproved_claim_after_proof_graph_share", 0.1),
+    ],
 )
-def test_the_tails_after_the_proof_graph_are_measured_over_the_phases_trees(field: str, value: float) -> None:
-    assert getattr(measurements(EXPERT_ITERATION_PHASE, [tree_entry()], None), field) == value
+def test_the_tails_are_shares_of_the_samples_reaching_the_proof_graph(field: str, value: float) -> None:
+    entries = [tree_entry(below_band=True), tree_entry(BlockHabits(block_samples=800))]
+    assert getattr(measurements(EXPERT_ITERATION_PHASE, entries, None), field) == pytest.approx(value)
+
+
+def test_statements_from_below_the_band_without_a_sample_on_the_graph_have_no_tails() -> None:
+    entries = [tree_entry(), tree_entry(BlockHabits(block_samples=10), below_band=True)]
+    assert measurements(EXPERT_ITERATION_PHASE, entries, None).below_band_failing_after_proof_graph_share is None
 
 
 @pytest.mark.parametrize("field", ["kl_to_starting_policy", "clip_fraction"])
@@ -149,11 +165,16 @@ def test_a_phase_without_a_grpo_update_measures_no_grpo_statistics(field: str) -
 
 CONFIG = dataclasses.replace(HealthConfig(), reference_phases=1, rollback_window_phases=0)
 QUIET_BUDGET = BudgetPhase(100, 50, 200, 32, 1, 0.02, 0.02, 3, 0.1)
+# grpo_loop_v1's phase 1 (review AG): of the samples reaching the proof graph, 16.2% then fail, 0.85% end in an
+# unproved claim.
+REFERENCE = (0.162, 0.0085)
 
 
-def record(phase: int, failing: float, unproved: float) -> PhaseHealth:
+def record(phase: int, failing: float, unproved: float, reached: int = 5000) -> PhaseHealth:
     measured = HealthMeasurements(
-        failing_after_proof_graph_share=failing, unproved_claim_after_proof_graph_share=unproved
+        proof_graph_samples=reached,
+        failing_after_proof_graph_share=failing,
+        unproved_claim_after_proof_graph_share=unproved,
     )
     return PhaseHealth(phase, phase, measured, HealthThresholds(0.5, 0.1))
 
@@ -164,57 +185,92 @@ def health_of(measured: HealthMeasurements, history: Sequence[PhaseHealth] = ())
 
 @pytest.mark.parametrize(
     ("field", "value"),
-    [("max_failing_after_proof_graph_share", 0.15), ("max_unproved_claim_after_proof_graph_share", 0.06)],
+    [("max_failing_after_proof_graph_share", 0.262), ("max_unproved_claim_after_proof_graph_share", 0.0385)],
+    ids=["failing: the reference + 10 points", "unproved: the reference + 3 points"],
 )
-def test_the_tail_thresholds_scale_the_first_phase_alone(field: str, value: float) -> None:
-    thresholds = health_of(HealthMeasurements(), [record(1, 0.1, 0.04), record(2, 0.5, 0.5)]).thresholds
+def test_the_tail_thresholds_rise_from_the_first_phase_by_at_least_their_floor(field: str, value: float) -> None:
+    thresholds = health_of(HealthMeasurements(), [record(1, *REFERENCE), record(2, 0.5, 0.5)]).thresholds
     assert getattr(thresholds, field) == pytest.approx(value)
 
 
+def test_a_common_tail_rises_by_its_factor_above_the_floor() -> None:
+    thresholds = health_of(HealthMeasurements(), [record(1, 0.4, 0.1)]).thresholds
+    assert thresholds.max_failing_after_proof_graph_share == pytest.approx(0.6)
+
+
 @pytest.mark.parametrize(
-    ("failing", "unproved", "checks"),
+    ("failing", "unproved", "reached", "checks"),
     [
-        (0.14, 0.05, []),
-        (0.16, 0.05, [HealthCheck.FAILING_AFTER_PROOF_GRAPH]),
-        (0.14, 0.07, [HealthCheck.UNPROVED_CLAIM_AFTER_PROOF_GRAPH]),
+        (0.25, 0.03, 5000, []),
+        (0.27, 0.03, 5000, [HealthCheck.FAILING_AFTER_PROOF_GRAPH]),
+        (0.25, 0.04, 5000, [HealthCheck.UNPROVED_CLAIM_AFTER_PROOF_GRAPH]),
+        (0.9, 0.9, 999, []),
     ],
-    ids=["within 1.5x", "failing tails rising", "unproved claims rising"],
+    ids=["within the floors", "failing tails rising", "unproved claims rising", "too few samples on the graph"],
 )
 def test_tails_after_the_proof_graph_alert_against_the_first_phase(
-    failing: float, unproved: float, checks: list[HealthCheck]
+    failing: float, unproved: float, reached: int, checks: list[HealthCheck]
 ) -> None:
-    measured = record(3, failing, unproved).measured
-    health = health_of(measured, [record(1, 0.1, 0.04)])
+    health = health_of(record(3, failing, unproved, reached).measured, [record(1, *REFERENCE)])
     assert [alert.check for alert in health.alerts] == checks
 
 
+def test_a_rare_unproved_claim_reference_does_not_alert_on_noise() -> None:
+    health = health_of(record(3, 0.1, 0.003).measured, [record(1, 0.1, 0.0008)])
+    assert health.alerts == ()
+
+
 def test_tails_after_the_proof_graph_never_stop_the_loop() -> None:
-    health = health_of(record(3, 0.9, 0.9).measured, [record(1, 0.1, 0.04)])
+    health = health_of(record(3, 0.9, 0.9).measured, [record(1, *REFERENCE)])
     assert not health.hard_stop
 
 
 def test_a_phase_without_grpo_statistics_still_stops_at_a_held_out_collapse() -> None:
     measured = measurements(EXPERT_ITERATION_PHASE, [tree_entry()], HeldOutRates(0.5, 0.3))
-    assert health_of(measured, [record(1, 0.2, 0.1)]).hard_stop
+    assert health_of(measured, [record(1, *REFERENCE)]).hard_stop
 
 
-def step(policy_loss: float, kl_penalty: float, replay_nll: float) -> GrpoStepRecord:
+def step(policy_loss: float, kl_penalty: float, replay_nll: float, gradient_norm: float) -> GrpoStepRecord:
     return dataclasses.replace(
-        zero(GrpoStepRecord), policy_loss=policy_loss, kl_penalty=kl_penalty, replay_nll=replay_nll
+        zero(GrpoStepRecord),
+        policy_loss=policy_loss,
+        kl_penalty=kl_penalty,
+        replay_nll=replay_nll,
+        gradient_norm=gradient_norm,
     )
 
 
-def test_the_loss_shares_are_of_the_summed_term_magnitudes() -> None:
-    records = [step(-0.2, 0.05, 0.5), step(0.1, 0.05, 0.5)]
-    assert loss_shares(records, 0.1) == LossShares(pytest.approx(0.2), pytest.approx(0.2))
+def moved_update() -> UpdateSize | None:
+    """Parameters (3, 4) moved to (0, 0) over two steps."""
+    parameters = [torch.nn.Parameter(torch.tensor([3.0, 4.0]))]
+    start = parameter_snapshot(parameters)
+    with torch.no_grad():
+        parameters[0].zero_()
+    records = [step(-0.2, 0.05, 0.5, 1.0), step(0.1, 0.03, 0.3, 3.0)]
+    return update_size(records, 0.1, parameters, start)
 
 
-def test_an_update_without_steps_has_no_loss_shares() -> None:
-    assert loss_shares([], 0.1) is None
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("parameter_change_norm", 5.0),
+        ("relative_parameter_change", 1.0),
+        ("mean_gradient_norm", 2.0),
+        ("mean_absolute_policy_loss", 0.15),
+        ("mean_kl_penalty", 0.04),
+        ("mean_replay_loss", 0.04),
+    ],
+)
+def test_the_update_size_of_a_phase(field: str, value: float) -> None:
+    assert getattr(moved_update(), field) == pytest.approx(value)
 
 
-def test_the_update_line_says_when_the_loss_shares_are_not_measured() -> None:
-    assert policy_update_text(1, zero(PolicyOutcome)).endswith("loss shares not measured")
+def test_an_update_without_steps_has_no_size() -> None:
+    assert update_size([], 0.1, [], []) is None
+
+
+def test_the_update_line_says_when_the_size_is_not_measured() -> None:
+    assert "its size not measured" in policy_update_text(1, zero(PolicyOutcome))
 
 
 PROBLEM = Problem("t", Split.VALID, "", "theorem t : True := by", "", "")
@@ -235,3 +291,21 @@ def test_the_tree_summary_counts_the_first_rounds_explanation_tokens() -> None:
     tree = tree_with_samples((False, fenced), (True, completion(("Idea", "x", "```"))))
     summary = tree_summary(tree, RewardConfig(), CreditMode.PER_TACTIC, 32, decoder=VocabularyDecoder())
     assert (summary.habits.explanation_token_samples, summary.habits.explanation_tokens) == (1, 2)
+
+
+class FailingDecoder:
+    def decode(self, token_ids: Sequence[int], *, skip_special_tokens: bool) -> str:
+        raise RuntimeError("the tokenizer failed")
+
+
+def failed_habits_summary() -> TreeSummary:
+    tree = tree_with_samples((False, completion(("Idea", "```"))))
+    return tree_summary(tree, RewardConfig(), CreditMode.PER_TACTIC, 32, decoder=FailingDecoder())
+
+
+def test_a_failed_habit_measurement_is_recorded_in_the_summary() -> None:
+    assert failed_habits_summary().habits_error == "RuntimeError: the tokenizer failed"
+
+
+def test_a_failed_habit_measurement_keeps_the_trees_trainable_groups() -> None:
+    assert failed_habits_summary().trainable_groups == 1

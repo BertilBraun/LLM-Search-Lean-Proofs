@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import ClassVar
 
-from lean_search.rl.policy_data import SamplerAgreement, SignedRatios
+from lean_search.rl.policy_data import SamplerAgreement, SignedRatios, UpdateSize
 from lean_search.rl.tree_statistics import GraphStatistics
 from lean_search.search.tactic_labels import TacticLabelCounts
 from lean_search.value.benchmark import BenchmarkMetrics
@@ -29,6 +29,8 @@ class LoopState(StrEnum):
     EVALUATING = "evaluating"
     PAUSED = "paused"
     STOPPED = "stopped"
+    # The run ended by itself after its last phase or at its token total (`GrpoLoop.finish_run`).
+    FINISHED = "finished"
 
 
 @dataclass(frozen=True)
@@ -353,11 +355,10 @@ class GrpoPhase:
     proof_success_no_closer_share: float = 0.0
     # The searches that produced the phase's data; with training_seconds it decides one or two passes.
     sampling_seconds: float | None = None
-    # The update's size beside the other arms': its optimizer steps, and of its summed loss-term magnitudes the KL
-    # penalty's and the replay's shares (`policy_trainer.loss_shares`).
+    # The update's size beside the other arms': its optimizer steps, and the parameter change, gradient norm and loss
+    # terms of `policy_data.UpdateSize` (None without a step and in older outcomes).
     optimizer_steps: int = 0
-    kl_loss_share: float | None = None
-    replay_loss_share: float | None = None
+    update: UpdateSize | None = None
 
 
 @dataclass(frozen=True)
@@ -619,10 +620,14 @@ class HealthMeasurements:
     below_band_bare_have_share: float | None = None
     below_band_claim_proved_rate: float | None = None
     below_band_median_explanation_characters: float | None = None
-    # Of the same samples: those reaching the proof graph and then running a failing tactic, or ending in a claim the
-    # tree never proves (`BlockHabits`), all statements and those from below the band.
+    # Of the same samples, those with a tactic reaching the proof graph (their count and share), and of those the
+    # shares then running a failing tactic or ending in a claim the tree never proves (`BlockHabits`); all statements
+    # and those from below the band (None without a sample reaching the graph there).
+    proof_graph_samples: int | None = None
+    proof_graph_sample_share: float | None = None
     failing_after_proof_graph_share: float | None = None
     unproved_claim_after_proof_graph_share: float | None = None
+    below_band_proof_graph_samples: int | None = None
     below_band_failing_after_proof_graph_share: float | None = None
     below_band_unproved_claim_after_proof_graph_share: float | None = None
 

@@ -170,10 +170,12 @@ class TreeStore:
         )
         return kept + left_out
 
-    def lost_tokens(self, phase: int) -> int:
-        """Of the searches a server failure or a stop cut off in the phase: generated, never counted."""
+    def lost_tokens(self, first_phase: int, last_phase: int) -> int:
+        """Of the searches a server failure or a stop cut off in these phases: generated, never counted."""
         return sum(
-            search.generated_tokens for search in self.without_tree if not search.end.counted and search.phase == phase
+            search.generated_tokens
+            for search in self.without_tree
+            if not search.end.counted and first_phase <= search.phase <= last_phase
         )
 
     def records(self, phase: int) -> list[TreeRecord]:

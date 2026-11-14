@@ -40,9 +40,9 @@ resume      the searches continue with the new weights; a newly served value mod
 
 Version 0's baselines (every at-start run) run all at once before sampling, sharing the concurrency.
 The searches held at a pause keep their trees and finish in the next phase, which their whole tree's tokens count
-towards. The run ends after phase `training.max_phases` or at `training.max_generated_tokens` (`GrpoLoop.run_ended`):
-its last phase is trained, published and evaluated, the searches stay paused (the servers serve the last version) and
-the loop stops; a restart stops again at once.
+towards. The run ends after its last phase (`LoopTrainingConfig.last_phase`) is trained, published and evaluated, or a
+sampling-only run at its token total (`GrpoLoop.run_ended`): the searches stay paused, the servers serve the last
+version, and the loop finishes (`finished.json`, the state `finished`, its loop.pid gone); a restart finishes again.
 The boundaries to the outside (the searches with Lean and vLLM, the training job, the vLLM servers, the evaluation
 jobs) are protocols; `loop_services.py` holds the production implementations.
 """
@@ -51,6 +51,7 @@ import asyncio
 import dataclasses
 import datetime
 import json
+import os
 import shutil
 import time
 import tomllib
@@ -253,6 +254,27 @@ class PhaseRecord:
     run_generated_tokens: int = 0
     lost_generated_tokens: int = 0
     paused_search_tokens: int = 0
+    # Trees whose block habits could not be measured (`TreeSummary.habits_error`); they trained.
+    trees_without_habits: int = 0
+
+
+@dataclass(frozen=True)
+class TokenBudget:
+    """The token budget a run's phases end on, recorded at its first start with one."""
+
+    phase_generated_tokens: int
+    recorded_at: str
+
+
+@dataclass(frozen=True)
+class RunFinished:
+    """Written when a run ends by itself (`training.max_phases`, `max_generated_tokens`)."""
+
+    # The last phase closed (0: a sampling-only run).
+    last_phase: int
+    generated_tokens: int
+    lost_tokens: int
+    finished_at: str
 
 
 @dataclass(frozen=True)
@@ -443,6 +465,18 @@ class GrpoLoopPaths:
         return self.directory / "curriculum.json"
 
     @property
+    def token_budget(self) -> Path:
+        return self.directory / "token_budget.json"
+
+    @property
+    def finished(self) -> Path:
+        return self.directory / "finished.json"
+
+    @property
+    def pid(self) -> Path:
+        return self.directory / "loop.pid"
+
+    @property
     def log(self) -> Path:
         return self.directory / "loop.log"
 
@@ -523,6 +557,10 @@ def read_progress(path: Path) -> LoopProgress:
 
 def read_phase_outcome(path: Path) -> PhaseOutcome:
     return from_json_object(PhaseOutcome, json.loads(path.read_text(encoding="utf-8")))
+
+
+def percent_of(part: int, total: int) -> str:
+    return "-" if not total else f"{part / total:.1%}"
 
 
 def phase_trigger(phase: int) -> str:
@@ -801,6 +839,8 @@ class GrpoLoop:
         self.stopped_tokens = 0
         # The phase whose long sampling was alerted (`training.sampling_alert_hours`).
         self.sampling_alerted_phase = 0
+        # The run ended by itself (`finish_run`), not on a stop or a failure.
+        self.finished = False
         self.server_failures: dict[str, int] = {}
         self.session_server_failures = 0
         self.statements_given_up = 0
@@ -876,28 +916,54 @@ class GrpoLoop:
         return sum(entry.summary.trainable_groups for entry in self.store.phase_entries(phase))
 
     def ends_with(self, phase: int) -> bool:
-        """Whether the run ends once this phase closes."""
-        training = self.config.training
-        last = bool(training.max_phases) and phase >= training.max_phases
-        tokens = training.max_generated_tokens
-        return last or (bool(tokens) and self.store.generated_tokens(1, phase) >= tokens)
+        """Whether the run ends once this phase closes (`LoopTrainingConfig.last_phase`)."""
+        last = self.config.training.last_phase()
+        return last is not None and phase >= last
 
     def run_ended(self) -> bool:
-        """Phase `max_phases` closed, or the finished searches hold `max_generated_tokens` and no phase is due."""
+        """Its last phase closed, or a sampling-only run's searches hold `max_generated_tokens`."""
         training = self.config.training
-        if training.max_phases and self.progress.phase > training.max_phases:
-            return True
-        tokens = training.max_generated_tokens
-        return bool(tokens) and self.store.generated_tokens(1, self.progress.phase) >= tokens and not self.phase_due()
+        if training.sampling_only():
+            return self.store.generated_tokens(1, self.progress.phase) >= training.max_generated_tokens
+        return self.ends_with(self.progress.phase - 1)
 
-    def end_text(self) -> str:
-        training = self.config.training
-        return (
-            f"The run ended (training.max_phases {training.max_phases}, max_generated_tokens "
-            f"{training.max_generated_tokens:,}) with {self.store.generated_tokens(1, self.progress.phase):,} "
-            f"generated tokens, phase {self.progress.phase} {self.progress.stage}; the servers serve the last "
-            "version, the loop stops"
+    def finish_run(self) -> None:
+        """The run ended by itself: it stops as FINISHED, with `finished.json` beside it."""
+        self.finished = True
+        counted = self.store.generated_tokens(1, self.progress.phase)
+        lost = self.store.lost_tokens(1, self.progress.phase)
+        record = RunFinished(self.progress.phase - 1, counted, lost, now())
+        write_json_atomically(self.paths.finished, record)
+        self.log(
+            f"The run finished after phase {record.last_phase}: {counted:,} generated tokens counted, {lost:,} lost "
+            f"to server failures and stops ({percent_of(lost, counted + lost)} of what the searches generated). The "
+            "servers are still up, serving the last version, and cost money: deployment/grpo_loop.sh stop stops them "
+            "(the arm's wrapper decides)."
         )
+        assert self.stop is not None
+        self.stop.set()
+
+    def check_token_budget(self) -> None:
+        """A run's phases end on one rule throughout: the token budget is recorded at the first start with it, and a
+        run that closed phases without it, or with another, refuses to start."""
+        budget = self.config.training.phase_generated_tokens
+        path = self.paths.token_budget
+        if path.exists():
+            recorded = from_json_object(TokenBudget, json.loads(path.read_text(encoding="utf-8")))
+            if recorded.phase_generated_tokens != budget:
+                raise RuntimeError(
+                    f"The run's phases end on {recorded.phase_generated_tokens:,} generated tokens ({path}); "
+                    f"training.phase_generated_tokens = {budget:,} would move every phase boundary."
+                )
+            return
+        if not budget:
+            return
+        if self.progress.phase > 1:
+            raise RuntimeError(
+                f"The run closed {self.progress.phase - 1} phases on minutes and groups; a token budget counts from "
+                "phase 1 and would end several phases at once. Start a new run for it."
+            )
+        write_json_atomically(path, TokenBudget(budget, now()))
 
     def alert_long_sampling(self) -> None:
         """Once per phase whose sampling outlasts `training.sampling_alert_hours` (token-budget phases only)."""
@@ -946,14 +1012,21 @@ class GrpoLoop:
                 self.save_progress(sampling_seconds=self.sampling_seconds())
             elif self.sampling_since is not None:
                 self.save_progress(next_phase_sampling_seconds=self.clock() - self.sampling_since)
-            self.loop_state = LoopState.STOPPED
+            self.loop_state = LoopState.FINISHED if self.finished else LoopState.STOPPED
             self.write_status()
+            if self.finished:
+                self.release_pid_file()
             self.log(
                 f"Stopped after {self.session_trees:,} trees and {self.session_proofs:,} proofs this session; "
                 f"{self.stopped_searches} searches cut off, {self.stopped_tokens:,} generated tokens lost"
             )
         if self.failure is not None:
             raise RuntimeError("The loop stopped on a failure; a restart resumes it") from self.failure
+
+    def release_pid_file(self) -> None:
+        """A finished run is no running loop: deployment/grpo_loop.sh's loop.pid goes when it names this process."""
+        if self.paths.pid.exists() and self.paths.pid.read_text(encoding="utf-8").strip() == str(os.getpid()):
+            self.paths.pid.unlink()
 
     async def session(self, stop: asyncio.Event) -> None:
         # A probe evaluation swaps its checkpoint into the same servers.
@@ -965,9 +1038,9 @@ class GrpoLoop:
         health_stop = read_health_stop(self.paths.health_stop)
         if health_stop is not None:
             raise RuntimeError(health_stop_text(health_stop))
+        self.check_token_budget()
         if self.progress.stage == PhaseStage.SAMPLING and self.run_ended():
-            self.log(self.end_text())
-            stop.set()
+            self.finish_run()
             return
         self.record_reward_fix()
         self.heartbeat = asyncio.create_task(self.stopping_on_failure(self.report_status(stop), stop))
@@ -1079,6 +1152,11 @@ class GrpoLoop:
                 f"{tokens:,} generated tokens count\n{traceback.format_exc()}"
             )
             return
+        if summary.habits_error:
+            self.log(
+                f"{fed.name}: its block habits could not be measured ({summary.habits_error}); the tree trains, its "
+                "health measurements are missing"
+            )
         async with self.store_lock:
             await asyncio.to_thread(
                 self.store.add,
@@ -1160,8 +1238,7 @@ class GrpoLoop:
                 return
             if not self.phase_due():
                 if self.run_ended():
-                    self.log(self.end_text())
-                    stop.set()
+                    self.finish_run()
                     return
                 self.alert_long_sampling()
                 self.save_sampling_progress()
@@ -1316,11 +1393,12 @@ class GrpoLoop:
         if health.rolled_back_to is not None:
             await self.roll_back(phase, health.rolled_back_to, searching)
         self.close_phase(phase, kinds, evaluation_seconds)
-        if health.hard_stop or self.run_ended():
-            if not health.hard_stop:
-                self.log(self.end_text())
+        if health.hard_stop:
             assert self.stop is not None
             self.stop.set()
+            return
+        if self.run_ended():
+            self.finish_run()
             return
         self.resume_searches()
         # Only now: the version is recorded, so the scoring is of the value version the servers serve.
@@ -2131,7 +2209,8 @@ class GrpoLoop:
         progress = self.progress
         generated_tokens = self.store.generated_tokens(phase, phase)
         run_generated_tokens = self.store.generated_tokens(1, phase)
-        lost_tokens = self.store.lost_tokens(phase)
+        lost_tokens = self.store.lost_tokens(phase, phase)
+        unmeasured = sum(bool(entry.summary.habits_error) for entry in entries)
         self.writer.write(
             PhaseTiming(
                 sampling_seconds=progress.sampling_seconds,
@@ -2152,6 +2231,21 @@ class GrpoLoop:
             f"{lost_tokens:,} of searches lost to server failures or stops, {progress.paused_search_tokens:,} held by "
             "the searches paused at its pause"
         )
+        budget = self.config.training.phase_generated_tokens
+        lost_limit = self.config.training.max_lost_token_share * budget
+        if budget and lost_tokens > lost_limit:
+            self.log(
+                f"Alert: phase {phase} lost {lost_tokens:,} generated tokens to server failures or stops, more than "
+                f"{lost_limit:,.0f} ({self.config.training.max_lost_token_share:.0%} of its budget): the arms' real "
+                "compute differs by that much beyond the counted tokens"
+            )
+        unmeasured_limit = self.config.health.max_unmeasured_tree_share * len(entries)
+        if unmeasured > unmeasured_limit:
+            self.log(
+                f"Alert: {unmeasured} of phase {phase}'s {len(entries)} trees have no block habits (their measurement "
+                f"failed; they train): above {self.config.health.max_unmeasured_tree_share:.0%}, the health checks "
+                "read a part of the phase"
+            )
         record = PhaseRecord(
             phase=phase,
             trees=len(entries),
@@ -2171,6 +2265,7 @@ class GrpoLoop:
             run_generated_tokens=run_generated_tokens,
             lost_generated_tokens=lost_tokens,
             paused_search_tokens=progress.paused_search_tokens,
+            trees_without_habits=unmeasured,
         )
         self.beside_sampling = BesideSampling()
         with self.paths.phases.open("a", encoding="utf-8") as handle:

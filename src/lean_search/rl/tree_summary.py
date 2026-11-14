@@ -67,8 +67,10 @@ class BlockHabits:
     # Tactics reaching a proof-graph state with goals left, and those of them a further tactic of the block follows.
     proof_graph_steps: int = 0
     continued_proof_graph_steps: int = 0
-    # Samples whose block reaches the proof graph and then runs a failing tactic, or whose last tactic reaching a
-    # state after the proof graph is a claim the tree never proves: tails that proof-success credit pays for.
+    # Samples whose block has a tactic reaching a proof-graph state, and those of them that then run a failing tactic,
+    # or whose last tactic reaching a state after it is a claim the tree never proves: tails that proof-success credit
+    # pays for, as shares of the samples reaching the graph.
+    proof_graph_samples: int = 0
     failing_after_proof_graph: int = 0
     unproved_claim_after_proof_graph: int = 0
     # Of all first-round samples with recorded tokens (`explanation_token_count`, with the loop's tokenizer only): the
@@ -127,6 +129,9 @@ class TreeSummary:
     # The curriculum fed the statement from below its band (`below_band_share`), not from the band.
     below_band: bool = False
     habits: BlockHabits = field(default_factory=BlockHabits)
+    # Why the block habits (health only) could not be measured, leaving them empty while the tree trains; "" when
+    # they were.
+    habits_error: str = ""
 
 
 def executed_edge(record: TreeRecord, edge: Edge) -> Edge:
@@ -309,6 +314,7 @@ def block_habits(
                 valid_block_tactics=samples * valid * executed.applied_tactics,
                 proof_graph_steps=samples * len(steps),
                 continued_proof_graph_steps=samples * sum(steps),
+                proof_graph_samples=samples * any(outcome.label == TacticLabel.PROOF_GRAPH for outcome in outcomes),
                 failing_after_proof_graph=samples * fails_after_proof_graph(outcomes),
                 unproved_claim_after_proof_graph=samples * ends_in_unproved_claim_after_proof_graph(outcomes),
                 openings=(OpeningCount(opening_head(first_tactic), samples),),
@@ -440,6 +446,10 @@ def tree_summary(
     )
     accounting = record.result.accounting
     solved_at = record.result.solved_at
+    try:
+        habits, habits_error = block_habits(record, tactics, decoder), ""
+    except Exception as error:
+        habits, habits_error = BlockHabits(), f"{type(error).__name__}: {error}"
     return TreeSummary(
         expansion_budget=expansion_budget,
         solved_at_expansion=None if solved_at is None else solved_at.expansions,
@@ -469,5 +479,6 @@ def tree_summary(
             sorted({version for expansion in record.expansions if (version := expansion.policy_version) is not None})
         ),
         below_band=below_band,
-        habits=block_habits(record, tactics, decoder),
+        habits=habits,
+        habits_error=habits_error,
     )

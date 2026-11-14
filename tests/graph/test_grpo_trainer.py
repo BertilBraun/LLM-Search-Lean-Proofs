@@ -153,6 +153,11 @@ def test_the_kl_penalty_term_is_recorded_with_the_steps_loss(
     assert (train(config, tmp_path / "adapter")[0].kl_penalty > 0) == penalized
 
 
+def test_a_phase_reports_how_far_its_update_moved_the_parameters(tiny_model: Path, tmp_path: Path) -> None:
+    result = train_grpo(grpo_config(tiny_model, passes=1), 0, sequences(), [], CPU, tmp_path / "adapter", [].append)
+    assert result.update is not None and result.update.parameter_change_norm > 0
+
+
 def test_without_feedback_sequences_the_first_rounds_kl_is_the_whole_kl(
     tiny_model: Path, perturbed_adapter: Path, tmp_path: Path
 ) -> None:

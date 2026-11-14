@@ -473,6 +473,7 @@ HEALTHY = HealthMeasurements(
     claim_proved_rate=0.02,
     closed_form_filler_share=0.01,
     median_explanation_characters=140.0,
+    proof_graph_samples=5000,
     failing_after_proof_graph_share=0.1,
     unproved_claim_after_proof_graph_share=0.04,
 )
