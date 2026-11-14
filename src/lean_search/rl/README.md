@@ -740,16 +740,20 @@ dashboard warns below `min_free_disk_gib` (50) free.
   orders. The loop's curriculum never feeds either (`statements.held_out`).
 - The follow-up's probe v2 (`grpo_fixed_sets.py select-by-characters`, `experiments/configs/grpo/followup/probe_v2.toml`,
   `fixed_sets.CharacterStrataConfig`): 2,000 statements over seven bands of the shortest known proof's characters
-  (0-499, ..., 4500+; 150 / 250 / 350 / 350 / 400 / 300 / 200), in a seeded hash order per band, after dropping the
-  old probe, gate and overfit statements, the held-out states' statements and statements whose root state is a
-  near-duplicate (MinHash, estimated Jaccard >= 0.7) of a training record's root state (`training_overlap.py`; the
-  SFT, reasoning and value data under `--training-data`); the drops per band go to `probe_v2.selection.json`.
-  `experiments/configs/grpo/followup/base.toml` holds it out beside the old sets, probes it in 12 parts and runs the
-  curriculum on characters / 100 from `initial_band_low` 10 (1,000-1,200 characters, where v0 solves about half).
-  Any checkpoint on the whole probe v2, outside a loop: `experiments/probe_evaluate.py` (`probe_evaluation.py`,
-  `followup/probe_evaluation.toml`: a policy adapter with a value adapter, value v0 or no value model, merged and
-  swapped into the running servers; one concurrency and a 7,200 s wall cap for every run; a run is rejected above 5%
-  of searches stopped on the wall clock).
+  (0-499, ..., 4500+; 150 / 250 / 350 / 350 / 400 / 300 / 200) of the frozen pool (a copy checked by its sha256), in a
+  seeded hash order per band, after dropping the old probe, gate and overfit statements, those grpo_loop_v1 searched
+  (its tree index), the held-out states' statements and statements whose root state nearly repeats a training proof's
+  earliest state (`training_overlap.py`: hypotheses in a fixed order, equal anonymized tokens or MinHash Jaccard >= 0.7;
+  LSH over every candidate, then each drawn statement against every training root, redrawn on a hit). Pool statements
+  whose root state matches a drawn one's are its twins (`probe_v2_twins.jsonl`). The drops per band go to
+  `probe_v2.selection.json`. `experiments/configs/grpo/followup/base.toml` holds probe v2 and its twins out beside the
+  old sets and runs the curriculum on characters / 100 from `initial_band_low` 10 (1,000-1,200 characters, where v0
+  solves about half); inside an arm only the held-out states run (at every pause).
+  Any checkpoint on probe v2, outside a loop: `experiments/probe_evaluate.py` (`probe_evaluation.py`,
+  `followup/probe_evaluation.toml`): a policy adapter with a value adapter, value v0 or none (row 2's value-free
+  priority), merged once per content and swapped into the running servers, never while a loop runs or another probe
+  evaluation holds the servers; one concurrency and a 7,200 s wall cap for every run; accepted only under 1% wall-clock
+  stops (run.json, per stratum too), and `probe_rating` rates accepted runs only, pooled by the checkpoint's identity.
 - `probe`: 16 expansions, no harvesting, no ε, with `evaluation.value_model` (the published value model in
   `loop.toml`), in slots: slot k searches
   part k % `probe_parts` (3) of the set (`fixed_targets.probe_part`: every third problem of each stratum, so each part

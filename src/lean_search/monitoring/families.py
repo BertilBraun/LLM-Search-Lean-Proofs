@@ -251,6 +251,8 @@ class VersionRating:
     # problems (None when the anchor searched none of them).
     solved_within: tuple[float, ...]
     baseline_solved_within: tuple[float, ...] | None
+    # A standalone run's checkpoint identity (rl/probe_evaluation.py); empty for a loop's version.
+    identity: str = ""
 
 
 @dataclass(frozen=True)
@@ -301,6 +303,7 @@ class ProbeRatings:
     parts: int
     runs_rated: int
     runs_unreadable: int
+    anchor_identity: str = ""
 
 
 @dataclass(frozen=True)

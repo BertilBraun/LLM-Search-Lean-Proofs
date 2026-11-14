@@ -1,21 +1,29 @@
 # Probe v2 searched with any checkpoint outside a loop (experiments/probe_evaluate.py; src/lean_search/rl/
-# probe_evaluation.py): an arm's phase adapters, step-2 variants, v0. Every run of the study uses these settings, so
-# runs compare; the search config may be replaced per run (--search-config).
+# probe_evaluation.py): v0, step 2's variants, the arms' retained phase adapters. Every run of the study uses these
+# settings, so runs compare; a run's own search config (--search-config, e.g. step 1's token-capped runs 3 and 4) brings
+# its own expansion budget.
 #   python experiments/probe_evaluate.py --config experiments/configs/grpo/followup/probe_evaluation.toml \
-#       --name v0 --policy-adapter /workspace/checkpoints/data_rewrite_sft_numbered/adapter --policy-version 0 --value v0
+#       --name v0_value_v0_run1 --arm v0 --phase 0 \
+#       --policy-adapter /workspace/checkpoints/data_rewrite_sft_numbered/adapter --value v0
 # The servers of loop_config's [serving] (deployment/grpo_loop.sh servers), its [initial] value_adapter as value v0.
 loop_config = "experiments/configs/grpo/followup/base.toml"
 search_config = "experiments/configs/grpo/search/visible_student_v2.toml"
 probe_set = "grpo/fixed_sets/probe_v2.jsonl"
-# Above this share of searches stopped on the wall clock a run is rejected: the expansions, not the clock, should be the
-# budget.
-max_wall_clock_stop_share = 0.05
+# Accepted only with fewer than 1% of the searches stopped on the wall clock (DESIGN.md, "Evaluation"); a rejected run
+# is repeated with the cap doubled, and every run it is compared with at the same cap.
+max_wall_clock_stop_share = 0.01
 output = "probe_evaluations"
 
 [probe]
 max_expansions = 16
-# Per statement; grpo_loop_v1's 1,800 s (sized to fit a slot into a phase) stopped searches the expansions had not
-# ended, and outside a loop nothing waits on the tail.
+# Per statement, only an emergency stop.
 max_wall_seconds = 7200.0
-# One concurrency for every run of the study (the node has half grpo_loop_v1's CPU quota).
-concurrency = 32
+# THROUGHPUT TEST: a placeholder; the throughput test sets one probe concurrency for every run of the study.
+concurrency = 56
+
+# --value none: row 2's value-free search (experiments/configs/phase2_sft_v2_search.toml): the path's mean step
+# log-probability per block; an automation step counts -2.8, row 2's median log-probability of the samples that made
+# progress (-2.79), until the study calibrates it on 200 pool statements outside every held-out set.
+[value_free_priority]
+length_exponent = 1.0
+automation_log_probability = -2.8
