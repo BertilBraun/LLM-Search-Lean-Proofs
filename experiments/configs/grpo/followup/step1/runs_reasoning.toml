@@ -1,0 +1,21 @@
+# Step 1's runs 3 and 4 (DESIGN.md, "Follow-up study: controlled arms", "Step 1", Q3): v0 with value v0 at equal
+# generated tokens T, visible against no reasoning, depth_weight 0 in both; run 4 is compared with run 3 only
+# (probe_compare.py pair --across-search-modes), never with runs 1-2. Run 3 against run 1 shows what depth_weight 0
+# cost the tuned visible search (a caveat on Q3 at 3 or more points).
+[[runs]]
+name = "step1_run3_visible_T"
+arm = "v0"
+phase = 0
+policy_adapter = "/workspace/checkpoints/data_rewrite_sft_numbered/adapter"
+value = "v0"
+search_config = "experiments/configs/grpo/followup/step1/token_capped_visible.toml"
+purpose = "Q3: visible reasoning at equal generated tokens"
+
+[[runs]]
+name = "step1_run4_no_reasoning_T"
+arm = "v0"
+phase = 0
+policy_adapter = "/workspace/checkpoints/data_rewrite_sft_numbered/adapter"
+value = "v0"
+search_config = "experiments/configs/grpo/followup/step1/token_capped_no_reasoning.toml"
+purpose = "Q3: no reasoning at equal generated tokens"

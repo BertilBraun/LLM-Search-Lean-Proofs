@@ -1,0 +1,13 @@
+# Step 1's run 4 pilot (DESIGN.md, "Follow-up study: controlled arms", "Step 1", Q3): v0 without reasoning at the
+# token cap T on the first 200 probe statements, which checks the wall-clock stops before runs 3 and 4 (~10-25 h for
+# run 4 in full). Runs 3 and 4 share one wall cap, set from this pilot: if it is rejected, both full runs need an
+# evaluation config with the cap doubled.
+[[runs]]
+name = "step1_run4_pilot_no_reasoning_T"
+arm = "v0"
+phase = 0
+policy_adapter = "/workspace/checkpoints/data_rewrite_sft_numbered/adapter"
+value = "v0"
+search_config = "experiments/configs/grpo/followup/step1/token_capped_no_reasoning.toml"
+problems = 200
+purpose = "wall-clock stops of the no-reasoning search at T"

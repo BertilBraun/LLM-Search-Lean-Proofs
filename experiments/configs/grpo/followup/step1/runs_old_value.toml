@@ -1,0 +1,11 @@
+# Step 1's run 5 (DESIGN.md, "Follow-up study: controlled arms", "Step 1", Q4): v0's policy with grpo_loop_v1's final
+# value model at 16 expansions, against runs 1-2 (probe_compare.py pair: the same search config, another value model).
+[[runs]]
+name = "step1_run5_v0_value_final"
+arm = "v0"
+phase = 0
+policy_adapter = "/workspace/checkpoints/data_rewrite_sft_numbered/adapter"
+# grpo_loop_v1's last value adapter (Hugging Face BertilBraun/lean4-prover-qwen3.5-4b-grpo-lora), once on the node.
+value = "PLACEHOLDER: the path of grpo_loop_v1's final value adapter"
+value_version = 35
+purpose = "Q4: does the loop's value training help (none < v0 < final) or only the value model (none < v0 = final)"
