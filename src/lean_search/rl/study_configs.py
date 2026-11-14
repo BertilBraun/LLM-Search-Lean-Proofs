@@ -38,7 +38,12 @@ ARM_SETTINGS = frozenset(
 )
 # Step 2's shared sampling: v0 sampling without training until a total token count, a phase never due.
 SHARED_SAMPLING_SETTINGS = frozenset(
-    {"loop.name", "loop.training.phase_generated_tokens", "loop.training.max_generated_tokens"}
+    {
+        "loop.name",
+        "loop.training.phase_generated_tokens",
+        "loop.training.max_generated_tokens",
+        "loop.training.max_phases",
+    }
 )
 
 

@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from lean_search.expert_iteration.toml_text import toml_text
+from lean_search.rl.loop_config import parse_loop_config
 from lean_search.rl.study_configs import (
     ARM_SETTINGS,
     SHARED_SAMPLING_SETTINGS,
@@ -27,9 +28,7 @@ def toml(path: Path) -> dict:
     return tomllib.loads(path.read_text(encoding="utf-8"))
 
 
-SHIPPED_BASE = toml(CONFIGS / "followup/base.toml")
-# The base as WP1 sets it: B per phase and 16 phases, identical for every arm.
-BASE = merged(SHIPPED_BASE, {"training": {"phase_generated_tokens": 12_000_000, "max_phases": 16}})
+BASE = toml(CONFIGS / "followup/base.toml")
 PHASE = toml(CONFIGS / "phase.toml")
 
 
@@ -122,6 +121,18 @@ def test_the_shared_sampling_run_samples_48m_tokens_without_a_phase_coming_due()
     configs = overlay_configs(OverlayKind.SHARED_SAMPLING, toml(SHARED_SAMPLING), BASE, PHASE, "phase.toml")
     training = configs.loop["training"]
     assert (training["max_generated_tokens"], training["phase_generated_tokens"] > 48_000_000) == (48_000_000, True)
+
+
+@pytest.mark.parametrize("path", ARMS, ids=lambda path: path.stem)
+def test_an_arms_loop_config_loads_with_16_phases_of_12m_tokens(path: Path) -> None:
+    training = parse_loop_config(toml_text(arm_configs(with_learning_rate(toml(path), 5e-5)).loop)).training
+    assert (training.phase_generated_tokens, training.max_phases, training.last_phase()) == (12_000_000, 16, 16)
+
+
+def test_the_shared_sampling_run_loads_as_a_sampling_only_run_without_a_phase_count() -> None:
+    configs = overlay_configs(OverlayKind.SHARED_SAMPLING, toml(SHARED_SAMPLING), BASE, PHASE, "phase.toml")
+    training = parse_loop_config(toml_text(configs.loop)).training
+    assert (training.sampling_only(), training.max_phases, training.last_phase()) == (True, 0, None)
 
 
 def test_a_shared_sampling_run_whose_phase_comes_due_is_refused() -> None:
