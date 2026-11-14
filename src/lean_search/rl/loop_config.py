@@ -89,8 +89,9 @@ class LoopTrainingConfig:
     # else a multiple of it, the end of that many phases; 0: never.
     max_phases: int = 0
     max_generated_tokens: int = 0
-    # With `phase_generated_tokens`: an alert when a phase's searches lost to server failures or stops generated more
-    # than this share of the budget (never counted, so real compute differs between arms by that much).
+    # With `phase_generated_tokens`: an alert when a phase's searches lost to server failures generated more than this
+    # share of the budget (never counted, so real compute differs between arms by that much); searches a stop or
+    # restart of the loop cut off are logged, not alerted on.
     max_lost_token_share: float = 0.02
     check_seconds: float = 30.0
     # The value model trains every this many phases (0 never) on the trees of the last `value_window_phases` phases,

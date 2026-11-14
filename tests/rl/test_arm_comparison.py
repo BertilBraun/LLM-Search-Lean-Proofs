@@ -60,6 +60,31 @@ def every_fourth(offset: int, count: int) -> set[str]:
 BASE = every_fourth(0, 100) | every_fourth(1, 60)
 
 
+OTHER_BUDGET = RunSettings("probe digest", 32, 7200.0, None, 16, 84, "other search digest")
+
+
+def test_runs_of_other_budgets_are_refused_without_the_descriptive_mode() -> None:
+    with pytest.raises(ValueError, match="expansion budget"):
+        compare_arms(arm("A", BASE), Arm("B", (run("B_0", BASE, settings=OTHER_BUDGET),)))
+
+
+def test_runs_of_other_budgets_compared_descriptively_get_no_verdict() -> None:
+    other = Arm("B", (run("B_0", BASE, settings=OTHER_BUDGET),))
+    comparison = compare_arms(arm("A", BASE | every_fourth(2, 40)), other, across_settings=True)
+    assert comparison.verdict.kind == VerdictKind.NO_VERDICT
+
+
+def test_the_primary_endpoint_is_refused_across_settings() -> None:
+    with pytest.raises(ValueError, match="one setting"):
+        compare_arms(arm("A", BASE, BASE), arm("B", BASE, BASE), primary=True, across_settings=True)
+
+
+def test_runs_of_other_probes_are_refused_across_settings_too() -> None:
+    other = RunSettings("another probe", 16, 7200.0, None, 16, 84, "search digest")
+    with pytest.raises(ValueError, match="probe set"):
+        compare_arms(arm("A", BASE), Arm("B", (run("B_0", BASE, settings=other),)), across_settings=True)
+
+
 def test_a_clear_difference_differs_with_the_better_arm_ahead() -> None:
     comparison = compare_arms(arm("A", BASE | every_fourth(2, 40)), arm("B", BASE))
     assert (comparison.verdict.kind, comparison.verdict.ahead) == (VerdictKind.DIFFER, "A")

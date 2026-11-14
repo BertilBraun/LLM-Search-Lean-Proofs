@@ -178,5 +178,13 @@ class TreeStore:
             if not search.end.counted and first_phase <= search.phase <= last_phase
         )
 
+    def server_failure_tokens(self, first_phase: int, last_phase: int) -> int:
+        """Of `lost_tokens`, those of searches a server failure cut off (not a stop or restart of the loop)."""
+        return sum(
+            search.generated_tokens
+            for search in self.without_tree
+            if search.end == SearchEnd.SERVER_FAILURE and first_phase <= search.phase <= last_phase
+        )
+
     def records(self, phase: int) -> list[TreeRecord]:
         return [read_tree(self.directory / entry.file) for entry in self.phase_entries(phase)]

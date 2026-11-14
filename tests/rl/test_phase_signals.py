@@ -504,7 +504,6 @@ def test_a_healthy_phase_has_no_alerts() -> None:
         ({"bare_have_share": 0.4}, HealthCheck.BARE_HAVES),
         ({"claim_proved_rate": 0.005}, HealthCheck.CLAIMS_PROVED),
         ({"median_explanation_characters": 90.0}, HealthCheck.EXPLANATION_CHARACTERS),
-        ({"failing_after_proof_graph_share": 0.2}, HealthCheck.FAILING_AFTER_PROOF_GRAPH),
         ({"unproved_claim_after_proof_graph_share": 0.1}, HealthCheck.UNPROVED_CLAIM_AFTER_PROOF_GRAPH),
     ],
 )
@@ -515,17 +514,47 @@ def test_a_signal_beyond_its_threshold_alerts(change: dict[str, float], check: H
 @pytest.mark.parametrize(
     "change",
     [
+        {"failing_after_proof_graph_share": 0.2},
+        {"below_band_failing_after_proof_graph_share": 0.2, "below_band_proof_graph_samples": 5000},
+    ],
+    ids=["all statements", "below the band"],
+)
+def test_a_rising_failing_tail_after_the_proof_graph_is_charted_not_alerted(change: dict[str, float]) -> None:
+    assert checks(dataclasses.replace(HEALTHY, **change)) == []
+
+
+@pytest.mark.parametrize(
+    ("change", "alerts"),
+    [
+        (
+            {"below_band_unproved_claim_after_proof_graph_share": 0.1, "below_band_proof_graph_samples": 500},
+            [],
+        ),
+        (
+            {"unproved_claim_after_proof_graph_share": 0.1, "below_band_proof_graph_samples": 500},
+            [HealthCheck.UNPROVED_CLAIM_AFTER_PROOF_GRAPH],
+        ),
+    ],
+    ids=["a below-band rise unread", "every statement's rise alerts"],
+)
+def test_too_few_below_band_samples_on_the_graph_fall_back_to_every_statement(
+    change: dict[str, float], alerts: list[HealthCheck]
+) -> None:
+    assert checks(dataclasses.replace(HEALTHY, **change)) == alerts
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
         {"bare_have_share": 0.4},
         {"claim_proved_rate": 0.005},
         {"median_explanation_characters": 90.0},
-        {"failing_after_proof_graph_share": 0.2},
         {"unproved_claim_after_proof_graph_share": 0.1},
     ],
     ids=[
         "bare haves",
         "claims proved",
         "explanation characters",
-        "failing after the proof graph",
         "unproved claims after the proof graph",
     ],
 )
@@ -540,9 +569,8 @@ def test_habit_alerts_are_warnings(change: dict[str, float]) -> None:
         ({"below_band_bare_have_share": 0.4}, HealthCheck.BARE_HAVES),
         ({"below_band_claim_proved_rate": 0.005}, HealthCheck.CLAIMS_PROVED),
         ({"below_band_median_explanation_characters": 90.0}, HealthCheck.EXPLANATION_CHARACTERS),
-        ({"below_band_failing_after_proof_graph_share": 0.2}, HealthCheck.FAILING_AFTER_PROOF_GRAPH),
         (
-            {"below_band_unproved_claim_after_proof_graph_share": 0.1},
+            {"below_band_unproved_claim_after_proof_graph_share": 0.1, "below_band_proof_graph_samples": 5000},
             HealthCheck.UNPROVED_CLAIM_AFTER_PROOF_GRAPH,
         ),
     ],
@@ -550,7 +578,6 @@ def test_habit_alerts_are_warnings(change: dict[str, float]) -> None:
         "bare haves",
         "claims proved",
         "explanation characters",
-        "failing after the proof graph",
         "unproved claims after the proof graph",
     ],
 )

@@ -2234,9 +2234,11 @@ class GrpoLoop:
         )
         budget = self.config.training.phase_generated_tokens
         lost_limit = self.config.training.max_lost_token_share * budget
-        if budget and lost_tokens > lost_limit:
+        # A stop or restart of the loop cuts searches off by design; only a server failure's loss is an alert.
+        failed_tokens = self.store.server_failure_tokens(phase, phase)
+        if budget and failed_tokens > lost_limit:
             self.log(
-                f"Alert: phase {phase} lost {lost_tokens:,} generated tokens to server failures or stops, more than "
+                f"Alert: phase {phase} lost {failed_tokens:,} generated tokens to server failures, more than "
                 f"{lost_limit:,.0f} ({self.config.training.max_lost_token_share:.0%} of its budget): the arms' real "
                 "compute differs by that much beyond the counted tokens"
             )

@@ -214,6 +214,13 @@ def test_lost_tokens_are_kept_apart(tmp_path: Path) -> None:
     assert TreeStore(tmp_path).lost_tokens(1, 1) == 70
 
 
+def test_only_a_server_failures_tokens_count_as_lost_to_server_failures(tmp_path: Path) -> None:
+    store = TreeStore(tmp_path)
+    store.add_without_tree("u", 1, 50, SearchEnd.SERVER_FAILURE)
+    store.add_without_tree("v", 1, 20, SearchEnd.STOPPED)
+    assert TreeStore(tmp_path).server_failure_tokens(1, 1) == 50
+
+
 FAILING = problem_name(statement(0).statement)
 MALFORMED = problem_name(statement(1).statement)
 FAILING_TOML = TOKEN_TOML.replace(
