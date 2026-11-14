@@ -2,25 +2,23 @@
 
 Kept current by the orchestrator. Details live in the linked files.
 
-**Last update:** 2026-11-14, 18:10 UTC.
+**Last update:** 2026-11-14, 21:30 UTC.
 
 ## Where we are
 
-Step 0 is done on the node; step 1 has started with the probe draw and the two anchor runs (v0 with value v0 on the
-2,000-statement probe).
+Step 1 is running: anchor run 1 (v0 with value v0 on the 2,000-statement probe) is close to done, run 2 follows by
+itself. All code packages are merged and pushed (master 192b2ac); every one had two independent reviews and a
+re-review.
 
 | Item | State | Result or file |
 |---|---|---|
-| Node: 4x RTX 3090, 61-core CPU quota, $0.89/h, billing since about 11:20 UTC | set up; v0 reproduced; throughput measured | `ssh -p 16657 root@104.233.209.157` |
-| Step 1, probe v2 draw and anchor runs 1 and 2 | started about 14:40 UTC | results to `node_backup/2026-11-14/` |
-| Step 1, value-free calibration and pilots, reasoning at equal tokens, old final value model | waits for the launcher (in review) and the anchor runs | |
-| Four step-0 analyses, design with two reviews | done | `results/followup_step0/`, `results/reviews/2026-11-14_review_aa_*`, `_ab_*` |
-| Package: probe v2, near-duplicate guard, curriculum by characters, base config, evaluation of any checkpoint | merged (reviews `_ac_`, `_ad_`, re-reviewed, final check) | master |
-| Package: step log-probability setting, pure proof-success credit, expert-iteration data from tree folders | merged (reviews `_ae_`, `_af_`, re-reviewed) | master |
-| Package: token-budget phases, a defined end, seeds; health checks that mean the same in every arm | implemented; two code reviews running | branch `worktree-agent-a1f7eaa0dbb612621` |
-| Package: study tooling (arm comparison, slicing, learning-rate ranking, step-1 run lists, launcher, arm configs) | implemented; two code reviews running | branch `worktree-agent-acedfb3c2cd157ac3` |
-| Package: expert iteration inside the loop | only after step 2, if that arm goes on | |
-| Watchdog | every 15 minutes while this session is open | |
+| Node: 4x RTX 3090, 61-core CPU quota, $0.89/h, billing since about 11:20 UTC | running the anchors; unstable earlier today (see below) | `ssh -p 16657 root@104.233.209.157` |
+| Step 1, anchor runs 1 and 2 | run 1 at 1,881 of 2,000 at 21:13 UTC; run 2 starts after it (about 3.5 h) | `node_backup/2026-11-14/` |
+| Step 1, next: calibration run (200 statements), value-free pilots, reasoning at equal tokens, old final value model | after the anchors; needs master on the node | |
+| Node measurements before any arm: stop and start timing, fingerprint noise, one short phase on the restart path | after the anchors | |
+| Merged packages | probe v2 and evaluation tool; signal packages; token-budget phases and health; study tooling; serving resilience | reviews `_ac_` to `_al_` in `results/reviews/` |
+| Not built: expert iteration inside the loop | only after step 2, if that arm goes on | |
+| Watchdog | every 30 minutes while this session is open; a supervisor on the node restarts servers and resumes runs by itself | |
 
 ## Node stability (2026-11-14) — decision needed from the owner
 
@@ -114,7 +112,7 @@ Step 0 is done on the node; step 1 has started with the probe draw and the two a
 
 | Item | Amount |
 |---|---|
-| Node, 2026-11-14 11:20 UTC to 17:55 UTC | about $5.9, of which about $2.4 idle (crashes and the pause) |
+| Node, 2026-11-14 11:20 UTC to 21:30 UTC | about $9.0, of which about $2.4 idle (crashes and the pause) |
 
 ## For the owner's next check-in
 
