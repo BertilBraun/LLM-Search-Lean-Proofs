@@ -17,17 +17,28 @@ rule's choice. Give the gate runs for all variants or none: they cost ~1 h each 
 import argparse
 import json
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
+from lean_search.expert_iteration.curriculum import file_sha256
 from lean_search.reasoning.records import read_records
 from lean_search.reasoning.states import ReasoningState
-from lean_search.rl.arm_comparison import Arm, Difference, read_arm_run
+from lean_search.rl.arm_comparison import Arm, Difference, multiple_comparisons_note, read_arm_run
+from lean_search.rl.evaluation import EvaluationPaths
 from lean_search.rl.fixed_sets import read_fixed_set
 from lean_search.rl.loop_config import load_loop_config
 from lean_search.rl.probe_rating import DifferenceInterval
-from lean_search.rl.rate_ranking import HeldOutStates, Variant, against_v0, choose_rate
+from lean_search.rl.rate_ranking import (
+    HeldOutRunStart,
+    HeldOutStates,
+    Variant,
+    against_v0,
+    choose_rate,
+    includes_zero,
+)
 from lean_search.rl.single_step import StateProblem, sample_success, state_problem, state_tree_path
 from lean_search.search import read_tree
+from lean_search.search.records import from_json_object
 from lean_search.search.summary import markdown_table
 
 REPOSITORY_DIRECTORY = Path(__file__).resolve().parents[1]
@@ -52,22 +63,35 @@ def located(run: str, root: Path, prefix: str) -> Path:
     return path if path.is_dir() else root / f"{prefix}{run}"
 
 
-def held_out_states() -> list[StateProblem]:
+@dataclass(frozen=True)
+class States:
+    problems: list[StateProblem]
+    sha256: str
+
+
+def held_out_states() -> States:
     loop = load_loop_config(REPOSITORY_DIRECTORY / LOOP_CONFIG)
-    records = read_records(RUNS_DIRECTORY / loop.evaluation.held_out_states_file, ReasoningState)
-    return [state_problem(state) for state in records]
+    path = RUNS_DIRECTORY / loop.evaluation.held_out_states_file
+    return States([state_problem(state) for state in read_records(path, ReasoningState)], file_sha256(path))
 
 
-def read_held_out(label: str, run: str, states: list[StateProblem]) -> HeldOutStates:
-    trees = located(run, RUNS_DIRECTORY / "held_out_evaluations", "held_out_") / "trees"
-    paths = {state.problem.name: (state, state_tree_path(trees, state)) for state in states}
+def read_held_out(label: str, run: str, states: States) -> HeldOutStates:
+    """A finished held_out_evaluate.py run of today's states file, every state sampled."""
+    directory = located(run, RUNS_DIRECTORY / "held_out_evaluations", "held_out_")
+    if not EvaluationPaths(directory).summary.exists():
+        raise SystemExit(f"{directory} has no summary.json: the run has not sampled every state yet.")
+    start = from_json_object(HeldOutRunStart, json.loads((directory / "checkpoint.json").read_text(encoding="utf-8")))
+    if start.states_sha256 != states.sha256:
+        raise SystemExit(f"{directory} sampled another states file ({start.states_file}, {start.states_sha256[:12]}).")
+    paths = {
+        state.problem.name: (state, state_tree_path(EvaluationPaths(directory).trees, state))
+        for state in states.problems
+    }
+    missing = [name for name, (_, path) in paths.items() if not path.exists()]
+    if missing:
+        raise SystemExit(f"{directory} lacks {len(missing)} of the {len(paths)} states' trees, e.g. {missing[0]}.")
     return HeldOutStates(
-        label,
-        {
-            name: sample_success(read_tree(path), state.reference_keys)
-            for name, (state, path) in paths.items()
-            if path.exists()
-        },
+        label, {name: sample_success(read_tree(path), state.reference_keys) for name, (state, path) in paths.items()}
     )
 
 
@@ -111,12 +135,17 @@ def main() -> None:
         for report in reports
     ]
     headers = ["variant", "rate", "held-out valid Lean", "held-out success", "gate set solved"]
-    print("Against v0, points [95%]: per held-out state, per gate statement")
+    print(f"Against v0, points [95%]: per held-out state ({len(states.problems)}), per gate statement")
     print(markdown_table(headers, rows))
     choice = choose_rate(variants, arguments.seed)
     print(f"\nChosen: {choice.chosen} ({choice.reason}; tied on the held-out states: {', '.join(choice.tied)})")
+    for tie in choice.gate:
+        within = "within noise" if includes_zero(tie.difference) else "apart"
+        print(f"  gate set, {tie.label} minus the gate leader: {interval(tie.difference)} points ({within})")
     for chosen, other in choice.probe_runs:
         print(f"The gate set contradicts the held-out states for {chosen} against {other}: run both on the probe.")
+    intervals = sum(2 + (report.gate is not None) for report in reports)
+    print(multiple_comparisons_note(intervals))
 
 
 if __name__ == "__main__":
