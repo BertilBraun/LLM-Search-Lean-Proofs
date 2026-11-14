@@ -14,8 +14,11 @@ current policy adapter on the loop's own verified proof-graph blocks as sampled,
 The trees are those of [data] loop's phases from the reward fix's first phase (reward_fix.json) to [data] last_phase,
 only samples of the version that phase published or later counting; with [data] window_phases = W those of the last W
 phases up to last_phase, only samples of the version the phase before them published or later counting (no
-reward_fix.json needed); never a rejected version's (rl/expert_iteration_data.phase_window). count reads only the
-tree index. build labels the solved trees in a process pool, selecting as the trees arrive, and writes
+reward_fix.json needed); never a rejected version's (rl/expert_iteration_data.phase_window). With [data]
+tree_directories instead (step 2's slices of a run that never ends a phase) every tree of those directories, every
+version's samples but a rejected one's, all of one version unless [data] allow_mixed_versions: count and build refuse
+a mix (rl/expert_iteration_trees.round_trees). count reads only the tree index (every tree of tree directories).
+build labels the trees in a process pool, selecting as the trees arrive, and writes
 $LEAN_SEARCH_DATA/grpo_expert_iteration/<[sft] data>/{train,validation}.jsonl (one ProofGraphCompletion per line: the
 recorded prompt and token ids), summary.json and README.md. train fine-tunes (training/sft.py) the loop's current
 policy adapter, read from models/current.json, on [sft] model with the Lean and math replay at their completion-token
@@ -39,6 +42,7 @@ import os
 import re
 import subprocess
 import time
+from collections.abc import Iterable
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass
@@ -66,8 +70,8 @@ from lean_search.rl.expert_iteration_data import (
     data_summary,
     file_completions,
     parse_expert_iteration_config,
-    phase_window,
     replay_loss_change,
+    sampling_versions,
     screened,
     space_shortages,
     training_data,
@@ -83,17 +87,17 @@ from lean_search.rl.expert_iteration_decision import (
     round_checks,
     state_validities,
 )
+from lean_search.rl.expert_iteration_trees import RoundTrees, check_one_version, round_trees
 from lean_search.rl.fixed_sets import read_fixed_set
 from lean_search.rl.grpo_groups import RewardConfig
 from lean_search.rl.health_checks import (
     CONTINUED_FROM_FILE,
     ContinuedVersion,
-    RewardFix,
     check_continued_adapter,
     held_out_rates,
     read_rejected_versions,
 )
-from lean_search.rl.loop import GrpoLoopPaths, read_progress
+from lean_search.rl.loop import GrpoLoopPaths
 from lean_search.rl.loop_config import GrpoLoopConfig, load_loop_config
 from lean_search.rl.loop_services import stopped_loop_refusal
 from lean_search.rl.policy_data import PolicyTokenizer
@@ -106,10 +110,9 @@ from lean_search.rl.probe_rating import (
     probe_ratings,
     read_markers,
 )
-from lean_search.rl.tree_store import TreeEntry
 from lean_search.rl.tree_summary import SearchHabits, search_habits
 from lean_search.search.graph_labels import goal_key
-from lean_search.search.records import from_json_object, to_json
+from lean_search.search.records import from_json_object, read_tree, to_json
 from lean_search.search.summary import markdown_table
 from lean_search.training.sft import (
     EvaluationRecord,
@@ -159,65 +162,59 @@ def loop_paths(config: ExpertIterationConfig) -> GrpoLoopPaths:
     return GrpoLoopPaths(RUNS_DIRECTORY, DATA_DIRECTORY, CHECKPOINTS_DIRECTORY, config.data.loop)
 
 
-def index_entries(paths: GrpoLoopPaths) -> list[TreeEntry]:
-    """The tree index; a last line the running loop is still appending is left out."""
-    lines = [line for line in (paths.trees / "index.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
-    entries = []
-    for number, line in enumerate(lines, start=1):
-        try:
-            entries.append(from_json_object(TreeEntry, json.loads(line)))
-        except ValueError:
-            if number < len(lines):
-                raise
-    return entries
-
-
 @dataclass(frozen=True)
 class LoopInputs:
     paths: GrpoLoopPaths
     loop_config: GrpoLoopConfig
-    first_phase: int
-    last_phase: int
+    trees: RoundTrees
     completion_filter: CompletionFilter
-    entries: tuple[TreeEntry, ...]
 
 
 def loop_inputs(config: ExpertIterationConfig) -> LoopInputs:
-    """The loop's phases, versions, held-out sets and trees of those phases, as its run directory records them."""
+    """The trees (`round_trees`: the phase window or the tree directories), versions and held-out sets, as the loop's
+    run directory records them."""
     paths = loop_paths(config)
-    reward_fix_phase = (
-        from_json_object(RewardFix, json.loads(paths.reward_fix.read_text(encoding="utf-8"))).first_phase
-        if paths.reward_fix.exists()
-        else None
-    )
-    last_phase = config.data.last_phase or read_progress(paths.progress).phase - 1
-    window = phase_window(config.data.window_phases, last_phase, read_versions(paths.models), reward_fix_phase)
+    trees = round_trees(config.data, paths)
     loop_config = load_loop_config(paths.config)
     held_out_sets = {*loop_config.statements.held_out, loop_config.evaluation.probe_set}
     held_out_statements = {entry.name for path in held_out_sets for entry in read_fixed_set(DATA_DIRECTORY / path)}
     held_out_statements |= {problem.name for problem in load_minif2f()}
     states = read_records(RUNS_DIRECTORY / loop_config.evaluation.held_out_states_file, ReasoningState)
     completion_filter = CompletionFilter(
-        minimum_version=window.minimum_version,
+        minimum_version=trees.minimum_version,
         rejected_versions=frozenset(read_rejected_versions(paths.rejected_versions)),
         held_out_statements=frozenset(held_out_statements),
         held_out_goal_keys=frozenset(goal_key(state.goals) for state in states),
     )
-    entries = tuple(entry for entry in index_entries(paths) if window.holds(entry.phase))
-    return LoopInputs(paths, loop_config, window.first_phase, window.last_phase, completion_filter, entries)
+    return LoopInputs(paths, loop_config, trees, completion_filter)
+
+
+def trees_read(config: ExpertIterationConfig, trees: RoundTrees) -> str:
+    if trees.window is None:
+        return f"the tree directories {', '.join(config.data.tree_directories)}"
+    return f"phases {trees.window.first_phase}-{trees.window.last_phase}"
+
+
+def versions_text(versions: Iterable[int | None]) -> str:
+    return ", ".join("unrecorded" if version is None else str(version) for version in versions)
 
 
 def count(config: ExpertIterationConfig) -> None:
     inputs = loop_inputs(config)
+    window = inputs.trees.window
+    if window is None:
+        count_directories(config, inputs)
+        return
     held_out = inputs.completion_filter.held_out_statements
+    entries = inputs.trees.entries
     rows = []
-    for phase in range(inputs.first_phase, inputs.last_phase + 1):
-        solved = [entry for entry in inputs.entries if entry.phase == phase and entry.proved]
+    for phase in range(window.first_phase, window.last_phase + 1):
+        solved = [entry for entry in entries if entry.phase == phase and entry.proved]
         usable = [entry for entry in solved if entry.problem_name not in held_out]
         rows.append(
             [
                 phase,
-                sum(entry.phase == phase for entry in inputs.entries),
+                sum(entry.phase == phase for entry in entries),
                 len(solved),
                 len(solved) - len(usable),
                 len({entry.problem_name for entry in usable}),
@@ -225,9 +222,9 @@ def count(config: ExpertIterationConfig) -> None:
                 sum(entry.summary.trainable_groups for entry in usable),
             ]
         )
-    usable = [entry for entry in inputs.entries if entry.proved and entry.problem_name not in held_out]
+    usable = [entry for entry in entries if entry.proved and entry.problem_name not in held_out]
     print(
-        f"Every tree of phases {inputs.first_phase}-{inputs.last_phase}, whichever version sampled it; build keeps "
+        f"Every tree of {trees_read(config, inputs.trees)}, whichever version sampled it; build keeps "
         f"only the samples of versions >= {inputs.completion_filter.minimum_version} except "
         f"{sorted(inputs.completion_filter.rejected_versions)}:"
     )
@@ -237,6 +234,25 @@ def count(config: ExpertIterationConfig) -> None:
         f"{len(usable):,} solved trees on {len({entry.problem_name for entry in usable}):,} statements; "
         f"{sum(entry.summary.proof_steps or 0 for entry in usable):,} states on the trees' shortest proofs."
     )
+
+
+def count_directories(config: ExpertIterationConfig, inputs: LoopInputs) -> None:
+    """Tree directories have no index: every tree is read, and a mix of policy versions is refused here already."""
+    held_out = inputs.completion_filter.held_out_statements
+    rows = []
+    versions: set[int | None] = set()
+    for name in config.data.tree_directories:
+        directory = inputs.paths.runs_root / name
+        records = [read_tree(tree.path) for tree in inputs.trees.trees if tree.path.parent == directory]
+        solved = [record for record in records if record.result.proved]
+        usable = [record for record in solved if record.problem_name not in held_out]
+        found = frozenset().union(*(sampling_versions(record) for record in records))
+        versions |= found
+        rows.append([name, len(records), len(solved), len(solved) - len(usable), len(usable), versions_text(found)])
+    rejected = sorted(inputs.completion_filter.rejected_versions)
+    print(f"Every tree of {trees_read(config, inputs.trees)}; build keeps every version's samples except {rejected}:")
+    print(markdown_table(["directory", "trees", "solved", "held out", "usable solved", "sampling versions"], rows))
+    check_one_version(versions, config.data.allow_mixed_versions)
 
 
 @dataclass(frozen=True)
@@ -279,8 +295,11 @@ class BuildSummary:
     built_at: str
     git_revision: str
     loop: str
+    # 0 for tree directories.
     first_phase: int
     last_phase: int
+    window_phases: int
+    tree_directories: tuple[str, ...]
     minimum_version: int
     rejected_versions: tuple[int, ...]
     trees: int
@@ -303,22 +322,24 @@ def git_revision() -> str:
 
 def build(config: ExpertIterationConfig, processes: int) -> None:
     inputs = loop_inputs(config)
-    held_out = inputs.completion_filter.held_out_statements
-    entries = [entry for entry in inputs.entries if entry.proved]
-    tasks = [TreeTask(inputs.paths.trees / entry.file, entry.summary.below_band) for entry in entries]
-    print(f"Labelling {len(tasks):,} solved trees of phases {inputs.first_phase}-{inputs.last_phase}", flush=True)
+    tasks = [TreeTask(tree.path, tree.below_band) for tree in inputs.trees.trees]
+    print(f"Labelling {len(tasks):,} trees of {trees_read(config, inputs.trees)}", flush=True)
     started = time.monotonic()
     selector = CompletionSelector(config.data)
     worker = WorkerInputs(config.sft.model, config.data, inputs.completion_filter)
+    versions: set[int | None] = set()
     try:
         with ProcessPoolExecutor(processes, initializer=start_worker, initargs=(worker,)) as executor:
             for index, tree in enumerate(executor.map(tree_completions, tasks, chunksize=4), start=1):
                 selector.add(tree)
+                versions |= tree.sampling_versions
                 if index % 250 == 0:
                     elapsed = time.monotonic() - started
                     print(f"{index:,} trees, {len(selector.blocks):,} states, {elapsed:.0f} s", flush=True)
     except BrokenProcessPool as error:
         raise SystemExit(f"A build worker died ({error}), killed for memory perhaps; nothing was written.") from error
+    if inputs.trees.window is None:
+        check_one_version(versions, config.data.allow_mixed_versions)
     selected = selector.selected()
     directory = OUTPUT_DIRECTORY / config.sft.data
     write_completions(directory / "train.jsonl", selected.train)
@@ -328,12 +349,14 @@ def build(config: ExpertIterationConfig, processes: int) -> None:
         built_at=datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds"),
         git_revision=git_revision(),
         loop=config.data.loop,
-        first_phase=inputs.first_phase,
-        last_phase=inputs.last_phase,
+        first_phase=0 if inputs.trees.window is None else inputs.trees.window.first_phase,
+        last_phase=0 if inputs.trees.window is None else inputs.trees.window.last_phase,
+        window_phases=config.data.window_phases,
+        tree_directories=config.data.tree_directories,
         minimum_version=inputs.completion_filter.minimum_version,
         rejected_versions=tuple(sorted(inputs.completion_filter.rejected_versions)),
         trees=len(tasks),
-        held_out_statements=sum(entry.problem_name in held_out for entry in entries),
+        held_out_statements=selector.counts.held_out_trees,
         held_out_states=selector.counts.held_out_state,
         counts=selector.counts,
         states=selected.states,
@@ -349,12 +372,19 @@ def build(config: ExpertIterationConfig, processes: int) -> None:
     print(markdown, flush=True)
 
 
+def trees_text(summary: BuildSummary) -> str:
+    if summary.tree_directories:
+        return "tree directories " + ", ".join(f"`{name}`" for name in summary.tree_directories)
+    window = f"the last {summary.window_phases}" if summary.window_phases else "from the reward fix"
+    return f"phases {summary.first_phase}-{summary.last_phase} ({window})"
+
+
 def build_markdown(summary: BuildSummary) -> str:
     data = summary.data
     counts = dataclasses.asdict(summary.counts)
     lengths = [*(str(length) for length in range(1, len(data.tactics))), f"{len(data.tactics)}+"]
     settings = [
-        ["Loop, phases", f"`{summary.loop}`, {summary.first_phase}-{summary.last_phase}"],
+        ["Loop, trees", f"`{summary.loop}`, {trees_text(summary)}"],
         ["Versions", f">= {summary.minimum_version}, without {list(summary.rejected_versions)}"],
         ["Solved trees read", f"{summary.trees:,}"],
         ["Held out (should be 0)", f"{summary.held_out_statements} trees, {summary.held_out_states} samples at states"],

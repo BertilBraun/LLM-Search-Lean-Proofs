@@ -55,6 +55,11 @@ class ExpertIterationDataConfig:
     # versions serving while they sampled; 0: from the reward fix's first phase (reward_fix.json), with the samples of
     # the version it published or later.
     window_phases: int = 0
+    # In place of the phases: tree directories (each one slice, its *.json.gz files as grpo_phase.py --trees reads
+    # them; under $LEAN_SEARCH_RUNS unless absolute), every version's samples but the rejected ones', and all of one
+    # version unless allow_mixed_versions.
+    tree_directories: tuple[str, ...] = ()
+    allow_mixed_versions: bool = False
     blocks_per_state: int = 2
     states_per_statement: int = 6
     # A state is easy when at least this share of its first-round samples, pooled over every tree, ran a block whose
@@ -99,6 +104,8 @@ def parse_expert_iteration_config(text: str) -> ExpertIterationConfig:
         raise ValueError("data needs blocks_per_state >= 1 and states_per_statement >= 1.")
     if data.last_phase < 0 or data.window_phases < 0:
         raise ValueError("data needs last_phase >= 0 and window_phases >= 0.")
+    if data.tree_directories and (data.window_phases or data.last_phase):
+        raise ValueError("data takes tree_directories or a phase window (last_phase, window_phases), not both.")
     if not 0 <= data.max_easy_share < 1 or not 0 <= data.validation_fraction < 1:
         raise ValueError("data needs 0 <= max_easy_share < 1 and 0 <= validation_fraction < 1.")
     if not 0 < data.easy_proof_graph_share <= 1:
@@ -133,7 +140,8 @@ def phase_window(
 ) -> PhaseWindow:
     """`last_phase` resolved (never 0), `versions` the run's models/versions.jsonl, `reward_fix_phase` its
     reward_fix.json's first phase (None without one). A window's samples are those of the version the phase before it
-    published (version 0 before any) or later: a rollback's re-publish is newer, so it counts."""
+    published (version 0 before any) or later: a rollback's re-publish is newer, so it counts. A window ignores
+    reward_fix.json, so on a run with one it may reach into the phases before the fix."""
     if window_phases == 0:
         if reward_fix_phase is None:
             raise ValueError("The run has no reward_fix.json: its first phase is unknown; set [data] window_phases.")
@@ -252,6 +260,8 @@ class TreeCompletions:
     completions: tuple[ProofGraphCompletion, ...] = ()
     counts: FilterCounts = field(default_factory=FilterCounts)
     samples: tuple[StateSamples, ...] = ()
+    # `sampling_versions` of the tree.
+    sampling_versions: frozenset[int | None] = frozenset()
 
 
 def is_easy(samples: int, proof_graph_blocks: int, config: ExpertIterationDataConfig) -> bool:
@@ -340,6 +350,11 @@ def token_verdict(tokens: CompletionTokens) -> Verdict:
     return Verdict.KEPT
 
 
+def sampling_versions(record: TreeRecord) -> frozenset[int | None]:
+    """The policy versions of the tree's first-round samples; None for unrecorded ones."""
+    return frozenset(expansion.policy_version for expansion in record.expansions if not expansion.feedback)
+
+
 def proof_graph_completions(
     record: TreeRecord,
     tokenizer: PolicyTokenizer,
@@ -405,7 +420,9 @@ def proof_graph_completions(
                     below_band=below_band,
                 )
             )
-    return TreeCompletions(tuple(capped_blocks(kept, config)), FilterCounts.of(verdicts), tuple(samples))
+    return TreeCompletions(
+        tuple(capped_blocks(kept, config)), FilterCounts.of(verdicts), tuple(samples), sampling_versions(record)
+    )
 
 
 def file_completions(
