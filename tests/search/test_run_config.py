@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from lean_search.policy.config import StepLogProbability
 from lean_search.search import ExpanderKind, ExplorationConfig, HarvestConfig, PriorityKind, load_run_config
 from lean_search.search.config import parse_run_config
 
@@ -11,6 +12,20 @@ CONFIG_DIRECTORY = Path(__file__).resolve().parents[2] / "experiments" / "config
 @pytest.mark.parametrize("path", sorted(CONFIG_DIRECTORY.glob("*.toml")), ids=lambda path: path.stem)
 def test_shipped_configs_load(path: Path) -> None:
     assert load_run_config(path).expander.kind in ExpanderKind
+
+
+SEARCH_CONFIGS = sorted(
+    [
+        *CONFIG_DIRECTORY.glob("*.toml"),
+        *CONFIG_DIRECTORY.glob("grpo/search/*.toml"),
+        CONFIG_DIRECTORY / "grpo" / "gate_search.toml",
+    ]
+)
+
+
+@pytest.mark.parametrize("path", SEARCH_CONFIGS, ids=lambda path: path.stem)
+def test_shipped_configs_keep_the_whole_completion_log_probability(path: Path) -> None:
+    assert load_run_config(path).policy.step_log_probability == StepLogProbability.COMPLETION
 
 
 def test_grpo_search_config_limits_steps_by_heartbeats() -> None:

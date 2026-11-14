@@ -11,7 +11,7 @@ from lean_search.data import Problem, Split
 from lean_search.lean import LeanRepl, ProofState
 from lean_search.policy import PolicyClient, Sample
 from lean_search.policy.client import Generation
-from lean_search.policy.config import FeedbackConfig, PolicyConfig
+from lean_search.policy.config import FeedbackConfig, PolicyConfig, StepLogProbability
 from lean_search.policy.expander import PolicyExpander, candidate_batch, failed_attempt, failed_blocks
 from lean_search.policy.prompts import BRIEF_THINKING_INSTRUCTION, END_OF_TURN, parse_samples
 from lean_search.search import (
@@ -209,7 +209,13 @@ async def test_thinking_instruction_reaches_the_prompt_only_when_thinking(thinki
     assert (BRIEF_THINKING_INSTRUCTION in server.prompts[0]) == thinking
 
 
-BLOCK_PIECES = [("Close it.\n\n```lean\n", -2.0), ("simp", -0.25), ("\n```", -0.5), (END_OF_TURN, -1.0)]
+BLOCK_PIECES = [
+    ("Close it.\n\n```lean\n", -2.0),
+    ("si", -0.25),
+    ("mp", -0.75),
+    ("\n```", -0.5),
+    (END_OF_TURN, -1.0),
+]
 PIECED_CHOICE = {
     "text": "Close it.\n\n```lean\nsimp\n```",
     "logprobs": {
@@ -220,28 +226,31 @@ PIECED_CHOICE = {
 }
 
 
-@pytest.mark.parametrize(("block_log_probability", "expected"), [(True, -0.25), (False, -3.75)])
-async def test_the_switch_chooses_which_tokens_a_candidates_log_probability_sums(
-    block_log_probability: bool, expected: float
-) -> None:
+@pytest.mark.parametrize(
+    ("setting", "expected"),
+    [
+        (StepLogProbability.COMPLETION, -4.5),
+        (StepLogProbability.BLOCK_SUM, -1.0),
+        (StepLogProbability.BLOCK_MEAN, -0.5),
+    ],
+)
+async def test_the_setting_chooses_a_candidates_log_probability(setting: StepLogProbability, expected: float) -> None:
     config = PolicyConfig(
-        model="policy",
-        visible_reasoning=True,
-        few_shot=False,
-        sample_count=1,
-        block_log_probability=block_log_probability,
+        model="policy", visible_reasoning=True, few_shot=False, sample_count=1, step_log_probability=setting
     )
     async with completion_server([PIECED_CHOICE]) as (_, url):
         (batch,) = await expand_root(url, config)
     assert batch.candidates[0].log_probability == expected
 
 
-def test_block_log_probability_is_off_by_default() -> None:
-    assert not PolicyConfig().block_log_probability
+def test_a_policy_section_without_the_setting_keeps_the_whole_completion() -> None:
+    assert parse_run_config(POLICY_SECTION).policy.step_log_probability == StepLogProbability.COMPLETION
 
 
-def test_block_log_probability_is_parsed() -> None:
-    assert parse_run_config(POLICY_SECTION + "block_log_probability = true\n").policy.block_log_probability
+@pytest.mark.parametrize("setting", list(StepLogProbability))
+def test_the_step_log_probability_setting_is_parsed(setting: StepLogProbability) -> None:
+    config = parse_run_config(POLICY_SECTION + f'step_log_probability = "{setting}"\n')
+    assert config.policy.step_log_probability == setting
 
 
 def test_policy_section_is_parsed() -> None:
@@ -276,7 +285,14 @@ def test_policy_kinds_need_a_model(kind: ExpanderKind) -> None:
 
 @pytest.mark.parametrize(
     "policy",
-    ["sample_count = 0\n", "server_urls = []\n", 'temperature = "hot"\n', 'thinking_instruction = "Be brief."\n'],
+    [
+        "sample_count = 0\n",
+        "server_urls = []\n",
+        'temperature = "hot"\n',
+        'thinking_instruction = "Be brief."\n',
+        'step_log_probability = "tokens"\n',
+        "block_log_probability = true\n",
+    ],
 )
 def test_invalid_policy_section_is_rejected(policy: str) -> None:
     with pytest.raises(ValueError):
