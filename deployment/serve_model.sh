@@ -9,11 +9,14 @@
 # model's generation_config.json, so every request states its own parameters. Later arguments override earlier
 # ones, e.g. --no-enable-lora for a merged model; GRPO policy servers add --logprobs-mode processed_logprobs so the
 # recorded log-probabilities are those of the tempered distribution the trainer compares against (deployment/README.md).
-# Log: $LEAN_SEARCH_RUNS/servers/<name>.log, process group id: <name>.pid. Stop with stop_model.sh <name>.
+# Log: $LEAN_SEARCH_RUNS/servers/<name>.log (a start moves the previous server's to <name>.<UTC time>.log, so a crash's
+# log survives the restart), process group id: <name>.pid. Stop with stop_model.sh <name>.
 # Overrides: MAX_MODEL_LEN (8192), GPU_MEMORY_UTILIZATION (0.90), MAX_NUM_SEQS and MAX_NUM_BATCHED_TOKENS (vLLM
 # defaults), MAX_LORA_RANK (64), MAX_LORAS (4), SLEEP_MODE=1 (--enable-sleep-mode, for /sleep and /wake_up),
-# SERVER_START_TIMEOUT seconds (900). Dev-mode endpoints (/pause, /collective_rpc, /reset_prefix_cache, ...) are on
-# for in-place weight swaps (experiments/publish_weights.py); the server only listens on 127.0.0.1.
+# SERVER_START_TIMEOUT seconds (900), CORE_DUMPS=1 (ulimit -c unlimited: a segfault leaves a core file where
+# /proc/sys/kernel/core_pattern says, which the log's first line shows). Dev-mode endpoints (/pause, /collective_rpc,
+# /reset_prefix_cache, ...) are on for in-place weight swaps (experiments/publish_weights.py); the server only listens
+# on 127.0.0.1.
 
 set -euo pipefail
 
@@ -35,6 +38,14 @@ mkdir -p "${server_directory}"
 if [[ -f "${pid_file}" ]] && kill -0 "$(cat "${pid_file}")" 2>/dev/null; then
     echo "Server ${name} is already running (pid $(cat "${pid_file}"))." >&2
     exit 1
+fi
+
+if [[ -f "${log_file}" ]]; then
+    mv "${log_file}" "${server_directory}/${name}.$(date -u +%Y%m%dT%H%M%SZ).log"
+fi
+if [[ "${CORE_DUMPS:-0}" == 1 ]]; then
+    ulimit -c unlimited
+    echo "Core dumps on; core_pattern: $(cat /proc/sys/kernel/core_pattern)" > "${log_file}"
 fi
 
 arguments=(
@@ -72,7 +83,7 @@ fi
 
 # Persisting Triton autotuning results removes about a minute of warmup from later starts.
 CUDA_VISIBLE_DEVICES="${gpu}" VLLM_ALLOW_RUNTIME_LORA_UPDATING=True VLLM_SERVER_DEV_MODE=1 TRITON_CACHE_AUTOTUNING=1 \
-    setsid nohup vllm "${arguments[@]}" "$@" > "${log_file}" 2>&1 < /dev/null &
+    setsid nohup vllm "${arguments[@]}" "$@" >> "${log_file}" 2>&1 < /dev/null &
 echo $! > "${pid_file}"
 echo "Starting ${name} (${model}) on GPU ${gpu}, port ${port}, pid $(cat "${pid_file}"), log ${log_file}"
 

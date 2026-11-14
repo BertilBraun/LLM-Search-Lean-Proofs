@@ -926,7 +926,8 @@ class GrpoLoop:
             except httpx.HTTPError as error:
                 self.server_failed(fed, error)
                 self.recent_searches.append(True)
-                if self.servers_failing():
+                # The clients leave a dead server out of their turn, so it fails a few searches only: look at once.
+                if self.servers_failing() or await self.servers.unhealthy():
                     await self.recover_servers()
                 else:
                     await asyncio.sleep(self.config.sampling.server_failure_pause_seconds)
@@ -1008,7 +1009,7 @@ class GrpoLoop:
         (stopped is better than idle GPUs until someone looks). An evaluation beside sampling is not paused: its
         requests to a server that does not answer, or restarts, fail it, and it runs again after the next pause."""
         async with self.pause_lock:
-            if not self.servers_failing():
+            if not self.servers_failing() and not await self.servers.unhealthy():
                 return
             self.log(
                 f"{sum(self.recent_searches)} of the last {len(self.recent_searches)} searches failed on a server: "

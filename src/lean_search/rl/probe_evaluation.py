@@ -17,26 +17,42 @@ run never searches with what the servers held before. One run at a time holds th
 import asyncio
 import dataclasses
 import datetime
+import filecmp
 import hashlib
 import importlib.metadata
 import json
+import math
 import os
+import re
 import shutil
 import socket
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from lean_search.expert_iteration.loop_config import ServingConfig
+import httpx
+
+from lean_search.expert_iteration.loop_config import ServerEndpoint, ServingConfig, SwapMethod
 from lean_search.policy.config import StepLogProbability
-from lean_search.policy.server_control import is_healthy, is_sleeping, release_gpu, restore_gpu
-from lean_search.rl.evaluation import EvaluationProblem, EvaluationSummary
+from lean_search.rl.evaluation import EvaluationProblem, EvaluationSummary, SearchFailure, ServerRecoveryError
 from lean_search.rl.loop_config import EvaluationTarget
-from lean_search.rl.loop_services import EVERY_RECORD, live_children
+from lean_search.rl.loop_services import (
+    CHECK_GOALS,
+    EVERY_RECORD,
+    ServedWeightsOn,
+    ServerStart,
+    check_policy_server,
+    live_children,
+    put_weights,
+    start_servers,
+    unhealthy_servers,
+    weights_start_command,
+)
 from lean_search.rl.search_models import evaluation_run_config, run_config_text, served_run_config
 from lean_search.rl.search_options import without_search_options
 from lean_search.search import PriorityKind, RunConfig, SearchResult, StopReason
 from lean_search.search.records import from_json_object, to_json
+from lean_search.value.estimator import open_value_estimator
 
 # The value version recorded for a run without a value model.
 NO_VALUE_VERSION = -1
@@ -106,6 +122,10 @@ class ProbeEvaluationConfig:
     max_wall_clock_stop_share: float = 0.01
     # Under $LEAN_SEARCH_RUNS the runs (probe_<name>/), under $LEAN_SEARCH_CHECKPOINTS the merges.
     output: str = "probe_evaluations"
+    # A statement whose search a server failed is searched again at most this often; a server that died is started
+    # again from the merges at most this often a run (evaluation.ToleratedSearches).
+    server_failure_retries: int = 3
+    max_server_restarts: int = 3
 
 
 @dataclass(frozen=True)
@@ -187,6 +207,43 @@ class RunEnvironment:
 
 
 @dataclass(frozen=True)
+class SessionServing:
+    """How the session's weights reached the servers: put on by `swap` (in place, or the servers restarted from the
+    merges), or already held (the servers started from byte-identical weights and never swapped since); `restarted`:
+    the servers started again after a failure, the session beginning then."""
+
+    swap: SwapMethod = SwapMethod.IN_PLACE
+    swapped: tuple[str, ...] = ()
+    skipped: tuple[str, ...] = ()
+    restarted: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ProbeSession:
+    session: str
+    # results.jsonl lines when the session started; the weights it served.
+    results_before: int
+    policy_digest: str
+    value_digest: str
+    # A loop started beside it: its results may come from another checkpoint.
+    spoiled: bool = False
+    serving: SessionServing = field(default_factory=SessionServing)
+    started_at: str = ""
+
+
+@dataclass(frozen=True)
+class ServerRestart:
+    at: str
+    servers: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class RetriedStatement:
+    problem_name: str
+    failed_searches: int
+
+
+@dataclass(frozen=True)
 class ProbeRunRecord:
     start: ProbeRunStart
     environment: RunEnvironment
@@ -196,7 +253,15 @@ class ProbeRunRecord:
     wall_clock_stop_share: float
     wall_clock_stops_by_stratum: tuple[StratumStops, ...]
     max_wall_clock_stop_share: float
+    # Below the wall-clock stop share and no statement left without a result.
     accepted: bool
+    sessions: tuple[ProbeSession, ...] = ()
+    # No session put weights on any server: they all held the run's from their start.
+    swap_skipped: bool = False
+    server_restarts: tuple[ServerRestart, ...] = ()
+    # Statements searched again after a server failed their search, and those left without a result.
+    retried_statements: tuple[RetriedStatement, ...] = ()
+    dropped_statements: tuple[str, ...] = ()
 
 
 def adapter_digest(directory: Path) -> str:
@@ -298,15 +363,62 @@ def merged_weights(base_model: str, adapter: Path, digest: str, weights_root: Pa
     return directory
 
 
-async def swap_weights(server_url: str, weights: Path) -> None:
-    # An in-place reload needs ~1.2 GiB beyond the KV cache, more than a GPU shared by two servers keeps free.
-    if not await is_sleeping(server_url):
-        await release_gpu(server_url)
-    await restore_gpu(server_url, weights)
-
-
 class ServersDownError(RuntimeError):
     pass
+
+
+# Lines a vLLM 0.31 server logs at its first in-place reload (once per process) and at every wake from sleep: a log
+# with neither is of a server that still holds the weights it started from.
+SWAP_MARKERS = ("Reloading weights inplace", "wake up the engine with tags")
+API_SERVER_PROCESS = re.compile(r"\(APIServer pid=(\d+)\)")
+# What makes merged weights the same for serving: compared byte for byte.
+SERVED_FILES = ("config.json", "*.safetensors")
+
+
+def holds_start_weights(servers_directory: Path, name: str) -> bool:
+    """The server's log (serve_model.sh's <name>.log) is its running process's, by the pid serve_model.sh recorded,
+    and shows no wake and no in-place reload."""
+    pid_file = servers_directory / f"{name}.pid"
+    log = servers_directory / f"{name}.log"
+    if not pid_file.exists() or not log.exists():
+        return False
+    process_group = pid_file.read_text(encoding="utf-8").strip()
+    text = log.read_text(encoding="utf-8", errors="replace")
+    started_by = API_SERVER_PROCESS.search(text)
+    return (
+        started_by is not None
+        and started_by.group(1) == process_group
+        and Path(f"/proc/{process_group}").exists()
+        and not any(marker in text for marker in SWAP_MARKERS)
+    )
+
+
+def same_served_weights(first: Path, second: Path) -> bool:
+    def names(directory: Path) -> list[str]:
+        return sorted({file.name for pattern in SERVED_FILES for file in directory.glob(pattern) if file.is_file()})
+
+    files = names(first)
+    return (
+        bool(files)
+        and files == names(second)
+        and all(filecmp.cmp(first / name, second / name, shallow=False) for name in files)
+    )
+
+
+async def served_model_root(server_url: str) -> Path:
+    """The directory the server started from (vLLM's /v1/models `root`)."""
+    async with httpx.AsyncClient(timeout=30.0) as http:
+        response = await http.get(f"{server_url.rstrip('/')}/models")
+        response.raise_for_status()
+        return Path(response.json()["data"][0]["root"])
+
+
+async def already_serves(servers_directory: Path, server: ServerEndpoint, weights: Path) -> bool:
+    """The server never swapped since it started, from weights byte-identical to `weights`."""
+    if not holds_start_weights(servers_directory, server.name):
+        return False
+    root = await served_model_root(server.url)
+    return await asyncio.to_thread(same_served_weights, root, weights)
 
 
 @dataclass(frozen=True)
@@ -314,17 +426,43 @@ class ServedWeights:
     policy: Path
     # None: the value servers were left as they were (no value model).
     value: Path | None
+    # The servers the weights were put on by the swap method, and those that already held them.
+    swap: SwapMethod = SwapMethod.IN_PLACE
+    swapped: tuple[str, ...] = ()
+    skipped: tuple[str, ...] = ()
+
+    def assignments(self, serving: ServingConfig) -> list[ServedWeightsOn]:
+        """The weights each server the run needs serves."""
+        policy = [ServedWeightsOn(server, str(self.policy)) for server in serving.policy_servers]
+        value = (
+            [] if self.value is None else [ServedWeightsOn(server, str(self.value)) for server in serving.value_servers]
+        )
+        return [*policy, *value]
+
+
+# Checks the servers answer the way the search needs (`verify_served`); raises ServersUnsoundError otherwise.
+Verify = Callable[[Sequence[ServerEndpoint]], Awaitable[None]]
+
+
+class ServersUnsoundError(RuntimeError):
+    pass
 
 
 async def serve_checkpoint(
-    serving: ServingConfig, checkpoint: ProbeCheckpoint, weights_root: Path, merge: Merge
+    serving: ServingConfig,
+    checkpoint: ProbeCheckpoint,
+    weights_root: Path,
+    merge: Merge,
+    servers_directory: Path | None = None,
+    verify: Verify | None = None,
 ) -> ServedWeights:
-    """Merges the adapters (or reuses their merges) and swaps them into the running servers; raises ServersDownError
-    when a server needed does not answer."""
+    """Merges the adapters (or reuses their merges) and puts them on the servers the run needs by `serving.swap`,
+    except on a server that already serves byte-identical weights it started from (judged from `servers_directory`,
+    serve_model.sh's logs and pid files; None: never); then `verify`. In place, every server needed must answer first
+    (ServersDownError); a restart starts a server that is down."""
     needed = [*serving.policy_servers, *(serving.value_servers if checkpoint.value_adapter else ())]
-    healthy = await asyncio.gather(*(is_healthy(server.url) for server in needed))
-    down = [server.name for server, up in zip(needed, healthy, strict=True) if not up]
-    if down:
+    down = await unhealthy_servers(needed)
+    if down and serving.swap == SwapMethod.IN_PLACE:
         raise ServersDownError(f"Servers not answering: {down}; start them (deployment/grpo_loop.sh servers).")
     policy = await asyncio.to_thread(
         merged_weights,
@@ -334,19 +472,101 @@ async def serve_checkpoint(
         weights_root,
         merge,
     )
-    await asyncio.gather(*(swap_weights(server.url, policy) for server in serving.policy_servers))
-    if not checkpoint.value_adapter:
-        return ServedWeights(policy, None)
-    value = await asyncio.to_thread(
-        merged_weights,
-        serving.value_base_model,
-        Path(checkpoint.value_adapter),
-        checkpoint.value_digest,
-        weights_root,
-        merge,
+    value = None
+    if checkpoint.value_adapter:
+        value = await asyncio.to_thread(
+            merged_weights,
+            serving.value_base_model,
+            Path(checkpoint.value_adapter),
+            checkpoint.value_digest,
+            weights_root,
+            merge,
+        )
+    served = ServedWeights(policy, value, serving.swap)
+    assignments = served.assignments(serving)
+    held = [
+        servers_directory is not None
+        and assigned.server.name not in down
+        and await already_serves(servers_directory, assigned.server, Path(assigned.weights))
+        for assigned in assignments
+    ]
+    to_put = [assigned for assigned, holds in zip(assignments, held, strict=True) if not holds]
+    if to_put:
+        await put_weights(serving, to_put)
+    if verify is not None:
+        await verify(needed)
+    return dataclasses.replace(
+        served,
+        swapped=tuple(assigned.server.name for assigned in to_put),
+        skipped=tuple(assigned.server.name for assigned, holds in zip(assignments, held, strict=True) if holds),
     )
-    await asyncio.gather(*(swap_weights(server.url, value) for server in serving.value_servers))
-    return ServedWeights(policy, value)
+
+
+async def verify_served(run_config: RunConfig, servers: Sequence[ServerEndpoint]) -> None:
+    """Every server answers /health, each policy server one search request with usable blocks whose tokens decode to
+    their text, each value server one state with most of its next-token mass on the bins."""
+    down = await unhealthy_servers(servers)
+    if down:
+        raise ServersUnsoundError(f"Servers {down} do not answer /health after their weights were put on them.")
+    for server in servers:
+        if server.url in run_config.policy.server_urls:
+            check = await check_policy_server(run_config.policy, server.url)
+            if not (check.tokens_recorded and check.tokens_decode_to_text and check.usable_blocks):
+                raise ServersUnsoundError(f"{server.name}: the policy's answer lacks what the search needs: {check}")
+        if run_config.value.model and server.url in run_config.value.server_urls:
+            value = dataclasses.replace(run_config.value, server_urls=(server.url,))
+            async with open_value_estimator(value) as estimator:
+                (probabilities,) = (await estimator.score_states([CHECK_GOALS])).states
+            mass = sum(probabilities)
+            if not (math.isfinite(mass) and mass >= MINIMUM_BIN_MASS):
+                raise ServersUnsoundError(f"{server.name}: the value model puts {mass:.3f} on its bins")
+
+
+# A trained value model answers with a bin token; a broken load spreads its mass elsewhere.
+MINIMUM_BIN_MASS = 0.5
+
+
+class ProbeServers:
+    """The servers a probe run searches with (the ServerRecovery of `evaluation.ToleratedSearches`): a dead one is
+    started again from the run's merges by serve_model.sh (its pid file; no in-place swap), verified, and the restart
+    recorded as a new session."""
+
+    def __init__(
+        self,
+        serving: ServingConfig,
+        served: ServedWeights,
+        checkpoint: ProbeCheckpoint,
+        directory: Path,
+        results: Path,
+        verify: Verify,
+        start: Callable[[Sequence[ServerStart]], Awaitable[None]] = start_servers,
+    ) -> None:
+        self.serving = serving
+        self.assignments = served.assignments(serving)
+        self.checkpoint = checkpoint
+        self.directory = directory
+        self.results = results
+        self.verify = verify
+        self.start = start
+
+    async def dead_servers(self) -> tuple[str, ...]:
+        return tuple(await unhealthy_servers([assigned.server for assigned in self.assignments]))
+
+    async def restart(self, names: Sequence[str]) -> None:
+        restarted = [assigned for assigned in self.assignments if assigned.server.name in names]
+        starts = [
+            ServerStart(assigned.server, weights_start_command(self.serving, assigned.server, assigned.weights))
+            for assigned in restarted
+        ]
+        try:
+            await self.start(starts)
+            await self.verify([assigned.server for assigned in restarted])
+        except (RuntimeError, httpx.HTTPError) as error:
+            raise ServerRecoveryError(
+                f"Restarting {list(names)} failed: {error} (logs: $LEAN_SEARCH_RUNS/servers/)"
+            ) from error
+        serving = SessionServing(SwapMethod.RESTART, restarted=tuple(names))
+        start_session(self.directory, self.checkpoint, self.results, serving)
 
 
 def remove_merges(directories: Sequence[Path]) -> None:
@@ -400,17 +620,6 @@ def running_loops(runs_root: Path) -> LoopActivity:
     return LoopActivity(tuple(running), tuple(notes))
 
 
-@dataclass(frozen=True)
-class ProbeSession:
-    session: str
-    # results.jsonl lines when the session started; the weights it served.
-    results_before: int
-    policy_digest: str
-    value_digest: str
-    # A loop started beside it: its results may come from another checkpoint.
-    spoiled: bool = False
-
-
 SESSIONS_FILE = "sessions.jsonl"
 
 
@@ -427,10 +636,17 @@ def append_session(directory: Path, session: ProbeSession) -> None:
         handle.write(to_json(session) + "\n")
 
 
-def start_session(directory: Path, checkpoint: ProbeCheckpoint, results: Path) -> ProbeSession:
+def start_session(directory: Path, checkpoint: ProbeCheckpoint, results: Path, serving: SessionServing) -> ProbeSession:
     count = len(results.read_text(encoding="utf-8").splitlines()) if results.exists() else 0
     started = datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds")
-    session = ProbeSession(f"{started} pid {os.getpid()}", count, checkpoint.policy_digest, checkpoint.value_digest)
+    session = ProbeSession(
+        f"{started} pid {os.getpid()}",
+        count,
+        checkpoint.policy_digest,
+        checkpoint.value_digest,
+        serving=serving,
+        started_at=started,
+    )
     append_session(directory, session)
     return session
 
@@ -486,12 +702,28 @@ def stops_by_stratum(
     return tuple(StratumStops(stratum, *counts) for stratum, counts in strata.items())
 
 
+def dropped_statements(problems: Sequence[EvaluationProblem], results: Sequence[SearchResult]) -> tuple[str, ...]:
+    """The problems without a result once the run ended: given up after repeated server failures."""
+    finished = {result.problem_name for result in results}
+    return tuple(problem.problem.name for problem in problems if problem.problem.name not in finished)
+
+
+def retried_statements(failures: Sequence[SearchFailure]) -> tuple[RetriedStatement, ...]:
+    counts: dict[str, int] = {}
+    for failure in failures:
+        counts[failure.problem_name] = max(counts.get(failure.problem_name, 0), failure.failures)
+    return tuple(RetriedStatement(name, count) for name, count in counts.items())
+
+
 def run_record(
     start: ProbeRunStart,
     environment: RunEnvironment,
     summary: EvaluationSummary,
     by_stratum: tuple[StratumStops, ...],
     max_share: float,
+    sessions: Sequence[ProbeSession] = (),
+    failures: Sequence[SearchFailure] = (),
+    dropped: tuple[str, ...] = (),
 ) -> ProbeRunRecord:
     share = summary.wall_clock_stops / summary.problems
     return ProbeRunRecord(
@@ -503,5 +735,14 @@ def run_record(
         wall_clock_stop_share=share,
         wall_clock_stops_by_stratum=by_stratum,
         max_wall_clock_stop_share=max_share,
-        accepted=share < max_share,
+        accepted=share < max_share and not dropped,
+        sessions=tuple(sessions),
+        swap_skipped=bool(sessions) and not any(session.serving.swapped for session in sessions),
+        server_restarts=tuple(
+            ServerRestart(session.started_at, session.serving.restarted)
+            for session in sessions
+            if session.serving.restarted
+        ),
+        retried_statements=retried_statements(failures),
+        dropped_statements=dropped,
     )

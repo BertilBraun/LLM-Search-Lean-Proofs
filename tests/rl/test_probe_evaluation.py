@@ -32,6 +32,7 @@ from lean_search.rl.probe_evaluation import (
     ProbeRunStart,
     RunEnvironment,
     ServedWeights,
+    SessionServing,
     StratumStops,
     ValueFreePriority,
     adapter_digest,
@@ -323,9 +324,9 @@ def write_results(path: Path, names: list[str]) -> None:
 def spoiled_run(tmp_path: Path) -> Path:
     """Two results of a clean session, then a session a loop spoiled after two more."""
     results = tmp_path / "results.jsonl"
-    start_session(tmp_path, checkpoint(), results)
+    start_session(tmp_path, checkpoint(), results, SessionServing())
     write_results(results, ["s.a", "s.b"])
-    spoiled = start_session(tmp_path, checkpoint(), results)
+    spoiled = start_session(tmp_path, checkpoint(), results, SessionServing())
     write_results(results, ["s.c", "s.d"])
     mark_spoiled(tmp_path, spoiled)
     return results
@@ -340,7 +341,7 @@ def test_a_spoiled_sessions_results_are_discarded_on_resume(tmp_path: Path) -> N
 def test_a_discarded_session_is_not_discarded_twice(tmp_path: Path) -> None:
     results = spoiled_run(tmp_path)
     discard_spoiled_results(tmp_path, results, tmp_path / "trees")
-    start_session(tmp_path, checkpoint(), results)
+    start_session(tmp_path, checkpoint(), results, SessionServing())
     write_results(results, ["s.c"])
     assert discard_spoiled_results(tmp_path, results, tmp_path / "trees") == 0
 

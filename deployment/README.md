@@ -226,6 +226,16 @@ that long (`request_timeout_seconds`), and searches in flight keep their wall-cl
 weight reload drops the workers' LoRA adapters: re-register them (`publish_weights.py difference ... --name value-v0`
 re-creates and reloads a difference adapter).
 
+The cold path: `[serving] swap = "restart"` (default `"in_place"`) brings each new version onto the servers by stopping
+them (`stop_model.sh`, by pid file) and starting them from the merged weights on disk, with no sleep, wake or in-place
+reload; the loop stops the training GPUs' servers for the training instead of putting them to sleep, and the probe
+tool (`probe_evaluate.py`) restarts the servers from its merges. It costs about 200 s for all 8 servers of the 4x 3090
+layout (the GPUs in parallel, a GPU's two servers in turn) at every publish and every loop start, against seconds in
+place; the merges handed off in `/dev/shm` are started from as they are, and the persistent trainer's ~1 GiB CUDA
+context fits in the 10% of each GPU the servers' shares leave. Two servers segfaulted minutes after in-place swaps on
+the 2026-11-14 node (`results/followup_progress.md`); the follow-up study runs on the cold path. A start moves the
+previous log to `<name>.<UTC time>.log`; `CORE_DUMPS=1` makes a segfault leave a core file.
+
 Re-scoring a frontier after a new value version: all 14,879 open states of the 244 row-4 trees take 105 s on both
 GPUs' merged value instances (141 states/s, ~17k prompt tokens/s per GPU, compute-bound; the value prompts share no
 cacheable prefix because hybrid-model prefix caching works in 544-token blocks). The value estimator sends 32 states

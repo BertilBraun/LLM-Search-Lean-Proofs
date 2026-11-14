@@ -8,6 +8,7 @@ against the slot's run with the reference value model.
 """
 
 import asyncio
+import collections
 import contextlib
 import dataclasses
 import datetime
@@ -15,10 +16,13 @@ import json
 import math
 import statistics
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+from typing import Protocol
+
+import httpx
 
 from lean_search.data import Problem
 from lean_search.expert_iteration.pool_search import PRELOADED_HEADER_SHARE, common_headers
@@ -488,14 +492,167 @@ def keep_config(paths: EvaluationPaths, config: RunConfig) -> None:
     paths.config.write_text(text, encoding="utf-8")
 
 
+class ServerRecoveryError(RuntimeError):
+    """The servers could not be brought back within the run's restarts."""
+
+
+class ServerRecovery(Protocol):
+    """The servers a standalone evaluation searches with."""
+
+    async def dead_servers(self) -> tuple[str, ...]:
+        """The servers that do not answer."""
+        ...
+
+    async def restart(self, names: Sequence[str]) -> None:
+        """Starts them again with the run's weights and verifies them; raises ServerRecoveryError when one still does
+        not answer."""
+        ...
+
+
+@dataclass(frozen=True)
+class FailureTolerance:
+    recovery: ServerRecovery
+    # Searches of a statement after its first failed one; a statement that fails beyond is left without a result.
+    retries: int
+    max_restarts: int
+    # One SearchFailure a line, appended.
+    failures: Path
+
+
+class FailureOutcome(StrEnum):
+    RETRIED = "retried"
+    DROPPED = "dropped"
+
+
+@dataclass(frozen=True)
+class SearchFailure:
+    problem_name: str
+    # The statement's failed searches so far, this one included.
+    failures: int
+    error: str
+    outcome: FailureOutcome
+    at: str
+
+
+def read_failures(path: Path) -> list[SearchFailure]:
+    if not path.exists():
+        return []
+    lines = path.read_text(encoding="utf-8").splitlines()
+    return [from_json_object(SearchFailure, json.loads(line)) for line in lines if line.strip()]
+
+
+class ToleratedSearches[Outcome]:
+    """Feeds the problems to `concurrency` searches at once. Without a tolerance a server error ends the run. With
+    one, a search that fails on a server (any httpx error) is searched again from scratch, at most `retries` times;
+    every failure has the servers checked first, no new search starting meanwhile, and the dead ones restarted (at
+    most `max_restarts` times a run, then ServerRecoveryError). The searches in flight run on meanwhile."""
+
+    def __init__(
+        self, problems: Sequence[Problem], tolerance: FailureTolerance | None, log: Callable[[str], None]
+    ) -> None:
+        self.queue = collections.deque(problems)
+        self.tolerance = tolerance
+        self.log = log
+        self.failures: dict[str, int] = {}
+        self.dropped: list[str] = []
+        self.restarts = 0
+        self.searching = 0
+        self.feeding = asyncio.Event()
+        self.feeding.set()
+        self.recovery_lock = asyncio.Lock()
+        # Failures before this were covered by a check of the servers that ended after them.
+        self.checked_at = -math.inf
+
+    async def run(
+        self,
+        concurrency: int,
+        search: Callable[[Problem], Awaitable[Outcome]],
+        completed: Callable[[Outcome], Awaitable[None]],
+    ) -> None:
+        try:
+            async with asyncio.TaskGroup() as group:
+                for _ in range(concurrency):
+                    group.create_task(self.work(search, completed))
+        except BaseExceptionGroup as failures:
+            # The first failure, as a gather of the searches raised it.
+            raise failures.exceptions[0] from None
+
+    async def work(
+        self,
+        search: Callable[[Problem], Awaitable[Outcome]],
+        completed: Callable[[Outcome], Awaitable[None]],
+    ) -> None:
+        while True:
+            await self.feeding.wait()
+            if not self.queue:
+                return
+            problem = self.queue.popleft()
+            self.searching += 1
+            try:
+                outcome = await search(problem)
+            except httpx.HTTPError as error:
+                if self.tolerance is None:
+                    raise
+                failed_at = time.monotonic()
+                self.failed(problem, error, self.tolerance)
+                await self.check_servers(failed_at, self.tolerance)
+                continue
+            finally:
+                self.searching -= 1
+            await completed(outcome)
+
+    def failed(self, problem: Problem, error: httpx.HTTPError, tolerance: FailureTolerance) -> None:
+        failures = self.failures.get(problem.name, 0) + 1
+        self.failures[problem.name] = failures
+        outcome = FailureOutcome.RETRIED if failures <= tolerance.retries else FailureOutcome.DROPPED
+        match outcome:
+            case FailureOutcome.RETRIED:
+                self.queue.appendleft(problem)
+                what = "searched again once the servers answer"
+            case FailureOutcome.DROPPED:
+                self.dropped.append(problem.name)
+                what = "left without a result, so the run will not be accepted"
+        text = f"{type(error).__name__}: {error}"
+        tolerance.failures.parent.mkdir(parents=True, exist_ok=True)
+        with tolerance.failures.open("a", encoding="utf-8") as handle:
+            handle.write(to_json(SearchFailure(problem.name, failures, text, outcome, now())) + "\n")
+        self.log(f"{problem.name}: {text}; {what} ({failures} failed searches)")
+
+    async def check_servers(self, failed_at: float, tolerance: FailureTolerance) -> None:
+        async with self.recovery_lock:
+            if failed_at <= self.checked_at:
+                return
+            self.feeding.clear()
+            dead = await tolerance.recovery.dead_servers()
+            if dead and self.restarts >= tolerance.max_restarts:
+                raise ServerRecoveryError(
+                    f"Servers {list(dead)} do not answer and the run has used its {tolerance.max_restarts} restarts: "
+                    "it stops; its results are kept, and a rerun under the same name resumes it."
+                )
+            if dead:
+                self.restarts += 1
+                self.log(
+                    f"Servers not answering: {list(dead)}; restarting them (restart {self.restarts} of "
+                    f"{tolerance.max_restarts}), no new search starting meanwhile"
+                )
+                await tolerance.recovery.restart(dead)
+                self.log(f"Restarted {list(dead)}; the searches resume")
+            else:
+                self.log("Every server answers; the searches resume")
+            self.checked_at = time.monotonic()
+            self.feeding.set()
+
+
 async def search_problem_set(
     problems: Sequence[EvaluationProblem],
     config: RunConfig,
     paths: EvaluationPaths,
     log: Callable[[str], None],
     renamings: StatementRenamings | None = None,
+    tolerance: FailureTolerance | None = None,
 ) -> list[SearchResult]:
-    """Searches the problems without a result yet (renamed when given renamings); returns every problem's result."""
+    """Searches the problems without a result yet (renamed when given renamings); returns every problem's result (one
+    that `tolerance` gave up on has none)."""
     keep_config(paths, config)
     done = read_results(paths.results) if paths.results.exists() else []
     finished = {result.problem_name for result in done}
@@ -516,32 +673,29 @@ async def search_problem_set(
         log(f"[{len(results)}/{len(problems)}] {result.problem_name}: {result.stop_reason} | solved {solved}")
 
     if pending:
+        searches = ToleratedSearches[CompletedSearch](pending, tolerance, log)
         async with contextlib.AsyncExitStack() as stack:
             models = await stack.enter_async_context(open_search_models(config))
             pool = await stack.enter_async_context(
                 LeanReplPool(config.lean.pool_size, LeanReplConfig(), config.lean.restart_fraction)
             )
             await pool.start(common_headers(pending, PRELOADED_HEADER_SHARE))
-            semaphore = asyncio.Semaphore(config.lean.concurrency)
-            not_started = len(pending)
-            searching = 0
 
-            async def search_one(problem: Problem) -> None:
-                nonlocal not_started, searching
-                async with semaphore:
-                    not_started -= 1
-                    searching += 1
-                    async with pool.acquire() as repl:
-                        completed = await search_problem(
-                            problem, repl, models.expander, models.priority_function, config.search, renamings
-                        )
-                    searching -= 1
-                    # In the tail the loop's sampling takes the freed searches, so the freed REPLs go.
-                    if not not_started:
-                        await pool.stop_idle_processes(searching)
-                    await on_completed(completed)
+            async def search_one(problem: Problem) -> CompletedSearch:
+                async with pool.acquire() as repl:
+                    return await search_problem(
+                        problem, repl, models.expander, models.priority_function, config.search, renamings
+                    )
 
-            await asyncio.gather(*(search_one(problem) for problem in pending))
+            async def completed(outcome: CompletedSearch) -> None:
+                # In the tail the loop's sampling takes the freed searches, so the freed REPLs go.
+                if not searches.queue:
+                    await pool.stop_idle_processes(searches.searching)
+                await on_completed(outcome)
+
+            await searches.run(config.lean.concurrency, search_one, completed)
+        if searches.dropped:
+            log(f"Left without a result after repeated server failures: {searches.dropped}")
         if renamings is not None:
             log(
                 f"Renaming: {renamings.missing} problems without a renaming, "
@@ -561,11 +715,12 @@ async def run_problem_set_evaluation(
     renamings: StatementRenamings | None = None,
     slot: int | None = None,
     part: int | None = None,
+    tolerance: FailureTolerance | None = None,
 ) -> EvaluationSummary:
     """`slot` and `part`: the probe slot and the part of the probe set the problems are."""
     started_at = now()
     started = time.monotonic()
-    results = await search_problem_set(problems, config, paths, log, renamings)
+    results = await search_problem_set(problems, config, paths, log, renamings, tolerance)
     summary = search_summary(
         kind, run_name, versions, problems, results, config, started_at, time.monotonic() - started
     )

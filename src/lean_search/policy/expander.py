@@ -3,7 +3,6 @@
 import contextlib
 import dataclasses
 import functools
-import itertools
 import time
 from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass
@@ -31,6 +30,7 @@ from lean_search.policy.prompts import (
     stop_sequences,
     truncated_before_answer,
 )
+from lean_search.policy.rotation import ServerRotation
 from lean_search.retrieval.provider import LemmaProvider, load_lemma_provider
 from lean_search.retrieval.statistics import LemmaStatistics
 from lean_search.search.expanders import Candidate, CandidateBatch, CandidateBatches, SearchContext
@@ -269,7 +269,7 @@ class PolicyExpander:
         self.forbidden_tokens = FORBIDDEN_TOKENS | frozenset(forbidden_steps)
         self.lemma_provider = lemma_provider
         self.statistics = PolicyStatistics(lemmas=lemma_provider.statistics if lemma_provider else None)
-        self._clients = itertools.cycle(clients)
+        self.rotation = ServerRotation(clients)
         self._first_request_started: float | None = None
 
     async def expand(self, node: Node, context: SearchContext) -> CandidateBatches:
@@ -358,24 +358,26 @@ class PolicyExpander:
         self, prompt_token_ids: Sequence[int], samples: Sequence[Sample]
     ) -> tuple[list[Sample], ForcedAnswers, float]:
         started = time.monotonic()
-        forced_samples, forced = await force_answers(
-            next(self._clients), self.config, self.tokenizer, prompt_token_ids, self.max_model_length, samples
-        )
+        with self.rotation.client() as client:
+            forced_samples, forced = await force_answers(
+                client, self.config, self.tokenizer, prompt_token_ids, self.max_model_length, samples
+            )
         return forced_samples, forced, time.monotonic() - started if forced.sample_indices else 0.0
 
     async def _generate(self, prompt: str, max_tokens: int, sample_count: int) -> tuple[Generation, float]:
         started = time.monotonic()
         if self._first_request_started is None:
             self._first_request_started = started
-        generation = await next(self._clients).generate(
-            prompt,
-            sample_count=sample_count,
-            max_tokens=max_tokens,
-            temperature=self.config.temperature,
-            top_p=self.config.top_p,
-            stop=stop_sequences(self.config.thinking, self.config.visible_reasoning),
-            adapter=self.config.adapter,
-        )
+        with self.rotation.client() as client:
+            generation = await client.generate(
+                prompt,
+                sample_count=sample_count,
+                max_tokens=max_tokens,
+                temperature=self.config.temperature,
+                top_p=self.config.top_p,
+                stop=stop_sequences(self.config.thinking, self.config.visible_reasoning),
+                adapter=self.config.adapter,
+            )
         finished = time.monotonic()
         self.statistics.window_seconds = finished - self._first_request_started
         return generation, finished - started
@@ -444,4 +446,6 @@ async def open_policy_expander(
             )
             for server_url in config.server_urls
         ]
-        yield PolicyExpander(config, tokenizer, clients, max_model_length, forbidden_steps, lemma_provider)
+        expander = PolicyExpander(config, tokenizer, clients, max_model_length, forbidden_steps, lemma_provider)
+        stack.push_async_callback(expander.rotation.close)
+        yield expander

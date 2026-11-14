@@ -1179,6 +1179,18 @@ async def test_the_searches_pause_while_a_dead_server_restarts(tmp_path: Path) -
     assert events_from_the_first_pause(world)[:3] == ["pause", "restart policy-gpu1 v0", "resume"]
 
 
+async def test_a_dead_server_is_restarted_before_the_failure_window_fills(tmp_path: Path) -> None:
+    toml = LOOP_TOML.replace(
+        "status_seconds = 0.01\n",
+        "status_seconds = 0.01\nserver_failure_pause_seconds = 0.0\nserver_failure_window = 40\n",
+    )
+    world = loop_world(tmp_path, toml=toml)
+    world.servers.down.add("policy-gpu1")
+    record_version_zero(world)
+    await run_until(world, world.loop(), phases=1)
+    assert last_status(world, "server_failures") < 20
+
+
 async def test_a_server_that_stays_down_stops_the_loop(tmp_path: Path) -> None:
     world = dead_server_world(tmp_path)
     world.servers.restarts_fail = True

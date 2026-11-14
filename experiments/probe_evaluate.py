@@ -21,24 +21,36 @@ deployment/grpo_loop.sh servers starts them (any version). The command holds the
 ($LEAN_SEARCH_CHECKPOINTS/serving.lock: a loop, grpo_evaluate.py and run_search.py refuse to start while it is held)
 and refuses while a loop under $LEAN_SEARCH_RUNS runs (its loop.pid, or a job it started; an empty or unreadable
 loop.pid counts as not running and is reported). Every session merges the adapters on the CPU once per content (their
-weight and config files; under $LEAN_SEARCH_CHECKPOINTS/<output>/weights/) and swaps them into the servers in place,
-as the loop does at a publish, so a resumed run never searches with what the servers held before; the merges are
-deleted when the run ends, fails or is interrupted (unless --keep-merge), and those a killed run left are deleted at
-the next start. A loop started later serves its own current version again when it starts.
+weight and config files; under $LEAN_SEARCH_CHECKPOINTS/<output>/weights/) and puts them on the servers by the loop
+config's serving.swap: swapped in place as the loop does at a publish, or the servers restarted from the merges. A
+server that started from byte-identical weights and never swapped since (its serve_model.sh log and pid file) is left
+as it is. Then each server answers one check request. So a resumed run never searches with what the servers held
+before; the merges are deleted when the run ends, fails or is interrupted (unless --keep-merge), and those a killed run
+left are deleted at the next start. A loop started later serves its own current version again when it starts.
+
+A server failure does not end the run: a statement whose search fails on a server is searched again from scratch (at
+most [server_failure_retries] times; failures.jsonl), after the servers were checked with no new search starting; a
+dead server is restarted from the merges by serve_model.sh, verified and recorded as a new session (at most
+[max_server_restarts] times a run, then the run stops and a rerun resumes it). A statement that still fails is left
+without a result, never recorded as unsolved, and the run is not accepted.
 
 The run goes to $LEAN_SEARCH_RUNS/<output>/probe_<name>/: results.jsonl (one per statement), summary.json, trees and
 config.toml as a loop's probe run; checkpoint.json (the checkpoint, the run config's digest, concurrency, wall cap and
 budget, their identity for the rating, the anchor mark; a rerun resumes, another checkpoint or setting under the name
 is refused); sessions.jsonl (each session's starting point and served weights; a session during which a loop came up
-is marked spoiled and its results are discarded on resume); and run.json: wall-clock stops in total and per stratum
-against the maximum, accepted or not, and the node, Lean toolchain, vLLM and torch. A run with
-max_wall_clock_stop_share or more stopped on the wall clock is rejected (exit status 3; repeat it with the cap doubled
-under another name); probe_rating.finished_probe_runs rates accepted runs only.
+is marked spoiled and its results are discarded on resume; how its weights reached the servers, and the servers it
+restarted); and run.json: wall-clock stops in total and per stratum against the maximum, the sessions, the server
+restarts, the statements searched again and those left without a result, accepted or not, and the node, Lean
+toolchain, vLLM and torch. A run with max_wall_clock_stop_share or more stopped on the wall clock is rejected (exit
+status 3; repeat it with the cap doubled under another name), and so is one with a statement left without a result
+(rerun it under the same name once the servers are sound: only that statement is searched);
+probe_rating.finished_probe_runs rates accepted runs only.
 """
 
 import argparse
 import asyncio
 import datetime
+import functools
 import json
 import os
 import tomllib
@@ -48,22 +60,34 @@ from lean_search.expert_iteration.curriculum import file_sha256
 from lean_search.lean.repl import PROJECT_DIRECTORY
 from lean_search.policy.adapters import merge_adapter
 from lean_search.policy.serving_lock import ServingBusyError, serving_lock, serving_lock_path
-from lean_search.rl.evaluation import EvaluationKind, EvaluationPaths, run_problem_set_evaluation
+from lean_search.rl.evaluation import (
+    EvaluationKind,
+    EvaluationPaths,
+    FailureTolerance,
+    ServerRecoveryError,
+    read_failures,
+    run_problem_set_evaluation,
+)
 from lean_search.rl.fixed_targets import first_problems_by_stratum, probe_problems
 from lean_search.rl.loop_config import GrpoLoopConfig, load_loop_config
 from lean_search.rl.probe_evaluation import (
     ProbeCheckpoint,
     ProbeEvaluationConfig,
     ProbeRunStart,
+    ProbeServers,
     ServersDownError,
+    ServersUnsoundError,
+    SessionServing,
     adapter_digest,
     anchor_problem,
     checkpoint_merges,
     default_value_version,
     discard_spoiled_results,
+    dropped_statements,
     keep_merges,
     mark_spoiled,
     probe_run_config,
+    read_sessions,
     remove_merges,
     remove_stale_merges,
     resolve_value_adapter,
@@ -76,6 +100,7 @@ from lean_search.rl.probe_evaluation import (
     serve_checkpoint,
     start_session,
     stops_by_stratum,
+    verify_served,
 )
 from lean_search.search import load_run_config, read_results
 from lean_search.search.records import from_json_object, to_json
@@ -84,6 +109,9 @@ REPOSITORY_DIRECTORY = Path(__file__).resolve().parents[1]
 DATA_DIRECTORY = Path(os.environ["LEAN_SEARCH_DATA"])
 RUNS_DIRECTORY = Path(os.environ["LEAN_SEARCH_RUNS"])
 CHECKPOINTS_DIRECTORY = Path(os.environ["LEAN_SEARCH_CHECKPOINTS"])
+# serve_model.sh's logs and pid files: whether a server still holds the weights it started from.
+SERVERS_DIRECTORY = RUNS_DIRECTORY / "servers"
+FAILURES_FILE = "failures.jsonl"
 REJECTED_EXIT_STATUS = 3
 
 
@@ -205,10 +233,20 @@ async def evaluate(arguments: argparse.Namespace) -> int:
             if discarded:
                 log(f"Discarded {discarded} results of a session a loop spoiled; they are searched again")
             try:
-                await serve_checkpoint(loop.serving, chosen, weights_root, merge_adapter)
+                verify = functools.partial(verify_served, run_config)
+                served = await serve_checkpoint(
+                    loop.serving, chosen, weights_root, merge_adapter, SERVERS_DIRECTORY, verify
+                )
+                log(f"Weights put on {list(served.swapped)} ({served.swap}); already held by {list(served.skipped)}")
                 directory.mkdir(parents=True, exist_ok=True)
                 (directory / "checkpoint.json").write_text(to_json(start), encoding="utf-8")
-                session = start_session(directory, chosen, paths.results)
+                session = start_session(
+                    directory, chosen, paths.results, SessionServing(served.swap, served.swapped, served.skipped)
+                )
+                servers = ProbeServers(loop.serving, served, chosen, directory, paths.results, verify)
+                tolerance = FailureTolerance(
+                    servers, config.server_failure_retries, config.max_server_restarts, directory / FAILURES_FILE
+                )
                 log(f"{len(problems)} problems of {config.probe_set} into {directory}")
                 summary = await run_problem_set_evaluation(
                     EvaluationKind.PROBE,
@@ -218,6 +256,7 @@ async def evaluate(arguments: argparse.Namespace) -> int:
                     run_config,
                     paths,
                     log,
+                    tolerance=tolerance,
                 )
                 activity = running_loops(RUNS_DIRECTORY)
                 if activity.running:
@@ -231,17 +270,27 @@ async def evaluate(arguments: argparse.Namespace) -> int:
                     keep_merges([merge for merge in merges if merge.is_dir()])
                 else:
                     remove_merges(merges)
-    except (ServingBusyError, ServersDownError) as error:
+    except (ServingBusyError, ServersDownError, ServersUnsoundError, ServerRecoveryError) as error:
         raise SystemExit(str(error)) from error
-    by_stratum = stops_by_stratum(problems, read_results(paths.results))
+    results = read_results(paths.results)
+    by_stratum = stops_by_stratum(problems, results)
     record = run_record(
-        start, run_environment(PROJECT_DIRECTORY), summary, by_stratum, config.max_wall_clock_stop_share
+        start,
+        run_environment(PROJECT_DIRECTORY),
+        summary,
+        by_stratum,
+        config.max_wall_clock_stop_share,
+        read_sessions(directory),
+        read_failures(directory / FAILURES_FILE),
+        dropped_statements(problems, results),
     )
     (directory / "run.json").write_text(to_json(record), encoding="utf-8")
     log(
         f"{summary.solved}/{summary.problems} solved; {summary.wall_clock_stops} searches stopped on the wall clock "
         f"({record.wall_clock_stop_share:.2%}, accepted below {config.max_wall_clock_stop_share:.2%}; by stratum "
-        f"{[(stratum.stratum, stratum.wall_clock_stops) for stratum in by_stratum]}): "
+        f"{[(stratum.stratum, stratum.wall_clock_stops) for stratum in by_stratum]}); "
+        f"{len(record.retried_statements)} statements searched again after a server failure, "
+        f"{len(record.server_restarts)} server restarts, left without a result: {list(record.dropped_statements)}: "
         f"{'accepted' if record.accepted else 'rejected'}"
     )
     return 0 if record.accepted else REJECTED_EXIT_STATUS

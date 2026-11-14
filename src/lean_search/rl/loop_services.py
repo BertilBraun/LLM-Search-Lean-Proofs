@@ -18,9 +18,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from lean_search.data import Problem
-from lean_search.expert_iteration.loop_config import ServerEndpoint, ServingConfig
+from lean_search.expert_iteration.loop_config import ServerEndpoint, ServingConfig, SwapMethod
 from lean_search.expert_iteration.loop_search import PauseGate
-from lean_search.expert_iteration.serving import MergedPublisher, ModelVersion, write_json_atomically
+from lean_search.expert_iteration.serving import (
+    MergedPublisher,
+    ModelVersion,
+    start_command,
+    write_json_atomically,
+)
 from lean_search.lean import FORBIDDEN_TOKENS, LeanReplConfig, LeanReplPool
 from lean_search.monitoring.system_sampler import (
     CGROUP,
@@ -596,12 +601,17 @@ class ServerStart:
     command: str
 
 
+def weights_start_command(serving: ServingConfig, server: ServerEndpoint, weights: str) -> str:
+    """The server's start command from merged weights; policy servers report the tempered log-probabilities."""
+    command = start_command(serving, server, weights)
+    return f"{command} {POLICY_SERVER_ARGUMENTS}" if server in serving.policy_servers else command
+
+
 def serve_command(
     serving: ServingConfig, publisher: MergedPublisher, version: ModelVersion, server: ServerEndpoint
 ) -> str:
-    """The server's start command for the version; policy servers report the tempered log-probabilities."""
-    command = publisher.serve_command(version, server)
-    return f"{command} {POLICY_SERVER_ARGUMENTS}" if server in serving.policy_servers else command
+    """The server's start command for the version."""
+    return weights_start_command(serving, server, publisher.weights(version, server))
 
 
 async def start_server(start: ServerStart) -> None:
@@ -611,6 +621,55 @@ async def start_server(start: ServerStart) -> None:
         process = await asyncio.create_subprocess_exec("bash", "-c", command, cwd=REPOSITORY_DIRECTORY)
         if await process.wait():
             raise RuntimeError(f"Starting {name} failed ({command}); see $LEAN_SEARCH_RUNS/servers/{name}.log")
+
+
+async def stop_servers(servers: Sequence[ServerEndpoint]) -> None:
+    """By their process groups (serve_model.sh's pid files)."""
+    command = "deployment/stop_model.sh " + " ".join(server.name for server in servers)
+    process = await asyncio.create_subprocess_exec("bash", "-c", command, cwd=REPOSITORY_DIRECTORY)
+    if await process.wait():
+        raise RuntimeError(f"Stopping the servers failed ({command})")
+
+
+async def unhealthy_servers(servers: Sequence[ServerEndpoint]) -> list[str]:
+    healthy = await asyncio.gather(*(is_healthy(server.url) for server in servers))
+    return [server.name for server, up in zip(servers, healthy, strict=True) if not up]
+
+
+@dataclass(frozen=True)
+class ServedWeightsOn:
+    server: ServerEndpoint
+    weights: str
+
+
+async def put_weights(serving: ServingConfig, assignments: Sequence[ServedWeightsOn]) -> PhaseSeconds:
+    """The weights onto the servers by `serving.swap`: swapped in place, or the servers (re)started from them; then
+    every one must answer."""
+    started = time.monotonic()
+    match serving.swap:
+        case SwapMethod.IN_PLACE:
+            seconds = slowest(
+                await asyncio.gather(*(swap_in_place(assigned.server, assigned.weights) for assigned in assignments))
+            )
+        case SwapMethod.RESTART:
+            await start_servers(
+                [
+                    ServerStart(assigned.server, weights_start_command(serving, assigned.server, assigned.weights))
+                    for assigned in assignments
+                ]
+            )
+            seconds = PhaseSeconds(0.0, time.monotonic() - started, 0.0)
+    down = await unhealthy_servers([assigned.server for assigned in assignments])
+    if down:
+        raise RuntimeError(f"Servers {down} do not answer after their weights were put on them.")
+    return seconds
+
+
+async def swap_in_place(server: ServerEndpoint, weights: str) -> PhaseSeconds:
+    # An in-place reload needs ~1.2 GiB beyond the KV cache, more than a GPU shared by two servers keeps free.
+    if not await is_sleeping(server.url):
+        await release_gpu(server.url)
+    return await restore_gpu(server.url, Path(weights))
 
 
 async def start_servers(starts: Sequence[ServerStart]) -> None:
@@ -631,7 +690,9 @@ async def start_servers(starts: Sequence[ServerStart]) -> None:
 
 
 class VllmServers:
-    """The merged policy and value servers: in-place weight swaps, sleep on the training GPUs."""
+    """The merged policy and value servers. `serving.swap` in place: the training GPUs' servers sleep and each new
+    version is swapped in; restart: those servers stop for training, and every server starts again from each version's
+    merged weights (the merges handed off in host memory included)."""
 
     def __init__(self, serving: ServingConfig, released: Sequence[ServerEndpoint], publisher: MergedPublisher) -> None:
         self.serving = serving
@@ -644,8 +705,7 @@ class VllmServers:
             raise RuntimeError(f"Servers not answering: {down}; start them (grpo_loop.py start-servers).")
 
     async def unhealthy(self) -> list[str]:
-        healthy = await asyncio.gather(*(is_healthy(server.url) for server in self.serving.servers))
-        return [server.name for server, up in zip(self.serving.servers, healthy, strict=True) if not up]
+        return await unhealthy_servers(self.serving.servers)
 
     async def restart(self, names: Sequence[str], version: ModelVersion) -> None:
         await start_servers(
@@ -657,26 +717,22 @@ class VllmServers:
         )
 
     async def release(self) -> PhaseSeconds:
-        return slowest(await asyncio.gather(*(release_gpu(server.url) for server in self.released)))
+        match self.serving.swap:
+            case SwapMethod.IN_PLACE:
+                return slowest(await asyncio.gather(*(release_gpu(server.url) for server in self.released)))
+            case SwapMethod.RESTART:
+                started = time.monotonic()
+                await stop_servers(self.released)
+                return PhaseSeconds(0.0, time.monotonic() - started, 0.0)
 
     async def serve(self, version: ModelVersion) -> PhaseSeconds:
-        return slowest(
-            await asyncio.gather(
-                *(
-                    self.serve_weights(server, self.publisher.weights(version, server))
-                    for server in self.serving.servers
-                )
-            )
+        return await put_weights(
+            self.serving,
+            [ServedWeightsOn(server, self.publisher.weights(version, server)) for server in self.serving.servers],
         )
 
     async def serve_value(self, weights: str) -> None:
-        await asyncio.gather(*(self.serve_weights(server, weights) for server in self.serving.value_servers))
-
-    async def serve_weights(self, server: ServerEndpoint, weights: str) -> PhaseSeconds:
-        # An in-place reload needs ~1.2 GiB beyond the KV cache, more than a GPU shared by two servers keeps free.
-        if not await is_sleeping(server.url):
-            await release_gpu(server.url)
-        return await restore_gpu(server.url, Path(weights))
+        await put_weights(self.serving, [ServedWeightsOn(server, weights) for server in self.serving.value_servers])
 
 
 class SubprocessEvaluations:
