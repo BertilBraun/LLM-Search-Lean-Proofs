@@ -318,6 +318,11 @@ def test_expert_iteration_config_parses() -> None:
     assert expert_iteration().sft.optimization.learning_rate == 5e-5
 
 
+@pytest.mark.parametrize("name", ["expert_iteration_1.toml", "expert_iteration_1_b.toml", "expert_iteration_1_c.toml"])
+def test_round_one_configs_take_their_phases_from_the_reward_fix(name: str) -> None:
+    assert expert_iteration(name).data.window_phases == 0
+
+
 @pytest.mark.parametrize(
     ("name", "run_name", "learning_rate", "epochs"),
     [
