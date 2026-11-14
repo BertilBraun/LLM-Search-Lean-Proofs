@@ -2,7 +2,7 @@
 
 Kept current by the orchestrator. Details live in the linked files.
 
-**Last update:** 2026-11-14, 22:25 UTC.
+**Last update:** 2026-11-14, 22:50 UTC.
 
 ## Where we are
 
@@ -64,6 +64,7 @@ this one for the arms or move); the open points listed at the end of this docume
 | 15:09 | policy server on GPU 3 segfaults, 83 s after a swap |
 | 15:20 | the host machine reboots (uptime from 1 day 9 h to 1 min) |
 | 15:29 | the host machine reboots again |
+| 22:43 | the host machine reboots a third time, during anchor run 2 (422 of 2,000 done); the on-node supervisor restarts the servers and resumes the run |
 
 - **Diagnosis** (crash logs, the server library's source, the old run's logs): the host is the leading suspect, the swap
   second. The old run did 31 swaps in 80 hours with the same versions and no server died. No file-lifetime defect.
