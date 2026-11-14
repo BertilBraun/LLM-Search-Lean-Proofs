@@ -1,0 +1,23 @@
+# The follow-up's probe v2 (experiments/grpo_fixed_sets.py select-by-characters; src/lean_search/rl/fixed_sets.py,
+# CharacterStrataConfig): 2,000 verified pool v3 statements stratified by the characters of the shortest known proof,
+# which separates easy from hard where the tactic count hardly does (v0 solved 84% of the old probe under 500
+# characters, 9% from 4,500 on; results/followup_step0/pool.md). 70% at 1,000-4,499 characters, where the old run moved
+# the solve rate most. Disjoint from the old probe, the gate and the overfit set, which stay as they are; statements of
+# the held-out states and near-duplicates of the training data's root states are dropped before the draw.
+#   python experiments/grpo_fixed_sets.py --config experiments/configs/grpo/followup/probe_v2.toml \
+#       select-by-characters --training-data $LEAN_SEARCH_DATA/sft $LEAN_SEARCH_DATA/reasoning $LEAN_SEARCH_DATA/value
+edges = [500, 1000, 1500, 2000, 3000, 4500]
+counts = [150, 250, 350, 350, 400, 300, 200]
+seed = "grpo-probe-v2"
+output = "grpo/fixed_sets/probe_v2.jsonl"
+excluded_sets = ["grpo/fixed_sets/probe.jsonl", "grpo/fixed_sets/gate.jsonl", "grpo/fixed_sets/overfit_300.jsonl"]
+held_out_states_file = "phase5_eval_visible_student_v2_visible/states.jsonl"
+near_duplicate_threshold = 0.7
+
+# The follow-up curriculum's difficulty (followup/base.toml), recorded with each statement: characters / 100.
+[curriculum]
+verified = "expert_iteration/pool_v3/verified.jsonl"
+unverified = ""
+proof_steps_weight = 0.0
+root_value_weight = 0.0
+characters_weight = 1.0

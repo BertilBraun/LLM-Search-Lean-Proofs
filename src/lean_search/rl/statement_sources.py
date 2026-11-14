@@ -2,8 +2,6 @@
 
 import bisect
 import json
-import math
-import re
 from collections import deque
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
@@ -17,7 +15,7 @@ from lean_search.expert_iteration.pool import pool_problem, problem_name
 from lean_search.expert_iteration.pool_search import PRELOADED_HEADER_SHARE, common_headers
 from lean_search.expert_iteration.serving import write_json_atomically
 from lean_search.monitoring.families import BandOutcome, CurriculumPhase
-from lean_search.rl.fixed_sets import HeldOutStatement
+from lean_search.rl.fixed_sets import HeldOutStatement, stratum_order
 from lean_search.rl.tree_store import TreeEntry
 from lean_search.search.records import from_json_object
 
@@ -78,12 +76,6 @@ def difficulty_band(difficulty: float | None, edges: Sequence[float] = DEFAULT_D
     return f"{low:g}+" if index == len(edges) else f"{low:g}-{edges[index]:g}"
 
 
-def band_order(label: str) -> tuple[float, str]:
-    """Bands by their low end, labels that do not start with a number (e.g. "unknown") after them by name."""
-    low = re.match(r"\d+(?:\.\d+)?", label)
-    return (float(low.group()) if low else math.inf, label)
-
-
 def outcomes_by_band(
     entries: Sequence[TreeEntry], edges: Sequence[float] = DEFAULT_DIFFICULTY_BAND_EDGES
 ) -> dict[str, BandOutcome]:
@@ -92,7 +84,7 @@ def outcomes_by_band(
         attempts_and_solved = counts.setdefault(difficulty_band(entry.difficulty, edges), [0, 0])
         attempts_and_solved[0] += 1
         attempts_and_solved[1] += entry.proved
-    return {band: BandOutcome(*counts[band]) for band in sorted(counts, key=band_order)}
+    return {band: BandOutcome(*counts[band]) for band in sorted(counts, key=stratum_order)}
 
 
 def tree_outcome(entries: Sequence[TreeEntry]) -> BandOutcome:

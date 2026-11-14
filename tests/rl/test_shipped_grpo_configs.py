@@ -7,7 +7,12 @@ import pytest
 from lean_search.policy.config import FeedbackConfig
 from lean_search.rl.evaluation import EvaluationKind
 from lean_search.rl.expert_iteration_data import ExpertIterationConfig, parse_expert_iteration_config
-from lean_search.rl.fixed_sets import FixedSetsConfig
+from lean_search.rl.fixed_sets import (
+    CharacterStrataConfig,
+    FixedSetsConfig,
+    character_strata,
+    validate_character_strata,
+)
 from lean_search.rl.fixed_targets import baseline_concurrency, baseline_jobs, target_config
 from lean_search.rl.loop_config import (
     EvaluationValueModel,
@@ -83,6 +88,36 @@ def test_gate_search_has_no_value_model() -> None:
 def test_fixed_sets_config_loads() -> None:
     text = (CONFIGS / "grpo/fixed_sets.toml").read_text(encoding="utf-8")
     assert from_json_object(FixedSetsConfig, tomllib.loads(text)).probe_per_stratum * 3 >= 500
+
+
+def probe_v2() -> CharacterStrataConfig:
+    text = (CONFIGS / "grpo/followup/probe_v2.toml").read_text(encoding="utf-8")
+    return from_json_object(CharacterStrataConfig, tomllib.loads(text))
+
+
+def test_probe_v2_takes_2000_statements_over_the_seven_character_bands() -> None:
+    config = probe_v2()
+    validate_character_strata(config)
+    assert dict(zip(character_strata(config.edges), config.counts, strict=True)) == {
+        "0-499": 150,
+        "500-999": 250,
+        "1000-1499": 350,
+        "1500-1999": 350,
+        "2000-2999": 400,
+        "3000-4499": 300,
+        "4500+": 200,
+    }
+
+
+def test_probe_v2_avoids_every_existing_fixed_set() -> None:
+    old = from_json_object(
+        FixedSetsConfig, tomllib.loads((CONFIGS / "grpo/fixed_sets.toml").read_text(encoding="utf-8"))
+    )
+    assert set(probe_v2().excluded_sets) == {old.probe_set, old.gate_set, old.overfit_set}
+
+
+def test_probe_v2_avoids_the_loops_held_out_states() -> None:
+    assert probe_v2().held_out_states_file == loop("grpo/loop.toml").evaluation.held_out_states_file
 
 
 def test_single_step_arms_load_their_phase_configs() -> None:

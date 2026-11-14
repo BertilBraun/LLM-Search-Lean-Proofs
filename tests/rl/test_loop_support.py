@@ -1,4 +1,5 @@
 import dataclasses
+from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -24,6 +25,7 @@ from lean_search.rl.evaluation import (
     repeats_to_compare,
     rolling_probe,
     search_summary,
+    stratum_outcomes,
     value_arm_result,
 )
 from lean_search.rl.fixed_targets import first_problems_by_stratum, probe_part, run_target
@@ -329,6 +331,18 @@ def test_probe_parts_together_are_the_whole_set() -> None:
 def test_a_probe_part_is_stratified_like_the_set() -> None:
     part = probe_part(stratified({"easy": 6, "medium": 6, "hard": 6}), 1, 3)
     assert [problem.stratum for problem in part] == ["easy"] * 2 + ["medium"] * 2 + ["hard"] * 2
+
+
+def test_a_probe_part_of_seven_character_bands_is_stratified_like_the_set() -> None:
+    bands = {"0-499": 3, "500-999": 5, "1000-1499": 7, "1500-1999": 7, "2000-2999": 8, "3000-4499": 6, "4500+": 4}
+    part = probe_part(stratified({band: 12 * count for band, count in bands.items()}), 5, 12)
+    assert Counter(problem.stratum for problem in part) == bands
+
+
+def test_character_bands_are_summarized_by_their_low_end() -> None:
+    problems = stratified({"4500+": 1, "500-999": 1, "0-499": 1, "1000-1499": 1})
+    strata = [outcome.stratum for outcome in stratum_outcomes(problems, [])]
+    assert strata == ["0-499", "500-999", "1000-1499", "4500+"]
 
 
 def slot_summary(slot: int, solved: int, outcomes: tuple[StratumOutcome, ...]) -> EvaluationSummary:

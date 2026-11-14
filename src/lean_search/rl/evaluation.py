@@ -25,6 +25,7 @@ from lean_search.expert_iteration.pool_search import PRELOADED_HEADER_SHARE, com
 from lean_search.expert_iteration.serving import write_json_atomically
 from lean_search.lean import LeanReplConfig, LeanReplPool
 from lean_search.monitoring.families import BandOutcome, FixedTargets, PairedDifference, ValueArmResult
+from lean_search.rl.fixed_sets import stratum_order
 from lean_search.rl.loop_config import ValueArmConfig
 from lean_search.rl.renaming import StatementRenamings, search_problem
 from lean_search.rl.search_models import open_search_models, run_config_text
@@ -175,7 +176,7 @@ def now() -> str:
 
 def stratum_outcomes(problems: Sequence[EvaluationProblem], results: Sequence[SearchResult]) -> list[StratumOutcome]:
     solved = {result.problem_name for result in results if result.proved}
-    strata = sorted({problem.stratum for problem in problems if problem.stratum})
+    strata = sorted({problem.stratum for problem in problems if problem.stratum}, key=stratum_order)
     return [
         StratumOutcome(
             stratum,

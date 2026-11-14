@@ -71,6 +71,25 @@ def similar_pairs(signatures: numpy.ndarray) -> list[SimilarPair]:
     return list(pairs.values())
 
 
+def matches_any(references: numpy.ndarray, queries: numpy.ndarray, threshold: float) -> list[bool]:
+    """Per query signature, whether a reference sharing one of its LSH buckets reaches the estimated Jaccard."""
+    buckets: list[dict[bytes, list[int]]] = [{} for _ in range(BANDS)]
+    for band, members in enumerate(buckets):
+        rows = references[:, band * ROWS : (band + 1) * ROWS]
+        for index in range(len(references)):
+            members.setdefault(rows[index].tobytes(), []).append(index)
+    found = []
+    for query in queries:
+        shared = {
+            index
+            for band, members in enumerate(buckets)
+            for index in members.get(query[band * ROWS : (band + 1) * ROWS].tobytes(), ())
+        }
+        similarity = numpy.mean(references[sorted(shared)] == query, axis=1) if shared else numpy.zeros(1)
+        found.append(bool(similarity.max() >= threshold))
+    return found
+
+
 def clusters(count: int, pairs: Sequence[SimilarPair], threshold: float) -> list[int]:
     """Per statement, the smallest index of its cluster (union-find over the pairs at or above the threshold)."""
     parent = list(range(count))
