@@ -79,6 +79,8 @@ class TacticReward:
     # Judged within the block (`judged_in_block`). None with parts: the block's anchor, judged against the group's
     # first-tactic baseline.
     gain: RewardParts | None = None
+    # On the proof graph: the group node's remaining steps minus the state's (negative for a detour).
+    steps_gained: int | None = None
 
 
 @dataclass(frozen=True)
@@ -122,6 +124,14 @@ class GroupSample:
         continuation off the graph or a failing tactic, is neither charged nor credited, as in per-tactic credit's
         global part; a redundant step stays redundant on the graph too."""
         return self.kind.is_forward and any(tactic.label == TacticLabel.PROOF_GRAPH for tactic in self.tactics)
+
+    @property
+    def gets_closer_to_proof(self) -> bool:
+        return any(tactic.steps_gained is not None and tactic.steps_gained > 0 for tactic in self.tactics)
+
+    @property
+    def has_failing_tactic(self) -> bool:
+        return any(tactic.label == TacticLabel.FAILING for tactic in self.tactics)
 
     @property
     def complete(self) -> bool:
@@ -191,7 +201,8 @@ def tactic_reward(
             parts = reward_parts(0.0, config.failure_local, config)
         case TacticLabel.MASKED:
             parts = None
-    return TacticReward(outcome.label, parts)
+    steps_gained = None if outcome.remaining_steps is None else node_steps - outcome.remaining_steps
+    return TacticReward(outcome.label, parts, steps_gained=steps_gained)
 
 
 def judged_in_block(rewards: Sequence[TacticReward], config: RewardConfig) -> tuple[TacticReward, ...]:

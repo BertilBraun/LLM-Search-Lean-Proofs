@@ -27,6 +27,7 @@ from lean_search.data import Problem, Split
 from lean_search.expert_iteration.serving import write_json_atomically
 from lean_search.lean import LeanRepl, LeanReplConfig, LeanReplPool, ProofState
 from lean_search.reasoning.states import ReasoningState
+from lean_search.rl.advantages import CreditMode
 from lean_search.rl.evaluation import SearchProgress
 from lean_search.rl.grpo_groups import RewardConfig, TreeGroups, policy_groups
 from lean_search.rl.policy_data import PolicyTree
@@ -388,7 +389,7 @@ async def search_pending(
 
 
 def single_step_phase_data(
-    records: Sequence[TreeRecord], states: Sequence[StateProblem], config: RewardConfig
+    records: Sequence[TreeRecord], states: Sequence[StateProblem], config: RewardConfig, credit: CreditMode
 ) -> LabelledPhaseData:
     """The root groups of the single-step trees, labelled against each state's reference proof."""
     policy_trees = []
@@ -397,5 +398,5 @@ def single_step_phase_data(
         labels, tactics = reference_labels(record, state.reference_steps, config.off_graph_min_expanded_nodes)
         tree_groups = single_step_groups(record, labels, tactics, config)
         policy_trees.append(PolicyTree(tree_groups.groups, record.expansions))
-        statistics.append(graph_statistics(record, labels, (), tactics, tree_groups))
+        statistics.append(graph_statistics(record, labels, (), tactics, tree_groups, credit))
     return LabelledPhaseData((), tuple(policy_trees), total_statistics(statistics))

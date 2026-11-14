@@ -1,7 +1,7 @@
 from collections.abc import Mapping, Sequence
 
 import pytest
-from rl_samples import FAILING, MASKED, PROOF_GRAPH, UNKNOWN, group, sample
+from rl_samples import FAILING, MASKED, NODE_STEPS, PROOF_GRAPH, UNKNOWN, group, sample
 
 from lean_search.policy.prompts import END_OF_TURN
 from lean_search.rl.advantages import CreditMode
@@ -10,6 +10,7 @@ from lean_search.rl.policy_data import (
     ExpansionTexts,
     PolicyData,
     PolicyDataConfig,
+    PolicyDataMetrics,
     PolicySequence,
     PolicyTree,
     SampledCompletion,
@@ -229,3 +230,26 @@ def test_inserted_tokens_are_untrained_in_every_credit_mode(credit: CreditMode) 
     data = single_tree_data([group_with_forced], texts, PolicyDataConfig(credit))
     opening = data.sequences[0].sampler_log_probabilities.index(None)
     assert not any(data.sequences[0].trained[opening : opening + 10])
+
+
+def proof_success_metrics() -> PolicyDataMetrics:
+    """A group whose samples reaching the proof graph are one with a failing tail and one no closer than the node."""
+    mixed = group(
+        sample("tail", PROOF_GRAPH, FAILING, MASKED, edge_id=0),
+        sample("sideways", PROOF_GRAPH, steps=(NODE_STEPS,), edge_id=1),
+        sample("error", FAILING, edge_id=2),
+    )
+    return single_tree_data([mixed], [], PolicyDataConfig(CreditMode.PROOF_SUCCESS)).metrics
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("mean_proof_success", 2 / 3),
+        ("trained_mean_proof_success", 2 / 3),
+        ("proof_success_failing_tail_share", 0.5),
+        ("proof_success_no_closer_share", 0.5),
+    ],
+)
+def test_proof_success_metrics_of_a_phase(field: str, value: float) -> None:
+    assert getattr(proof_success_metrics(), field) == pytest.approx(value)

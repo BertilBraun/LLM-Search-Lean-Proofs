@@ -134,7 +134,7 @@ def train_round(
         reference_adapter=config.policy_adapter,
         optimization=optimization,
     )
-    labelled = single_step_phase_data(records, states, phase.reward)
+    labelled = single_step_phase_data(records, states, phase.reward, phase.credit)
     inputs = PhaseInputs(records=records)
     tokenizer = transformers.AutoTokenizer.from_pretrained(config.policy_base_model)
     log(f"{arm.name}: training on {len(labelled.groups)} groups from {initial_adapter or 'a fresh adapter'}")

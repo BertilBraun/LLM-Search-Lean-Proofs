@@ -97,6 +97,13 @@ class PolicyDataMetrics:
     mean_explanation_tokens: float
     mean_tactics_per_sample: float
     untrained_token_share: float
+    # Proof-success r (`GroupSample.reaches_proof_graph`), sample-weighted: its mean over all groups and over the
+    # trained ones, and of the trained groups' samples with r = 1 the shares with a failing tactic after the proof
+    # graph and with no proof-graph state closer to a proof than the group's node. Logged in every credit mode.
+    mean_proof_success: float = 0.0
+    trained_mean_proof_success: float = 0.0
+    proof_success_failing_tail_share: float = 0.0
+    proof_success_no_closer_share: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -290,6 +297,7 @@ def data_metrics(
     samples = weighted_samples(groups)
     known = [parts for sample in samples for parts in sample.known]
     trained_samples = weighted_samples(group for group, _ in trained_groups)
+    reaching = [sample for sample in trained_samples if sample.reaches_proof_graph]
     completion_tokens_total = sum(sequence.tokenized.completion_token_count for sequence in sequences)
     untrained = sum(
         not trained
@@ -317,4 +325,9 @@ def data_metrics(
         / max(1, len(first_round)),
         mean_tactics_per_sample=sum(len(sample.tactics) for sample in trained_samples) / max(1, len(trained_samples)),
         untrained_token_share=untrained / max(1, completion_tokens_total - inserted),
+        mean_proof_success=sum(sample.reaches_proof_graph for sample in samples) / max(1, len(samples)),
+        trained_mean_proof_success=len(reaching) / max(1, len(trained_samples)),
+        proof_success_failing_tail_share=sum(sample.has_failing_tactic for sample in reaching) / max(1, len(reaching)),
+        proof_success_no_closer_share=sum(not sample.gets_closer_to_proof for sample in reaching)
+        / max(1, len(reaching)),
     )
