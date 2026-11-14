@@ -15,6 +15,7 @@ from lean_search.rl.fixed_sets import (
 )
 from lean_search.rl.fixed_targets import baseline_concurrency, baseline_jobs, target_config
 from lean_search.rl.loop_config import (
+    EvaluationTarget,
     EvaluationValueModel,
     GrpoLoopConfig,
     HealthConfig,
@@ -388,6 +389,8 @@ def test_the_followup_base_differs_from_the_loop_only_in_the_followups_settings(
     base, old = loop("grpo/followup/base.toml"), loop("grpo/loop.toml")
     curriculum = dataclasses.replace(
         old.statements.curriculum,
+        verified="followup/verified_pool_2026-11-01.jsonl",
+        verified_sha256="1b216b06e30148a1e652291098c642842dadad83e2a6eaca9b85e3cb2aa5600c",
         proof_steps_weight=0.0,
         root_value_weight=0.0,
         characters_weight=1.0,
@@ -397,54 +400,102 @@ def test_the_followup_base_differs_from_the_loop_only_in_the_followups_settings(
     statements = dataclasses.replace(
         old.statements,
         curriculum=curriculum,
-        held_out=(*old.statements.held_out, "grpo/fixed_sets/probe_v2.jsonl"),
+        held_out=(
+            *old.statements.held_out,
+            "grpo/fixed_sets/probe_v2.jsonl",
+            "grpo/fixed_sets/probe_v2_twins.jsonl",
+        ),
         difficulty_band_edges=(5.0, 10.0, 15.0, 20.0, 30.0, 45.0),
     )
     evaluation = dataclasses.replace(
         old.evaluation,
         probe_set="grpo/fixed_sets/probe_v2.jsonl",
-        probe_parts=12,
-        probe=dataclasses.replace(old.evaluation.probe, baseline_runs=1, baseline_concurrency=6),
-        minif2f=dataclasses.replace(old.evaluation.minif2f, baseline_concurrency=34),
+        beside_sampling=False,
+        probe_parts=1,
+        probe=EvaluationTarget(16, 7200.0, 56, every_hours=0.0, at_start=False, baseline_runs=1),
+        minif2f=EvaluationTarget(64, 7200.0, 56, every_hours=0.0, at_start=False),
+        held_out_states=EvaluationTarget(1, 120.0, 56, every_hours=0.01, at_start=True, baseline_concurrency=56),
+    )
+    health = dataclasses.replace(
+        old.health, reference_phases=1, rollback_window_phases=0, early_resume_valid_fraction=2.0
     )
     expected = dataclasses.replace(
         old,
         name="grpo_followup_base",
-        sampling=dataclasses.replace(old.sampling, options_arm=OptionsArmConfig()),
+        sampling=dataclasses.replace(old.sampling, concurrency=56, options_arm=OptionsArmConfig()),
         training=dataclasses.replace(old.training, kl_reference_policy_adapter=""),
         statements=statements,
         evaluation=evaluation,
+        retention=dataclasses.replace(old.retention, adapter_versions=0),
+        health=health,
     )
     assert base == expected
 
 
-def test_the_followup_base_holds_out_its_probe() -> None:
-    config = loop("grpo/followup/base.toml")
-    assert config.evaluation.probe_set in config.statements.held_out
+def followup() -> GrpoLoopConfig:
+    return loop("grpo/followup/base.toml")
+
+
+def test_the_followup_base_holds_out_probe_v2_and_its_twins() -> None:
+    held_out = followup().statements.held_out
+    assert {probe_v2().output, probe_v2().twins_output} <= set(held_out)
+
+
+def test_the_followup_base_and_probe_v2_read_the_same_frozen_pool() -> None:
+    curriculum, probe = followup().statements.curriculum, probe_v2().curriculum
+    assert (curriculum.verified, curriculum.verified_sha256) == (probe.verified, probe.verified_sha256)
 
 
 def test_the_followup_curriculum_bins_are_probe_v2s_bands() -> None:
-    edges = loop("grpo/followup/base.toml").statements.difficulty_band_edges
+    edges = followup().statements.difficulty_band_edges
     assert [edge * 100 for edge in edges] == list(probe_v2().edges)
 
 
 def test_the_followup_probe_records_the_followup_curriculums_difficulty() -> None:
-    curriculum = loop("grpo/followup/base.toml").statements.curriculum
+    curriculum = followup().statements.curriculum
     weights = (curriculum.proof_steps_weight, curriculum.root_value_weight, curriculum.characters_weight)
     probe = probe_v2().curriculum
     assert (probe.proof_steps_weight, probe.root_value_weight, probe.characters_weight) == weights
 
 
-def test_the_followup_probe_slot_is_the_old_slots_size() -> None:
-    parts = loop("grpo/followup/base.toml").evaluation.probe_parts
-    assert round(sum(probe_v2().counts) / parts) == 167
+@pytest.mark.parametrize("kind", [EvaluationKind.PROBE, EvaluationKind.MINIF2F])
+def test_the_followup_runs_no_probe_or_minif2f_inside_an_arm(kind: EvaluationKind) -> None:
+    target = target_config(followup().evaluation, kind)
+    assert (target.every_hours, target.at_start) == (0.0, False)
 
 
-def test_version_zeros_followup_baselines_share_the_sampling_concurrency() -> None:
-    config = loop("grpo/followup/base.toml")
-    repls = sum(
-        baseline_concurrency(config, kind) * baseline_jobs(config.evaluation, kind)
-        for kind in EvaluationKind
-        if target_config(config.evaluation, kind).at_start
-    )
-    assert repls == config.sampling.concurrency
+def test_the_followup_runs_nothing_beside_sampling() -> None:
+    assert not followup().evaluation.beside_sampling
+
+
+def test_the_followup_held_out_states_are_due_at_every_pause() -> None:
+    assert followup().evaluation.held_out_states.every_hours * 3600 < 60
+
+
+def test_version_zeros_held_out_baseline_runs_at_the_pauses_concurrency() -> None:
+    held_out = followup().evaluation.held_out_states
+    assert baseline_concurrency(followup(), EvaluationKind.HELD_OUT_STATES) == held_out.concurrency
+
+
+def test_the_followup_searches_wait_for_the_held_out_states_last_checks() -> None:
+    assert followup().health.early_resume_valid_fraction > 1.0
+
+
+def test_the_followup_sampling_concurrency_is_a_placeholder_within_the_new_nodes_quota() -> None:
+    assert followup().sampling.concurrency <= 56
+
+
+def test_the_followup_held_out_concurrency_is_a_placeholder_within_the_new_nodes_quota() -> None:
+    assert followup().evaluation.held_out_states.concurrency <= 56
+
+
+def test_the_followup_keeps_every_adapter() -> None:
+    assert followup().retention.adapter_versions == 0
+
+
+def test_the_followup_stops_at_the_first_collapse() -> None:
+    assert followup().health.rollback_window_phases == 0
+
+
+def test_each_arms_health_reference_is_its_own_first_phase() -> None:
+    assert followup().health.reference_phases == 1
