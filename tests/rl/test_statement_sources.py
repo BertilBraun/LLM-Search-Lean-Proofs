@@ -35,9 +35,24 @@ def test_difficulty_bands(difficulty: float, band: str) -> None:
     assert difficulty_band(difficulty) == band
 
 
+CHARACTER_EDGES = (5.0, 10.0, 15.0, 20.0, 30.0, 45.0)
+
+
+@pytest.mark.parametrize(
+    ("difficulty", "band"), [(0.3, "0-5"), (5.0, "5-10"), (29.9, "20-30"), (45.0, "45+"), (120.0, "45+")]
+)
+def test_difficulty_bands_on_configured_edges(difficulty: float, band: str) -> None:
+    assert difficulty_band(difficulty, CHARACTER_EDGES) == band
+
+
 def test_outcomes_count_attempts_and_solved_per_band() -> None:
     entries = [entry(1.5, True), entry(1.2, False), entry(3.0, True)]
     assert outcomes_by_band(entries) == {"1-2": BandOutcome(2, 1), "3-4": BandOutcome(1, 1)}
+
+
+def test_outcomes_list_the_bands_by_their_low_end() -> None:
+    entries = [entry(None, True), entry(50.0, True), entry(12.0, False), entry(7.0, True)]
+    assert list(outcomes_by_band(entries, CHARACTER_EDGES)) == ["5-10", "10-15", "45+", "unknown"]
 
 
 def test_fixed_statements_cycle_in_order() -> None:

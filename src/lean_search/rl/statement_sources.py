@@ -1,7 +1,9 @@
 """Where the loop's statements come from: the curriculum over verified pool statements, or a fixed list (overfit)."""
 
+import bisect
 import json
 import math
+import re
 from collections import deque
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
@@ -19,8 +21,8 @@ from lean_search.rl.fixed_sets import HeldOutStatement
 from lean_search.rl.tree_store import TreeEntry
 from lean_search.search.records import from_json_object
 
-# Difficulty bands of the curriculum family: [0, 1), [1, 2), ..., and everything from the last one on.
-DIFFICULTY_BAND_COUNT = 6
+# Upper edges of the curriculum family's difficulty bands: [0, 1), [1, 2), ..., and everything from the last one on.
+DEFAULT_DIFFICULTY_BAND_EDGES = (1.0, 2.0, 3.0, 4.0, 5.0)
 BAND_ORIGIN = "band"
 BELOW_BAND_ORIGIN = "below_band"
 
@@ -67,20 +69,30 @@ class StatementSource(Protocol):
         ...
 
 
-def difficulty_band(difficulty: float | None) -> str:
+def difficulty_band(difficulty: float | None, edges: Sequence[float] = DEFAULT_DIFFICULTY_BAND_EDGES) -> str:
+    """The band's label, e.g. "1-2", the last one open ("5+"); below the first edge counts from 0."""
     if difficulty is None:
         return "unknown"
-    low = max(0, min(DIFFICULTY_BAND_COUNT - 1, math.floor(difficulty)))
-    return f"{low}+" if low == DIFFICULTY_BAND_COUNT - 1 else f"{low}-{low + 1}"
+    index = bisect.bisect_right(edges, difficulty)
+    low = 0.0 if index == 0 else edges[index - 1]
+    return f"{low:g}+" if index == len(edges) else f"{low:g}-{edges[index]:g}"
 
 
-def outcomes_by_band(entries: Sequence[TreeEntry]) -> dict[str, BandOutcome]:
+def band_order(label: str) -> tuple[float, str]:
+    """Bands by their low end, labels that do not start with a number (e.g. "unknown") after them by name."""
+    low = re.match(r"\d+(?:\.\d+)?", label)
+    return (float(low.group()) if low else math.inf, label)
+
+
+def outcomes_by_band(
+    entries: Sequence[TreeEntry], edges: Sequence[float] = DEFAULT_DIFFICULTY_BAND_EDGES
+) -> dict[str, BandOutcome]:
     counts: dict[str, list[int]] = {}
     for entry in entries:
-        attempts_and_solved = counts.setdefault(difficulty_band(entry.difficulty), [0, 0])
+        attempts_and_solved = counts.setdefault(difficulty_band(entry.difficulty, edges), [0, 0])
         attempts_and_solved[0] += 1
         attempts_and_solved[1] += entry.proved
-    return {band: BandOutcome(attempts, solved) for band, (attempts, solved) in sorted(counts.items())}
+    return {band: BandOutcome(*counts[band]) for band in sorted(counts, key=band_order)}
 
 
 def tree_outcome(entries: Sequence[TreeEntry]) -> BandOutcome:
@@ -119,9 +131,11 @@ class CurriculumStatements:
         state_path: Path,
         held_out: Collection[str],
         searched: Sequence[str],
+        difficulty_band_edges: Sequence[float] = DEFAULT_DIFFICULTY_BAND_EDGES,
     ) -> None:
         """`searched`: the statements of the loop's trees, in the order their searches finished."""
         self.config = config
+        self.difficulty_band_edges = difficulty_band_edges
         self.data_root = data_root
         self.state_path = state_path
         self.curriculum = Curriculum(config, 0)
@@ -179,7 +193,7 @@ class CurriculumStatements:
             band_high=counts.band_high or 0.0,
             pool_statements=counts.statements,
             verified_statements=counts.verified_statements,
-            by_difficulty=outcomes_by_band(entries),
+            by_difficulty=outcomes_by_band(entries, self.difficulty_band_edges),
             by_origin=outcomes_by_origin(entries),
         )
 
@@ -191,8 +205,13 @@ class CurriculumStatements:
 class FixedStatements:
     """A fixed list in a cycle: a statement comes again as soon as its previous search finished."""
 
-    def __init__(self, statements: Sequence[HeldOutStatement]) -> None:
+    def __init__(
+        self,
+        statements: Sequence[HeldOutStatement],
+        difficulty_band_edges: Sequence[float] = DEFAULT_DIFFICULTY_BAND_EDGES,
+    ) -> None:
         self.statements = list(statements)
+        self.difficulty_band_edges = difficulty_band_edges
         self.position = 0
         self.running: set[str] = set()
 
@@ -219,7 +238,9 @@ class FixedStatements:
 
     def phase_record(self, entries: Sequence[TreeEntry]) -> CurriculumPhase:
         count = len(self.statements)
-        return CurriculumPhase(0.0, 0.0, count, count, by_difficulty=outcomes_by_band(entries))
+        return CurriculumPhase(
+            0.0, 0.0, count, count, by_difficulty=outcomes_by_band(entries, self.difficulty_band_edges)
+        )
 
     def headers(self) -> list[str]:
         return common_headers([statement.problem for statement in self.statements], PRELOADED_HEADER_SHARE)

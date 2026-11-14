@@ -1221,6 +1221,12 @@ def test_an_impossible_gpu_layout_is_refused(toml: str) -> None:
         parse_loop_config(toml)
 
 
+@pytest.mark.parametrize("edges", ["[]", "[0.0, 5.0]", "[5.0, 5.0]", "[10.0, 5.0]"])
+def test_difficulty_band_edges_that_do_not_increase_from_above_zero_are_refused(edges: str) -> None:
+    with pytest.raises(ValueError, match="difficulty_band_edges"):
+        parse_loop_config(LOOP_TOML + f"\n[statements]\ndifficulty_band_edges = {edges}\n")
+
+
 def training_arguments(root: Path, toml: str) -> list[str]:
     world = loop_world(root, toml=toml)
     request = TrainingRequest(1, "", root / "trees", "run", root / "checkpoints", False)

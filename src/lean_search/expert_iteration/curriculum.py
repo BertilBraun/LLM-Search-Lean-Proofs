@@ -10,11 +10,11 @@ from the band [low, low + width]. The first `window` statements fed since the ba
 `judged_share` of them finished, the ones still running counted unsolved (solved searches finish much sooner than
 unsolved ones, so the first outcomes to arrive alone would overstate the solve rate), the band moves up by `step`
 when at least `raise_solve_rate` were solved (by `fast_band_step` at `fast_raise_solve_rate`) and down when fewer than
-`lower_solve_rate`. A cohort statement that ends
-without an outcome (abandoned) leaves room for the next one fed. When the band holds no statement it moves to the
-nearest one. Statements the automation tactics alone close never enter. With `below_band_share`, that share of the
-statements fed are verified ones below the band (never above it): first ones not fed yet, at random, then ones searched
-before, least recently first; they never join a cohort.
+`lower_solve_rate`. The first band starts at `initial_band_low`, else at the easiest statement. A cohort statement
+that ends without an outcome (abandoned) leaves room for the next one fed. When the band holds no statement it moves
+to the nearest one. Statements the automation tactics alone close never enter. With `below_band_share`, that share of
+the statements fed are verified ones below the band (never above it): first ones not fed yet, at random, then ones
+searched before, least recently first; they never join a cohort.
 """
 
 import bisect
@@ -45,6 +45,8 @@ class CurriculumConfig:
     characters_weight: float = 0.0
     band_width: float = 1.0
     band_step: float = 0.5
+    # The first band's low end; None: the easiest statement's difficulty.
+    initial_band_low: float | None = None
     window: int = 50
     # The cohort's slowest searches can outlast a phase and its pause; below 1 the last ones count as unsolved.
     judged_share: float = 1.0
@@ -218,7 +220,7 @@ class Curriculum:
         if not ordered:
             return None
         if self.band_low is None:
-            self.band_low = ordered[0][0]
+            self.band_low = ordered[0][0] if self.config.initial_band_low is None else self.config.initial_band_low
         start, end = self._band_range()
         if start == end:
             self._move_to_nearest(start)
