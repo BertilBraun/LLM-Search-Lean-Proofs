@@ -2,7 +2,7 @@
 
 Kept current by the orchestrator. Details live in the linked files.
 
-**Last update:** 2026-11-14, 21:30 UTC.
+**Last update:** 2026-11-14, 21:55 UTC.
 
 ## Where we are
 
@@ -19,6 +19,26 @@ re-review.
 | Merged packages | probe v2 and evaluation tool; signal packages; token-budget phases and health; study tooling; serving resilience | reviews `_ac_` to `_al_` in `results/reviews/` |
 | Not built: expert iteration inside the loop | only after step 2, if that arm goes on | |
 | Watchdog | every 30 minutes while this session is open; a supervisor on the node restarts servers and resumes runs by itself | |
+
+## Plan for the night of 2026-11-14 (set 21:55 UTC)
+
+Everything tonight uses v0's own weights, so no weights are swapped. The node works through a chain of reviewed
+commands and does not need an agent; a watchdog checks every 30 minutes while the session is open.
+
+| Order | What | Expected |
+|---|---|---|
+| 1 | Anchor run 1 finishes (1,994 of 2,000 at 21:49 UTC) | before about 23:00 UTC |
+| 2 | Anchor run 2, same code and settings as run 1 | about 3.5-4 hours |
+| 3 | Update the node to master; check the new server scripts; time stopping and starting servers; measure the fingerprint noise | about 20 minutes |
+| 4 | Token budget T from the anchors; 200 calibration statements; calibration run; three constants | about 40 minutes |
+| 5 | Three value-free pilots, 200 statements each (the winner is chosen in the morning) | about 1 hour |
+| 6 | Reasoning at equal tokens: pilot of the no-reasoning run, then the visible run on 2,000 statements | into the morning |
+
+Not tonight: any arm, step 2's shared sampling, any run with another policy or value model, the deliberate swap test.
+Cost of the night: about $8-9 of node time.
+
+For the owner in the morning: the anchors' numbers and their run-to-run agreement; the pilots; the node decision (keep
+this one for the arms or move); the open points listed at the end of this document.
 
 ## Node stability (2026-11-14) — decision needed from the owner
 
