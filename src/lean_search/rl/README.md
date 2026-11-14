@@ -738,6 +738,18 @@ dashboard warns below `min_free_disk_gib` (50) free.
   verified pool v3 statements the automation does not close, easy (difficulty < 2), medium (< 4) or hard by the
   curriculum's difficulty estimate (the known proof's tactic count until roots are scored), disjoint, in seeded hash
   orders. The loop's curriculum never feeds either (`statements.held_out`).
+- The follow-up's probe v2 (`grpo_fixed_sets.py select-by-characters`, `experiments/configs/grpo/followup/probe_v2.toml`,
+  `fixed_sets.CharacterStrataConfig`): 2,000 statements over seven bands of the shortest known proof's characters
+  (0-499, ..., 4500+; 150 / 250 / 350 / 350 / 400 / 300 / 200), in a seeded hash order per band, after dropping the
+  old probe, gate and overfit statements, the held-out states' statements and statements whose root state is a
+  near-duplicate (MinHash, estimated Jaccard >= 0.7) of a training record's root state (`training_overlap.py`; the
+  SFT, reasoning and value data under `--training-data`); the drops per band go to `probe_v2.selection.json`.
+  `experiments/configs/grpo/followup/base.toml` holds it out beside the old sets, probes it in 12 parts and runs the
+  curriculum on characters / 100 from `initial_band_low` 10 (1,000-1,200 characters, where v0 solves about half).
+  Any checkpoint on the whole probe v2, outside a loop: `experiments/probe_evaluate.py` (`probe_evaluation.py`,
+  `followup/probe_evaluation.toml`: a policy adapter with a value adapter, value v0 or no value model, merged and
+  swapped into the running servers; one concurrency and a 7,200 s wall cap for every run; a run is rejected above 5%
+  of searches stopped on the wall clock).
 - `probe`: 16 expansions, no harvesting, no ε, with `evaluation.value_model` (the published value model in
   `loop.toml`), in slots: slot k searches
   part k % `probe_parts` (3) of the set (`fixed_targets.probe_part`: every third problem of each stratum, so each part
