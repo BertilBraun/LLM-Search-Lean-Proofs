@@ -11,27 +11,37 @@ from lean_search.rl.probe_run_list import (
     PlannedRun,
     RunList,
     RunState,
+    evaluation_config,
     interleaved,
+    missing_files,
     probe_arguments,
     read_run_list,
     record_finished,
     run_refusals,
     run_state,
+    start_mismatches,
 )
-from lean_search.rl.step1_settings import StepValue, TokenBudget, automation_constant
-from lean_search.rl.study_configs import placeholders
+from lean_search.rl.step1_settings import TokenBudget, automation_constant
+from lean_search.rl.study_configs import placeholders, resolved_toml
 from lean_search.search.records import to_json
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 FOLLOWUP = REPOSITORY / "experiments/configs/grpo/followup"
 STEP1 = FOLLOWUP / "step1"
 SEARCH = REPOSITORY / "experiments/configs/grpo/search/visible_student_v2.toml"
-STUDY_CONCURRENCY = 56
+PROBE_EVALUATION = FOLLOWUP / "probe_evaluation.toml"
 SETTINGS = [setting.value for setting in StepLogProbability]
+RUN_LISTS = sorted(STEP1.glob("runs_*.toml"))
+# Every evaluation config of the study: the probe's and those over it.
+STUDY_EVALUATIONS = [PROBE_EVALUATION, FOLLOWUP / "gate_evaluation.toml", *sorted(STEP1.glob("*_evaluation.toml"))]
+STUDY_EVALUATIONS += sorted(STEP1.glob("value_free_*.toml"))
 
 
 def toml(path: Path) -> dict:
     return tomllib.loads(path.read_text(encoding="utf-8"))
+
+
+STUDY_CONCURRENCY = toml(PROBE_EVALUATION)["probe"]["concurrency"]
 
 
 def planned(name: str, **settings: object) -> PlannedRun:
@@ -68,10 +78,20 @@ def test_placeholders_are_found_in_nested_tables_and_arrays_of_tables() -> None:
     assert placeholders(table) == ["a.b", "d[0].e"]
 
 
+def test_a_config_over_a_base_changes_only_its_own_keys(tmp_path: Path) -> None:
+    (tmp_path / "base.toml").write_text("a = 1\n[t]\nb = 2\nc = 3\n", encoding="utf-8")
+    (tmp_path / "over.toml").write_text('base = "base.toml"\n[t]\nc = 4\n', encoding="utf-8")
+    assert resolved_toml(tmp_path / "over.toml", tmp_path) == {"a": 1, "t": {"b": 2, "c": 4}}
+
+
 def write_repository(root: Path, concurrency: int = STUDY_CONCURRENCY, search: str = "") -> Path:
     (root / "search.toml").write_text(search or "[search]\nmax_expansions = 16\n", encoding="utf-8")
-    evaluation = f'loop_config = "loop.toml"\nsearch_config = "search.toml"\n[probe]\nconcurrency = {concurrency}\n'
+    evaluation = (
+        'loop_config = "loop.toml"\nsearch_config = "search.toml"\nprobe_set = "probe.jsonl"\n'
+        f"[probe]\nconcurrency = {concurrency}\nmax_wall_seconds = 7200.0\n"
+    )
     (root / "evaluation.toml").write_text(evaluation, encoding="utf-8")
+    (root / "loop.toml").write_text('[initial]\nvalue_adapter = "/adapters/value_v0"\n', encoding="utf-8")
     return root
 
 
@@ -80,9 +100,11 @@ def write_repository(root: Path, concurrency: int = STUDY_CONCURRENCY, search: s
     [
         (planned("r", config="evaluation.toml", value="PLACEHOLDER: a path"), STUDY_CONCURRENCY, ""),
         (planned("r", config="evaluation.toml"), STUDY_CONCURRENCY, '[search]\nmax_generated_tokens = "PLACEHOLDER"\n'),
-        (planned("r", config="evaluation.toml"), 64, ""),
+        (planned("r", config="evaluation.toml"), 56, ""),
+        (planned("r", config="evaluation.toml", value="/adapters/value"), STUDY_CONCURRENCY, ""),
+        (planned("r", config="evaluation.toml", anchor=True, problems=200), STUDY_CONCURRENCY, ""),
     ],
-    ids=["placeholder path", "placeholder in the search config", "another concurrency"],
+    ids=["placeholder path", "placeholder in the search config", "another concurrency", "no value version", "anchor"],
 )
 def test_a_run_that_is_not_ready_is_refused(tmp_path: Path, run: PlannedRun, concurrency: int, search: str) -> None:
     assert run_refusals(run, write_repository(tmp_path, concurrency, search), STUDY_CONCURRENCY)
@@ -97,7 +119,12 @@ def test_a_ready_run_is_not_refused(tmp_path: Path) -> None:
     assert run_refusals(planned("r", config="evaluation.toml"), write_repository(tmp_path), STUDY_CONCURRENCY) == []
 
 
-@pytest.mark.parametrize("path", sorted(STEP1.glob("runs_*.toml")), ids=lambda path: path.name)
+def test_a_run_without_its_adapter_or_probe_set_on_the_node_is_refused(tmp_path: Path) -> None:
+    run = planned("r", config="evaluation.toml", policy_adapter=str(tmp_path / "missing"))
+    assert len(missing_files(run, write_repository(tmp_path), tmp_path)) == 2
+
+
+@pytest.mark.parametrize("path", RUN_LISTS, ids=lambda path: path.name)
 def test_every_step1_run_list_reads(path: Path) -> None:
     assert read_run_list(path).runs
 
@@ -114,7 +141,6 @@ def test_the_runs_that_need_nothing_measured_are_ready(name: str) -> None:
         "runs_old_value.toml",
         "runs_value_free_pilots.toml",
         "runs_value_free_full.toml",
-        "runs_reasoning_pilot.toml",
         "runs_reasoning.toml",
         "runs_optional_v35.toml",
     ],
@@ -128,30 +154,70 @@ def test_both_anchor_runs_are_the_ratings_anchor() -> None:
     assert all(run.anchor for run in read_run_list(STEP1 / "runs_anchor.toml").runs)
 
 
+def test_run_4s_pilot_comes_before_runs_3_and_4() -> None:
+    runs = read_run_list(STEP1 / "runs_reasoning.toml").runs
+    assert [run.problems for run in runs] == [200, 0, 0]
+
+
 def test_the_value_free_pilots_try_every_step_log_probability_setting() -> None:
     runs = read_run_list(STEP1 / "runs_value_free_pilots.toml").runs
-    settings = [toml(REPOSITORY / run.config)["value_free_priority"]["step_log_probability"] for run in runs]
+    settings = [evaluation_config(run, REPOSITORY)["value_free_priority"]["step_log_probability"] for run in runs]
     assert (sorted(settings), {run.problems for run in runs}) == (sorted(SETTINGS), {200})
 
 
-@pytest.mark.parametrize("setting", SETTINGS)
-def test_a_value_free_config_differs_from_the_probes_only_in_its_value_free_priority(setting: str) -> None:
-    changed, probe = toml(STEP1 / f"value_free_{setting}.toml"), toml(FOLLOWUP / "probe_evaluation.toml")
-    assert {**changed, "value_free_priority": probe["value_free_priority"]} == probe
+def every_planned_run() -> list[PlannedRun]:
+    return [run for path in RUN_LISTS for run in read_run_list(path).runs]
+
+
+def test_every_run_on_a_value_free_config_has_no_value_model() -> None:
+    assert {run.value for run in every_planned_run() if "value_free_" in run.config} == {"none"}
+
+
+def test_every_run_without_a_value_model_searches_on_a_value_free_config() -> None:
+    assert all("value_free_" in run.config for run in every_planned_run() if run.value == "none")
+
+
+@pytest.mark.parametrize("path", STUDY_EVALUATIONS, ids=lambda path: path.name)
+def test_every_study_evaluation_config_resolves_to_the_one_probe_concurrency(path: Path) -> None:
+    assert resolved_toml(path, REPOSITORY)["probe"]["concurrency"] == STUDY_CONCURRENCY
+
+
+@pytest.mark.parametrize("path", STUDY_EVALUATIONS[1:], ids=lambda path: path.name)
+def test_no_other_study_evaluation_config_sets_a_probe_table_of_its_own(path: Path) -> None:
+    assert (toml(path)["base"], "probe" in toml(path)) == (
+        "experiments/configs/grpo/followup/probe_evaluation.toml",
+        False,
+    )
 
 
 @pytest.mark.parametrize("setting", SETTINGS)
-def test_a_calibration_config_searches_one_expansion_of_the_calibration_statements(setting: str) -> None:
-    changed, probe = toml(STEP1 / f"calibration_{setting}.toml"), toml(FOLLOWUP / "probe_evaluation.toml")
-    changed |= {"probe_set": probe["probe_set"], "output": probe["output"]}
-    changed["probe"] = {**changed["probe"], "max_expansions": probe["probe"]["max_expansions"]}
-    changed["value_free_priority"] = probe["value_free_priority"]
-    assert changed == probe
+def test_a_value_free_config_changes_only_the_value_free_priority(setting: str) -> None:
+    assert set(toml(STEP1 / f"value_free_{setting}.toml")) == {"base", "value_free_priority"}
 
 
 @pytest.mark.parametrize("setting", SETTINGS)
-def test_a_calibration_config_searches_with_its_setting(setting: str) -> None:
-    assert toml(STEP1 / f"calibration_{setting}.toml")["value_free_priority"]["step_log_probability"] == setting
+def test_a_value_free_config_carries_a_constant_for_its_own_setting_only(setting: str) -> None:
+    priority = resolved_toml(STEP1 / f"value_free_{setting}.toml", REPOSITORY)["value_free_priority"]
+    constants = {constant["step_log_probability"] for constant in priority["automation_constants"]}
+    assert (priority["step_log_probability"], constants) == (setting, {setting})
+
+
+def test_the_calibration_run_is_the_probe_evaluation_on_the_calibration_statements() -> None:
+    config = toml(STEP1 / "calibration_evaluation.toml")
+    assert (config["probe_set"], config["output"]) == (
+        "grpo/fixed_sets/calibration_200.jsonl",
+        "calibration_evaluations",
+    )
+
+
+def test_the_calibration_run_searches_with_value_v0() -> None:
+    (run,) = read_run_list(STEP1 / "runs_calibration.toml").runs
+    assert (run.value, run.config) == ("v0", "experiments/configs/grpo/followup/step1/calibration_evaluation.toml")
+
+
+def test_the_gate_evaluation_is_the_probe_evaluation_on_the_gate_set_in_its_own_output() -> None:
+    gate, probe = resolved_toml(FOLLOWUP / "gate_evaluation.toml", REPOSITORY), toml(PROBE_EVALUATION)
+    assert {**gate, "probe_set": probe["probe_set"], "output": probe["output"]} == probe
 
 
 def test_the_calibration_draws_200_statements_outside_probe_v2_and_its_twins() -> None:
@@ -192,23 +258,46 @@ def test_the_token_cap_is_16_times_the_tokens_per_expansion() -> None:
     assert TokenBudget(searches=2, expansions=30, generated_tokens=51_000).cap(16) == 27_200
 
 
-def test_the_automation_constant_is_the_median_over_samples() -> None:
-    values = [StepValue(-1.0, 1), StepValue(-5.0, 3)]
-    assert automation_constant(StepLogProbability.BLOCK_SUM, values).constant == -5.0
+def test_the_automation_constant_is_the_median_over_edges() -> None:
+    assert automation_constant(StepLogProbability.BLOCK_SUM, [-1.0, -5.0, -6.0]).constant == -5.0
 
 
 def test_a_calibration_without_progress_is_refused() -> None:
-    with pytest.raises(ValueError, match="No sample made progress"):
+    with pytest.raises(ValueError, match="No policy step made progress"):
         automation_constant(StepLogProbability.BLOCK_MEAN, [])
+
+
+def start(**changes: object) -> ProbeRunStart:
+    checkpoint = ProbeCheckpoint("v0", 0, "/adapters/v0", "digest", "/adapters/value_v0", "value digest", 0, 0, 0)
+    started = ProbeRunStart(
+        "r identity", False, checkpoint, "search.toml", "sha", STUDY_CONCURRENCY, 7200.0, 16, "probe.jsonl", "sha"
+    )
+    return dataclasses.replace(started, **changes)
+
+
+def test_a_record_matching_the_list_has_no_mismatch(tmp_path: Path) -> None:
+    assert start_mismatches(planned("r", config="evaluation.toml"), start(), write_repository(tmp_path)) == []
+
+
+@pytest.mark.parametrize(
+    "run",
+    [
+        planned("r", config="evaluation.toml", policy_adapter="/adapters/v1"),
+        planned("r", config="evaluation.toml", value="none"),
+        planned("r", config="evaluation.toml", problems=200),
+        planned("r", config="evaluation.toml", search_config="other.toml"),
+    ],
+    ids=["another policy", "another value model", "a pilot", "another search config"],
+)
+def test_a_run_recorded_with_other_settings_than_the_list_asks_is_a_mismatch(tmp_path: Path, run: PlannedRun) -> None:
+    assert start_mismatches(run, start(), write_repository(tmp_path))
 
 
 def finished(root: Path, name: str, accepted: bool) -> PlannedRun:
     directory = root / "probe_evaluations" / f"probe_{name}"
     directory.mkdir(parents=True)
-    checkpoint = ProbeCheckpoint("v0", 0, "/adapters/v0", "digest", "", "", 0, 0, -1)
-    start = ProbeRunStart(f"{name} identity", False, checkpoint, "s.toml", "sha", 56, 7200.0, 16, "probe.jsonl", "sha")
     environment = RunEnvironment("node", "lean", "vllm", "torch")
-    record = ProbeRunRecord(start, environment, 2000, 700, 4, 0.002, (), 0.01, accepted)
+    record = ProbeRunRecord(start(identity=f"{name} identity"), environment, 2000, 700, 4, 0.002, (), 0.01, accepted)
     (directory / "run.json").write_text(to_json(record), encoding="utf-8")
     (directory / "summary.json").write_text('{"wall_seconds": 18000.0}', encoding="utf-8")
     (root / "evaluation.toml").write_text('output = "probe_evaluations"\n', encoding="utf-8")

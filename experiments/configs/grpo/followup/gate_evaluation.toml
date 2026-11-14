@@ -3,40 +3,10 @@
 # experiments/rank_learning_rates.py). probe_evaluation.toml on the gate set, into its own output so the probe rating
 # never pools a gate run. Optional: about a fifth of a probe run each (~1 h), so the 13 step-2 variants and v0 cost
 # ~11-17 node hours (~$10-15); without them the lowest tied rate is chosen.
-#   python experiments/probe_evaluate.py --config experiments/configs/grpo/followup/gate_evaluation.toml \
+#   BACKGROUND_CPUS=52 deployment/background.sh python experiments/probe_evaluate.py \
+#       --config experiments/configs/grpo/followup/gate_evaluation.toml \
 #       --name step2_A_5e-5 --arm step2_A_5e-5 --phase 1 --policy-adapter <adapter> --value v0
-loop_config = "experiments/configs/grpo/followup/base.toml"
-search_config = "experiments/configs/grpo/search/visible_student_v2.toml"
+# (or a run list through deployment/probe_runs.sh).
+base = "experiments/configs/grpo/followup/probe_evaluation.toml"
 probe_set = "grpo/fixed_sets/gate.jsonl"
-# Accepted only with fewer than 1% of the searches stopped on the wall clock (DESIGN.md, "Evaluation"); a rejected run
-# is repeated with the cap doubled, and every run it is compared with at the same cap.
-max_wall_clock_stop_share = 0.01
 output = "gate_evaluations"
-
-[probe]
-max_expansions = 16
-# Per statement, only an emergency stop.
-max_wall_seconds = 7200.0
-# THROUGHPUT TEST: a placeholder; the throughput test sets one probe concurrency for every run of the study.
-concurrency = 56
-
-# --value none: the value-free search (DESIGN.md, Q4): best-first by the path's mean step log-probability per block
-# (row 2's experiments/configs/phase2_sft_v2_search.toml), each step's value the sum over its Lean block's tokens
-# (policy.step_log_probability, policy/README.md "Candidate log-probability"). The automation constant must be on the
-# same scale, so each setting has its own; a run refuses a setting without one or with a placeholder (calibrated =
-# false) until the calibration on 200 pool statements outside every held-out set fills it in.
-[value_free_priority]
-length_exponent = 1.0
-step_log_probability = "block_sum"
-
-# Row 2's: the median whole-completion log-probability of the SFT v2 probe samples that made progress (-2.79).
-[[value_free_priority.automation_constants]]
-step_log_probability = "completion"
-automation_log_probability = -2.8
-calibrated = true
-
-# PLACEHOLDER: review AF's rule on the old run's trees (the median block sum of samples that made progress).
-[[value_free_priority.automation_constants]]
-step_log_probability = "block_sum"
-automation_log_probability = -5.65
-calibrated = false

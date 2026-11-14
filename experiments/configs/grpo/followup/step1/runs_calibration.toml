@@ -1,32 +1,16 @@
-# The automation constant's calibration (DESIGN.md, "Follow-up study: controlled arms", "Step 1", Q4): v0 without a
-# value model, one expansion at the root of the 200 calibration statements (calibration_statements.toml), once per
-# step_log_probability setting; then
-#   python experiments/followup_step1.py automation-constant \
-#       $LEAN_SEARCH_RUNS/calibration_evaluations/probe_calibration_{completion,block_sum,block_mean}
+# The automation constants' calibration (DESIGN.md, "Follow-up study: controlled arms", "Step 1", Q4): one ordinary
+# run, v0 with value v0, visible, 16 expansions, on the 200 calibration statements (calibration_statements.toml draws
+# them; calibration_evaluation.toml). Then
+#   HF_HUB_OFFLINE=1 python experiments/followup_step1.py automation-constant \
+#       $LEAN_SEARCH_RUNS/calibration_evaluations/probe_calibration_v0_value_v0
 # prints each setting's [[value_free_priority.automation_constants]] entry, calibrated, for value_free_<setting>.toml.
+#   BACKGROUND_CPUS=52 PROBE_CONCURRENCY=84 deployment/probe_runs.sh \
+#       experiments/configs/grpo/followup/step1/runs_calibration.toml
 [[runs]]
-name = "calibration_completion"
+name = "calibration_v0_value_v0"
 arm = "v0"
 phase = 0
 policy_adapter = "/workspace/checkpoints/data_rewrite_sft_numbered/adapter"
-value = "none"
-config = "experiments/configs/grpo/followup/step1/calibration_completion.toml"
-purpose = "the automation constant for completion"
-
-[[runs]]
-name = "calibration_block_sum"
-arm = "v0"
-phase = 0
-policy_adapter = "/workspace/checkpoints/data_rewrite_sft_numbered/adapter"
-value = "none"
-config = "experiments/configs/grpo/followup/step1/calibration_block_sum.toml"
-purpose = "the automation constant for block_sum"
-
-[[runs]]
-name = "calibration_block_mean"
-arm = "v0"
-phase = 0
-policy_adapter = "/workspace/checkpoints/data_rewrite_sft_numbered/adapter"
-value = "none"
-config = "experiments/configs/grpo/followup/step1/calibration_block_mean.toml"
-purpose = "the automation constant for block_mean"
+value = "v0"
+config = "experiments/configs/grpo/followup/step1/calibration_evaluation.toml"
+purpose = "every depth's step values for the three settings' automation constants"

@@ -1,7 +1,21 @@
-# Step 1's runs 3 and 4 (DESIGN.md, "Follow-up study: controlled arms", "Step 1", Q3): v0 with value v0 at equal
-# generated tokens T, visible against no reasoning, depth_weight 0 in both; run 4 is compared with run 3 only
-# (probe_compare.py pair --across-search-modes), never with runs 1-2. Run 3 against run 1 shows what depth_weight 0
-# cost the tuned visible search (a caveat on Q3 at 3 or more points).
+# Step 1's run 4 pilot, then runs 3 and 4 (DESIGN.md, "Follow-up study: controlled arms", "Step 1", Q3): v0 with value
+# v0 at equal generated tokens T, visible against no reasoning, depth_weight 0 in both. The pilot (no reasoning, the
+# first 200 probe statements) comes first and checks the wall-clock stops before ~10-25 h of run 4: a rejected pilot
+# stops the list (exit 3), and runs 3 and 4 then need an evaluation config with the wall cap doubled (they share one
+# cap). Run 4 is compared with run 3 only (probe_compare.py pair --across-search-modes), never with runs 1-2; run 3
+# against run 1 shows what depth_weight 0 cost the tuned visible search (a caveat on Q3 at 3 or more points).
+#   BACKGROUND_CPUS=52 PROBE_CONCURRENCY=84 deployment/probe_runs.sh \
+#       experiments/configs/grpo/followup/step1/runs_reasoning.toml
+[[runs]]
+name = "step1_run4_pilot_no_reasoning_T"
+arm = "v0"
+phase = 0
+policy_adapter = "/workspace/checkpoints/data_rewrite_sft_numbered/adapter"
+value = "v0"
+search_config = "experiments/configs/grpo/followup/step1/token_capped_no_reasoning.toml"
+problems = 200
+purpose = "wall-clock stops of the no-reasoning search at T"
+
 [[runs]]
 name = "step1_run3_visible_T"
 arm = "v0"
