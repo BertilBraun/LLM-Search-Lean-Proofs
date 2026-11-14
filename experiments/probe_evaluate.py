@@ -5,11 +5,13 @@
         --policy-adapter /workspace/checkpoints/data_rewrite_sft_numbered/adapter --value v0 \
         [--search-config experiments/configs/grpo/search/<other>.toml] [--problems 200] [--keep-merge]
     --value none             no value model: best-first on the path's mean step log-probability per block (the
-                             config's [value_free_priority]; the search config's other priority settings kept)
+                             config's [value_free_priority]: the policy's step log-probability and its calibrated
+                             automation constant; refused for a placeholder; other priority settings kept)
     --value v0               the loop config's [initial] value_adapter (value version 0)
     --value PATH             a value adapter (give --value-version, the rating's label)
-    --anchor                 the rating's anchor: v0's policy with value v0 at the standard settings (no
-                             --search-config, no --problems); probe_rating rates every run against it
+    --anchor                 the rating's anchor: the loop config's starting policy and value adapters (checked by
+                             content) at the standard settings (no --search-config, no --problems); probe_rating
+                             rates every run against it
 
 The budget rule: a run given --search-config searches at that file's own max_expansions (even when it names the
 config's default file), every other run at the config's [probe] max_expansions.
@@ -55,6 +57,7 @@ from lean_search.rl.probe_evaluation import (
     ProbeRunStart,
     ServersDownError,
     adapter_digest,
+    anchor_problem,
     checkpoint_merges,
     default_value_version,
     discard_spoiled_results,
@@ -117,16 +120,12 @@ def checkpoint(arguments: argparse.Namespace, loop: GrpoLoopConfig) -> ProbeChec
     value_version = arguments.value_version if value_version is None else value_version
     if value_version is None:
         raise SystemExit("--value with an adapter's path needs --value-version.")
-    if arguments.anchor and (
-        arguments.value != "v0" or arguments.phase or arguments.problems or arguments.search_config
-    ):
-        raise SystemExit("--anchor is v0's policy with --value v0 at phase 0, without --search-config or --problems.")
     value_adapter = resolve_value_adapter(arguments.value, loop.initial.value_adapter)
     adapters = [arguments.policy_adapter, *([Path(value_adapter)] if value_adapter else [])]
     missing = [str(adapter) for adapter in adapters if not adapter.is_dir()]
     if missing:
         raise SystemExit(f"No adapter directory at {missing}.")
-    return ProbeCheckpoint(
+    chosen = ProbeCheckpoint(
         arm=arguments.arm,
         phase=arguments.phase,
         policy_adapter=str(arguments.policy_adapter.absolute()),
@@ -137,6 +136,16 @@ def checkpoint(arguments: argparse.Namespace, loop: GrpoLoopConfig) -> ProbeChec
         policy_version=arguments.phase,
         value_version=value_version,
     )
+    if arguments.anchor:
+        problem = anchor_problem(
+            chosen,
+            adapter_digest(Path(loop.initial.policy_adapter)),
+            adapter_digest(Path(loop.initial.value_adapter)),
+            arguments.search_config is not None,
+        )
+        if problem is not None:
+            raise SystemExit(f"--anchor refused: {problem}.")
+    return chosen
 
 
 def refuse_while_loops_run() -> None:
@@ -160,10 +169,15 @@ async def evaluate(arguments: argparse.Namespace) -> int:
     search_config = str(arguments.search_config or config.search_config)
     template = load_run_config(REPOSITORY_DIRECTORY / search_config)
     value_free = None if chosen.value_adapter else config.value_free_priority
-    run_config = probe_run_config(template, loop.serving, config.probe, value_free, arguments.search_config is not None)
+    try:
+        run_config = probe_run_config(
+            template, loop.serving, config.probe, value_free, arguments.search_config is not None
+        )
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
     digest = run_config_sha256(run_config)
     start = ProbeRunStart(
-        identity=run_identity(chosen, digest, run_config.search.max_expansions, run_config.search.max_wall_seconds),
+        identity=run_identity(chosen, run_config),
         anchor=arguments.anchor,
         checkpoint=chosen,
         search_config=search_config,

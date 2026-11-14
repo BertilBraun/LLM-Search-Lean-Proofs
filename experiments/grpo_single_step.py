@@ -34,6 +34,7 @@ import transformers
 
 from lean_search.policy.adapters import merge_adapter
 from lean_search.policy.server_control import is_sleeping, publish_weights, release_gpu, restore_gpu
+from lean_search.policy.serving_lock import exit_while_served
 from lean_search.reasoning.records import read_records
 from lean_search.reasoning.states import ReasoningState
 from lean_search.rl.single_step import (
@@ -237,6 +238,7 @@ def main() -> None:
     config = load_config(arguments.config)
     match arguments.command:
         case "run":
+            exit_while_served("grpo_single_step.py")
             (arm,) = (arm for arm in config.arms if arm.name == arguments.arm)
             asyncio.run(run_arm(config, arm))
         case "report":

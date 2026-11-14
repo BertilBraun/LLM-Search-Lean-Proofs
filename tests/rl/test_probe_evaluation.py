@@ -14,11 +14,19 @@ from fake_vllm import FakeVllmServer
 
 from lean_search.data import Problem, Split
 from lean_search.expert_iteration.loop_config import ServerEndpoint, ServingConfig
-from lean_search.policy.serving_lock import ServingBusyError, lock_holder, serving_lock
+from lean_search.policy.config import StepLogProbability
+from lean_search.policy.serving_lock import (
+    ServingBusyError,
+    exit_while_served,
+    lock_holder,
+    serving_lock,
+    serving_lock_path,
+)
 from lean_search.rl.evaluation import EvaluationKind, EvaluationProblem, EvaluationSummary
 from lean_search.rl.loop_config import EvaluationTarget, load_loop_config
 from lean_search.rl.probe_evaluation import (
     NO_VALUE_VERSION,
+    AutomationConstant,
     ProbeCheckpoint,
     ProbeEvaluationConfig,
     ProbeRunStart,
@@ -27,6 +35,7 @@ from lean_search.rl.probe_evaluation import (
     StratumStops,
     ValueFreePriority,
     adapter_digest,
+    anchor_problem,
     default_value_version,
     discard_spoiled_results,
     keep_merges,
@@ -42,7 +51,7 @@ from lean_search.rl.probe_evaluation import (
     start_session,
     stops_by_stratum,
 )
-from lean_search.search import Accounting, PriorityKind, SearchResult, StopReason, load_run_config
+from lean_search.search import Accounting, PriorityKind, RunConfig, SearchResult, StopReason, load_run_config
 from lean_search.search.records import from_json_object, to_json
 
 REPOSITORY_DIRECTORY = Path(__file__).resolve().parents[2]
@@ -51,7 +60,12 @@ CONFIG = from_json_object(ProbeEvaluationConfig, tomllib.loads(CONFIG_PATH.read_
 LOOP = load_loop_config(REPOSITORY_DIRECTORY / CONFIG.loop_config)
 TEMPLATE = load_run_config(REPOSITORY_DIRECTORY / CONFIG.search_config)
 TARGET = EvaluationTarget(16, 7200.0, 32)
-VALUE_FREE = ValueFreePriority(1.0, -2.8)
+ROW_2 = ValueFreePriority(
+    1.0, StepLogProbability.COMPLETION, (AutomationConstant(StepLogProbability.COMPLETION, -2.8, calibrated=True),)
+)
+BLOCK_SUM = ValueFreePriority(
+    1.0, StepLogProbability.BLOCK_SUM, (AutomationConstant(StepLogProbability.BLOCK_SUM, -5.0, calibrated=True),)
+)
 
 
 def checkpoint(
@@ -60,8 +74,15 @@ def checkpoint(
     return ProbeCheckpoint(arm, 0, "/policy", policy_digest, value_adapter, value_digest, 0, 0, 0)
 
 
+def searched(
+    expansions: int = 16, wall_seconds: float = 7200.0, value_free: ValueFreePriority | None = None
+) -> RunConfig:
+    target = EvaluationTarget(expansions, wall_seconds, 32)
+    return probe_run_config(TEMPLATE, LOOP.serving, target, value_free, False)
+
+
 START = ProbeRunStart(
-    run_identity(checkpoint(), "c" * 64, 16, 7200.0),
+    run_identity(checkpoint(), searched()),
     False,
     checkpoint(),
     "search.toml",
@@ -90,22 +111,54 @@ def test_the_value_choice_has_a_default_label_unless_given_by_path(value: str, v
 
 
 def test_without_a_value_model_the_search_asks_no_value_server() -> None:
-    assert probe_run_config(TEMPLATE, LOOP.serving, TARGET, VALUE_FREE, False).value.model == ""
+    assert probe_run_config(TEMPLATE, LOOP.serving, TARGET, ROW_2, False).value.model == ""
 
 
-def test_without_a_value_model_the_search_takes_the_configured_value_free_priority() -> None:
-    priority = probe_run_config(TEMPLATE, LOOP.serving, TARGET, ValueFreePriority(1.0, -2.5), False).priority
+def test_completion_steps_with_minus_2_8_reproduce_row_2s_search() -> None:
+    config = probe_run_config(TEMPLATE, LOOP.serving, TARGET, ROW_2, False)
     expected = dataclasses.replace(
         TEMPLATE.priority,
         kind=PriorityKind.CUMULATIVE_LOG_PROBABILITY,
         length_exponent=1.0,
-        automation_log_probability=-2.5,
+        automation_log_probability=-2.8,
     )
-    assert priority == expected
+    assert (config.priority, config.policy.step_log_probability) == (expected, StepLogProbability.COMPLETION)
 
 
-def test_the_shipped_value_free_priority_is_row_2s() -> None:
-    assert CONFIG.value_free_priority == ValueFreePriority(length_exponent=1.0, automation_log_probability=-2.8)
+def test_a_value_free_run_carries_its_step_log_probability_into_the_policy() -> None:
+    config = probe_run_config(TEMPLATE, LOOP.serving, TARGET, BLOCK_SUM, False)
+    assert config.policy.step_log_probability == StepLogProbability.BLOCK_SUM
+
+
+def test_a_value_free_run_takes_the_automation_constant_of_its_setting() -> None:
+    assert (
+        probe_run_config(TEMPLATE, LOOP.serving, TARGET, BLOCK_SUM, False).priority.automation_log_probability == -5.0
+    )
+
+
+def test_a_setting_without_its_own_automation_constant_is_refused() -> None:
+    without = dataclasses.replace(ROW_2, step_log_probability=StepLogProbability.BLOCK_MEAN)
+    with pytest.raises(ValueError, match="No automation constant"):
+        probe_run_config(TEMPLATE, LOOP.serving, TARGET, without, False)
+
+
+def test_a_placeholder_automation_constant_is_refused() -> None:
+    placeholder = ValueFreePriority(
+        1.0, StepLogProbability.BLOCK_SUM, (AutomationConstant(StepLogProbability.BLOCK_SUM, -5.65, calibrated=False),)
+    )
+    with pytest.raises(ValueError, match="placeholder"):
+        probe_run_config(TEMPLATE, LOOP.serving, TARGET, placeholder, False)
+
+
+def test_the_shipped_value_free_search_waits_for_its_block_sum_calibration() -> None:
+    with pytest.raises(ValueError, match="placeholder"):
+        probe_run_config(TEMPLATE, LOOP.serving, TARGET, CONFIG.value_free_priority, False)
+
+
+def test_the_identity_names_the_step_log_probability() -> None:
+    assert "steps block_sum" in run_identity(
+        checkpoint(value_adapter="", value_digest=""), searched(value_free=BLOCK_SUM)
+    )
 
 
 def test_with_a_value_model_the_search_asks_the_value_servers() -> None:
@@ -142,18 +195,32 @@ def test_a_run_lies_where_the_probe_rating_looks(tmp_path: Path) -> None:
     ids=["another arm", "another policy", "no value model"],
 )
 def test_checkpoints_that_differ_have_different_identities(other: ProbeCheckpoint) -> None:
-    assert run_identity(other, "c" * 64, 16, 7200.0) != run_identity(checkpoint(), "c" * 64, 16, 7200.0)
+    assert run_identity(other, searched()) != START.identity
 
 
 @pytest.mark.parametrize(
-    ("digest", "expansions", "wall_seconds"),
-    [("d" * 64, 16, 7200.0), ("c" * 64, 1024, 7200.0), ("c" * 64, 16, 14400.0)],
-    ids=["another search config", "another budget", "a doubled cap"],
+    "config",
+    [searched(expansions=1024), searched(wall_seconds=14400.0), searched(value_free=ROW_2)],
+    ids=["another budget", "a doubled cap", "another search"],
 )
-def test_one_checkpoint_searched_otherwise_has_another_identity(
-    digest: str, expansions: int, wall_seconds: float
+def test_one_checkpoint_searched_otherwise_has_another_identity(config: RunConfig) -> None:
+    assert run_identity(checkpoint(), config) != START.identity
+
+
+@pytest.mark.parametrize(
+    ("policy_digest", "value_digest", "problems"),
+    [("q" * 64, "v" * 64, 0), ("p" * 64, "w" * 64, 0), ("p" * 64, "v" * 64, 200)],
+    ids=["another policy", "another value model", "a pilot"],
+)
+def test_only_v0_with_value_v0_on_the_whole_probe_can_be_the_anchor(
+    policy_digest: str, value_digest: str, problems: int
 ) -> None:
-    assert run_identity(checkpoint(), digest, expansions, wall_seconds) != START.identity
+    other = dataclasses.replace(checkpoint(policy_digest=policy_digest, value_digest=value_digest), problems=problems)
+    assert anchor_problem(other, "p" * 64, "v" * 64, own_search=False) is not None
+
+
+def test_v0_with_value_v0_at_the_standard_settings_is_the_anchor() -> None:
+    assert anchor_problem(checkpoint(), "p" * 64, "v" * 64, own_search=False) is None
 
 
 def test_another_file_beside_the_adapter_leaves_its_digest(tmp_path: Path) -> None:
@@ -231,6 +298,14 @@ def test_an_empty_loop_pid_is_reported(tmp_path: Path) -> None:
 def test_a_held_lock_names_its_holder(tmp_path: Path) -> None:
     with serving_lock(tmp_path / "serving.lock"):
         assert lock_holder(tmp_path / "serving.lock") == str(os.getpid())
+
+
+def test_a_command_that_swaps_weights_exits_while_the_node_lock_is_held(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LEAN_SEARCH_CHECKPOINTS", str(tmp_path))
+    with serving_lock(serving_lock_path(tmp_path)), pytest.raises(SystemExit, match="holds the model servers"):
+        exit_while_served("publish_weights.py")
 
 
 def test_a_released_lock_has_no_holder(tmp_path: Path) -> None:
