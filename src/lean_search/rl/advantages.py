@@ -15,7 +15,7 @@ class CreditMode(StrEnum):
     PER_TACTIC = "per_tactic"
     # Every sampled token gets the sample's score minus the baseline (the single-step comparison).
     SEQUENCE = "sequence"
-    # Every sampled token gets r minus the group's mean r, r = 1 when the sample advances on the proof graph.
+    # Every sampled token gets r minus the group's mean r, r = 1 when the sample reaches the proof graph.
     PROOF_SUCCESS = "proof_success"
 
 
@@ -28,7 +28,7 @@ class SampleAdvantages:
     tactics: tuple[float | None, ...]
     # The closing fence and end of turn: 0 after a complete block (stopping keeps the state reached), else None.
     closing: float | None
-    # r minus the group's proof-success baseline (`GroupSample.advances_on_proof_graph`).
+    # r minus the group's proof-success baseline (`GroupSample.reaches_proof_graph`).
     proof_success: float
 
 
@@ -38,7 +38,7 @@ class GroupAdvantages:
     baseline: float | None
     # The same mean of their anchors' rewards: a later tactic's progress is not charged to the first.
     first_tactic_baseline: float | None
-    # The multiplicity-weighted share of samples advancing on the proof graph.
+    # The multiplicity-weighted share of samples reaching the proof graph.
     proof_success_baseline: float
     samples: tuple[SampleAdvantages, ...]
     # Multiplicity-weighted sums of |global part| and |local part| over the tactic advantages.
@@ -86,7 +86,7 @@ def sample_advantages(
         None if score is None or baseline is None else score - baseline.total,
         tuple(None if parts is None else parts.total for parts in tactics),
         0.0 if sample.complete else None,
-        float(sample.advances_on_proof_graph) - proof_success_baseline,
+        float(sample.reaches_proof_graph) - proof_success_baseline,
     )
 
 
@@ -98,8 +98,7 @@ def group_advantages(group: PolicyGroup) -> GroupAdvantages:
         baseline = weighted_mean([sample.score_parts for sample in scored], weights)
         first_tactic_baseline = weighted_mean([sample.anchor_parts for sample in scored], weights)
     proof_success_baseline = (
-        sum(float(sample.advances_on_proof_graph) * sample.multiplicity for sample in group.samples)
-        / group.sample_count
+        sum(float(sample.reaches_proof_graph) * sample.multiplicity for sample in group.samples) / group.sample_count
     )
     advantages = [
         (parts, sample.multiplicity)

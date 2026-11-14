@@ -116,12 +116,12 @@ class GroupSample:
         return None if parts is None else parts.total
 
     @property
-    def advances_on_proof_graph(self) -> bool:
-        """Proof-success credit's r = 1: a forward edge (no failure, no-op or return to an ancestor) whose last tactic
-        reaching a state with a reward is on the proof graph. No-progress and redundant tactics reach none, so one after
-        progress keeps it, one alone is no success; failing tactics after it are free, leaving the graph is not."""
-        reached = [tactic.label for tactic in self.tactics if tactic.label in REACHED_STATE_LABELS]
-        return self.kind.is_forward and reached[-1:] == [TacticLabel.PROOF_GRAPH]
+    def reaches_proof_graph(self) -> bool:
+        """Proof-success credit's r = 1: a forward edge (no failure, unparsed sample, no-op, return to an ancestor or
+        unverified proof) with a tactic of its kept prefix labelled proof graph. Whatever follows that state, a valid
+        continuation off the graph or a failing tactic, is neither charged nor credited, as in per-tactic credit's
+        global part; a redundant step stays redundant on the graph too."""
+        return self.kind.is_forward and any(tactic.label == TacticLabel.PROOF_GRAPH for tactic in self.tactics)
 
     @property
     def complete(self) -> bool:
