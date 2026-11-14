@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from lean_search.expert_iteration.loop_config import SwapMethod
 from lean_search.policy.config import FeedbackConfig
 from lean_search.rl.evaluation import EvaluationKind
 from lean_search.rl.expert_iteration_data import ExpertIterationConfig, parse_expert_iteration_config
@@ -435,6 +436,7 @@ def test_the_followup_base_differs_from_the_loop_only_in_the_followups_settings(
         training=dataclasses.replace(
             old.training, kl_reference_policy_adapter="", phase_generated_tokens=12_000_000, max_phases=16
         ),
+        serving=dataclasses.replace(old.serving, swap=SwapMethod.RESTART),
         statements=statements,
         evaluation=evaluation,
         retention=dataclasses.replace(old.retention, adapter_versions=0),

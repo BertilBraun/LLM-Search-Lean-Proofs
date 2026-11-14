@@ -3,6 +3,7 @@ src/lean_search/rl/node_pinning.py).
 
     python experiments/node_checks.py pinning --background-cpus 52   # the pinned set; exit 1 if it will not do
     python experiments/node_checks.py servers-free                   # exit 1 while the lock is held or a loop runs
+                                                                      # (or a process of RESPECTED_PID_FILES lives)
     deployment/background.sh python experiments/node_checks.py record --directory <run directory>
 
 pinning checks deployment/background.sh's set (the last N of all the host's CPUs) against the CPUs this process may
@@ -33,6 +34,34 @@ def parse_arguments() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def ancestors(process_id: int) -> set[int]:
+    """The process and those it descends from."""
+    found = set()
+    while process_id > 1 and process_id not in found:
+        found.add(process_id)
+        try:
+            stat = Path(f"/proc/{process_id}/stat").read_text(encoding="utf-8")
+        except OSError:
+            break
+        process_id = int(stat.rsplit(")", 1)[1].split()[1])
+    return found
+
+
+def respected_processes(pid_files: str) -> list[tuple[str, int]]:
+    """The live processes the colon-separated pid files name, except this command's own ancestors (a supervisor that
+    starts the probe runs itself)."""
+    own = ancestors(os.getpid())
+    live = []
+    for pid_file in filter(None, pid_files.split(":")):
+        try:
+            text = Path(pid_file).read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if text.isdigit() and int(text) not in own and Path(f"/proc/{text}").exists():
+            live.append((pid_file, int(text)))
+    return live
+
+
 def refuse(refusals: list[str]) -> None:
     if refusals:
         print("\n".join(refusals), file=sys.stderr)
@@ -54,6 +83,10 @@ def main() -> None:
             holder = lock_holder(serving_lock_path(CHECKPOINTS_DIRECTORY))
             refusals = [f"Process {holder} holds the serving lock: something else uses the servers."] if holder else []
             refusals += [f"A loop runs: {loop}" for loop in running_loops(RUNS_DIRECTORY).running]
+            refusals += [
+                f"{pid_file} names a live process ({process_id}): something else may use the servers."
+                for pid_file, process_id in respected_processes(os.environ.get("RESPECTED_PID_FILES", ""))
+            ]
             refuse(refusals)
         case "record":
             print(append_pinning(arguments.directory))

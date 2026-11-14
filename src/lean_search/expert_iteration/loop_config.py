@@ -2,6 +2,7 @@
 
 import tomllib
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 
 from lean_search.expert_iteration.config import PreferenceConfig
@@ -26,6 +27,11 @@ class ServerEndpoint:
     max_num_batched_tokens: int = 0
 
 
+class SwapMethod(StrEnum):
+    IN_PLACE = "in_place"
+    RESTART = "restart"
+
+
 @dataclass(frozen=True)
 class ServingConfig:
     """Merged policy and merged value weights, each a vLLM instance without LoRA on every GPU."""
@@ -41,6 +47,9 @@ class ServingConfig:
     policy_model: str = "policy-merged"
     value_model: str = "value-merged"
     dtype: str = "bfloat16"
+    # How new weights reach running servers: swapped in place (vLLM sleep level 2, wake, in-place reload, seconds) or
+    # the servers restarted from the merged weights on disk (about 200 s for 8 servers; deployment/README.md).
+    swap: SwapMethod = SwapMethod.IN_PLACE
 
     @property
     def servers(self) -> tuple[ServerEndpoint, ...]:

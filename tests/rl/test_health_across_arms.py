@@ -202,11 +202,16 @@ def test_a_common_tail_rises_by_its_factor_above_the_floor() -> None:
     ("failing", "unproved", "reached", "checks"),
     [
         (0.25, 0.03, 5000, []),
-        (0.27, 0.03, 5000, [HealthCheck.FAILING_AFTER_PROOF_GRAPH]),
+        (0.27, 0.03, 5000, []),
         (0.25, 0.04, 5000, [HealthCheck.UNPROVED_CLAIM_AFTER_PROOF_GRAPH]),
         (0.9, 0.9, 999, []),
     ],
-    ids=["within the floors", "failing tails rising", "unproved claims rising", "too few samples on the graph"],
+    ids=[
+        "within the floors",
+        "failing tails rising, charted only",
+        "unproved claims rising",
+        "too few samples on the graph",
+    ],
 )
 def test_tails_after_the_proof_graph_alert_against_the_first_phase(
     failing: float, unproved: float, reached: int, checks: list[HealthCheck]

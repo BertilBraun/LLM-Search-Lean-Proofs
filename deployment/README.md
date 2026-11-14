@@ -226,6 +226,42 @@ that long (`request_timeout_seconds`), and searches in flight keep their wall-cl
 weight reload drops the workers' LoRA adapters: re-register them (`publish_weights.py difference ... --name value-v0`
 re-creates and reloads a difference adapter).
 
+The cold path: `[serving] swap = "restart"` (default `"in_place"`) brings each new version onto the servers by stopping
+them (`stop_model.sh`, by pid file) and starting them from the merged weights on disk, with no sleep, wake or in-place
+reload; the loop stops the training GPUs' servers for the training instead of putting them to sleep, and the probe
+tool (`probe_evaluate.py`) restarts the servers from its merges. It costs about 200 s for all 8 servers of the 4x 3090
+layout (the GPUs in parallel, a GPU's two servers in turn) at every publish and every loop start, against seconds in
+place; the merges handed off in `/dev/shm` are started from as they are, and the persistent trainer's ~1 GiB CUDA
+context fits in the 10% of each GPU the servers' shares leave. Two servers segfaulted minutes after in-place swaps on
+the 2026-11-14 node (`results/followup_progress.md`); the follow-up study runs on the cold path. A start moves the
+previous log to `<name>.<UTC time>.log`; `CORE_DUMPS=1` makes a segfault leave a core file (up to the container's hard
+limit, relative patterns under `servers/cores/`). A failed start is tried twice more, each failed log kept as
+`<name>.failed-<attempt>.<time>.log`, before the loop or the probe tool gives up. A loop on the restart path starts
+without checking the servers (the training GPUs' are stopped by design, so a crash in training resumes by itself).
+
+Pid files are trusted only for a vLLM started with them (`deployment/server_pid.sh`: its command line names the
+server, and it started within 60 s of the file): `stop_model.sh` removes a stale one (a pid reused after a reboot)
+without signalling it, and stops a server whose API process died but whose engine lives on by its process group.
+`serve_model.sh` refuses a port that already answers. The tooling writes `<name>.swapped` before it sleeps or swaps a
+server in place, and a start removes it; the probe tool skips the swap only for a server without that mark, with a
+trusted pid file, awake, and (on vLLM 0.31.0 only; on another version never) a log without sleep, wake or reload
+lines. After every start, swap or skip the probe tool holds each
+server to its merge's fingerprint (`fingerprint.json`: the log-probabilities of the top-5 next tokens of three fixed
+prompts, written only from a server freshly started from that merge whose root is the merge). What it proves: the
+servers of a merge answer alike, and none holds grossly other weights (another model, a broken load: above 1.0 nat on
+a reference token the start fails). What it does not: it does not tell adjacent RL versions apart (they differ by
+~1e-3 to 1e-2 nats a token); on the restart path the guarantee is the content-addressed merge each server reports as
+its root. A difference above the tolerance (0.05 nats, not yet measured on the node) is a warning in the session entry
+and run.json, not a failed start. In place, without a fresh start, the servers are held to each other only.
+
+Pid files are written since the boot or they are stale; a server's processes are recorded (`<name>.members`, pid and
+start) once it answers, and stop_model.sh signals a group whose API process died only if every live member is such a
+recorded vLLM process (otherwise it reports, keeps the pid file and signals nothing).
+
+Known limits of the restart path, left for later: a loop resumed during publishing starts every server twice (its
+session's start, then the publish), ~400 s; `arm_loop.sh` cold-starts down servers before the loop starts them again;
+the loop has no cap on restarts per hour (the probe tool's cap is per run).
+
 Re-scoring a frontier after a new value version: all 14,879 open states of the 244 row-4 trees take 105 s on both
 GPUs' merged value instances (141 states/s, ~17k prompt tokens/s per GPU, compute-bound; the value prompts share no
 cacheable prefix because hybrid-model prefix caching works in 544-token blocks). The value estimator sends 32 states

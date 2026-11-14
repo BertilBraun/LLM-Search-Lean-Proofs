@@ -267,18 +267,23 @@ class MergedPublisher:
         return version.policy_weights if server in self.config.policy_servers else version.value_weights
 
     def serve_command(self, version: ModelVersion, server: ServerEndpoint) -> str:
-        served = self.config.policy_model if server in self.config.policy_servers else self.config.value_model
-        settings = (
-            ("GPU_MEMORY_UTILIZATION", server.memory_share),
-            ("MAX_NUM_SEQS", server.max_num_seqs),
-            ("MAX_NUM_BATCHED_TOKENS", server.max_num_batched_tokens),
-        )
-        environment = "".join(f"{name}={value} " for name, value in settings if value)
-        return (
-            f"{environment}SLEEP_MODE=1 deployment/serve_model.sh {server.name} {self.weights(version, server)} "
-            f"{server.gpu} {server_port(server)} --served-model-name {served} --no-enable-lora "
-            f"--dtype {self.config.dtype}"
-        )
+        return start_command(self.config, server, self.weights(version, server))
+
+
+def start_command(config: ServingConfig, server: ServerEndpoint, weights: str) -> str:
+    """Starts the server from merged weights on disk (deployment/serve_model.sh)."""
+    served = config.policy_model if server in config.policy_servers else config.value_model
+    settings = (
+        ("GPU_MEMORY_UTILIZATION", server.memory_share),
+        ("MAX_NUM_SEQS", server.max_num_seqs),
+        ("MAX_NUM_BATCHED_TOKENS", server.max_num_batched_tokens),
+    )
+    environment = "".join(f"{name}={value} " for name, value in settings if value)
+    return (
+        f"{environment}SLEEP_MODE=1 deployment/serve_model.sh {server.name} {weights} "
+        f"{server.gpu} {server_port(server)} --served-model-name {served} --no-enable-lora "
+        f"--dtype {config.dtype}"
+    )
 
 
 async def run_shell(command: str) -> None:

@@ -368,6 +368,8 @@ class FakeServers:
     down: set[str] = field(default_factory=set)
     restarts_fail: bool = False
     restarted: list[str] = field(default_factory=list)
+    # serving.swap = "restart": a release stops the released servers (down until the next serve starts them all).
+    restart_path: bool = False
     # Whether an evaluation runs, and the sleeps, wakes and swaps under one.
     evaluating: Callable[[], bool] = lambda: False
     changed_under_evaluation: list[str] = field(default_factory=list)
@@ -391,6 +393,10 @@ class FakeServers:
     async def release(self) -> PhaseSeconds:
         self.changing("release")
         self.releases += 1
+        if self.restart_path:
+            self.down |= set(self.released)
+            self.events += [f"stop {name}" for name in self.released]
+            return RELEASE_SECONDS
         self.asleep |= set(self.released)
         self.events += [f"sleep {name}" for name in self.released]
         return RELEASE_SECONDS
@@ -399,6 +405,10 @@ class FakeServers:
         self.changing(f"serve v{version.version}")
         self.served.append(version.version)
         self.served_policy_weights.append(version.policy_weights)
+        if self.restart_path:
+            self.down.clear()
+            self.events += [f"start {name} v{version.version}" for name in self.names]
+            return SERVE_SECONDS
         self.events += [f"{'wake' if name in self.asleep else 'swap'} {name} v{version.version}" for name in self.names]
         self.asleep.clear()
         return SERVE_SECONDS

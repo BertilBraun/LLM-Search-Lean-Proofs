@@ -59,6 +59,7 @@ class NextTokenDistributions:
 class PolicyClient:
     def __init__(self, base_url: str, model: str, timeout_seconds: float = 1800.0, max_connections: int = 512) -> None:
         self.model = model
+        self.server_url = base_url
         self._http = httpx.AsyncClient(
             base_url=base_url.rstrip("/"),
             timeout=httpx.Timeout(timeout_seconds, connect=30.0),

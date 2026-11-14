@@ -92,6 +92,8 @@ REPOSITORY_DIRECTORY = Path(__file__).resolve().parents[1]
 DATA_DIRECTORY = Path(os.environ["LEAN_SEARCH_DATA"])
 RUNS_DIRECTORY = Path(os.environ["LEAN_SEARCH_RUNS"])
 CHECKPOINTS_DIRECTORY = Path(os.environ["LEAN_SEARCH_CHECKPOINTS"])
+# serve_model.sh's logs, pid files and swap marks.
+SERVERS_DIRECTORY = RUNS_DIRECTORY / "servers"
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -199,8 +201,14 @@ def init(config: GrpoLoopConfig, config_text: str, paths: GrpoLoopPaths) -> None
         print(command)
 
 
+def print_flushed(message: str) -> None:
+    print(message, flush=True)
+
+
 async def start_servers(config: GrpoLoopConfig, paths: GrpoLoopPaths) -> None:
-    servers = VllmServers(config.serving, config.released_servers(), publisher(config, paths))
+    servers = VllmServers(
+        config.serving, config.released_servers(), publisher(config, paths), SERVERS_DIRECTORY, print_flushed
+    )
     down = await servers.unhealthy()
     print(f"Starting {down} on version {read_current(paths.models).version}; the others answer", flush=True)
     await servers.restart(down, read_current(paths.models))
@@ -222,7 +230,7 @@ async def run(config: GrpoLoopConfig, paths: GrpoLoopPaths) -> None:
         asyncio.get_running_loop().add_signal_handler(signal_number, stop.set)
     statements = statement_source(config, paths)
     merged = publisher(config, paths)
-    servers = VllmServers(config.serving, config.released_servers(), merged)
+    servers = VllmServers(config.serving, config.released_servers(), merged, SERVERS_DIRECTORY, log)
     evaluations = SubprocessEvaluations(
         paths, config.evaluation.command_prefix, lambda: read_current(paths.models).version
     )

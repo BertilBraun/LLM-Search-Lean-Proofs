@@ -16,7 +16,9 @@ against its run 2, solved within 1-16 expansions, which limit ended each run's s
 "primary" only with --primary (final checkpoints, two runs per side, refused otherwise), else "descriptive". seeds
 prints the second-seed confirmation; against one row per variant against the reference (v0). Runs with another probe
 set, expansion, token or depth budget, wall cap or concurrency are refused, and so are runs with another search config
-unless --across-search-modes (step 1's reasoning comparison, the value-free search).
+unless --across-search-modes (step 1's reasoning comparison, the value-free search). pair
+--descriptive-across-settings compares runs of other budgets, caps or search configs (e.g. depth weights) on the same
+probe, descriptively: the numbers are printed, and that no verdict applies.
 """
 
 import argparse
@@ -55,6 +57,11 @@ def parse_arguments() -> argparse.Namespace:
     pair.add_argument("--x", nargs="+", required=True)
     pair.add_argument("--y", nargs="+", required=True)
     pair.add_argument("--primary", action="store_true", help="final checkpoints, two runs each: the primary endpoint")
+    pair.add_argument(
+        "--descriptive-across-settings",
+        action="store_true",
+        help="allow other budgets, caps or search configs (depth weights); prints that no verdict applies",
+    )
     seeds = commands.add_parser("seeds", parents=[shared, labels])
     for side in ("--x", "--x-second", "--y", "--y-second"):
         seeds.add_argument(side, nargs="+", required=True)
@@ -132,7 +139,15 @@ def main() -> None:
     match arguments.command:
         case "pair":
             x, y = read_arm(arguments.x, arguments.x_label), read_arm(arguments.y, arguments.y_label)
-            print_comparison(compare_arms(x, y, arguments.seed, arguments.across_search_modes, arguments.primary))
+            comparison = compare_arms(
+                x,
+                y,
+                arguments.seed,
+                arguments.across_search_modes,
+                arguments.primary,
+                arguments.descriptive_across_settings,
+            )
+            print_comparison(comparison)
         case "seeds":
             x = (read_arm(arguments.x), read_arm(arguments.x_second))
             y = (read_arm(arguments.y), read_arm(arguments.y_second))

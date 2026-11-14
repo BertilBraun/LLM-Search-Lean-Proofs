@@ -1100,7 +1100,8 @@ class GrpoLoop:
             except httpx.HTTPError as error:
                 self.server_failed(fed, error, self.lose_search(fed.name, SearchEnd.SERVER_FAILURE))
                 self.recent_searches.append(True)
-                if self.servers_failing():
+                # The clients leave a dead server out of their turn, so it fails a few searches only: look at once.
+                if self.servers_failing() or await self.servers.unhealthy():
                     await self.recover_servers()
                 else:
                     await asyncio.sleep(self.config.sampling.server_failure_pause_seconds)
@@ -1197,7 +1198,9 @@ class GrpoLoop:
         (stopped is better than idle GPUs until someone looks). An evaluation beside sampling is not paused: its
         requests to a server that does not answer, or restarts, fail it, and it runs again after the next pause."""
         async with self.pause_lock:
-            if not self.servers_failing():
+            assert self.stop is not None
+            # A loop stopping on a failure (one in training leaves the restart path's servers stopped) restarts none.
+            if self.stop.is_set() or (not self.servers_failing() and not await self.servers.unhealthy()):
                 return
             self.log(
                 f"{sum(self.recent_searches)} of the last {len(self.recent_searches)} searches failed on a server: "
@@ -2233,9 +2236,11 @@ class GrpoLoop:
         )
         budget = self.config.training.phase_generated_tokens
         lost_limit = self.config.training.max_lost_token_share * budget
-        if budget and lost_tokens > lost_limit:
+        # A stop or restart of the loop cuts searches off by design; only a server failure's loss is an alert.
+        failed_tokens = self.store.server_failure_tokens(phase, phase)
+        if budget and failed_tokens > lost_limit:
             self.log(
-                f"Alert: phase {phase} lost {lost_tokens:,} generated tokens to server failures or stops, more than "
+                f"Alert: phase {phase} lost {failed_tokens:,} generated tokens to server failures, more than "
                 f"{lost_limit:,.0f} ({self.config.training.max_lost_token_share:.0%} of its budget): the arms' real "
                 "compute differs by that much beyond the counted tokens"
             )

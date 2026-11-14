@@ -2,7 +2,6 @@
 
 import asyncio
 import contextlib
-import itertools
 import time
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
@@ -11,6 +10,7 @@ import httpx
 
 from lean_search.policy.client import NextTokenDistributions, PolicyClient
 from lean_search.policy.expander import load_tokenizer, served_max_model_length
+from lean_search.policy.rotation import RequestFailures, ServerRotation
 from lean_search.search.priority import ValueEstimates
 from lean_search.search.tree import Node
 from lean_search.value.bins import BIN_COUNT, DEAD_BIN, BinDistribution, bin_distribution
@@ -61,14 +61,19 @@ class ValueStatistics:
 
 class ValueModelEstimator:
     def __init__(
-        self, config: ValueConfig, tokenizer: ValueTokenizer, clients: Sequence[PolicyClient], max_model_length: int
+        self,
+        config: ValueConfig,
+        tokenizer: ValueTokenizer,
+        clients: Sequence[PolicyClient],
+        max_model_length: int,
+        request_failures: RequestFailures | None = None,
     ) -> None:
         self.config = config
         self.tokenizer = tokenizer
         self.max_model_length = max_model_length
         self.bin_token_ids = bin_token_ids(tokenizer)
         self.statistics = ValueStatistics()
-        self._clients = itertools.cycle(clients)
+        self.rotation = ServerRotation(clients, request_failures=request_failures)
 
     async def estimate(self, nodes: Sequence[Node]) -> ValueEstimates:
         scored = await self.score_states([node.goals for node in nodes])
@@ -118,12 +123,14 @@ class ValueModelEstimator:
         return await self.request(prompts)
 
     async def request(self, prompts: Sequence[str]) -> NextTokenDistributions:
-        client = next(self._clients)
-        return await client.score_next_tokens(prompts, top_k=self.config.top_k, adapter=self.config.adapter)
+        with self.rotation.client() as client:
+            return await client.score_next_tokens(prompts, top_k=self.config.top_k, adapter=self.config.adapter)
 
 
 @contextlib.asynccontextmanager
-async def open_value_estimator(config: ValueConfig) -> AsyncIterator[ValueModelEstimator]:
+async def open_value_estimator(
+    config: ValueConfig, request_failures: RequestFailures | None = None
+) -> AsyncIterator[ValueModelEstimator]:
     tokenizer = load_tokenizer(config.tokenizer)
     max_model_length = min([await served_max_model_length(url, config.model) for url in config.server_urls])
     async with contextlib.AsyncExitStack() as stack:
@@ -133,4 +140,6 @@ async def open_value_estimator(config: ValueConfig) -> AsyncIterator[ValueModelE
             )
             for url in config.server_urls
         ]
-        yield ValueModelEstimator(config, tokenizer, clients, max_model_length)
+        estimator = ValueModelEstimator(config, tokenizer, clients, max_model_length, request_failures)
+        stack.push_async_callback(estimator.rotation.close)
+        yield estimator

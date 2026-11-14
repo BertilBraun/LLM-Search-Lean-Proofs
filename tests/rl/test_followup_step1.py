@@ -14,6 +14,7 @@ from lean_search.rl.probe_run_list import (
     evaluation_config,
     interleaved,
     missing_files,
+    planned_run_config_sha256,
     probe_arguments,
     read_run_list,
     record_finished,
@@ -85,13 +86,19 @@ def test_a_config_over_a_base_changes_only_its_own_keys(tmp_path: Path) -> None:
 
 
 def write_repository(root: Path, concurrency: int = STUDY_CONCURRENCY, search: str = "") -> Path:
-    (root / "search.toml").write_text(search or "[search]\nmax_expansions = 16\n", encoding="utf-8")
+    """The study's search config (or `search`) and follow-up base with value v0 at /adapters/value_v0, beside another
+    search config (other.toml: the same with another expansion budget)."""
+    (root / "search.toml").write_text(search or SEARCH.read_text(encoding="utf-8"), encoding="utf-8")
+    other = SEARCH.read_text(encoding="utf-8").replace("max_expansions = ", "max_expansions = 1", 1)
+    (root / "other.toml").write_text(other, encoding="utf-8")
     evaluation = (
         'loop_config = "loop.toml"\nsearch_config = "search.toml"\nprobe_set = "probe.jsonl"\n'
-        f"[probe]\nconcurrency = {concurrency}\nmax_wall_seconds = 7200.0\n"
+        f"[probe]\nmax_expansions = 16\nconcurrency = {concurrency}\nmax_wall_seconds = 7200.0\n"
     )
     (root / "evaluation.toml").write_text(evaluation, encoding="utf-8")
-    (root / "loop.toml").write_text('[initial]\nvalue_adapter = "/adapters/value_v0"\n', encoding="utf-8")
+    base = (FOLLOWUP / "base.toml").read_text(encoding="utf-8")
+    value_v0 = toml(FOLLOWUP / "base.toml")["initial"]["value_adapter"]
+    (root / "loop.toml").write_text(base.replace(value_v0, "/adapters/value_v0"), encoding="utf-8")
     return root
 
 
@@ -275,8 +282,24 @@ def start(**changes: object) -> ProbeRunStart:
     return dataclasses.replace(started, **changes)
 
 
+def matching_start(repository: Path) -> ProbeRunStart:
+    """A record of planned("r") with the run config's digest it searches with."""
+    return start(run_config_sha256=planned_run_config_sha256(planned("r", config="evaluation.toml"), repository))
+
+
 def test_a_record_matching_the_list_has_no_mismatch(tmp_path: Path) -> None:
-    assert start_mismatches(planned("r", config="evaluation.toml"), start(), write_repository(tmp_path)) == []
+    repository = write_repository(tmp_path)
+    assert start_mismatches(planned("r", config="evaluation.toml"), matching_start(repository), repository) == []
+
+
+def test_a_search_config_moved_with_the_same_contents_still_matches(tmp_path: Path) -> None:
+    repository = write_repository(tmp_path)
+    (repository / "moved.toml").write_text((repository / "search.toml").read_text(encoding="utf-8"), encoding="utf-8")
+    (repository / "evaluation.toml").write_text(
+        (repository / "evaluation.toml").read_text(encoding="utf-8").replace("search.toml", "moved.toml"),
+        encoding="utf-8",
+    )
+    assert start_mismatches(planned("r", config="evaluation.toml"), matching_start(repository), repository) == []
 
 
 @pytest.mark.parametrize(
@@ -290,7 +313,8 @@ def test_a_record_matching_the_list_has_no_mismatch(tmp_path: Path) -> None:
     ids=["another policy", "another value model", "a pilot", "another search config"],
 )
 def test_a_run_recorded_with_other_settings_than_the_list_asks_is_a_mismatch(tmp_path: Path, run: PlannedRun) -> None:
-    assert start_mismatches(run, start(), write_repository(tmp_path))
+    repository = write_repository(tmp_path)
+    assert start_mismatches(run, matching_start(repository), repository)
 
 
 def finished(root: Path, name: str, accepted: bool) -> PlannedRun:

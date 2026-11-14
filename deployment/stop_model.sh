@@ -8,6 +8,7 @@ set -euo pipefail
 
 script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${script_directory}/environment.sh"
+source "${script_directory}/server_pid.sh"
 
 server_directory="${LEAN_SEARCH_RUNS}/servers"
 
@@ -22,6 +23,7 @@ else
     done
 fi
 
+status=0
 for pid_file in ${pid_files[@]+"${pid_files[@]}"}; do
     name="$(basename "${pid_file}" .pid)"
     if [[ ! -f "${pid_file}" ]]; then
@@ -29,19 +31,33 @@ for pid_file in ${pid_files[@]+"${pid_files[@]}"}; do
         continue
     fi
     # serve_model.sh starts vLLM with setsid, so its pid is the process group of the API server and engine core.
-    process_group="$(cat "${pid_file}")"
-    # A pid file from before a container restart may name an unrelated process by now.
-    if [[ -r "/proc/${process_group}/cmdline" ]] && ! tr '\0' ' ' < "/proc/${process_group}/cmdline" | grep -q vllm; then
-        echo "${name}'s pid ${process_group} is no vLLM process now: its pid file is removed, nothing stopped." >&2
-        rm -f "${pid_file}"
-        continue
+    if ! process_group="$(trusted_server_pid "${pid_file}" "${name}")"; then
+        found=0
+        process_group="$(orphaned_server_group "${pid_file}" "${name}")" || found=$?
+        case "${found}" in
+            0) ;;
+            1)
+                echo "Stale pid file ${pid_file}: no vLLM of ${name} started with it; removed, nothing signalled." >&2
+                rm -f "${pid_file}" "${pid_file%.pid}.members"
+                continue
+                ;;
+            *)
+                echo "Refused: ${pid_file}'s process group has members that are not ${name}'s vLLM" \
+                    "(${process_group}); nothing signalled, the pid file kept. Look before stopping them by pid." >&2
+                status=1
+                continue
+                ;;
+        esac
     fi
     kill -TERM -- "-${process_group}" 2>/dev/null || true
     for _ in $(seq 60); do
-        kill -0 -- "-${process_group}" 2>/dev/null || break
+        [[ -n "$(live_group_members "${process_group}")" ]] || break
         sleep 1
     done
-    kill -KILL -- "-${process_group}" 2>/dev/null || true
-    rm -f "${pid_file}"
+    if [[ -n "$(live_group_members "${process_group}")" ]]; then
+        kill -KILL -- "-${process_group}" 2>/dev/null || true
+    fi
+    rm -f "${pid_file}" "${pid_file%.pid}.members"
     echo "Stopped ${name}."
 done
+exit "${status}"

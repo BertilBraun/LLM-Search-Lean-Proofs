@@ -32,12 +32,16 @@ policy_adapter = "/workspace/checkpoints/data_rewrite_sft_numbered/adapter"
 value_adapter = "/workspace/checkpoints/phase3_value_v0/adapter"
 
 [serving]
-# Per GPU 0.62 + 0.28 of its memory: the servers leave nothing for training, which runs while they sleep.
+# Per GPU 0.62 + 0.28 of its memory: the servers leave nothing for training, which runs while they are stopped.
 # The weights the starting policy's adapter was trained on (the SFT stage continues visible student v2 on the base).
 policy_base_model = "Qwen/Qwen3.5-4B"
 value_base_model = "Qwen/Qwen3.5-2B"
 policy_model = "policy-merged"
 value_model = "value-merged"
+# New weights reach the servers by restarting them from the merges on disk, not by an in-place swap: on the
+# 2026-11-14 node two servers segfaulted minutes after in-place swaps (results/followup_progress.md). About 200 s for
+# the 8 servers per publish and per probe run, against seconds in place; "in_place" brings the swap back.
+swap = "restart"
 
 [[serving.policy_servers]]
 name = "policy-gpu0"

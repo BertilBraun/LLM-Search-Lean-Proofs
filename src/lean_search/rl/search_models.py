@@ -9,6 +9,7 @@ from lean_search.expert_iteration.loop_config import ServingConfig
 from lean_search.expert_iteration.loop_search import GatedExpander, GatedValueEstimator, PauseGate
 from lean_search.expert_iteration.toml_text import toml_text
 from lean_search.policy.expander import PolicyStatistics, open_policy_expander
+from lean_search.policy.rotation import RequestFailures
 from lean_search.rl.loop_config import EvaluationTarget, SamplingConfig, offset_number_seed
 from lean_search.rl.search_options import SearchOptions, with_search_options, without_search_options
 from lean_search.search import (
@@ -101,18 +102,23 @@ def options_run_config(template: RunConfig, options: SearchOptions) -> RunConfig
 
 
 @contextlib.asynccontextmanager
-async def open_search_models(config: RunConfig, gate: PauseGate | None = None) -> AsyncIterator[SearchModels]:
-    """The policy expander and the priority function; with a gate, their requests wait while it is paused."""
+async def open_search_models(
+    config: RunConfig, gate: PauseGate | None = None, request_failures: RequestFailures | None = None
+) -> AsyncIterator[SearchModels]:
+    """The policy expander and the priority function; with a gate, their requests wait while it is paused; with
+    `request_failures`, their clients count each server's server errors in a row there."""
     async with contextlib.AsyncExitStack() as stack:
         policy: Expander | None = None
         statistics = None
         if config.expander.kind.uses_policy:
-            opened = await stack.enter_async_context(open_policy_expander(config.policy, config.search.forbidden_steps))
+            opened = await stack.enter_async_context(
+                open_policy_expander(config.policy, config.search.forbidden_steps, request_failures)
+            )
             statistics = opened.statistics
             policy = opened if gate is None else GatedExpander(opened, gate)
         value_estimator: ValueEstimator | None = None
         if config.value.model:
-            opened_value = await stack.enter_async_context(open_value_estimator(config.value))
+            opened_value = await stack.enter_async_context(open_value_estimator(config.value, request_failures))
             value_estimator = opened_value if gate is None else GatedValueEstimator(opened_value, gate)
         yield SearchModels(
             build_expander(config, policy), build_priority_function(config.priority, value_estimator), statistics

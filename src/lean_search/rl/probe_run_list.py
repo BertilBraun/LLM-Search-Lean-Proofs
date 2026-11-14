@@ -15,8 +15,18 @@ from enum import StrEnum
 from itertools import zip_longest
 from pathlib import Path
 
-from lean_search.rl.probe_evaluation import ProbeRunRecord, ProbeRunStart, ValueFreePriority, run_directory
+from lean_search.rl.loop_config import load_loop_config
+from lean_search.rl.probe_evaluation import (
+    ProbeEvaluationConfig,
+    ProbeRunRecord,
+    ProbeRunStart,
+    ValueFreePriority,
+    probe_run_config,
+    run_config_sha256,
+    run_directory,
+)
 from lean_search.rl.study_configs import PLACEHOLDER, placeholders, resolved_toml
+from lean_search.search import load_run_config
 from lean_search.search.records import from_json_object
 
 DEFAULT_EVALUATION_CONFIG = "experiments/configs/grpo/followup/probe_evaluation.toml"
@@ -133,8 +143,21 @@ def missing_files(run: PlannedRun, repository: Path, data_root: Path) -> list[st
     return missing
 
 
+def planned_run_config_sha256(run: PlannedRun, repository: Path) -> str:
+    """The content digest of the run config the run searches with, as probe_evaluate.py builds it (what the run's
+    identity covers: the search config's contents, budget, wall cap, concurrency, step log-probability)."""
+    config = from_json_object(ProbeEvaluationConfig, evaluation_config(run, repository))
+    loop = load_loop_config(repository / config.loop_config)
+    template = load_run_config(repository / (run.search_config or config.search_config))
+    value_free = config.value_free_priority if run.value == "none" else None
+    return run_config_sha256(
+        probe_run_config(template, loop.serving, config.probe, value_free, bool(run.search_config))
+    )
+
+
 def start_mismatches(run: PlannedRun, start: ProbeRunStart, repository: Path) -> list[str]:
-    """Where a run already started under the name differs from what the list asks for."""
+    """Where a run already started under the name differs from what the list asks for; the search settings by their
+    content digest, so a config moved or renamed with the same contents still matches."""
     evaluation = evaluation_config(run, repository)
     loop = read_toml(repository / evaluation["loop_config"])
     match run.value:
@@ -149,7 +172,7 @@ def start_mismatches(run: PlannedRun, start: ProbeRunStart, repository: Path) ->
         ("value adapter", start.checkpoint.value_adapter, value_adapter),
         ("problems", start.checkpoint.problems, run.problems),
         ("anchor mark", start.anchor, run.anchor),
-        ("search config", start.search_config, run.search_config or evaluation["search_config"]),
+        ("run config digest", start.run_config_sha256, planned_run_config_sha256(run, repository)),
         ("probe set", start.probe_set, evaluation["probe_set"]),
         ("wall cap", start.max_wall_seconds, float(evaluation["probe"]["max_wall_seconds"])),
         ("concurrency", start.concurrency, evaluation["probe"]["concurrency"]),

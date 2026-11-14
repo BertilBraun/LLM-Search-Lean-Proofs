@@ -141,10 +141,10 @@ def read_arm_run(directory: Path, strata: Mapping[str, str]) -> ArmRun:
     return ArmRun(directory.name, start.identity, settings, outcomes)
 
 
-def check_comparable(arms: Sequence[Arm], across_search_modes: bool) -> None:
+def check_comparable(arms: Sequence[Arm], across_search_modes: bool, across_settings: bool = False) -> None:
     """ValueError unless each arm is one checkpoint searched alike and every run shares the probe, the budgets
     (expansions, generated tokens, depth), the wall cap and the concurrency, and, unless across search modes, the
-    search config."""
+    search config. Across settings only the probe and each arm's identity are required."""
     for arm in arms:
         identities = {run.identity for run in arm.runs}
         if len(identities) != 1:
@@ -152,13 +152,16 @@ def check_comparable(arms: Sequence[Arm], across_search_modes: bool) -> None:
     runs = [run for arm in arms for run in arm.runs]
     fields = [
         ("probe set", lambda settings: settings.probe_set_sha256),
-        ("expansion budget", lambda settings: settings.max_expansions),
-        ("wall cap", lambda settings: settings.max_wall_seconds),
-        ("generated-token cap", lambda settings: settings.max_generated_tokens),
-        ("depth cap", lambda settings: settings.max_depth),
-        ("concurrency", lambda settings: settings.concurrency),
     ]
-    if not across_search_modes:
+    if not across_settings:
+        fields += [
+            ("expansion budget", lambda settings: settings.max_expansions),
+            ("wall cap", lambda settings: settings.max_wall_seconds),
+            ("generated-token cap", lambda settings: settings.max_generated_tokens),
+            ("depth cap", lambda settings: settings.max_depth),
+            ("concurrency", lambda settings: settings.concurrency),
+        ]
+    if not across_search_modes and not across_settings:
         fields.append(("search config", lambda settings: settings.run_config_sha256))
     for what, value in fields:
         found = {run.name: value(run.settings) for run in runs}
@@ -278,6 +281,8 @@ class SearchEnds:
 class VerdictKind(StrEnum):
     DIFFER = "differ (provisional, one seed)"
     NO_DIFFERENCE = "no difference shown"
+    # Runs of different settings compared on request: the rule does not apply to them.
+    NO_VERDICT = "no verdict applies: the runs differ in their settings"
 
 
 @dataclass(frozen=True)
@@ -351,10 +356,19 @@ def search_ends(run: ArmRun, problems: Sequence[str]) -> SearchEnds:
 
 
 def compare_arms(
-    x: Arm, y: Arm, seed: int = 0, across_search_modes: bool = False, primary: bool = False
+    x: Arm,
+    y: Arm,
+    seed: int = 0,
+    across_search_modes: bool = False,
+    primary: bool = False,
+    across_settings: bool = False,
 ) -> ArmComparison:
-    """`primary`: the caller's word that both are final checkpoints; ValueError unless each has two runs."""
-    check_comparable([x, y], across_search_modes)
+    """`primary`: the caller's word that both are final checkpoints; ValueError unless each has two runs.
+    `across_settings`: runs of other budgets, caps or search configs (e.g. depth weights) compared descriptively, with
+    no verdict."""
+    if primary and across_settings:
+        raise ValueError("The primary endpoint compares runs of one setting only.")
+    check_comparable([x, y], across_search_modes, across_settings)
     if primary and (len(x.runs) != 2 or len(y.runs) != 2):
         raise ValueError("The primary endpoint pools two runs per arm.")
     problems = common_problems([x, y])
@@ -374,7 +388,9 @@ def compare_arms(
     )
     ends = tuple(search_ends(run, problems) for arm in (x, y) for run in arm.runs)
     repeats = tuple(repeat_difference(arm, problems, strata, seed) for arm in (x, y) if len(arm.runs) == 2)
-    verdict = rule_verdict(overall, x.label, y.label, primary)
+    verdict = (
+        Verdict(VerdictKind.NO_VERDICT, None) if across_settings else rule_verdict(overall, x.label, y.label, primary)
+    )
     return ArmComparison(x.label, y.label, overall, by_stratum, mcnemar, within, ends, verdict, repeats)
 
 
