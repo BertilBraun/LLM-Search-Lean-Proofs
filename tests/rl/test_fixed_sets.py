@@ -66,6 +66,40 @@ def test_overfit_set_avoids_the_held_out_statements() -> None:
     assert not {statement.name for statement in select_overfit_set(POOL, CONFIG, held_out)} & held_out
 
 
+def test_the_three_strata_probe_selection_is_unchanged() -> None:
+    probe = select_fixed_sets(POOL, CONFIG).probe
+    assert [(statement.name, statement.stratum) for statement in probe] == [
+        ("s.t42", "easy"),
+        ("s.t24", "easy"),
+        ("s.t18", "easy"),
+        ("s.t8", "medium"),
+        ("s.t19", "medium"),
+        ("s.t44", "medium"),
+        ("s.t23", "hard"),
+        ("s.t27", "hard"),
+        ("s.t33", "hard"),
+    ]
+
+
+def test_the_three_strata_gate_selection_is_unchanged() -> None:
+    gate = select_fixed_sets(POOL, CONFIG).gate
+    assert [(statement.name, statement.stratum) for statement in gate] == [
+        ("s.t12", "easy"),
+        ("s.t0", "easy"),
+        ("s.t31", "medium"),
+        ("s.t56", "medium"),
+        ("s.t45", "hard"),
+        ("s.t3", "hard"),
+    ]
+
+
+def test_the_overfit_selection_is_unchanged() -> None:
+    sets = select_fixed_sets(POOL, CONFIG)
+    held_out = {statement.name for statement in (*sets.probe, *sets.gate)}
+    overfit = [statement.name for statement in select_overfit_set(POOL, CONFIG, held_out)]
+    assert overfit == ["s.t30", "s.t54", "s.t37", "s.t50", "s.t59", "s.t53"]
+
+
 def test_fixed_set_files_read_back(tmp_path: Path) -> None:
     probe = select_fixed_sets(POOL, CONFIG).probe
     write_fixed_set(tmp_path / "probe.jsonl", probe)
