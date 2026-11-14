@@ -169,6 +169,12 @@ def test_sequence_credit_trains_every_token_of_a_failed_sample() -> None:
     assert all(policy_data(credit=CreditMode.SEQUENCE).sequences[2].trained)
 
 
+@pytest.mark.parametrize("credit", [CreditMode.SEQUENCE, CreditMode.PROOF_SUCCESS])
+def test_explanation_tokens_mean_the_same_in_every_credit_mode(credit: CreditMode) -> None:
+    expected = policy_data().metrics.mean_explanation_tokens
+    assert policy_data(credit=credit).metrics.mean_explanation_tokens == expected
+
+
 def test_proof_success_credit_gives_every_token_of_a_failed_sample_minus_the_mean_r() -> None:
     sequence = policy_data(credit=CreditMode.PROOF_SUCCESS).sequences[2]
     assert (set(sequence.advantages), all(sequence.trained)) == ({-0.5}, True)

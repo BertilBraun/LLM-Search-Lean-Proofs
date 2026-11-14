@@ -105,31 +105,31 @@ def token_credits(
     advantages: SampleAdvantages,
     mode: CreditMode,
 ) -> TokenCredits:
-    """Without one span per tactic (no usable block, or none recorded) every sampled token gets the sequence credit;
-    outside per-tactic credit every sampled token gets the sample's one advantage, counted as explanation."""
+    """Segments by position whatever the mode when there is one span per tactic, else every sampled token is the
+    explanation. Per-tactic credit gives the tactics and the closing part their own advantages and the rest the
+    sequence credit; the other modes give every sampled token the sample's one advantage."""
+    by_position = bool(spans) and len(spans) == len(advantages.tactics)
+    per_tactic = mode == CreditMode.PER_TACTIC
     match mode:
-        case CreditMode.PER_TACTIC:
-            per_tactic = bool(spans) and len(spans) == len(advantages.tactics)
-            whole: float | None = advantages.sequence
-        case CreditMode.SEQUENCE:
-            per_tactic, whole = False, advantages.sequence
+        case CreditMode.PER_TACTIC | CreditMode.SEQUENCE:
+            whole = advantages.sequence
         case CreditMode.PROOF_SUCCESS:
-            per_tactic, whole = False, advantages.proof_success
+            whole = advantages.proof_success
     segments: list[TokenSegment] = []
     values: list[float | None] = []
     for index, token in enumerate(offsets):
         if index in inserted:
             segments.append(TokenSegment.INSERTED)
             values.append(None)
-        elif not per_tactic or (token[0] < spans[0].start and token[1] <= spans[0].start):
+        elif not by_position or (token[0] < spans[0].start and token[1] <= spans[0].start):
             segments.append(TokenSegment.EXPLANATION)
             values.append(whole)
         elif (position := tactic_position(token, spans)) == len(spans):
             segments.append(TokenSegment.CLOSING)
-            values.append(advantages.closing)
+            values.append(advantages.closing if per_tactic else whole)
         else:
             segments.append(TokenSegment.TACTIC)
-            values.append(advantages.tactics[position])
+            values.append(advantages.tactics[position] if per_tactic else whole)
     return TokenCredits(
         advantages=tuple(0.0 if value is None else value for value in values),
         trained=tuple(value is not None for value in values),
