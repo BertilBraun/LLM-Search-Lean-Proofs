@@ -22,14 +22,14 @@ from lean_search.rl.loop_config import (
     load_loop_config,
 )
 from lean_search.rl.policy_trainer import GrpoConfig, ReferencePolicy
-from lean_search.rl.search_options import SearchOptions
+from lean_search.rl.search_options import OptionsArmConfig, SearchOptions
 from lean_search.rl.single_step import SingleStepConfig
 from lean_search.rl.training_phase import TrainingPhaseConfig
 from lean_search.search import PriorityKind, RunConfig, load_run_config
 from lean_search.search.records import from_json_object
 
 CONFIGS = Path(__file__).resolve().parents[2] / "experiments" / "configs"
-LOOPS = ["grpo/loop.toml", "grpo/loop_overfit.toml", "grpo/loop_smoke.toml"]
+LOOPS = ["grpo/loop.toml", "grpo/loop_overfit.toml", "grpo/loop_smoke.toml", "grpo/followup/base.toml"]
 
 
 def loop(name: str) -> GrpoLoopConfig:
@@ -382,3 +382,69 @@ def test_expert_iteration_replays_the_loops_replay() -> None:
 
 def test_expert_iteration_reads_the_shipped_loop() -> None:
     assert expert_iteration().data.loop == loop("grpo/loop.toml").name
+
+
+def test_the_followup_base_differs_from_the_loop_only_in_the_followups_settings() -> None:
+    base, old = loop("grpo/followup/base.toml"), loop("grpo/loop.toml")
+    curriculum = dataclasses.replace(
+        old.statements.curriculum,
+        proof_steps_weight=0.0,
+        root_value_weight=0.0,
+        characters_weight=1.0,
+        band_width=2.0,
+        initial_band_low=10.0,
+    )
+    statements = dataclasses.replace(
+        old.statements,
+        curriculum=curriculum,
+        held_out=(*old.statements.held_out, "grpo/fixed_sets/probe_v2.jsonl"),
+        difficulty_band_edges=(5.0, 10.0, 15.0, 20.0, 30.0, 45.0),
+    )
+    evaluation = dataclasses.replace(
+        old.evaluation,
+        probe_set="grpo/fixed_sets/probe_v2.jsonl",
+        probe_parts=12,
+        probe=dataclasses.replace(old.evaluation.probe, baseline_runs=1, baseline_concurrency=6),
+        minif2f=dataclasses.replace(old.evaluation.minif2f, baseline_concurrency=34),
+    )
+    expected = dataclasses.replace(
+        old,
+        name="grpo_followup_base",
+        sampling=dataclasses.replace(old.sampling, options_arm=OptionsArmConfig()),
+        training=dataclasses.replace(old.training, kl_reference_policy_adapter=""),
+        statements=statements,
+        evaluation=evaluation,
+    )
+    assert base == expected
+
+
+def test_the_followup_base_holds_out_its_probe() -> None:
+    config = loop("grpo/followup/base.toml")
+    assert config.evaluation.probe_set in config.statements.held_out
+
+
+def test_the_followup_curriculum_bins_are_probe_v2s_bands() -> None:
+    edges = loop("grpo/followup/base.toml").statements.difficulty_band_edges
+    assert [edge * 100 for edge in edges] == list(probe_v2().edges)
+
+
+def test_the_followup_probe_records_the_followup_curriculums_difficulty() -> None:
+    curriculum = loop("grpo/followup/base.toml").statements.curriculum
+    weights = (curriculum.proof_steps_weight, curriculum.root_value_weight, curriculum.characters_weight)
+    probe = probe_v2().curriculum
+    assert (probe.proof_steps_weight, probe.root_value_weight, probe.characters_weight) == weights
+
+
+def test_the_followup_probe_slot_is_the_old_slots_size() -> None:
+    parts = loop("grpo/followup/base.toml").evaluation.probe_parts
+    assert round(sum(probe_v2().counts) / parts) == 167
+
+
+def test_version_zeros_followup_baselines_share_the_sampling_concurrency() -> None:
+    config = loop("grpo/followup/base.toml")
+    repls = sum(
+        baseline_concurrency(config, kind) * baseline_jobs(config.evaluation, kind)
+        for kind in EvaluationKind
+        if target_config(config.evaluation, kind).at_start
+    )
+    assert repls == config.sampling.concurrency
