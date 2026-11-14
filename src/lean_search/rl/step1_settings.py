@@ -70,12 +70,13 @@ class AutomationConstant:
 
     @property
     def table(self) -> str:
+        """The entry of [value_free_priority] automation_constants (`probe_evaluation.AutomationConstant`)."""
         return (
-            f"# The median step log-probability of {self.samples} samples that made progress.\n"
-            "[value_free_priority]\n"
-            "length_exponent = 1.0\n"
+            f"# The median step log-probability of {self.samples} samples that made progress (calibration).\n"
+            "[[value_free_priority.automation_constants]]\n"
             f'step_log_probability = "{self.setting}"\n'
             f"automation_log_probability = {self.constant:.3g}\n"
+            "calibrated = true\n"
         )
 
 

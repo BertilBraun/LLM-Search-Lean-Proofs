@@ -10,8 +10,9 @@ token-budget reads accepted anchor runs (probe_evaluate.py --anchor: v0 with val
 mean generated tokens per expansion (their searches' tokens over their expansions), T = 16 x it for runs 3 and 4 and
 T64 = 64 x it for the miniF2F token runs, with the line to set in step1/token_capped_*.toml. automation-constant reads
 the calibration runs (step1/runs_calibration.toml: one expansion without a value model per calibration statement) and
-prints, per run, the [value_free_priority] table for step1/value_free_<setting>.toml: the setting the run searched with
-and the median step log-probability of its root samples that made progress (ran completely, changed the goals).
+prints, per run, the [[value_free_priority.automation_constants]] entry for step1/value_free_<setting>.toml (in place of
+its calibrated = false placeholder): the setting the run searched with and the median step log-probability of its root
+samples that made progress (ran completely, changed the goals).
 """
 
 import argparse

@@ -3,7 +3,7 @@
 # step_log_probability setting; then
 #   python experiments/followup_step1.py automation-constant \
 #       $LEAN_SEARCH_RUNS/calibration_evaluations/probe_calibration_{completion,block_sum,block_mean}
-# prints the [value_free_priority] table of each value_free_<setting>.toml.
+# prints each setting's [[value_free_priority.automation_constants]] entry, calibrated, for value_free_<setting>.toml.
 [[runs]]
 name = "calibration_completion"
 arm = "v0"

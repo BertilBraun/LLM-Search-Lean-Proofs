@@ -13,7 +13,7 @@ from enum import StrEnum
 from itertools import zip_longest
 from pathlib import Path
 
-from lean_search.rl.probe_evaluation import ProbeRunRecord, run_directory
+from lean_search.rl.probe_evaluation import ProbeRunRecord, ValueFreePriority, run_directory
 from lean_search.rl.study_configs import PLACEHOLDER, placeholders
 from lean_search.search.records import from_json_object
 
@@ -82,7 +82,8 @@ def read_toml(path: Path) -> dict:
 
 def run_refusals(run: PlannedRun, repository: Path, concurrency: int) -> list[str]:
     """Why the run cannot start yet: a placeholder in its own settings, its evaluation config or the search config it
-    searches with, or a probe concurrency other than the study's one."""
+    searches with, an uncalibrated automation constant for a value-free run, or a probe concurrency other than the
+    study's one."""
     own = {
         "policy_adapter": run.policy_adapter,
         "value": run.value,
@@ -99,6 +100,12 @@ def run_refusals(run: PlannedRun, repository: Path, concurrency: int) -> list[st
         f"{run.name}: {search_config} has a placeholder at {key}"
         for key in placeholders(read_toml(repository / search_config))
     ]
+    if run.value == "none":
+        priority = from_json_object(ValueFreePriority, evaluation.get("value_free_priority", {}))
+        try:
+            priority.automation_log_probability()
+        except ValueError as error:
+            refusals.append(f"{run.name}: {run.config}: {error}")
     found = evaluation["probe"]["concurrency"]
     if found != concurrency:
         refusals.append(f"{run.name}: {run.config} searches at concurrency {found}, the study's is {concurrency}")

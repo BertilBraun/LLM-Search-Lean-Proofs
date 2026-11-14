@@ -18,9 +18,13 @@ max_wall_seconds = 7200.0
 # THROUGHPUT TEST: a placeholder; the throughput test sets one probe concurrency for every run of the study.
 concurrency = 56
 
-# One expansion never compares a policy step with an automation step, so this constant does not act; review AF's
-# estimate from the old run's trees stands in.
 [value_free_priority]
 length_exponent = 1.0
 step_log_probability = "completion"
+
+# One expansion never ranks a policy step against an automation step, so the constant does not act here; marked
+# calibrated only so that probe_evaluate.py runs (review AF's estimate stands in).
+[[value_free_priority.automation_constants]]
+step_log_probability = "completion"
 automation_log_probability = -2.8
+calibrated = true

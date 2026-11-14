@@ -88,6 +88,11 @@ def test_a_run_that_is_not_ready_is_refused(tmp_path: Path, run: PlannedRun, con
     assert run_refusals(run, write_repository(tmp_path, concurrency, search), STUDY_CONCURRENCY)
 
 
+def test_a_value_free_run_with_an_uncalibrated_constant_is_refused() -> None:
+    run = planned("r", value="none", config="experiments/configs/grpo/followup/step1/value_free_block_sum.toml")
+    assert any("placeholder" in refusal for refusal in run_refusals(run, REPOSITORY, STUDY_CONCURRENCY))
+
+
 def test_a_ready_run_is_not_refused(tmp_path: Path) -> None:
     assert run_refusals(planned("r", config="evaluation.toml"), write_repository(tmp_path), STUDY_CONCURRENCY) == []
 

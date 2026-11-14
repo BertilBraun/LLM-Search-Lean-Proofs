@@ -1,10 +1,10 @@
 # Step 1's run 6 with step_log_probability = "completion" (DESIGN.md, "Follow-up study: controlled arms", "Step 1",
-# Q4): v0 without a value model, best-first on the path's mean step log-probability per block (row 2's search,
-# the rest of probe_evaluation.toml unchanged). Run with --value none; the pilot with --problems 200
+# Q4): v0 without a value model, best-first on the path's mean step log-probability per block (row 2's search;
+# probe_evaluation.toml but for [value_free_priority]). Run with --value none; the pilot with --problems 200
 # (runs_value_free_pilots.toml), the best of the three settings' pilots in full (runs_value_free_full.toml).
-# Review AF (results/reviews/2026-11-14_review_af_signals_code.md): on 2,060 recorded expansions the top-ranked sibling
-# lies on the proof graph 42.6% (completion), 39.4% (block_sum), 42.2% (block_mean), chance 39.9%; so all three
-# settings get a 200-statement pilot and the best goes to the full run.
+# Review AF (results/reviews/2026-11-14_review_af_signals_code.md): on 2,060 recorded expansions the top-ranked
+# sibling lies on the proof graph 42.6% (completion), 39.4% (block_sum), 42.2% (block_mean), chance 39.9%; so all
+# three settings get a 200-statement pilot and the best goes to the full run.
 loop_config = "experiments/configs/grpo/followup/base.toml"
 search_config = "experiments/configs/grpo/search/visible_student_v2.toml"
 probe_set = "grpo/fixed_sets/probe_v2.jsonl"
@@ -20,10 +20,14 @@ max_wall_seconds = 7200.0
 # THROUGHPUT TEST: a placeholder; the throughput test sets one probe concurrency for every run of the study.
 concurrency = 56
 
-# The setting and its automation constant together: the median step log-probability of the samples that made
-# progress on the 200 calibration statements (experiments/followup_step1.py automation-constant prints this
-# table); the launcher refuses the file while the constant is a placeholder.
 [value_free_priority]
 length_exponent = 1.0
 step_log_probability = "completion"
-automation_log_probability = "PLACEHOLDER: experiments/followup_step1.py automation-constant (completion)"
+
+# A placeholder (calibrated = false: probe_evaluate.py and the launcher refuse it) until the calibration
+# (runs_calibration.toml, then experiments/followup_step1.py automation-constant) prints the entry to put here:
+# the median step log-probability of the samples that made progress on the 200 calibration statements.
+[[value_free_priority.automation_constants]]
+step_log_probability = "completion"
+automation_log_probability = -2.8
+calibrated = false
