@@ -1,7 +1,7 @@
 # The follow-up study's outcome-only control B2 (DESIGN.md "Follow-up study: controlled arms", WP3): phase.toml with
-# pure proof-success credit. A sample's r is 1 when it advances on the proof graph (a forward edge whose kept prefix's
-# last state with a reward is on it; GroupSample.advances_on_proof_graph), else 0; every sampled token gets r minus
-# the group's multiplicity-weighted mean r. [reward] only builds the groups and the
+# pure proof-success credit. A sample's r is 1 when it reaches the proof graph (a forward edge with a tactic of its
+# kept prefix on it; GroupSample.reaches_proof_graph), else 0; every sampled token gets r minus the group's
+# multiplicity-weighted mean r. [reward] only builds the groups and the
 # tactic labels (and the logged reward means): no progress, no local term, no wasted-tactic costs enter the advantage.
 # Generated from phase.toml; keep the two identical apart from [policy.data] credit.
 

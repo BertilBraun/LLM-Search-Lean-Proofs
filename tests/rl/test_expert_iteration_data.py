@@ -29,6 +29,7 @@ from lean_search.rl.expert_iteration_data import (
     read_completions,
     replay_loss_change,
     replay_token_budgets,
+    sampling_versions,
     screened,
     selected_completions,
     space_shortages,
@@ -222,6 +223,10 @@ def test_samples_of_a_rejected_version_are_not_selected() -> None:
 @pytest.mark.parametrize("version", [VERSION - 1, None])
 def test_samples_before_the_minimum_version_are_not_selected(version: int | None) -> None:
     assert kept_blocks(root_with(SHORTEST, [(MIDDLE,), ()]).record(version=version)) == []
+
+
+def test_a_trees_sampling_versions_are_its_first_round_samples_versions() -> None:
+    assert sampling_versions(root_with(SHORTEST, [(MIDDLE,), ()]).record(version=VERSION)) == {VERSION}
 
 
 def test_feedback_round_samples_are_not_selected() -> None:

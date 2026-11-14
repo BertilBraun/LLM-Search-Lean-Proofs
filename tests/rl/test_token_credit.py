@@ -107,6 +107,14 @@ def test_proof_success_credit_gives_every_token_the_proof_success_advantage() ->
     assert (set(credits.advantages), set(credits.trained)) == ({-0.25}, {True})
 
 
+@pytest.mark.parametrize("mode", [CreditMode.SEQUENCE, CreditMode.PROOF_SUCCESS])
+def test_segments_are_by_position_in_every_credit_mode(mode: CreditMode) -> None:
+    layout = spans(COMPLETION, "intro x", "simp", "ring")
+    per_tactic = token_credits(character_offsets(COMPLETION), layout, frozenset(), ADVANTAGES, CreditMode.PER_TACTIC)
+    other = token_credits(character_offsets(COMPLETION), layout, frozenset(), ADVANTAGES, mode)
+    assert other.segments == per_tactic.segments
+
+
 def test_without_a_span_per_tactic_every_token_gets_the_sequence_advantage() -> None:
     credits = token_credits(character_offsets(COMPLETION), [], frozenset(), ADVANTAGES, CreditMode.PER_TACTIC)
     assert set(credits.advantages) == {0.5}

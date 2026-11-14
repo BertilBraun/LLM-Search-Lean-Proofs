@@ -2,26 +2,27 @@
 
 Kept current by the orchestrator. Details live in the linked files.
 
-**Last update:** 2026-11-14, 12:15 UTC.
+**Last update:** 2026-11-14, 12:45 UTC.
 
 ## Where we are
 
-Step 0: analyses on existing data, node setup, design and the first work package. Nothing has trained or been evaluated
-on the new node yet.
+Step 0 is nearly done: all four analyses, the design (two reviews, both re-checked) and three implementation packages
+are finished; the packages are in code review. The node's environment and Lean are installed, but its model downloads
+stalled and are being fixed, so nothing has run on the GPUs yet.
 
 | Item | State | Result or file |
 |---|---|---|
 | Node: 4x RTX 3090, 61-core CPU quota, $0.89/h, billing since about 11:20 UTC | rented | `ssh -p 16657 root@104.233.209.157` |
-| Node setup: environment, Lean, models, data, v0 reproduction, throughput test | running | |
+| Node setup | environment and Lean done; model and dataset downloads stalled, being fixed; then v0 reproduction and throughput test | |
 | Analysis: compute and hardware of the old run | done | `results/followup_step0/throughput_and_hardware.md` |
 | Analysis: pool difficulty | done | `results/followup_step0/pool.md` |
-| Analysis: noise floor (v0 against itself, power of the new probe) | done | `results/followup_step0/noise_floor.md` |
-| Analysis: training signal per scheme on the recorded trees | running | `results/followup_step0/training_signal.md` |
-| Design section in `DESIGN.md` ("Follow-up study: controlled arms") | drafted, two reviews running | `results/reviews/2026-11-14_review_aa_*`, `_ab_*` |
-| Work package 1: probe v2, near-duplicate guard, curriculum by characters, full-probe evaluation | being implemented, then two reviews | |
-| Work package 2: log-probability of the Lean block only (search without the value model) | being implemented | |
-| Work packages 3 and 4a: pure proof-success credit; expert-iteration phase window | being implemented | |
-| Later packages: token-budget phases, expert iteration inside the loop, health checks per arm, study tooling | after the design reviews | |
+| Analysis: noise floor | done | `results/followup_step0/noise_floor.md` |
+| Analysis: training signal per scheme | done | `results/followup_step0/training_signal.md` |
+| Design section in `DESIGN.md` ("Follow-up study: controlled arms") | done, reviewed twice, re-checked | `results/reviews/2026-11-14_review_aa_*`, `_ab_*` |
+| Package: probe v2, near-duplicate guard, curriculum by characters, evaluation of any checkpoint | implemented, two code reviews running | branch `worktree-agent-afca96780ff18295f` |
+| Package: Lean-block-only log-probability; pure proof-success credit; expert-iteration window | implemented, two code reviews running | branch `followup-signals` |
+| Packages still to write: token-budget phases and seeds, health checks per arm, study tooling (launcher, slicing, arm comparison) | next | |
+| Package: expert iteration inside the loop | only after step 2, if that arm goes on | |
 
 ## Findings so far
 
@@ -36,13 +37,16 @@ on the new node yet.
 - **Noise floor.** v0 against itself: 16% of probe statements are solved in only one of two runs. On the 2,000-statement
   probe one paired comparison detects about 2.6 points, two runs per checkpoint about 1.9. With two seeds per arm, a
   5-point difference can be confirmed (seeds must agree within 1.6 points); 3 points cannot.
-- **Unsolved statements taught the policy nothing.** The design draft found that training groups are built only at
-  proof-graph nodes (`rl/grpo_groups.policy_groups`), so only solved trees train the policy; unsolved ones reach only
-  the value model. Graph credit against outcome-only is therefore a question of how credit is spread inside solved
-  trees. The training-signal analysis is confirming this on the recorded trees. An arm that really learns from
-  unsolved trees is a possible addition; to discuss at the next check-in.
-- **Evaluation cost.** A full probe run is expected to take several hours on this node, so the design's evaluation
-  plan is being cut down (screen learning rates on the 512 held-out states, probe only the finalists).
+- **The old run never trained the policy on unsolved statements.** Groups are built only at proof-graph nodes, by a
+  design decision of 2026-10-28. All 6,550 unsolved trees (41%) gave zero policy groups, and 82-85% of all policy
+  expansions were never used for the policy. The write-up's sentence that unsolved statements teach valid and failing
+  steps holds only for the value model.
+- **Graph credit and pure outcome are nearly the same signal.** On the recorded trees they use the same solved trees
+  and agree in sign on 92-94% of the advantage mass; they differ in the size of the advantages. A closed-loop pair of
+  these two would measure reward shaping and will probably not separate with one seed.
+- **Step sizes differ between signals at the same learning rate.** Sequence credit carries 1.4-2 times the advantage
+  mass of per-tactic credit; expert iteration trains on a tenth of the tokens at five times the rate. Arms should be
+  matched on step size (the same KL to v0 per phase), not only on learning rate.
 
 ## Plan
 
@@ -76,4 +80,16 @@ on the new node yet.
 
 | Item | Amount |
 |---|---|
-| Node, 2026-11-14 11:20 UTC to 12:15 UTC | about $0.8 |
+| Node, 2026-11-14 11:20 UTC to 12:45 UTC | about $1.3 |
+
+## For the owner's next check-in
+
+1. **Which arms to run.** Graph credit against pure outcome is expected to show little. Candidates with a larger
+   expected contrast: graph credit against expert iteration, and a new arm E that learns from unsolved trees and
+   off-graph expansions (the 82-85% never used). E brings back the conditions of the old reward hacking, so it would
+   get its own step-2 round and a habit check first.
+2. **Closed-loop outcome-only control.** Pure proof success instead of "whichever differs more" (a reviewer's point:
+   that rule selects on noise).
+3. **Proposed defaults.** 12M generated tokens per phase, 16 phases per arm; stop an arm at its first collapse; an
+   expert-iteration round every 4 phases in the interleaved arm.
+4. **Half probe.** 1,000 statements at intermediate checkpoints (phases 4 and 8), saving 4-6 hours per arm.

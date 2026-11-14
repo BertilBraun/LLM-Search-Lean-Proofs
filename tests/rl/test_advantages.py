@@ -18,7 +18,7 @@ from rl_samples import (
 
 from lean_search.rl.advantages import CreditMode, group_advantages, local_share_of_advantages
 from lean_search.rl.grpo_groups import tactic_reward
-from lean_search.search.tactic_labels import TacticOutcome
+from lean_search.search.tactic_labels import TacticLabel, TacticOutcome
 
 STEP = 0.2
 COST = 0.1
@@ -308,33 +308,37 @@ def test_proof_success_ignores_progress_and_wasted_tactics() -> None:
 
 
 @pytest.mark.parametrize(
-    ("labels", "advances"),
+    ("labels", "reaches"),
     [
         ((PROOF_GRAPH,), True),
         ((PROOF_GRAPH, FAILING, MASKED), True),
         ((UNKNOWN, PROOF_GRAPH), True),
         ((PROOF_GRAPH, NO_PROGRESS), True),
+        ((PROOF_GRAPH, OFF_GRAPH), True),
+        ((PROOF_GRAPH, UNKNOWN), True),
         ((FAILING,), False),
         ((NO_PROGRESS,), False),
         ((REDUNDANT,), False),
         ((NO_PROGRESS, FAILING, MASKED), False),
-        ((PROOF_GRAPH, OFF_GRAPH), False),
-        ((PROOF_GRAPH, UNKNOWN), False),
+        ((UNKNOWN, FAILING, MASKED), False),
         ((UNPROVED_CLAIM, FAILING, MASKED), False),
     ],
     ids=[
         "proof graph",
-        "advance then a failing tactic",
+        "proof graph then a failing tactic",
         "unknown then the proof graph",
-        "advance then a no-op",
+        "proof graph then a no-op",
+        "proof graph then a valid step off it",
+        "proof graph then a valid step into an unknown state",
         "first tactic fails",
         "no progress",
         "redundant",
         "no-op then a failing tactic",
-        "leaves the proof graph",
-        "valid continuation into an unknown state",
+        "unknown then a failing tactic",
         "unproved claim",
     ],
 )
-def test_sample_advances_on_the_proof_graph_by_its_last_state_with_a_reward(labels: tuple, advances: bool) -> None:
-    assert sample("s", *labels).advances_on_proof_graph is advances
+def test_sample_reaches_the_proof_graph_with_any_tactic_of_its_kept_prefix(
+    labels: tuple[TacticLabel, ...], reaches: bool
+) -> None:
+    assert sample("s", *labels).reaches_proof_graph is reaches

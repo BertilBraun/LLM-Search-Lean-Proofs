@@ -203,8 +203,9 @@ def graph_statistics(
     targets: Sequence[ValueTarget],
     tactics: Mapping[int, Sequence[TacticOutcome]],
     tree_groups: TreeGroups,
+    credit: CreditMode,
 ) -> GraphStatistics:
-    """`tactics` from `policy_tactics`, `tree_groups` from `policy_groups`."""
+    """`tactics` from `policy_tactics`, `tree_groups` from `policy_groups`; groups with a signal under `credit`."""
     on_path = {node.node_id for node in record.nodes if node.status == NodeStatus.PROVED}
     policy = [edge for edge in labels.edges if edge.source == StepSource.POLICY]
     into_proof = [edge for edge in labels.edges if is_into_proof_graph(edge, labels)]
@@ -268,7 +269,7 @@ def graph_statistics(
         ),
         groups=len(groups),
         group_samples=sum(group.sample_count for group in groups),
-        groups_with_signal=sum(group_advantages(group).has_signal(CreditMode.PER_TACTIC) for group in groups),
+        groups_with_signal=sum(group_advantages(group).has_signal(credit) for group in groups),
         groups_without_policy_proof=tree_groups.without_policy_proof,
         global_reward=sum(parts.global_part * weight for parts, weight in known),
         local_reward=sum(parts.local_part * weight for parts, weight in known),
