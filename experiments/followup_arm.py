@@ -54,7 +54,7 @@ def main() -> None:
     from_json_object(TrainingPhaseConfig, read_toml(directory / "phase.toml"))
     print(f"Wrote {directory}/loop.toml and phase.toml; the loop:")
     print(f"  python experiments/grpo_loop.py --config {directory}/loop.toml init")
-    print(f"  LOOP_CONFIG={directory}/loop.toml deployment/grpo_loop.sh loop")
+    print(f"  BACKGROUND_CPUS=<the throughput test's> LOOP_CONFIG={directory}/loop.toml deployment/grpo_loop.sh loop")
 
 
 if __name__ == "__main__":
