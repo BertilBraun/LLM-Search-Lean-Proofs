@@ -117,7 +117,9 @@ def test_loop_replays_the_flattened_sft_data(name: str) -> None:
     )
 
 
-@pytest.mark.parametrize("phase", ["grpo/phase.toml", "grpo/phase_sequence_credit.toml"])
+@pytest.mark.parametrize(
+    "phase", ["grpo/phase.toml", "grpo/phase_sequence_credit.toml", "grpo/phase_proof_success.toml"]
+)
 def test_phase_config_starts_where_the_loop_starts(phase: str) -> None:
     policy = tomllib.loads((CONFIGS / phase).read_text(encoding="utf-8"))["policy"]
     starting = loop("grpo/loop.toml")
@@ -125,13 +127,13 @@ def test_phase_config_starts_where_the_loop_starts(phase: str) -> None:
     assert (policy["model"], policy["initial_adapter"], policy["reference_adapter"]) == expected
 
 
-def test_sequence_credit_phase_differs_from_the_phase_only_in_its_credit() -> None:
-    phase, sequence = (
-        tomllib.loads((CONFIGS / name).read_text(encoding="utf-8"))
-        for name in ("grpo/phase.toml", "grpo/phase_sequence_credit.toml")
+@pytest.mark.parametrize("other", ["grpo/phase_sequence_credit.toml", "grpo/phase_proof_success.toml"])
+def test_other_credit_phase_differs_from_the_phase_only_in_its_credit(other: str) -> None:
+    phase, changed = (
+        tomllib.loads((CONFIGS / name).read_text(encoding="utf-8")) for name in ("grpo/phase.toml", other)
     )
-    sequence["policy"]["data"]["credit"] = phase["policy"]["data"]["credit"]
-    assert sequence == phase
+    changed["policy"]["data"]["credit"] = phase["policy"]["data"]["credit"]
+    assert changed == phase
 
 
 def shipped_policy() -> GrpoConfig:
@@ -314,6 +316,11 @@ def expert_iteration(name: str = "expert_iteration_1.toml") -> ExpertIterationCo
 
 def test_expert_iteration_config_parses() -> None:
     assert expert_iteration().sft.optimization.learning_rate == 5e-5
+
+
+@pytest.mark.parametrize("name", ["expert_iteration_1.toml", "expert_iteration_1_b.toml", "expert_iteration_1_c.toml"])
+def test_round_one_configs_take_their_phases_from_the_reward_fix(name: str) -> None:
+    assert expert_iteration(name).data.window_phases == 0
 
 
 @pytest.mark.parametrize(

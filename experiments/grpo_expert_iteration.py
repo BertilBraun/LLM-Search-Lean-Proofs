@@ -11,8 +11,10 @@ current policy adapter on the loop's own verified proof-graph blocks as sampled,
         --variants experiments/configs/grpo/expert_iteration_1_b.toml experiments/configs/grpo/expert_iteration_1_c.toml
     python experiments/grpo_expert_iteration.py --config ... compare --version N [--against M] [--held-out-only]
 
-The trees are those of [data] loop's phases from the reward fix's first phase (reward_fix.json) to [data] last_phase;
-only samples of the version that phase published or later count, never a rejected version's. count reads only the
+The trees are those of [data] loop's phases from the reward fix's first phase (reward_fix.json) to [data] last_phase,
+only samples of the version that phase published or later counting; with [data] window_phases = W those of the last W
+phases up to last_phase, only samples of the version the phase before them published or later counting (no
+reward_fix.json needed); never a rejected version's (rl/expert_iteration_data.phase_window). count reads only the
 tree index. build labels the solved trees in a process pool, selecting as the trees arrive, and writes
 $LEAN_SEARCH_DATA/grpo_expert_iteration/<[sft] data>/{train,validation}.jsonl (one ProofGraphCompletion per line: the
 recorded prompt and token ids), summary.json and README.md. train fine-tunes (training/sft.py) the loop's current
@@ -64,6 +66,7 @@ from lean_search.rl.expert_iteration_data import (
     data_summary,
     file_completions,
     parse_expert_iteration_config,
+    phase_window,
     replay_loss_change,
     screened,
     space_shortages,
@@ -182,26 +185,26 @@ class LoopInputs:
 def loop_inputs(config: ExpertIterationConfig) -> LoopInputs:
     """The loop's phases, versions, held-out sets and trees of those phases, as its run directory records them."""
     paths = loop_paths(config)
-    if not paths.reward_fix.exists():
-        raise SystemExit(f"{paths.reward_fix} is missing: the reward fix's first phase is unknown.")
-    first_phase = from_json_object(RewardFix, json.loads(paths.reward_fix.read_text(encoding="utf-8"))).first_phase
-    minimum_version = read_markers(paths.directory).reward_fix_version
-    if minimum_version is None:
-        raise SystemExit(f"No version was published by phase {first_phase}, the reward fix's first phase.")
+    reward_fix_phase = (
+        from_json_object(RewardFix, json.loads(paths.reward_fix.read_text(encoding="utf-8"))).first_phase
+        if paths.reward_fix.exists()
+        else None
+    )
     last_phase = config.data.last_phase or read_progress(paths.progress).phase - 1
+    window = phase_window(config.data.window_phases, last_phase, read_versions(paths.models), reward_fix_phase)
     loop_config = load_loop_config(paths.config)
     held_out_sets = {*loop_config.statements.held_out, loop_config.evaluation.probe_set}
     held_out_statements = {entry.name for path in held_out_sets for entry in read_fixed_set(DATA_DIRECTORY / path)}
     held_out_statements |= {problem.name for problem in load_minif2f()}
     states = read_records(RUNS_DIRECTORY / loop_config.evaluation.held_out_states_file, ReasoningState)
     completion_filter = CompletionFilter(
-        minimum_version=minimum_version,
+        minimum_version=window.minimum_version,
         rejected_versions=frozenset(read_rejected_versions(paths.rejected_versions)),
         held_out_statements=frozenset(held_out_statements),
         held_out_goal_keys=frozenset(goal_key(state.goals) for state in states),
     )
-    entries = tuple(entry for entry in index_entries(paths) if first_phase <= entry.phase <= last_phase)
-    return LoopInputs(paths, loop_config, first_phase, last_phase, completion_filter, entries)
+    entries = tuple(entry for entry in index_entries(paths) if window.holds(entry.phase))
+    return LoopInputs(paths, loop_config, window.first_phase, window.last_phase, completion_filter, entries)
 
 
 def count(config: ExpertIterationConfig) -> None:

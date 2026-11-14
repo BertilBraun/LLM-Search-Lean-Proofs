@@ -15,6 +15,8 @@ class CreditMode(StrEnum):
     PER_TACTIC = "per_tactic"
     # Every sampled token gets the sample's score minus the baseline (the single-step comparison).
     SEQUENCE = "sequence"
+    # Every sampled token gets r minus the group's mean r, r = 1 when the sample advances on the proof graph.
+    PROOF_SUCCESS = "proof_success"
 
 
 @dataclass(frozen=True)
@@ -26,6 +28,8 @@ class SampleAdvantages:
     tactics: tuple[float | None, ...]
     # The closing fence and end of turn: 0 after a complete block (stopping keeps the state reached), else None.
     closing: float | None
+    # r minus the group's proof-success baseline (`GroupSample.advances_on_proof_graph`).
+    proof_success: float
 
 
 @dataclass(frozen=True)
@@ -34,15 +38,23 @@ class GroupAdvantages:
     baseline: float | None
     # The same mean of their anchors' rewards: a later tactic's progress is not charged to the first.
     first_tactic_baseline: float | None
+    # The multiplicity-weighted share of samples advancing on the proof graph.
+    proof_success_baseline: float
     samples: tuple[SampleAdvantages, ...]
     # Multiplicity-weighted sums of |global part| and |local part| over the tactic advantages.
     global_magnitude: float
     local_magnitude: float
 
     def has_signal(self, mode: CreditMode) -> bool:
-        values = [sample.sequence for sample in self.samples]
-        if mode == CreditMode.PER_TACTIC:
-            values += [value for sample in self.samples for value in sample.tactics]
+        values: list[float | None]
+        match mode:
+            case CreditMode.PER_TACTIC:
+                values = [sample.sequence for sample in self.samples]
+                values += [value for sample in self.samples for value in sample.tactics]
+            case CreditMode.SEQUENCE:
+                values = [sample.sequence for sample in self.samples]
+            case CreditMode.PROOF_SUCCESS:
+                values = [sample.proof_success for sample in self.samples]
         return any(value is not None and abs(value) > ZERO_ADVANTAGE for value in values)
 
 
@@ -63,7 +75,10 @@ def tactic_advantage(tactic: TacticReward, baseline: RewardParts | None) -> Rewa
 
 
 def sample_advantages(
-    sample: GroupSample, baseline: RewardParts | None, first_tactic_baseline: RewardParts | None
+    sample: GroupSample,
+    baseline: RewardParts | None,
+    first_tactic_baseline: RewardParts | None,
+    proof_success_baseline: float,
 ) -> SampleAdvantages:
     score = sample.score
     tactics = [tactic_advantage(tactic, first_tactic_baseline) for tactic in sample.tactics]
@@ -71,6 +86,7 @@ def sample_advantages(
         None if score is None or baseline is None else score - baseline.total,
         tuple(None if parts is None else parts.total for parts in tactics),
         0.0 if sample.complete else None,
+        float(sample.advances_on_proof_graph) - proof_success_baseline,
     )
 
 
@@ -81,6 +97,10 @@ def group_advantages(group: PolicyGroup) -> GroupAdvantages:
     if scored:
         baseline = weighted_mean([sample.score_parts for sample in scored], weights)
         first_tactic_baseline = weighted_mean([sample.anchor_parts for sample in scored], weights)
+    proof_success_baseline = (
+        sum(float(sample.advances_on_proof_graph) * sample.multiplicity for sample in group.samples)
+        / group.sample_count
+    )
     advantages = [
         (parts, sample.multiplicity)
         for sample in group.samples
@@ -90,7 +110,11 @@ def group_advantages(group: PolicyGroup) -> GroupAdvantages:
     return GroupAdvantages(
         baseline=None if baseline is None else baseline.total,
         first_tactic_baseline=None if first_tactic_baseline is None else first_tactic_baseline.total,
-        samples=tuple(sample_advantages(sample, baseline, first_tactic_baseline) for sample in group.samples),
+        proof_success_baseline=proof_success_baseline,
+        samples=tuple(
+            sample_advantages(sample, baseline, first_tactic_baseline, proof_success_baseline)
+            for sample in group.samples
+        ),
         global_magnitude=sum(abs(parts.global_part) * weight for parts, weight in advantages),
         local_magnitude=sum(abs(parts.local_part) * weight for parts, weight in advantages),
     )

@@ -136,7 +136,14 @@ value. After a failure the closing follows masked tactics and stays untrained.
 
 A sample without a span per executed tactic (no usable block, spans not recorded) gets
 score − b on every sampled token, so an unparsed sample scores like a failing tactic over its whole completion.
-Sequence credit sees the progress and the wasted-tactic costs through the score.
+Sequence credit sees the progress and the wasted-tactic costs through the score. `proof_success` credit (the
+follow-up study's outcome-only control, `phase_proof_success.toml`) sees none of them: r = 1 when the sample advances
+on the proof graph (`GroupSample.advances_on_proof_graph`): its edge is a forward one (new state, sibling state,
+transposition: no failure, no-op, return to an ancestor or unverified proof) and the last tactic of its kept prefix
+reaching a state with a reward is labelled proof graph (a no-progress or redundant tactic after it keeps r = 1, one
+alone gets 0; a later failing tactic is free; a valid continuation off the proof graph gets 0); else 0. Every sampled
+token but the inserted ones gets r minus the group's multiplicity-weighted mean r, and a group trains only when its
+samples' r differ.
 
 Tokens are the recorded ones (`SampledCompletion.tokens.token_ids`, no re-tokenization; the prompt is the recorded
 prompt encoded without special tokens, as vLLM does). Their characters come from decoding them one by one with the
@@ -818,11 +825,13 @@ variants train on the same data (`experiments/configs/grpo/expert_iteration_1.to
 two validation losses; the best two are published and evaluated, the winner kept.
 
 **Data** (`build`, a CPU process pool beside the sampling loop). The trees of the phases from the reward fix's first
-phase (`reward_fix.json`) to `[data] last_phase`, labelled with the loop's own `label_graph` and `policy_tactics`. A
-recorded sample is an example when its node is on the proof graph, it is a first-round sample (not the feedback
-round's) of a version from the one the fix's first phase published on (`probe_rating.read_markers`), never a rejected
-version's, its every tactic is on the proof graph, none leaves a claim open, and it is on a shortest route: its last
-state is as many steps closer to a proof as it has tactics. The example is the recorded prompt's ids plus the recorded
+phase (`reward_fix.json`) to `[data] last_phase`, labelled with the loop's own `label_graph` and `policy_tactics`; with
+`[data] window_phases` = W instead the last W phases up to `last_phase` (fewer while fewer have finished; no
+`reward_fix.json` needed), the follow-up study's sliding window (`phase_window`). A recorded sample is an example when
+its node is on the proof graph, it is a first-round sample (not the feedback round's) of a version from the one the
+fix's first phase published on (`probe_rating.read_markers`; in a window: from the one the phase before it published,
+version 0 before any), never a rejected version's, its every tactic is on the proof graph, none leaves a claim open,
+and it is on a shortest route: its last state is as many steps closer to a proof as it has tactics. The example is the recorded prompt's ids plus the recorded
 token ids, the loop's `PolicySequence.tokenized`; samples tokenized again, forced at the token cap or whose tokens do
 not decode to their text are dropped. Trees of the probe, gate and miniF2F statements and states equal to a held-out
 state are dropped too (both counts should be 0). Then: one example per state across trees, at most `blocks_per_state`

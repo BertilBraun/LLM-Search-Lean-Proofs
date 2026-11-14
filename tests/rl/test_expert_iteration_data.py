@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from test_policy_data import CharacterTokenizer, completion, forced_completion
 
+from lean_search.expert_iteration.serving import LoopPaths, ModelVersion, read_versions
 from lean_search.lean import ProofState
 from lean_search.policy.prompts import render_prompt
 from lean_search.reasoning.dataset import ReasoningExample, ReasoningOrigin, write_examples
@@ -14,6 +15,7 @@ from lean_search.rl.expert_iteration_data import (
     CompletionFilter,
     CompletionSelector,
     ExpertIterationDataConfig,
+    PhaseWindow,
     ProofGraphCompletion,
     ReplayConfig,
     SpaceRequirement,
@@ -22,6 +24,7 @@ from lean_search.rl.expert_iteration_data import (
     ValidationPoint,
     data_summary,
     examples_within_completion_tokens,
+    phase_window,
     proof_graph_completions,
     read_completions,
     replay_loss_change,
@@ -32,8 +35,9 @@ from lean_search.rl.expert_iteration_data import (
     training_data,
     write_completions,
 )
-from lean_search.rl.health_checks import ContinuedVersion
+from lean_search.rl.health_checks import ContinuedVersion, RewardFix
 from lean_search.rl.policy_data import PolicyDataConfig, build_policy_data
+from lean_search.rl.probe_rating import read_markers
 from lean_search.rl.training_phase import TrainingPhaseConfig, label_phase_data
 from lean_search.search import (
     Accounting,
@@ -48,6 +52,7 @@ from lean_search.search import (
     tree_record,
 )
 from lean_search.search.graph_labels import goal_key
+from lean_search.search.records import to_json
 from lean_search.search.texts import ExpansionTexts, SampledCompletion, SampledTokens
 from lean_search.search.tree import Node
 from lean_search.training.math_data import MathSolution, write_solutions
@@ -447,3 +452,48 @@ def test_a_variant_whose_replay_loss_rose_too_much_does_not_survive_the_screen()
 
 def test_the_screen_publishes_the_gentlest_survivor_first_and_the_strongest_second() -> None:
     assert (SCREENED.first.config, SCREENED.second.config) == ("a.toml", "c.toml")
+
+
+# Published by phases 1 to 5, with a rollback after phase 2 (its trigger is no phase's).
+TRIGGERS = ["initial", "phase 1", "phase 2", "rollback to v1 after phase 2", "phase 3", "phase 4", "phase 5"]
+VERSIONS = [ModelVersion(number, "policy", "value", "2026-11-14", trigger) for number, trigger in enumerate(TRIGGERS)]
+
+
+def test_a_window_holds_its_last_phases_from_the_version_the_phase_before_it_published() -> None:
+    assert phase_window(2, 5, VERSIONS, None) == PhaseWindow(4, 5, 4)
+
+
+def test_a_window_after_a_rollback_keeps_the_rollbacks_version() -> None:
+    assert phase_window(3, 5, VERSIONS, None).minimum_version == 2
+
+
+@pytest.mark.parametrize(("phase", "held"), [(3, False), (4, True), (5, True), (6, False)])
+def test_a_window_holds_exactly_its_phases(phase: int, held: bool) -> None:
+    assert phase_window(2, 5, VERSIONS, None).holds(phase) is held
+
+
+def test_a_window_wider_than_the_finished_phases_starts_at_phase_one_with_version_zero() -> None:
+    assert phase_window(4, 2, VERSIONS, None) == PhaseWindow(1, 2, 0)
+
+
+def test_a_window_reads_no_reward_fix_when_the_run_has_one() -> None:
+    assert phase_window(1, 5, VERSIONS, 2) == PhaseWindow(5, 5, 5)
+
+
+def test_an_empty_window_is_refused() -> None:
+    with pytest.raises(ValueError, match="empty"):
+        phase_window(4, 0, VERSIONS, None)
+
+
+def test_a_run_without_a_reward_fix_needs_a_window() -> None:
+    with pytest.raises(ValueError, match="window_phases"):
+        phase_window(0, 5, VERSIONS, None)
+
+
+def test_without_a_window_the_reward_fix_decides_the_phases_and_versions_as_before(tmp_path: Path) -> None:
+    run = LoopPaths(tmp_path, tmp_path, "run")
+    run.versions.parent.mkdir(parents=True)
+    run.versions.write_text("".join(f"{to_json(version)}\n" for version in VERSIONS), encoding="utf-8")
+    (run.directory / "reward_fix.json").write_text(to_json(RewardFix(3, "2026-10-31")), encoding="utf-8")
+    expected = PhaseWindow(3, 5, read_markers(run.directory).reward_fix_version)
+    assert phase_window(0, 5, read_versions(run), 3) == expected

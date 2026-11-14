@@ -107,8 +107,9 @@ def test_every_recorded_completion_of_a_trained_group_is_a_sequence() -> None:
     assert [sequence.edge_id for sequence in policy_data().sequences] == [0, 0, 1]
 
 
-def test_groups_without_a_non_zero_advantage_are_dropped() -> None:
-    assert {sequence.node_id for sequence in policy_data().sequences} == {0}
+@pytest.mark.parametrize("credit", list(CreditMode))
+def test_groups_without_a_non_zero_advantage_are_dropped(credit: CreditMode) -> None:
+    assert {sequence.node_id for sequence in policy_data(credit=credit).sequences} == {0}
 
 
 def test_sequences_train_on_the_recorded_token_ids() -> None:
@@ -166,6 +167,11 @@ def test_records_without_tokens_are_tokenized_again() -> None:
 
 def test_sequence_credit_trains_every_token_of_a_failed_sample() -> None:
     assert all(policy_data(credit=CreditMode.SEQUENCE).sequences[2].trained)
+
+
+def test_proof_success_credit_gives_every_token_of_a_failed_sample_minus_the_mean_r() -> None:
+    sequence = policy_data(credit=CreditMode.PROOF_SUCCESS).sequences[2]
+    assert (set(sequence.advantages), all(sequence.trained)) == ({-0.5}, True)
 
 
 def test_tactic_counts_of_the_trained_groups() -> None:
