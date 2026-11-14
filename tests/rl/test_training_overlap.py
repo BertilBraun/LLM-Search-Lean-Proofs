@@ -5,6 +5,7 @@ import pytest
 
 from lean_search.corpora.records import StatementRecord
 from lean_search.expert_iteration.curriculum import CurriculumConfig
+from lean_search.expert_iteration.near_duplicates import estimated_jaccard
 from lean_search.rl.fixed_sets import CharacterCandidate, CharacterStrataConfig, Exclusions, HeldOutStatement
 from lean_search.rl.training_overlap import (
     exhaustive_duplicates,
@@ -55,6 +56,21 @@ def test_a_case_tag_is_left_out() -> None:
 
 def test_reordered_hypotheses_give_the_same_statement() -> None:
     assert goal_statement(REORDERED_ROOT) == goal_statement(ROOT)
+
+
+SUMS = ("x y z : ℝ\nh₀ : x = 1\nh₁ : y = 2\nh₂ : z = 3\n⊢ x + y + z = 6",)
+# Renamed so that the names sort the other way round, and the hypotheses reordered.
+RENAMED_AND_REORDERED_SUMS = ("c b a : ℝ\nh₂ : a = 3\nh₀ : c = 1\nh₁ : b = 2\n⊢ c + b + a = 6",)
+
+
+def test_a_renamed_and_reordered_duplicate_has_the_same_anonymized_tokens() -> None:
+    first, second = fingerprints([SUMS, RENAMED_AND_REORDERED_SUMS]).keys
+    assert first == second
+
+
+def test_a_renamed_and_reordered_duplicate_scores_jaccard_one() -> None:
+    signatures = fingerprints([SUMS, RENAMED_AND_REORDERED_SUMS]).signatures
+    assert estimated_jaccard(signatures[0], signatures[1]) == 1.0
 
 
 def test_variables_come_before_the_hypotheses_in_their_own_order() -> None:

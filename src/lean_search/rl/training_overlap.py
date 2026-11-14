@@ -31,9 +31,16 @@ def is_hypothesis(names: str) -> bool:
     return all(name.startswith("h") or name == "this" for name in names.split())
 
 
+def anonymized_type(variable_binders: str, type_text: str) -> str:
+    """A hypothesis's type with the variables named by their position (as the near-duplicate tokens name them), so
+    that renaming the variables does not change it."""
+    return " ".join(anonymized_statement_tokens(f"theorem t {variable_binders} (h : {type_text}) := by"))
+
+
 def goal_statement(goals: Sequence[str]) -> str:
     """`x y : ℝ`, `h : 0 < x`, `⊢ x * y ≤ 1` as `theorem goal (x y : ℝ) (h : 0 < x) : x * y ≤ 1 := by`: the variables
-    in their order, then the hypotheses (names starting with h, or `this`) ordered by their types."""
+    in their order, then the hypotheses (names starting with h, or `this`) ordered by their types with the variables
+    anonymized, so neither reordering the hypotheses nor renaming the variables changes the order."""
     variables = []
     hypotheses = []
     conclusions = []
@@ -50,7 +57,9 @@ def goal_statement(goals: Sequence[str]) -> str:
                 continue
             names, _, type_text = entry.partition(" : ")
             (hypotheses if is_hypothesis(names) else variables).append((type_text.strip(), names))
-    binders = " ".join(f"({names} : {type_text})" for type_text, names in [*variables, *sorted(hypotheses)])
+    variable_binders = " ".join(f"({names} : {type_text})" for type_text, names in variables)
+    ordered = sorted(hypotheses, key=lambda hypothesis: anonymized_type(variable_binders, hypothesis[0]))
+    binders = " ".join(f"({names} : {type_text})" for type_text, names in [*variables, *ordered])
     return f"theorem goal {binders} : {' ∧ '.join(conclusions)} := by"
 
 
