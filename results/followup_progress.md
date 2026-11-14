@@ -2,7 +2,7 @@
 
 Kept current by the orchestrator. Details live in the linked files.
 
-**Last update:** 2026-11-14, 21:55 UTC.
+**Last update:** 2026-11-14, 22:25 UTC.
 
 ## Where we are
 
@@ -19,6 +19,21 @@ re-review.
 | Merged packages | probe v2 and evaluation tool; signal packages; token-budget phases and health; study tooling; serving resilience | reviews `_ac_` to `_al_` in `results/reviews/` |
 | Not built: expert iteration inside the loop | only after step 2, if that arm goes on | |
 | Watchdog | every 30 minutes while this session is open; a supervisor on the node restarts servers and resumes runs by itself | |
+
+## Step 1 results so far
+
+**Anchor run 1** (v0 with value v0, 2,000 statements, 16 expansions; finished 22:10 UTC, accepted): 722 solved (36.1%),
+no wall-clock stops, 39.9M generated tokens, 23,814 expansions (1,677 tokens per expansion), about 4.5 hours in total.
+
+| Proof characters | 0-499 | 500-999 | 1,000-1,499 | 1,500-1,999 | 2,000-2,999 | 3,000-4,499 | 4,500+ |
+|---|---|---|---|---|---|---|---|
+| Solved | 120/150 (80%) | 159/250 (64%) | 156/350 (45%) | 134/350 (38%) | 101/400 (25%) | 39/300 (13%) | 13/200 (6.5%) |
+
+- Anchor run 2 started at 22:11 UTC on the same code and settings; about 4.2 hours.
+- Results are pulled to the PC every 10 minutes (`node_backup/2026-11-14/live/`); finished runs are also copied to
+  `node_backup/2026-11-14/anchor_v0_value_v0_run1/`.
+- The run's last searches left the GPUs mostly idle for about 25 minutes. Planned fix (with review): submit the
+  longest statements first, and let the next run with the same weights fill free slots.
 
 ## Plan for the night of 2026-11-14 (set 21:55 UTC)
 
