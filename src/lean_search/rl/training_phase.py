@@ -530,6 +530,24 @@ def grpo_phase_record(
         proof_success_failing_tail_share=data.proof_success_failing_tail_share,
         proof_success_no_closer_share=data.proof_success_no_closer_share,
         sampling_seconds=sampling_seconds,
+        optimizer_steps=result.steps,
+        kl_loss_share=None if result.loss_shares is None else result.loss_shares.kl_penalty,
+        replay_loss_share=None if result.loss_shares is None else result.loss_shares.replay,
+    )
+
+
+def policy_update_text(phase: int, policy: PolicyOutcome) -> str:
+    """The update's size, to compare step sizes between arms."""
+    result = policy.result
+    shares = result.loss_shares
+    loss = (
+        "loss shares not measured"
+        if shares is None
+        else f"the KL penalty {shares.kl_penalty:.1%} and the replay {shares.replay:.1%} of the loss"
+    )
+    return (
+        f"Policy update of phase {phase}: {result.steps} optimizer steps, {result.trained_tokens:,} trained tokens, "
+        f"{policy.replay_examples} replay examples, {loss}"
     )
 
 

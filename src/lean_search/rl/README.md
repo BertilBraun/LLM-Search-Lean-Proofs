@@ -580,15 +580,17 @@ its threshold dashed, and its alert list shows the latest phase's alerts. Thresh
 
 | Check | Signal | Default threshold | Reference |
 |---|---|---|---|
-| `kl_to_starting_policy` | KL (k1, per token) to the starting policy, the mean over the last pass's reference tokens of the first round (`final_first_round_kl_to_reference`) | > 0.5 | absolute (version 0's is 0; 0.5 nats per token flags a policy far from its start; phases before 2026-10-31 report a median of k3 step means, which reads 0 or 10^1-10^7) |
-| `clip_fraction` | clip fraction of the last pass's trained tokens | > 0.1 | absolute (PPO runs usually stay below 0.1-0.2) |
+| `kl_to_starting_policy` | KL (k1, per token) to the starting policy, the mean over the last pass's reference tokens of the first round (`final_first_round_kl_to_reference`); the GRPO trainer's, not measured in a phase without a GRPO update | > 0.5 | absolute (version 0's is 0; 0.5 nats per token flags a policy far from its start; phases before 2026-10-31 report a median of k3 step means, which reads 0 or 10^1-10^7) |
+| `clip_fraction` | clip fraction of the last pass's trained tokens; GRPO only, like the KL | > 0.1 | absolute (PPO runs usually stay below 0.1-0.2) |
 | `distinct_samples` | distinct blocks per policy expansion (of n = 8) | < 0.75 × reference | mean of the first `reference_phases` (2) phases |
-| `explanation_length` | mean explanation tokens of the trained samples | outside 0.5-2 × reference | the first phases |
+| `explanation_length` | mean tokens up to the opening fence over every first-round sample with recorded tokens, from the trees (`BlockHabits.explanation_tokens`, counted with the policy's tokenizer as each tree finishes; phases before 2026-11-14 took the trained samples' from the trainer) | outside 0.5-2 × reference | the first phases |
 | `cut_off_samples` | share of policy samples cut off at the token cap (repetition loops shown with it) | > max(2 × reference, reference + 0.01) | the first phases |
 | `valid_blocks` | share of the phase's distinct policy blocks Lean judged that ran completely (`TreeSummary.valid_blocks`, free) | < 0.85 × reference: the held-out states run at the next pause | the first phases |
 | `bare_haves` | share of the samples with a block that open with a bare `have h : A` (first top-level tactic without `:=`, with `have`, `haveI`, `letI` or `rsuffices` anywhere in it: `try have`, `all_goals have`, after `<;>`; `TreeSummary.habits`) | > 1.5 × reference (`max_bare_have_factor`) | the first phases |
 | `claims_proved` | of the bare-`have` samples whose block leaves the claim open (`leaves_claim_open`), the share the tree proves (no `unproved_claim` label) | < 0.5 × reference (`min_claim_proved_fraction`) | the first phases |
 | `explanation_characters` | median explanation characters before the opening fence, per sample (10-character bins, interpolated) | < 0.7 × reference (`min_explanation_characters_fraction`) | the first phases |
+| `failing_after_proof_graph` | share of the samples with a block whose block reaches the proof graph and then runs a failing tactic (`BlockHabits.failing_after_proof_graph`) | > 1.5 × reference (`max_after_proof_graph_factor`), warning only | the first phases |
+| `unproved_claim_after_proof_graph` | share of the samples with a block whose last tactic reaching a state after a proof-graph tactic is a claim the tree never proves | > 1.5 × reference (`max_after_proof_graph_factor`), warning only | the first phases |
 | `held_out_valid_lean` | share of held-out samples whose block runs completely in Lean | < 0.9 × version 0's (warning); **< 0.7 × version 0's: a collapse** (rollback, below) | version 0's held-out evaluation |
 | `held_out_success` | held-out per-sample success | < 0.9 × version 0's | version 0's held-out evaluation |
 | `search_budget` | share of solves in the budget's last quarter, pooled over the last 3 phases | > 0.10 (a note) | absolute |
@@ -607,7 +609,15 @@ the phase alike. Relative thresholds stay unset (no alert) until their reference
 schedule and the hard stop on, the loop refuses to start without version 0's held-out evaluation (or with one without
 valid samples), since the stop could never fire.
 
-The block habits (`bare_haves`, `claims_proved`, `explanation_characters`, and charted without a check: the
+Every check but the KL and the clip fraction reads the phase's trees, so it means the same whatever trains the
+policy (GRPO under any credit, expert iteration): an arm's reference is its own first phase(s), which version 0
+sampled, and a phase without GRPO statistics passes the checks with those two unmeasured; the collapse stop needs only
+the held-out states. Each phase also logs its update's size (`Policy update of phase <k>: ...`, and on the `grpo`
+line): optimizer steps, trained tokens, replay examples and the KL penalty's and the replay's shares of the summed
+loss-term magnitudes (`policy_trainer.loss_shares`).
+
+The block habits (`bare_haves`, `claims_proved`, `explanation_characters`, the tails after the proof graph, and charted
+without a check: the
 closed-form filler share, `have … :=` and linarith/nlinarith openings, tactics per complete block and the continue rate
 after a proof-graph step with goals left) are warnings only, from the first round's samples, logged every phase
 (`Block habits of phase <k> (the reward fix trains from phase <m>): ...`; `reward_fix.json`, written at the first start

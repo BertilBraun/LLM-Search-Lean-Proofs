@@ -353,6 +353,11 @@ class GrpoPhase:
     proof_success_no_closer_share: float = 0.0
     # The searches that produced the phase's data; with training_seconds it decides one or two passes.
     sampling_seconds: float | None = None
+    # The update's size beside the other arms': its optimizer steps, and of its summed loss-term magnitudes the KL
+    # penalty's and the replay's shares (`policy_trainer.loss_shares`).
+    optimizer_steps: int = 0
+    kl_loss_share: float | None = None
+    replay_loss_share: float | None = None
 
 
 @dataclass(frozen=True)
@@ -574,14 +579,16 @@ class BudgetPhase:
 class HealthMeasurements:
     """A phase's training-stability signals (rl/health_checks.py); None when not measured in this phase."""
 
-    # KL (k3, per token) of the trained policy to the starting policy and the clip fraction, both of the last pass.
+    # KL (k3, per token) of the trained policy to the starting policy and the clip fraction, both of the last pass:
+    # the GRPO trainer's, None in a phase without a GRPO update.
     kl_to_starting_policy: float | None = None
     clip_fraction: float | None = None
     # Per policy expansion of the phase's searches (n = 8 samples): distinct blocks (identical ones run once), and
     # distinct sample texts.
     distinct_samples_per_expansion: float | None = None
     distinct_texts_per_expansion: float | None = None
-    # Explanation tokens of the trained samples.
+    # Per first-round sample of the phase's trees, its tokens up to the opening fence (`BlockHabits`): the same
+    # measure whatever trains the policy.
     mean_explanation_tokens: float | None = None
     # Policy samples cut off at the token cap (their answer forced), and those repeating their own text.
     cut_off_share: float | None = None
@@ -612,6 +619,12 @@ class HealthMeasurements:
     below_band_bare_have_share: float | None = None
     below_band_claim_proved_rate: float | None = None
     below_band_median_explanation_characters: float | None = None
+    # Of the same samples: those reaching the proof graph and then running a failing tactic, or ending in a claim the
+    # tree never proves (`BlockHabits`), all statements and those from below the band.
+    failing_after_proof_graph_share: float | None = None
+    unproved_claim_after_proof_graph_share: float | None = None
+    below_band_failing_after_proof_graph_share: float | None = None
+    below_band_unproved_claim_after_proof_graph_share: float | None = None
 
 
 @dataclass(frozen=True)
@@ -633,6 +646,8 @@ class HealthThresholds:
     max_bare_have_share: float | None = None
     min_claim_proved_rate: float | None = None
     min_explanation_characters: float | None = None
+    max_failing_after_proof_graph_share: float | None = None
+    max_unproved_claim_after_proof_graph_share: float | None = None
 
 
 class HealthCheck(StrEnum):
@@ -648,6 +663,8 @@ class HealthCheck(StrEnum):
     BARE_HAVES = "bare_haves"
     CLAIMS_PROVED = "claims_proved"
     EXPLANATION_CHARACTERS = "explanation_characters"
+    FAILING_AFTER_PROOF_GRAPH = "failing_after_proof_graph"
+    UNPROVED_CLAIM_AFTER_PROOF_GRAPH = "unproved_claim_after_proof_graph"
 
 
 class HealthSeverity(StrEnum):

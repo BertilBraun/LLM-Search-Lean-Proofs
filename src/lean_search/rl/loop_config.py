@@ -261,6 +261,9 @@ class HealthConfig:
     max_bare_have_factor: float = 1.5
     min_claim_proved_fraction: float = 0.5
     min_explanation_characters_fraction: float = 0.7
+    # The same rule as the bare `have`s for the blocks running a failing tactic, or ending in a claim the tree never
+    # proves, after a proof-graph tactic: the tails proof-success credit leaves uncharged.
+    max_after_proof_graph_factor: float = 1.5
     # The share of solves in the budget's last quarter, pooled over the last `late_solve_phases` phases, above which
     # a larger `sampling.max_expansions` is suggested.
     max_late_solve_share: float = 0.10

@@ -151,6 +151,7 @@ from lean_search.rl.training_phase import (
     grpo_phase_record,
     label_phase_data,
     next_version,
+    policy_update_text,
     publish_phase,
 )
 from lean_search.rl.tree_store import SearchEnd, TreeStore
@@ -166,6 +167,7 @@ from lean_search.rl.value_trends import (
 )
 from lean_search.search import CompletedSearch, tree_record
 from lean_search.search.records import from_json_object, to_json
+from lean_search.search.texts import TokenDecoder
 from lean_search.training.resident import HostDirectories
 from lean_search.value.benchmark import BenchmarkScores, ValueBenchmark
 from lean_search.value.bins import Readout
@@ -736,12 +738,15 @@ class GrpoLoop:
         value_readout: Readout = DEFAULT_READOUT,
         value_benchmark: ValueBenchmarkScoring | None = None,
         gpu_memory: Callable[[], str] = not_measured,
+        decoder: TokenDecoder | None = None,
     ) -> None:
         """`phase_template`: the text of the training phase config (config.training.phase_config); `host_memory`
         describes the node's memory for the log at the pause's stage boundaries, `gpu_memory` the training GPUs' free
         memory before their servers wake; `value_readout`: A*'s readout of the value bins, for the value metrics;
-        `value_benchmark`: scored by every newly served value model."""
+        `value_benchmark`: scored by every newly served value model; `decoder`: the policy's tokenizer, which counts
+        the samples' explanation tokens in each tree's summary (none without it)."""
         self.config = config
+        self.decoder = decoder
         self.value_readout = value_readout
         self.value_benchmark = value_benchmark
         # The value benchmark's scoring in flight, during sampling.
@@ -1063,6 +1068,7 @@ class GrpoLoop:
                 self.config.sampling.max_expansions,
                 start.arm,
                 fed.below_band,
+                self.decoder,
             )
         except Exception as error:
             self.trees_left_out += 1
@@ -1773,6 +1779,7 @@ class GrpoLoop:
     def write_training_metrics(self, outcome: PhaseOutcome, candidate_version: int) -> None:
         if outcome.policy is not None:
             self.writer.write(grpo_phase_record(outcome.policy, self.progress.sampling_seconds, candidate_version - 1))
+            self.log(policy_update_text(self.progress.phase, outcome.policy))
         if outcome.value is not None:
             value = outcome.value
             self.writer.write(

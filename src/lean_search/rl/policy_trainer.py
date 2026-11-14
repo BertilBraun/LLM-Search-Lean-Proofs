@@ -147,6 +147,26 @@ class GrpoStepRecord:
     first_round_clip_fraction: float = 0.0
     first_round_reference_tokens: int = 0
     first_round_trained_tokens: int = 0
+    # The KL penalty's term of `loss` (kl_coefficient times the weighted k3 over the normalizer).
+    kl_penalty: float = 0.0
+
+
+@dataclass(frozen=True)
+class LossShares:
+    """Of the summed magnitudes of the steps' loss terms (|policy loss|, the KL penalty, the weighted replay NLL), the
+    KL penalty's and the replay's: how much of the update the anchors to the start take."""
+
+    kl_penalty: float
+    replay: float
+
+
+def loss_shares(records: Sequence[GrpoStepRecord], replay_weight: float) -> LossShares | None:
+    """None without a step or with every term 0."""
+    policy = sum(abs(record.policy_loss) for record in records)
+    kl_penalty = sum(record.kl_penalty for record in records)
+    replay = replay_weight * sum(record.replay_nll for record in records)
+    total = policy + kl_penalty + replay
+    return LossShares(kl_penalty / total, replay / total) if total else None
 
 
 @dataclass(frozen=True)
@@ -180,6 +200,8 @@ class GrpoTrainingResult:
     # first-round tokens (and in older outcomes).
     final_first_round_kl_to_reference: float | None = None
     final_first_round_clip_fraction: float | None = None
+    # Over every step (`loss_shares`); None in older outcomes.
+    loss_shares: LossShares | None = None
 
 
 def clipped_policy_losses(
@@ -743,6 +765,7 @@ def train_grpo(
             first_round_clip_fraction=first_round_clipped / max(1.0, first_round_tokens),
             first_round_reference_tokens=int(first_round_reference_tokens),
             first_round_trained_tokens=int(first_round_tokens),
+            kl_penalty=loss - policy_loss,
         )
         records.append(record)
         if ranks.is_main:
@@ -785,6 +808,7 @@ def train_grpo(
             [record.first_round_reference_tokens for record in last_pass],
         ),
         final_first_round_clip_fraction=mean(first_round_clip) if first_round_clip else None,
+        loss_shares=loss_shares(records, config.replay_weight),
     )
 
 
