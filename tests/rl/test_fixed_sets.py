@@ -1,3 +1,5 @@
+import dataclasses
+import json
 from collections import Counter
 from pathlib import Path
 
@@ -17,6 +19,7 @@ from lean_search.rl.fixed_sets import (
     character_stratum,
     read_fixed_set,
     same_statements,
+    searched_problem_names,
     select_by_characters,
     select_fixed_sets,
     select_overfit_set,
@@ -122,7 +125,7 @@ CHARACTERS = CharacterStrataConfig(
     edges=(500, 1000),
     counts=(2, 3, 1),
 )
-NO_EXCLUSIONS = Exclusions(frozenset(), frozenset(), frozenset())
+NO_EXCLUSIONS = Exclusions(frozenset(), frozenset(), frozenset(), frozenset())
 
 
 def with_characters(number: int, characters: int) -> VerifiedStatement:
@@ -176,22 +179,33 @@ def test_the_character_selection_is_deterministic() -> None:
     ]
 
 
-@pytest.mark.parametrize("reason", ["fixed_sets", "held_out_states", "near_training_duplicates"])
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "fixed_sets",
+        "searched_by_old_run",
+        "held_out_states",
+        "near_training_duplicates",
+        "drawn_near_training_duplicates",
+    ],
+)
 def test_excluded_statements_are_never_drawn(reason: str) -> None:
     excluded = frozenset(drawn())
-    exclusions = Exclusions(
-        excluded if reason == "fixed_sets" else frozenset(),
-        excluded if reason == "held_out_states" else frozenset(),
-        excluded if reason == "near_training_duplicates" else frozenset(),
-    )
+    exclusions = dataclasses.replace(NO_EXCLUSIONS, **{reason: excluded})
     assert not set(drawn(exclusions)) & excluded
 
 
 def test_the_draw_reports_each_bands_drops_under_their_first_reason() -> None:
-    names = ["s.c0", "s.c1", "s.c2"]
-    exclusions = Exclusions(frozenset(names[:1]), frozenset(names[:2]), frozenset(names))
+    names = ["s.c0", "s.c1", "s.c2", "s.c3", "s.c4"]
+    exclusions = Exclusions(*(frozenset(names[: count + 1]) for count in range(5)))
     selection = select_by_characters(character_candidates(CHARACTER_POOL, CHARACTERS), CHARACTERS, exclusions)
-    assert selection.strata[0] == StratumDraw("0-499", 10, 1, 1, 1, 2)
+    assert selection.strata[0] == StratumDraw("0-499", 10, 1, 1, 1, 1, 1, 2)
+
+
+def test_the_statements_a_loop_searched_are_read_from_its_tree_index(tmp_path: Path) -> None:
+    lines = [{"sequence": number, "problem_name": f"s.c{number % 2}", "phase": 1} for number in range(3)]
+    (tmp_path / "index.jsonl").write_text("".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8")
+    assert searched_problem_names(tmp_path / "index.jsonl") == {"s.c0", "s.c1"}
 
 
 def test_a_band_with_too_few_statements_is_refused() -> None:

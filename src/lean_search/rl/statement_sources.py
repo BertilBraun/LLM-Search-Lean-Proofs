@@ -9,7 +9,12 @@ from pathlib import Path
 from typing import Protocol
 
 from lean_search.corpora.records import StatementRecord
-from lean_search.expert_iteration.curriculum import Curriculum, CurriculumConfig, CurriculumState
+from lean_search.expert_iteration.curriculum import (
+    Curriculum,
+    CurriculumConfig,
+    CurriculumState,
+    check_frozen_pool,
+)
 from lean_search.expert_iteration.known_proofs import read_index, read_verified
 from lean_search.expert_iteration.pool import pool_problem, problem_name
 from lean_search.expert_iteration.pool_search import PRELOADED_HEADER_SHARE, common_headers
@@ -126,6 +131,7 @@ class CurriculumStatements:
         difficulty_band_edges: Sequence[float] = DEFAULT_DIFFICULTY_BAND_EDGES,
     ) -> None:
         """`searched`: the statements of the loop's trees, in the order their searches finished."""
+        check_frozen_pool(config, data_root)
         self.config = config
         self.difficulty_band_edges = difficulty_band_edges
         self.data_root = data_root

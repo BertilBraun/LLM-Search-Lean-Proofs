@@ -6,7 +6,8 @@ each stratum, in a seeded hash order. The loop never feeds them (`StatementsConf
 
 A set stratified by characters (`CharacterStrataConfig`, the follow-up's probe v2) takes configured counts from bands of
 the shortest known proof's length in characters, in a seeded hash order within each band, after dropping statements of
-the existing fixed sets, those of the held-out states and near-duplicates of the training data (`Exclusions`).
+the existing fixed sets, those an earlier loop searched, those of the held-out states and near-duplicates of the
+training data (`Exclusions`).
 """
 
 import bisect
@@ -150,8 +151,10 @@ class CharacterStrataConfig:
     # Statements per band, one more entry than `edges`.
     counts: tuple[int, ...] = (150, 250, 350, 350, 400, 300, 200)
     seed: str = "grpo-probe-v2"
-    # Under $LEAN_SEARCH_DATA: the set written, and the fixed sets it shares no statement with.
+    # Under $LEAN_SEARCH_DATA: the set written, its pool twins (statements the curriculum must not feed either), and
+    # the fixed sets it shares no statement with.
     output: str = "grpo/fixed_sets/probe_v2.jsonl"
+    twins_output: str = "grpo/fixed_sets/probe_v2_twins.jsonl"
     excluded_sets: tuple[str, ...] = (
         "grpo/fixed_sets/probe.jsonl",
         "grpo/fixed_sets/gate.jsonl",
@@ -160,8 +163,8 @@ class CharacterStrataConfig:
     # Under $LEAN_SEARCH_RUNS: the loop's held-out states (`evaluation.held_out_states_file`), kept out by statement;
     # empty: none.
     held_out_states_file: str = "phase5_eval_visible_student_v2_visible/states.jsonl"
-    # A candidate whose root state reaches this estimated Jaccard with a root state of the training data is dropped
-    # (pool v3's near-duplicate threshold).
+    # A candidate whose root state reaches this estimated Jaccard with a root state of the training data is dropped,
+    # and a pool statement this close to a drawn one is a twin (pool v3's near-duplicate threshold).
     near_duplicate_threshold: float = 0.7
 
 
@@ -218,22 +221,45 @@ def same_statements(candidates: Iterable[CharacterCandidate], formal_statements:
     )
 
 
+def searched_problem_names(index_path: Path) -> frozenset[str]:
+    """The statements a loop searched, from its tree index (`trees/index.jsonl`, published as
+    `search_trees/index.jsonl`)."""
+    with index_path.open(encoding="utf-8") as lines:
+        return frozenset(json.loads(line)["problem_name"] for line in lines if line.strip())
+
+
 @dataclass(frozen=True)
 class Exclusions:
-    # Candidates (by name) in an existing fixed set, with a held-out state's statement, nearly repeating training data.
+    """Candidates by name, each dropped under the first of these reasons that applies (in this order)."""
+
     fixed_sets: frozenset[str]
+    # Its trees trained the old run's value model, and the solved ones its policy.
+    searched_by_old_run: frozenset[str]
     held_out_states: frozenset[str]
+    # Found by LSH among every candidate, and by comparing each drawn statement with every training root.
     near_training_duplicates: frozenset[str]
+    drawn_near_training_duplicates: frozenset[str] = frozenset()
+
+    def in_order(self) -> tuple[frozenset[str], ...]:
+        return (
+            self.fixed_sets,
+            self.searched_by_old_run,
+            self.held_out_states,
+            self.near_training_duplicates,
+            self.drawn_near_training_duplicates,
+        )
 
 
 @dataclass(frozen=True)
 class StratumDraw:
     stratum: str
     candidates: int
-    # Dropped before the draw, each candidate under the first of these reasons that applies.
+    # Dropped before the draw, as `Exclusions` counts them.
     in_fixed_sets: int
+    searched_by_old_run: int
     held_out_states: int
     near_training_duplicates: int
+    drawn_near_training_duplicates: int
     chosen: int
 
 
@@ -251,17 +277,16 @@ def select_by_characters(
     draws = []
     for stratum, count in zip(character_strata(config.edges), config.counts, strict=True):
         members = [candidate.held_out for candidate in candidates if candidate.held_out.stratum == stratum]
-        in_fixed_sets = [member for member in members if member.name in exclusions.fixed_sets]
-        rest = [member for member in members if member.name not in exclusions.fixed_sets]
-        held_out_states = [member for member in rest if member.name in exclusions.held_out_states]
-        rest = [member for member in rest if member.name not in exclusions.held_out_states]
-        near = [member for member in rest if member.name in exclusions.near_training_duplicates]
-        available = [member for member in rest if member.name not in exclusions.near_training_duplicates]
+        available = members
+        dropped = []
+        for excluded in exclusions.in_order():
+            dropped.append(sum(member.name in excluded for member in available))
+            available = [member for member in available if member.name not in excluded]
         if len(available) < count:
             raise ValueError(f"Band {stratum} has {len(available)} statements left, fewer than its count {count}.")
         available.sort(key=lambda member: hash_order(member.name, config.seed))
         chosen += available[:count]
-        draws.append(StratumDraw(stratum, len(members), len(in_fixed_sets), len(held_out_states), len(near), count))
+        draws.append(StratumDraw(stratum, len(members), *dropped, count))
     return CharacterSelection(tuple(chosen), tuple(draws))
 
 

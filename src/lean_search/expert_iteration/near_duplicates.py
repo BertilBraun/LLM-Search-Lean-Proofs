@@ -90,6 +90,12 @@ def matches_any(references: numpy.ndarray, queries: numpy.ndarray, threshold: fl
     return found
 
 
+def exhaustive_matches(references: numpy.ndarray, queries: numpy.ndarray, threshold: float) -> list[bool]:
+    """Per query signature, whether any reference reaches the estimated Jaccard: every pair compared, no LSH (whose
+    recall at Jaccard 0.7 is only ~0.71)."""
+    return [bool(numpy.mean(references == query, axis=1).max(initial=0.0) >= threshold) for query in queries]
+
+
 def clusters(count: int, pairs: Sequence[SimilarPair], threshold: float) -> list[int]:
     """Per statement, the smallest index of its cluster (union-find over the pairs at or above the threshold)."""
     parent = list(range(count))

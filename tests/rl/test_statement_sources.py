@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from lean_search.corpora.records import StatementRecord
-from lean_search.expert_iteration.curriculum import CurriculumConfig, CurriculumState
+from lean_search.expert_iteration.curriculum import CurriculumConfig, CurriculumState, file_sha256
 from lean_search.expert_iteration.known_proofs import VerifiedStatement
 from lean_search.monitoring.families import BandOutcome
 from lean_search.rl.fixed_sets import HeldOutStatement, Stratum
@@ -160,3 +160,17 @@ def test_statements_searched_before_a_restart_are_fed_again_below_the_band(tmp_p
 def test_a_restart_keeps_statements_searched_in_the_band_out_of_it(tmp_path: Path) -> None:
     source = restarted_below_band_three(tmp_path, ["s.t2"])
     assert "s.t2" not in fed_names(source)
+
+
+def test_a_pool_that_is_not_the_frozen_one_is_refused(tmp_path: Path) -> None:
+    write_verified(tmp_path / "pool/verified.jsonl", [2])
+    config = CurriculumConfig(verified="pool/verified.jsonl", unverified="", verified_sha256="0" * 64)
+    with pytest.raises(ValueError, match="frozen pool"):
+        CurriculumStatements(config, tmp_path, tmp_path / "curriculum.json", set(), [])
+
+
+def test_the_frozen_pool_is_accepted(tmp_path: Path) -> None:
+    write_verified(tmp_path / "pool/verified.jsonl", [2, 2])
+    digest = file_sha256(tmp_path / "pool/verified.jsonl")
+    config = CurriculumConfig(verified="pool/verified.jsonl", unverified="", verified_sha256=digest)
+    assert len(fed_names(CurriculumStatements(config, tmp_path, tmp_path / "curriculum.json", set(), []))) == 2
