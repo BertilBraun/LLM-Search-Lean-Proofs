@@ -47,6 +47,9 @@ class PolicyConfig:
     feedback: FeedbackConfig = field(default_factory=FeedbackConfig)
     # One prompt line naming the automation tactics that failed at the node; the automation must finish first.
     failed_automation_in_prompt: bool = False
+    # A candidate's log-probability (its batch's order, the search's path log-probability and A*'s policy prior) sums
+    # only its Lean block's tokens, not the explanation, fences or what follows; false: every sampled token's.
+    block_log_probability: bool = False
 
     @property
     def reasons(self) -> bool:

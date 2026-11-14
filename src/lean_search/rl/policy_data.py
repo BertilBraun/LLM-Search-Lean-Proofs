@@ -16,11 +16,10 @@ from lean_search.rl.grpo_groups import GroupSample, PolicyGroup
 from lean_search.rl.token_credit import (
     TokenSegment,
     inserted_token_indices,
-    sampled_token_offsets,
     token_credits,
 )
 from lean_search.search.tactic_labels import TacticLabelCounts
-from lean_search.search.texts import ExpansionTexts, SampledCompletion
+from lean_search.search.texts import ExpansionTexts, SampledCompletion, token_offsets
 from lean_search.training.sft_data import SftExample, TokenizedExample
 
 
@@ -161,7 +160,7 @@ def completion_tokens(tokenizer: PolicyTokenizer, completion: SampledCompletion)
     """The recorded tokens; records written before tokens were kept tokenize the text again."""
     tokens = completion.tokens
     if tokens.token_ids:
-        offsets = sampled_token_offsets(tokenizer, completion)
+        offsets = token_offsets(tokenizer, completion.text, tokens)
         return CompletionTokens(
             tokens.token_ids, offsets, inserted_token_indices(completion), tokens.log_probabilities, False
         )

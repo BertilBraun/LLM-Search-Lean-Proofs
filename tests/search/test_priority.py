@@ -42,6 +42,13 @@ async def test_cumulative_log_probability_is_length_normalized(length_exponent: 
     assert scores.priorities == (pytest.approx(expected),)
 
 
+async def test_automation_steps_use_the_configured_log_probability() -> None:
+    tree = new_tree("⊢ p")
+    child = add_child(tree, tree.root, ("⊢ q",), step="omega", source=StepSource.AUTOMATION)
+    scores = await CumulativeLogProbability(1.0, -2.8).score([child], tree)
+    assert scores.priorities == (pytest.approx(2.8),)
+
+
 async def test_cumulative_log_probability_prefers_likely_paths() -> None:
     tree = new_tree("⊢ p")
     likely = add_child(tree, tree.root, ("⊢ q",), step="a", source=StepSource.POLICY, log_probability=-0.1)

@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 
 import pytest
+from piece_tokens import PieceDecoder, token_id
 
 from lean_search.data import Problem, Split
 from lean_search.lean import LeanRepl, ProofState
@@ -12,7 +13,7 @@ from lean_search.policy import PolicyClient, Sample
 from lean_search.policy.client import Generation
 from lean_search.policy.config import FeedbackConfig, PolicyConfig
 from lean_search.policy.expander import PolicyExpander, candidate_batch, failed_attempt, failed_blocks
-from lean_search.policy.prompts import BRIEF_THINKING_INSTRUCTION, parse_samples
+from lean_search.policy.prompts import BRIEF_THINKING_INSTRUCTION, END_OF_TURN, parse_samples
 from lean_search.search import (
     CandidateBatch,
     Edge,
@@ -129,7 +130,7 @@ def test_batch_carries_the_prompt() -> None:
     assert visible_batch().prompt == "<prompt>"
 
 
-class PlainTemplate:
+class PlainTemplate(PieceDecoder):
     """Stands in for a Hugging Face tokenizer: the messages' contents joined, one token per word."""
 
     def apply_chat_template(
@@ -206,6 +207,41 @@ async def test_thinking_instruction_reaches_the_prompt_only_when_thinking(thinki
     async with completion_server([TRUNCATED_CHOICE]) as (server, url):
         await expand_root(url, config)
     assert (BRIEF_THINKING_INSTRUCTION in server.prompts[0]) == thinking
+
+
+BLOCK_PIECES = [("Close it.\n\n```lean\n", -2.0), ("simp", -0.25), ("\n```", -0.5), (END_OF_TURN, -1.0)]
+PIECED_CHOICE = {
+    "text": "Close it.\n\n```lean\nsimp\n```",
+    "logprobs": {
+        "tokens": [f"token_id:{token_id(piece)}" for piece, _ in BLOCK_PIECES],
+        "token_logprobs": [log_probability for _, log_probability in BLOCK_PIECES],
+    },
+    "finish_reason": "stop",
+}
+
+
+@pytest.mark.parametrize(("block_log_probability", "expected"), [(True, -0.25), (False, -3.75)])
+async def test_the_switch_chooses_which_tokens_a_candidates_log_probability_sums(
+    block_log_probability: bool, expected: float
+) -> None:
+    config = PolicyConfig(
+        model="policy",
+        visible_reasoning=True,
+        few_shot=False,
+        sample_count=1,
+        block_log_probability=block_log_probability,
+    )
+    async with completion_server([PIECED_CHOICE]) as (_, url):
+        (batch,) = await expand_root(url, config)
+    assert batch.candidates[0].log_probability == expected
+
+
+def test_block_log_probability_is_off_by_default() -> None:
+    assert not PolicyConfig().block_log_probability
+
+
+def test_block_log_probability_is_parsed() -> None:
+    assert parse_run_config(POLICY_SECTION + "block_log_probability = true\n").policy.block_log_probability
 
 
 def test_policy_section_is_parsed() -> None:
