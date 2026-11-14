@@ -319,6 +319,7 @@ Learn and measure the RL stage on a verifiable task: an RL loop with a concrete 
 globally anchored rewards, and per-phase curves rather than a single final score. Success: the loop improves its
 starting policy on the fixed targets beyond noise. There is no full control run (decided 2026-10-28: too
 expensive); per-tactic against sequence-level credit is compared only in the cheap single-step test below.
+Superseded for the follow-up (2026-11-14): controlled arms from v0 at equal tokens, "Follow-up study: controlled arms".
 
 ### Budget and infrastructure
 
@@ -403,6 +404,7 @@ expensive); per-tactic against sequence-level credit is compared only in the che
    at least 45 and at most 90 minutes (decided 2026-10-29, review F M4: the pause's fixed costs are paid per phase;
    before: 15–30 min and 100 solved trees). Watch the clip fraction and the KL to the data-collecting and to the
    starting policy (health checks below); if they rise, lower the learning rate or train on smaller batches.
+   The follow-up study ends phases on a generated-token budget instead ("Follow-up study: controlled arms").
 6. The curriculum keeps the solve rate around 30–70%, so groups carry signal and trees are balanced between
    solved and unsolved. Hard problems absorbing most of the budget is expected; the curriculum and escalation
    stages bound it.
@@ -704,6 +706,7 @@ at 50k 9 stop on heartbeats and 1 fails fast (median 8.6 s, 133 s), at 100k 5 he
   data-parallel on four GPUs (one as the fallback).
 - **No control run** (decided 2026-10-28): a second full loop is out of budget. The credit comparison happens in
   the single-step test.
+  Superseded by the follow-up study's arms (2026-11-14, "Follow-up study: controlled arms").
 - **Implemented** (2026-10-29; `src/lean_search/rl/README.md`, `search/tactic_labels.py`): per-tactic labels from
   `Edge.tactic_goals` matched to nodes by goal key (proof graph, off graph, unknown, no progress, redundant
   hypothesis, failing, masked), with the proof graph at tactic granularity (an edge whose intermediate state is
@@ -859,6 +862,7 @@ foundation of everything above, so it comes first.
 
 ### Fixed targets
 
+- Follow-up study (2026-11-14): probe v2, 2,000 statements by proof characters ("Follow-up study: controlled arms").
 - **Probe set** (decided 2026-10-28): about 500 held-out pool problems, stratified easy / medium / hard by the
   curriculum's difficulty estimate (not mostly easy; 501 problems), searched at a small budget (16 expansions) with the
   published value model (v0 until 2026-10-30). Small budgets because RL improves efficiency first (126 of 166 miniF2F solves came at the first
@@ -1125,6 +1129,301 @@ Paper names in the last three rows are from memory and still need checking befor
   of failure messages into the tiers of the error analysis (syntax errors and unknown constants vs the rest), which
   the code does not have yet; the identifier check's `UNKNOWN_IDENTIFIER` alone mixes unknown constants with
   unknown hypothesis names. Then: those samples as separate single-sample terms with a small negative advantage.
+
+## Follow-up study: controlled arms (agreed 2026-11-14)
+
+Internal documentation for now. **Decided**: the owner's decisions of 2026-11-14 and the coordinator's after reviews AA
+and AB (`results/reviews/2026-11-14_review_a{a,b}_followup_design.md`); **proposed**: needs the owner's confirmation.
+Progress: `results/followup_progress.md`; analyses: `results/followup_step0/`. Node (decided): 4× RTX 3090, a 61-core
+CPU quota (sampling expected Lean-bound), $0.89/h; the owner checks in about twice a day.
+
+### Question, measurements, outcomes
+
+- **What matters in search-tree RL for a small step-level Lean prover.** Measured in-pool on held-out pool statements
+  (probe v2 below); miniF2F-valid is a secondary check against v0 only (244 statements cannot resolve arm differences
+  under ~7 points); the test split stays untouched. No retrieval (decided).
+- **Q1** does the loop improve the prover in-pool, and how fast (largely answered by `grpo_loop_v1`: probe 203 → 304 of
+  501). **Q2** which training signal works: per-tactic graph credit GRPO, outcome-only GRPO, expert iteration, or GRPO
+  interleaved with expert iteration. **Q3** does visible reasoning pay at equal generated tokens. **Q4** does the value
+  model matter (the old run's final value model, v0, none).
+
+| Outcome (by the rule in "Evaluation") | What it means |
+|---|---|
+| Q2, A vs B2: A wins | per-tactic shaping (progress, local labels, where credit lands) adds signal beyond "the sample advanced along a found proof" |
+| Q2, A vs B2: no difference | the shaping adds nothing measurable; expected to be small, as A and B2 share ~85% of their reward (review AA) |
+| Q2, A vs B2: B2 wins | the shaping misdirects the policy, as in the reward hacking of phases 1–10 |
+| Q2, A vs B1 (step 2 only) | placing the same graph credit per tactic against spreading it over the sequence; not an outcome-only comparison |
+| Q2, A vs C | recipe against recipe (GRPO with KL 0.01 and NLL replay against SFT with 40% replay, no KL); C ahead: GRPO's small steps do not pay at equal tokens |
+| Q2, D vs A and C | D ahead of both: GRPO and expert-iteration rounds are complementary |
+| Q2: no two arms differ | at ~190M tokens per arm the signal does not matter; with the frozen-policy runs, how much comes from the value model and the search |
+| Q3: visible at least as good at equal tokens | reasoning pays per token, not only per expansion; the arms stay visible |
+| Q3: no reasoning wins at equal tokens | the +14 per expansion of 2026-10 was bought with tokens; the owner decides on a no-reasoning arm |
+| Q4: none < v0 ≈ final | the value model matters at 16 expansions, its training in the loop does not |
+| Q4: none < v0 < final | the loop's value training helps too |
+| Q4: none ≈ v0 | the value model does not matter at this budget (not in general; miniF2F at 64 checks a larger one) |
+
+### Arms
+
+All arms start from v0 (the SFT policy, `data_rewrite_sft_numbered`) and value v0, and train their value model inside
+the arm as in the old run (decided). Each enters step 3 with its own learning rate from step 2 (decided).
+
+| Arm | Policy update per phase | In the code today |
+|---|---|---|
+| A per-tactic GRPO | the loop's recipe ("Policy update: GRPO over sibling groups") | `[policy.data] credit = "per_tactic"` (`grpo/phase.toml`) |
+| B1 graph credit spread over the sequence | every sampled token gets the sample's score − b (the anchor's R plus the block's gains: progress and wasted-tactic costs stay) | `credit = "sequence"` (`grpo/phase_sequence_credit.toml`, `rl/advantages.CreditMode.SEQUENCE`) |
+| B2 pure proof success | r = 1 only if the last tactic of the kept prefix that produces a state is labelled `PROOF_GRAPH` (the sample advances along the found proof from the anchor); a failing first tactic, a no-progress, redundant, back-to-ancestor or off-graph block and an unparsed sample get 0; every sampled token gets r − the group's multiplicity-weighted mean r | missing (WP3) |
+| C expert iteration, window W | SFT continuing the current adapter on the verified proof-graph blocks of the last W phases (`rl/expert_iteration_data.py`: shortest route, no claim left open, ≤ 2 blocks per state, ≤ 6 states per statement, ≤ 20% easy states), replay 30% Lean + 10% math by completion tokens | a hand-run round: `grpo_expert_iteration.py` takes phases from `reward_fix.json`'s phase on, `train` refuses unless the loop is stopped, `publish-adapter` and `compare` by hand; window: WP4a, inside the loop: WP4b |
+| D interleaved | exactly A, plus a C round every N = 4 phases (proposed) over C's window after that phase's GRPO update; the KL reference stays v0 | missing (WP4b) |
+| E unsolved-tree signal | open, owner decides (below) | missing |
+
+- **The closed-loop outcome-only control is B2** (a change to the owner's pick rule of 2026-11-14, "the one that differs
+  more from A, B2 on a tie"; to be confirmed at the next check-in). B1 and B2 both train at step 2 as decided; B1 is
+  reported as "graph credit spread over the sequence".
+- **No GRPO signal or C learns from unsolved trees**: `rl/grpo_groups.policy_groups` builds groups only at proof-graph
+  nodes, and `require_policy_proof` drops groups without a policy sample on the graph (`training_signal.md`: 0 groups in
+  all 6,550 unsolved trees). With μ = 0 an off-graph state's G is 0, so 85% of A's anchor reward is the 0/1 "reached the
+  proof graph" B2 uses; A and B2 differ by δ = 0.2 per step, the 15% local term, the within-block costs and where the
+  credit lands. The old write-up's "an unsolved statement still teaches which steps were valid"
+  (`results/grpo_loop_v1/README.md`, "Concept") holds for the value model only.
+- **The expert-iteration window** (decided): fixed and sliding, never all phases. With W = 4 each phase's blocks are
+  trained in four consecutive rounds (~four epochs per block; round 1's 2 epochs forgot); step 2 can only test one round
+  on 1 slice against 4 slices: the data amount, not the repetition.
+- **E, a signal that learns from unsolved trees** (open, owner decides): groups also at expanded nodes off the proof
+  graph, in solved and unsolved trees, scored by local labels only. In `policy_groups`: admit `NodeClass` off-graph
+  expanded nodes, skip `require_policy_proof` for them, and give them their own weight, since with G = 0 for every
+  sample only λ · L differs (±0.15) and A's groups would dominate. The old design restricted groups to proof-graph nodes
+  on 2026-10-28 ("Policy update", Group) because 72.6% of the positive local reward was earned off the proof graph,
+  where nothing says the step helped. Risk: the reward hacking of phases 1–10 again (off the graph any valid state
+  change beats an attempt that may fail: bare `have` claims, filler); the claim and filler rules were tuned for
+  proof-graph groups. Needs WP3-sized reward work and a replay check. Its data: 82–85% of all policy expansions lie
+  outside today's groups, 80–85% of them with both a valid and a failing or no-op first tactic (`training_signal.md`).
+  If wanted, E gets its own step-2 round and a habit check (bare claims, filler, explanation length against v0's
+  samples) before any closed loop.
+
+**Identical in every arm** (proposed where not decided):
+- Sampling: `grpo/search/visible_student_v2.toml` (n = 8, temperature 0.8, 32 expansions plus up to 16 harvesting,
+  ε = 0.1 over the top 8, heartbeats 50k, the sweep), A* with the arm's served value model; the search options A/B off
+  (`[sampling.options_arm] name = ""`: `grpo/loop.toml` still runs "feedback" for 3 phases).
+- **Load** (decided): one sampling concurrency, one probe concurrency, one held-out-states concurrency (v0's held-out
+  baseline at the pause's) and mandatory `BACKGROUND_CPUS` pinning below the quota, all from the node's throughput test,
+  identical for every arm and evaluation. **Nothing else runs on the node beside an arm or an evaluation**: tactic
+  timeouts are wall-clock (`tactic_timeout_seconds` 60 s; a timeout is a `FAILING` label), so load changes labels.
+- Curriculum (decided: difficulty by proof characters): `characters_weight = 1`, the other weights 0, the same seed,
+  `below_band_share` 0.35; the pool snapshot frozen as published (a file copy, `unverified = ""`): the loop re-reads
+  `verified` at every `GrpoLoop.watch` tick (`CurriculumStatements.refresh`), so an appending verifier would change an
+  arm's pool. Probe v2, the old probe and the gate in `statements.held_out`.
+- Value: every 2 phases on the last 4 phases' trees, continuing the last value adapter, 10% v0 replay, published without
+  a gate, the gate benchmark scored as a trend; μ = 0 (proposed, as in the old run).
+- GRPO (A, B, D): clip [0.8, 1.28], 1 pass, 64 sequences per step, normalization 256, 5 warmup steps per phase, k3 KL
+  penalty 0.01 to v0 on every GRPO sequence (`training.kl_reference_policy_adapter = ""`: `loop.toml` still names the
+  old round-1 adapter), NLL replay at weight 0.1 (256 Lean, 128 math examples per phase), groups whose advantages are
+  all 0 dropped (`GroupAdvantages.has_signal` with the arm's credit).
+- Expert iteration (C, D): 1 epoch, warmup 3%, decay to 0.1× (`grpo/expert_iteration_1.toml`), replay as round 1
+  (proposed), no KL penalty, no accept gate (every round published; the automatic rules apply), an alert on the
+  replay-loss rise in every round.
+
+**Ways the arms could differ by accident:**
+
+| Item | Code today | Study |
+|---|---|---|
+| Phase end | `GrpoLoop.phase_due`: ≥ 75 min and 300 trainable groups counted with the arm's credit, or at 120 min with ≥ 1 group | a generated-token budget (decided; below) |
+| Optimizer steps per phase | A trains every group with any non-zero tactic advantage (also groups split only by the local term); B2 drops groups whose samples agree; C trains the selected blocks | logged per phase with the KL term's share of the loss and the replay tokens; if A's steps exceed B2's by > 1.5×, said beside any A–B2 difference |
+| Rollback | first collapse rolls back and continues, a second within 4 phases stops | stop at the first collapse (proposed; "Automatic rules") |
+| Adapter retention | last 5 versions plus 3 healthy (`RetentionConfig`) | all (`adapter_versions = 0`, ~0.5 GB per phase) |
+| Seeds | `phase_config_text` sets the policy, replay and value seeds from the phase number; exploration seeded by problem name | identical across arms; a second seed needs a `seed_offset` (WP1) |
+| Stale trees | ~112 searches in flight at each pause (~1/3 of B) finish in the next phase | same for every arm; their tokens logged per phase |
+
+### Compute matching
+
+- **Decided**: equal generated tokens in the training searches, phase by phase; training time (C and D train longer)
+  reported apart. **Today**: `GrpoLoop.phase_due` (`rl/loop.py`) ends sampling by minutes and trainable groups. A tree
+  joins the phase that is collecting when it finishes (`collect`, `keep_tree`); a search paused at a pause finishes in
+  the next phase. Every tree records its generated tokens (`TreeSummary.generated_tokens`: the search's accounting,
+  charged per request, unparsed samples and harvesting included).
+- **Change (WP1)**: `training.phase_generated_tokens = B`; phase k ends at the first check (every 30 s) at which the
+  trees of phases 1..k hold ≥ k · B tokens, so an overshoot is paid back in the next phase; no minutes or group
+  condition (C has no groups); a phase sampling over 4 h raises an alert only; the tokens of a tree left out because its
+  summary failed (`keep_tree`) count and are persisted, so a restart keeps them; tokens of searches lost to a crash or a
+  server failure are logged per phase; the loop stops after phase N or a total token count.
+- **Budgets** (proposed): B = 12M tokens (old phases 13–30: 12.9M per 75 min, phases 1–12: 19.0M), 16 phases = 192M per
+  arm (the old kept line had used ~196M training tokens by v19: 310M less the rejected branch's 114M). Old node:
+  773–1,204 tokens/s per GPU, 20 (early) to 52 (late) Lean core-seconds per expansion, ~1,700 tokens per expansion. New
+  node, estimated with ~45–50 Lean cores: ~1,500–3,500 tokens/s, 1–2.2 h of sampling per phase, plus pauses of 18
+  (policy) or 35 min (policy and value). **To be re-derived from step 0's throughput test.**
+- **Evaluation tokens**: evaluations are their own jobs and result directories; their tokens never enter the tree store,
+  so they never count towards B.
+
+### Evaluation
+
+- **Probe v2** (decided): 2,000 held-out statements stratified by proof characters (`pool.md` §5: 150, 250, 350, 350,
+  400, 300, 200 over 0–499 … 4,500+), 16 expansions, harvesting and ε off (`rl/fixed_targets.evaluate_target`), the
+  whole set per run, at the fixed probe concurrency. **Wall cap 7,200 s per statement** (decided; only an emergency
+  stop): every probe and miniF2F run is accepted only with under 1% wall-clock stops, reported by stratum; a run that
+  fails is repeated with the cap doubled, and every run it is compared with is repeated at the same cap. Runs 3 and 4
+  share one cap, set from run 4's 200-statement pilot. Expected v0 ~37%.
+- **Checkpoints**: v0 twice (step 1) and once more at the very end of the study (drift); step 2 as below; per step-3
+  arm: phases 4 and 8 once (descriptive), phase 16 twice with its own value model, phase 16 once with value v0, and once
+  the v0 policy with the arm's phase-16 value model (frozen-policy reference): a 2 × 2 of policy (v0, arm) × value (v0,
+  arm). The arms' evaluation jobs are interleaved (A4, B4, A8, B8, …); each run records the node, Lean and vLLM
+  identity.
+- **Decision rule** (decided, from `noise_floor.md`): the primary endpoint is each arm's phase-16 checkpoint, two probe
+  runs pooled per statement (detects ~1.9 points; one run ~2.6). Two arms differ when the 95% interval of the paired
+  per-statement difference excludes 0 and the difference is at least 3 points; with one seed it is provisional. With a
+  second seed: all four cross-seed comparisons favour the same arm (exact McNemar p < 0.05 each) and each arm's seed gap
+  is at most a third of the claimed difference; differences under about 5 points cannot be confirmed with two seeds and
+  are reported as such. Intermediate checkpoints (one run each) are descriptive. Curves: `rl/probe_rating.py`'s ratings.
+- **An arm stopped by a collapse** contributes its last healthy checkpoint (the newest whose held-out evaluation raised
+  no alert), labelled "stopped at phase k", evaluated like a phase-16 checkpoint; the stop and its phase are a result.
+- **Held-out states** (512, one request each, no value model): at every pause in every arm; the hard stop's signal and a
+  cheap per-phase curve (paired per state resolves ~3 points), never an arm decision on their own.
+- **miniF2F-valid** at the end: each arm's final checkpoint at 64 expansions with its own value model, paired (McNemar)
+  against v0 only.
+- **Where**: standalone with WP0's evaluation tool on retained adapters. Per probe run ~35M tokens (~17–18k per
+  statement, the probe being harder than the old one), ~4–6 h, $3.5–5.5; re-derive from the first v0 run.
+
+### Step 1: evaluations only (Q3, Q4)
+
+| Run | Policy | Mode | Value model | Budget per statement |
+|---|---|---|---|---|
+| 1, 2 | v0 | visible | v0 | 16 expansions (the baseline and its A/A repeat) |
+| 3 | v0 | visible | v0 | token cap T, `depth_weight = 0`, ≤ 1,024 expansions, depth ≤ 64 |
+| 4 | v0 | no reasoning | v0 | as run 3; first a pilot on 200 stratified statements |
+| 5, 6 | v0 | visible | the old run's final / none | 16 expansions |
+| 7–9 (only if 5–6 leave Q4 ambiguous) | v35 | visible | final / v0 / none | 16 expansions |
+| miniF2F-valid | v0 | visible at 64 exp. (value v0, final); visible and no reasoning at T64 as runs 3–4, after run 1 and only if run 4 differs from run 3 by ≥ 5 points | | |
+
+- **Q3** (decided: generated tokens only; the same adapter in both modes). T = 16 × run 1's mean generated tokens per
+  expansion (~27k), T64 = 64 × the same (so the miniF2F token runs wait for run 1); both modes stop on the same cap
+  (`SearchConfig.max_generated_tokens`, checked before each expansion: the last expansion overshoots by up to ~3% of T
+  visible, < 0.5% without reasoning; tokens used reported). `depth_weight = 0` in both: A*'s depth term counts blocks,
+  and a no-reasoning block is about one tactic against two or three, so the old 0.25 would push it breadth-first.
+  Expansion and depth caps at 4× the expected counts (~160 expansions at T, ~640 at T64: 1,024 and 4,096; depth 64);
+  each search reports which limit ended it (tokens, expansions, depth, wall). `depth_weight = 0` also changes the tuned
+  visible search: if run 3 is 3 or more points below run 1, Q3 is reported with that caveat. Run 4 is compared with run
+  3 only, never with runs 1–2. `policy.visible_reasoning = false` renders `render_prompt(goals)` plus the fence prefill,
+  exactly v0's no-explanation SFT examples (`training/sft_data.tokenize_example`). Run 4 needs ~10× the expansions, Lean
+  time and value calls: ~10–25 h on 2,000 statements, so its 200-statement pilot (~1–3 h) checks wall stops first.
+- **Q4 without a value model** (decided: best-first by the policy's log-probability of the path, the Lean block's tokens
+  only). The configuration is the pre-value row-2 search's (`experiments/configs/phase2_sft_v2_search.toml`, also
+  `grpo/gate_search.toml`): `kind = "cumulative_log_probability"`, `length_exponent = 1.0`. `CumulativeLogProbability`
+  (`search/priority.py`) scores a node −(Σ of its path's step log-probabilities) / depth^1, so the **path score is the
+  mean step log-probability per block** (not a sum); automation steps count as `automation_log_probability`. Today a
+  policy step's log-probability is `TacticCandidate.log_probability` (`policy/prompts.parse_samples`), the highest
+  `Sample.cumulative_logprob` among merged identical samples, which `policy/client._sample` sums over every generated
+  token: in visible mode the explanation, the fences, the block and anything after it (a forced answer: truncated part
+  plus continuation, the inserted opening left out). **Change (WP2)**: a switch making each step's value the sum of the
+  recorded log-probabilities (`SampledTokens.log_probabilities`) of the tokens overlapping the block's characters
+  (`block_positions`; offsets as `rl/token_credit.sampled_token_offsets`, which WP0 moves to `search/texts`), the
+  maximum over merged samples. The automation constant by row 2's rule (the median step log-probability of the samples
+  that made progress; −2.8 for whole-sample sums) on 200 pool statements outside every held-out set. Harvesting reads
+  value estimates (`Search._harvest`), so a value-free training search would harvest nothing; evaluations do not.
+- **Code**: runs 1, 2, 5, 7, 8 need WP0's tool; 3 and 4 configs only; 6 and 9 WP2; miniF2F at 64 expansions works today
+  (`experiments/run_search.py` searches miniF2F from a TOML config on served models).
+
+### Step 2: one training round per signal from shared trees
+
+- **Shared sampling** (proposed): one loop run from v0 and value v0 with the study's base config samples 4 × B = 48M
+  tokens without training (WP1's total-token stop; with existing code a loop whose phase never comes due, every minute
+  and group condition out of reach, stopped by hand). Its trees are cut by finish order into four slices of ~B; the stop
+  drops in-flight (slower) searches from slice 4 and the band rises across slices. ~4–9 h.
+
+| Signal | Data | Learning rates (proposed) | Runs |
+|---|---|---|---|
+| A per-tactic | slice 4 | 2e-5, 5e-5, 1e-4 | 3 |
+| B1 sequence credit | slice 4 | 2e-5, 5e-5, 1e-4 | 3 |
+| B2 pure proof success | slice 4 | 2e-5, 5e-5, 1e-4 | 3 |
+| C window 1 / window 4 | slice 4 / slices 1–4 | 5e-5, 1e-4 (after a `train --dry-run` on both) | 2 + 2 |
+
+- GRPO rounds with `experiments/grpo_phase.py --trees <slice> --part policy` and the loop's `--lean-replay` and
+  `--math-replay` (exists; B2 after WP3); C with `grpo_expert_iteration.py build` and `train` once it takes a phase
+  window (WP4a). At round 1's density one slice gives C only ~8 optimizer steps, so the dry runs size C's rounds before
+  its rates are fixed. GRPO's rates go upward from the old 2e-5–3e-5 because one pass moves little (< 0.1% per phase in
+  the old run). D needs several phases and takes A's and C's step-2 settings.
+- **Ranking the rates** (decided): primary, the 512 held-out states, paired per state; tie-breaker and sanity check,
+  the old gate set's 402 statements (16 expansions, value v0), paired per statement. Among rates tied on the held-out
+  states (95% interval of their difference including 0) the better gate-set point estimate wins, the lower rate only if
+  that ties too. If the gate set shows the opposite sign with its interval excluding 0, both rates get a probe run.
+  C's window by the same rule. Every variant is reported against v0 with intervals on both sets. Probe v2 then runs
+  for each signal's chosen rate (A, B1, B2, C W = 1, C W = 4: 5 runs, value v0) against v0's two runs; a chosen rate
+  that did not move ≥ 3 points from v0 on the probe counts as "step too small", never as "equal".
+- **Gate** (decided): if all signals at their chosen rates lie within about 3 points of each other on the probe, stop
+  and decide with the owner. Beside it, the offline agreement of A's and B2's advantages on the shared trees
+  (`experiments/analysis/training_signal.py`): the share of trained tokens with the same advantage sign and the
+  correlation of the sample advantages; at ≥ ~95% agreement a closed-loop A–B2 pair is unlikely to separate. WP3's B2
+  advantages are checked per sample against the script's outcome scheme (two implementations must agree).
+  **Placeholder** (`training_signal.md`, in progress: it confirms that no unsolved tree trained the policy in the old
+  run; its per-scheme numbers are not written yet).
+
+### Step 3: closed-loop arms
+
+- **Arm length** (proposed): 16 phases × B = 192M tokens, one seed first. Each arm's phase 1 is checked against slice 1
+  of the shared trees labelled offline with the arm's credit, no training (sequences, tokens, steps, groups with signal
+  within ~±30%; else a config or credit bug).
+- **First two arms**: not fixed here; the owner chooses at the check-in after step 2. Candidates:
+  - A with B2: the question as posed; they share ~85% of their reward, so expect a small difference, likely under the
+    ~5 points two seeds can confirm. Worth it if step 2 shows A and B2 apart, or the offline agreement well below 95%.
+  - A with C: the largest expected contrast (recipe against recipe); needs WP4b. Worth it if C moved ≥ 3 points from
+    v0 at step 2 at a rate whose replay loss held.
+  - D and E come later if the first pair leaves them open; second seeds only after the third or fourth arm (decided).
+
+### Cost (estimate after the cuts; re-derive after the throughput test)
+
+| Step | Node hours | Of which evaluation | $ at 0.89/h |
+|---|---|---|---|
+| 1: runs 1–6, run 4's pilot, miniF2F (runs 7–9 not counted) | 40–65 | all | 36–58 |
+| 2: shared sampling, 13 rounds, ranking on held-out + gate, 5 probe runs | 45–65 | 30–45 | 40–58 |
+| 3, per arm: sampling 15–36, pauses ~7, held-out ~1, 6 probe runs, miniF2F | 50–80 | 25–38 | 45–71 |
+| Steps 1–3 with two arms, v0's final rerun | 190–300 | ~60–65% | 170–265 |
+
+### Automatic rules (identical for every arm)
+
+- **Hard stop** (decided, as today): held-out valid Lean below 0.7 × v0's (`HealthConfig.stop_held_out_valid_fraction`).
+  Today the first collapse publishes the last good version again and continues, a second within 4 phases stops
+  (`rl/health_checks.phase_health`). Proposed: `rollback_window_phases = 0`, which already stops at the first collapse:
+  a rollback is an automatic recipe change, and the protocol has the owner look first. The held-out states run at every
+  pause (`[evaluation.held_out_states] every_hours` small enough to be due at each pause, an existing switch).
+- **Alerts recorded, never acted on** (as today, `HealthConfig` and `grpo/loop.toml`): held-out valid Lean or success
+  below 0.9 × v0's; distinct blocks per expansion below 0.75 ×, the cut-off share above 2 × (and + 1 point), the sampled
+  blocks' valid-Lean rate below 0.85 × the reference (it also brings the held-out states forward); bare-`have` openings
+  above 1.5 ×, claims proved below 0.5 ×, median explanation characters below 0.7 ×; mean explanation tokens outside
+  0.5–2 ×; KL to the start above 0.5 per token, clip fraction above 0.1; the late-solve note above 10%.
+- **Changes (WP5)**: `health_checks.measurements` takes the KL, the clip fraction and the mean explanation tokens from
+  the GRPO trainer's outcome. C's phases have none, and under sequence credit `token_credits` labels every token
+  `EXPLANATION`, so the trainer's figure is the whole completion for B1: the explanation tokens must come from the trees
+  for every arm. KL and clip stay GRPO-only and are "not measured" in C's phases. `reference_phases = 1` (existing)
+  makes every arm's reference its own phase 1, which v0 sampled.
+- **After a stop** (decided): the owner and the orchestrator look at the cause; an obvious bug is fixed and every
+  affected arm rerun; otherwise the degradation is documented as a result. No silent mid-run recipe changes.
+
+### Work packages
+
+| WP | What | Files, functions | Tests | Gates | Size |
+|---|---|---|---|---|---|
+| 0 (in progress, worktree) | probe v2 selection, near-duplicate guard against `sft_data/`, curriculum by characters in `experiments/configs/grpo/followup/base.toml`, standalone evaluation; the tool must take (policy adapter, value adapter, v0 or none, target, budget, mode) independent of `models/current.json`, merge on demand and delete the merge after (~13.5 GB), and write where WP6 and `probe_rating` read | `rl/fixed_sets.py` (`FixedSetsConfig`, `select_fixed_sets`), `experiments/grpo_fixed_sets.py`, the base config | as that package defines | step 1's probe runs | medium |
+| 1 | token-budget phases; stop after phase N or a total token count; persisted tokens of left-out trees; lost-search tokens logged; `seed_offset` for second seeds | `LoopTrainingConfig`, `parse_loop_config`, `GrpoLoop.phase_due`, `keep_tree`, `phase_config_text` | due at k · B with the overshoot carried; no group condition; a smoke loop at B = 200k across a restart | step 2's shared run (or by hand), step 3 | small–medium |
+| 2 | block-only log-probability switch | `policy/prompts.parse_samples` / `TacticCandidate`, `policy/expander.candidate_batch`, `search/priority.CumulativeLogProbability` | visible, forced, merged samples; tokens straddling the fence; a sample running on after its block; REPAIR nodes inherit the sampled block's value | step 1 runs 6, 9 | small–medium |
+| 3 | pure proof success credit (B2) | `rl/advantages` (a third `CreditMode`), `rl/token_credit.token_credits` (segments by position whatever the credit), `rl/tree_summary`, `grpo/phase_proof_success.toml` | first tactic fails (0); pure no-op (0); back to an ancestor (0); graph then off-graph (0); graph reached then a failing tactic (1); unparsed (0); all on the graph (dropped) | step 2's B2 | small |
+| 4a | expert-iteration window | `ExpertIterationDataConfig` (`first_phase` in place of `reward_fix.json` and its minimum version), `grpo_expert_iteration.loop_inputs` | the window's phases and versions; whether carried trees' older-version samples count | step 2's C | small |
+| 4b (only after the step-2 gate) | expert iteration inside the loop: (a) `check_health` judges the version whose trigger is `phase_trigger(phase)`, so D's SFT round must publish as its phase's one version; (b) `ResidentTrainer` asserts `config.policy is not None` (`rl/resident_trainer.py`), so C's value-only phases need `persistent = false` or code; (c) an SFT job beside the parked trainer finds `/dev/shm` full (~28 GiB parked); (d) D's GRPO runs on A's resident path | `rl/training_phase`, `rl/resident_trainer`, `GrpoLoop.train` and `publish`, loop config (`expert_iteration_every_phases`, `expert_iteration_window_phases`) | restarts in build, train and publish; round due every N; value phases unchanged | step 3's C, D | large |
+| 5 | health checks across arms | `rl/health_checks.measurements`: explanation tokens from the trees (required); `reference_phases = 1` | C phases without GRPO statistics; B1's explanation measure | step 3 | small |
+| 6 | study tooling | slicing shared trees by finish order and tokens; arm comparison (paired, the rule) beside `rl/probe_rating.py`; step-1 configs; a launcher that requires the arm config and pinning; a test that parses each arm config and diffs it against the base | slices sum to the tokens; the rule on synthetic pairs; config diffs | step 1, step 2's decision | small–medium |
+| 7 (optional, off the critical path) | more verified statements at the pool's hard end (`pool.md` §5.2–3) | `expert_iteration/known_proofs.stratified_candidates`, `VerificationConfig`, `phase6_pool_v3.py verify` | strata and quotas | nothing; never beside a run | medium |
+
+**Order, so the GPUs never wait for code**: now (existing code, one job at a time): node setup, the throughput test
+alone (it sets the concurrencies and the pinning), the v0 reproduction, miniF2F at 64 expansions with value v0 and final
+(`run_search.py`). Once WP0 lands: step 1's runs 1–2, 3, 4's pilot, 5, then the T64 runs, while WP2, WP3, WP4a and WP6
+are written. Then the shared sampling, A's and B1's step-2 rounds (existing `grpo_phase.py`), B2 and C as WP3 and WP4a
+land, run 6 with WP2, the ranking and probe runs, while WP1 and WP5 are written. WP4b only after the gate.
+
+### Risks and open points
+
+- The block-only step value is a sum over the block's tokens, so short blocks score higher even with the per-block mean.
+- `grpo/loop.toml` and the dataclass defaults carry settings that would make arms differ if copied (options A/B, KL
+  reference, retention, timed probe and miniF2F at start, `persistent`, sampling minutes, `value_model`, `value_arm`,
+  the held-out wall cap): WP0's base config must set them all; WP6's diff test checks it.
+- `tree_statistics.py` counts the dashboard's `groups_with_signal` with `PER_TACTIC` whatever the arm's credit.
+- Owner: confirm B2 as the closed-loop control (a change to the pick rule), μ = 0, the 12M × 16 budget, stop at the
+  first collapse, N = 4 for D, and whether E is wanted.
 
 ## Known issues (backlog)
 - Resolved: search generation cost is charged per batch (`CandidateBatch`), when the expander yields it. Runs before
