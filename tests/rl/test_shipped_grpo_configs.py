@@ -117,7 +117,9 @@ def test_loop_replays_the_flattened_sft_data(name: str) -> None:
     )
 
 
-@pytest.mark.parametrize("phase", ["grpo/phase.toml", "grpo/phase_sequence_credit.toml"])
+@pytest.mark.parametrize(
+    "phase", ["grpo/phase.toml", "grpo/phase_sequence_credit.toml", "grpo/phase_proof_success.toml"]
+)
 def test_phase_config_starts_where_the_loop_starts(phase: str) -> None:
     policy = tomllib.loads((CONFIGS / phase).read_text(encoding="utf-8"))["policy"]
     starting = loop("grpo/loop.toml")
@@ -125,13 +127,13 @@ def test_phase_config_starts_where_the_loop_starts(phase: str) -> None:
     assert (policy["model"], policy["initial_adapter"], policy["reference_adapter"]) == expected
 
 
-def test_sequence_credit_phase_differs_from_the_phase_only_in_its_credit() -> None:
-    phase, sequence = (
-        tomllib.loads((CONFIGS / name).read_text(encoding="utf-8"))
-        for name in ("grpo/phase.toml", "grpo/phase_sequence_credit.toml")
+@pytest.mark.parametrize("other", ["grpo/phase_sequence_credit.toml", "grpo/phase_proof_success.toml"])
+def test_other_credit_phase_differs_from_the_phase_only_in_its_credit(other: str) -> None:
+    phase, changed = (
+        tomllib.loads((CONFIGS / name).read_text(encoding="utf-8")) for name in ("grpo/phase.toml", other)
     )
-    sequence["policy"]["data"]["credit"] = phase["policy"]["data"]["credit"]
-    assert sequence == phase
+    changed["policy"]["data"]["credit"] = phase["policy"]["data"]["credit"]
+    assert changed == phase
 
 
 def shipped_policy() -> GrpoConfig:

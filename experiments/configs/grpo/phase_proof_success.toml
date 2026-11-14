@@ -1,0 +1,143 @@
+# The follow-up study's outcome-only control B2 (DESIGN.md "Follow-up study: controlled arms", WP3): phase.toml with
+# pure proof-success credit. A sample's r is 1 when it advances on the proof graph (a forward edge whose kept prefix's
+# last state with a reward is on it; GroupSample.advances_on_proof_graph), else 0; every sampled token gets r minus
+# the group's multiplicity-weighted mean r. [reward] only builds the groups and the
+# tactic labels (and the logged reward means): no progress, no local term, no wasted-tactic costs enter the advantage.
+# Generated from phase.toml; keep the two identical apart from [policy.data] credit.
+
+[reward]
+local_share = 0.15
+# L of the first failing tactic (errors and timeouts) and of a sample without a usable block (e.g. a repetition loop
+# cut off at the token cap).
+failure_local = -1.0
+# L of a tactic without progress (unchanged, back to an earlier state) or adding only redundant hypotheses: as low
+# as a failure, so a no-op never beats a genuine attempt. Off the proof graph, a comparison of numerals
+# (`have h1 : 0 < (1:ℝ)`) in a statement with local names counts as redundant too (owner, 2026-10-31).
+no_progress_local = -1.0
+# L of a state off the proof graph with a claim the model invented (`have h : claim`, `obtain ... : claim`,
+# `replace`, `suffices`) nothing in the tree proves: like no progress (owner, 2026-10-31, after the reward hacking of
+# phases 1-10: bare claims at 0 beat real attempts at -1). A block stopping on it pays c more at its closing tokens; an
+# attempt at it that fails scores as one failing tactic.
+unproved_claim_local = -1.0
+# L of the first state with a reward when it is unknown (never expanded, or too few expanded nodes below it) or
+# explored off the proof graph: below the proof graph, above a failure (-1) (owner, 2026-10-31). A later unknown state
+# after evidence is an unverified continuation: 0, or -c when it ends the block's states.
+unknown_local = -0.5
+# L per goal a proof-graph tactic closes.
+goal_closed_bonus = 0.1
+# delta: a proof-graph state earns this per remaining proof-graph step it is closer to a proof than the group's node,
+# so a correct further step raises the reward (and the sample's score, its final state's reward) by delta. A state
+# farther from the proof loses delta per step, but its global part never falls below the best off-graph state's.
+progress_per_step = 0.2
+# c: the advantage of a failing, no-progress or redundant tactic after the first; the search keeps the block's valid
+# prefix, so only its tokens are wasted. Tactics after the first are judged against the state before them, so
+# continuing pays when P(next tactic correct) > c / (c + delta) = 1/3: an unverified continuation costs c like an
+# error, a valid step to an explored off-graph state the whole drop (rl/README.md). Keep delta clearly above c.
+wasted_tactic_cost = 0.1
+# mu: expanded off-graph states earn G = mu * q; the loop sets it per phase (deployment/grpo_loop.sh value-share),
+# 0 until the owner turns it on.
+value_share = 0.0
+# An expanded off-graph state with live children and fewer expanded nodes in its subtree (itself included: the
+# value targets' n) is unknown like a never-expanded one, so one harvesting or epsilon expansion does not push a
+# sibling down; a dead end (nothing usable from its expansion) stays off graph.
+off_graph_min_expanded_nodes = 4
+# Groups train only if a policy sample reaches the proof graph (the sweep's children do not count); the search
+# metrics count the groups left out (graph.groups_without_policy_proof).
+require_policy_proof = true
+
+[value_targets]
+# y = (1 - mu) * z + mu * q per expanded state: z the concrete label (1 with exact steps on the proof graph, 0 off
+# it), q the average over its expanded descendants. mu: the same as in [reward], set by the loop.
+value_share = 0.0
+proof_graph_weight = 1.0
+# Times n / (n + 4) for n expanded nodes (the state and its expanded descendants).
+off_graph_weight = 0.5
+half_weight_expanded_nodes = 4.0
+max_targets_per_tree = 64
+
+[ranking]
+# The proof-graph child over each expanded off-graph sibling (times the sibling's n / (n + 4)) and over each
+# never-expanded sibling (0: they may be provable too).
+proof_over_expanded_weight = 0.5
+proof_over_never_expanded_weight = 0.0
+half_weight_expanded_nodes = 4.0
+
+[policy]
+model = "Qwen/Qwen3.5-4B"
+initial_adapter = "/workspace/checkpoints/data_rewrite_sft_numbered/adapter"
+reference_adapter = "/workspace/checkpoints/data_rewrite_sft_numbered/adapter"
+sequences_per_step = 64
+# One pass over each phase's groups (owner, 2026-10-30): two passes made the pause ~half of the loop's time.
+passes_per_phase = 1
+warmup_steps = 5
+clip_low = 0.2
+clip_high = 0.28
+# Owner decision 2026-10-31, after the drift of phases 1-10: a k3 penalty to the starting policy on every trained
+# token of the GRPO sequences (replay has its NLL and no penalty); every sequence is then scored under the reference.
+kl_coefficient = 0.01
+reference = "starting_weights"
+# Only with kl_coefficient 0, when the KL to the reference is reported alone: the sequences scored per phase.
+reference_sequences = 256
+normalization_tokens = 256
+replay_weight = 0.1
+replay_sequences_per_step = 8
+# No length filter; a recorded sample longer than the servers' context is a bug.
+max_sequence_tokens = 8192
+
+[policy.data]
+# "proof_success": every sampled token gets r minus the group's mean r (rl/advantages.CreditMode.PROOF_SUCCESS).
+credit = "proof_success"
+# For records written before the sampling temperature was kept.
+default_temperature = 0.8
+
+# Unused with initial_adapter: the continued adapter keeps its own rank and alpha (the SFT stage's, from v2's).
+[policy.lora]
+rank = 64
+alpha = 64
+dropout = 0.0
+
+[policy.optimization]
+method = "lora"
+# 3e-5 (single-step test) until the drift of phases 1-10; owner decision 2026-10-31.
+learning_rate = 2e-5
+minimum_learning_rate_ratio = 1.0
+max_gradient_norm = 1.0
+micro_batch_tokens = 16384
+gradient_checkpointing = true
+packing = true
+compile_layers = true
+seed = 0
+
+[policy_replay]
+lean_examples = 256
+math_examples = 128
+
+[value]
+model = "Qwen/Qwen3.5-2B"
+initial_adapter = "/workspace/checkpoints/phase3_value_v0/adapter"
+retrain_from_base = false
+smoothing_sigma = 0.5
+bin_mass_weight = 1.0
+ranking_weight = 0.5
+ranking_score = "log_odds"
+ranking_temperature = 1.0
+max_pairs_per_tree = 64
+replay_share = 0.1
+
+[value.optimization]
+method = "lora"
+learning_rate = 5e-5
+warmup_fraction = 0.05
+minimum_learning_rate_ratio = 1.0
+max_gradient_norm = 1.0
+epochs = 1
+micro_batch_tokens = 32768
+micro_batches_per_step = 1
+gradient_checkpointing = true
+packing = true
+compile_layers = true
+seed = 0
+
+[value.source_shares]
+proof_graph = 0.4
+off_graph = 0.6

@@ -15,7 +15,7 @@ from lean_search.search.texts import CharacterSpan, InsertedSpan, SampledComplet
 EXPLANATION = "Introduce x, then normalize.\n\n```lean\n"
 BLOCK = "intro x\nsimp\nring"
 COMPLETION = EXPLANATION + BLOCK + "\n```<|im_end|>"
-ADVANTAGES = SampleAdvantages(sequence=0.5, tactics=(0.8, -0.3, None), closing=None)
+ADVANTAGES = SampleAdvantages(sequence=0.5, tactics=(0.8, -0.3, None), closing=None, proof_success=-0.25)
 
 
 class ByteDecoder:
@@ -73,7 +73,7 @@ def test_token_credit_of_each_part(needle: str, segment: TokenSegment, advantage
 
 
 def test_closing_tokens_of_a_complete_block_get_the_last_tactic_advantage() -> None:
-    complete = SampleAdvantages(sequence=0.5, tactics=(0.8, 0.2, 0.4), closing=0.4)
+    complete = SampleAdvantages(sequence=0.5, tactics=(0.8, 0.2, 0.4), closing=0.4, proof_success=0.75)
     credits, positions = credits_at("<|im_end|>", complete)
     assert {credits.advantages[index] for index in positions} == {0.4}
 
@@ -92,6 +92,17 @@ def test_sequence_credit_gives_every_token_the_sequence_advantage() -> None:
         CreditMode.SEQUENCE,
     )
     assert set(credits.advantages) == {0.5}
+
+
+def test_proof_success_credit_gives_every_token_the_proof_success_advantage() -> None:
+    credits = token_credits(
+        character_offsets(COMPLETION),
+        spans(COMPLETION, "intro x", "simp", "ring"),
+        frozenset(),
+        ADVANTAGES,
+        CreditMode.PROOF_SUCCESS,
+    )
+    assert (set(credits.advantages), set(credits.trained)) == ({-0.25}, {True})
 
 
 def test_without_a_span_per_tactic_every_token_gets_the_sequence_advantage() -> None:

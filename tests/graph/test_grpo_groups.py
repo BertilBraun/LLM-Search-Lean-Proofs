@@ -8,12 +8,17 @@ from tactic_trees import (
     CONSTRUCTOR,
     CONTEXT,
     COPY,
+    E_FIRST_THEN_FAILING,
+    ERROR,
     ERRORING_HAVE,
     FIRST_THEN_FAILING,
+    NO_OP,
     OPEN_ENDED_HAVE,
     PROOF,
     PROVABLE_ATTEMPT,
+    REDUNDANT,
     ROOT,
+    THROUGH_SECOND_HAVE,
     claim_tree,
     example_tree,
     open_claims_tree,
@@ -21,6 +26,7 @@ from tactic_trees import (
 
 from lean_search.rl.advantages import CreditMode, SampleAdvantages, group_advantages
 from lean_search.rl.grpo_groups import GroupSample, PolicyGroup, RewardConfig, TreeGroups, policy_groups
+from lean_search.rl.tree_summary import tree_summary
 from lean_search.search import FailureKind, StepSource, TreeRecord
 from lean_search.search.graph_labels import label_graph
 from lean_search.search.tactic_labels import TacticLabel, policy_tactics
@@ -263,3 +269,85 @@ def test_policy_sample_repeating_the_sweep_proof_counts_as_a_policy_proof() -> N
     proof = builder.child(builder.root, text="omega", source=StepSource.AUTOMATION)
     builder.repeat(builder.root, builder.tree.edges[proof.edge_id])
     assert [group.node_id for group in groups(builder.record(proof))] == [0]
+
+
+def rounded(value: float | None) -> float | None:
+    return None if value is None else round(value, 6)
+
+
+def test_per_tactic_and_sequence_advantages_of_the_design_example_are_unchanged() -> None:
+    (root,) = groups(example_tree())
+    found = [(rounded(item.sequence), tuple(map(rounded, item.tactics))) for item in group_advantages(root).samples]
+    assert found == [
+        (1.163333, (0.783333, 0.2, 0.215)),
+        (0.648333, (0.783333, -0.1, None)),
+        (-0.476667, (-0.341667, -0.1, None)),
+        (-0.451667, (-0.416667,)),
+        (-0.451667, (-0.416667,)),
+        (-0.451667, (-0.416667,)),
+        (-0.451667, (-0.416667,)),
+        (-0.376667, (-0.341667,)),
+        (0.848333, (0.783333, 0.2, -0.1)),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("text", "reaches"),
+    [
+        (PROOF, True),
+        (FIRST_THEN_FAILING, True),
+        (E_FIRST_THEN_FAILING, False),
+        (COPY, False),
+        (NO_OP, False),
+        (ERROR, False),
+        ("", False),
+        (CONSTRUCTOR, False),
+        (THROUGH_SECOND_HAVE, False),
+    ],
+    ids=[
+        "proof",
+        "proof graph then a failing tactic",
+        "unknown state then a failing tactic",
+        "redundant off the proof graph",
+        "no progress",
+        "lean error",
+        "unparsed",
+        "dead end",
+        "through the proof graph and off it",
+    ],
+)
+def test_proof_success_of_each_sample_of_the_design_example(text: str, reaches: bool) -> None:
+    assert root_sample(text).advances_on_proof_graph is reaches
+
+
+def test_redundant_step_on_a_found_proof_is_no_proof_success() -> None:
+    builder = GraphBuilder(ROOT)
+    redundant = builder.child(builder.root, REDUNDANT, text=COPY, tactic_goals=((REDUNDANT,),))
+    builder.tree.mark_proof_path(builder.child(redundant, text="exact ⟨by linear_combination h₀ - h₁, rfl⟩"))
+    (root, _) = groups(builder.record(builder.child(builder.root, text=PROOF)))
+    (copy,) = [sample for sample in root.samples if sample.text == COPY]
+    assert copy.advances_on_proof_graph is False
+
+
+def test_block_back_to_an_ancestor_is_no_proof_success() -> None:
+    builder = GraphBuilder("⊢ p")
+    middle = builder.child(builder.root, "⊢ q", text="intro")
+    builder.duplicate(middle, builder.root, text="revert", tactic_goals=(("⊢ p",),))
+    (_, at_middle) = groups(builder.record(builder.child(middle, text="close")))
+    (back,) = [sample for sample in at_middle.samples if sample.text == "revert"]
+    assert back.advances_on_proof_graph is False
+
+
+def two_proofs_tree() -> TreeRecord:
+    """The root proved in one step and in two: every sample of each group reaches the proof graph."""
+    builder = GraphBuilder("⊢ p")
+    middle = builder.child(builder.root, "⊢ q", text="intro")
+    builder.tree.mark_proof_path(builder.child(middle, text="close"))
+    return builder.record(builder.child(builder.root, text="exact p"))
+
+
+@pytest.mark.parametrize(
+    ("credit", "trainable"), [(CreditMode.PER_TACTIC, 1), (CreditMode.SEQUENCE, 1), (CreditMode.PROOF_SUCCESS, 0)]
+)
+def test_trainable_groups_are_counted_with_the_phases_credit(credit: CreditMode, trainable: int) -> None:
+    assert tree_summary(two_proofs_tree(), CONFIG, credit, 32).trainable_groups == trainable

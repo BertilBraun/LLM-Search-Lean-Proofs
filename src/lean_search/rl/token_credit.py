@@ -105,8 +105,16 @@ def token_credits(
     advantages: SampleAdvantages,
     mode: CreditMode,
 ) -> TokenCredits:
-    """Without one span per tactic (no usable block, or none recorded) every sampled token gets the sequence credit."""
-    per_tactic = mode == CreditMode.PER_TACTIC and bool(spans) and len(spans) == len(advantages.tactics)
+    """Without one span per tactic (no usable block, or none recorded) every sampled token gets the sequence credit;
+    outside per-tactic credit every sampled token gets the sample's one advantage, counted as explanation."""
+    match mode:
+        case CreditMode.PER_TACTIC:
+            per_tactic = bool(spans) and len(spans) == len(advantages.tactics)
+            whole: float | None = advantages.sequence
+        case CreditMode.SEQUENCE:
+            per_tactic, whole = False, advantages.sequence
+        case CreditMode.PROOF_SUCCESS:
+            per_tactic, whole = False, advantages.proof_success
     segments: list[TokenSegment] = []
     values: list[float | None] = []
     for index, token in enumerate(offsets):
@@ -115,7 +123,7 @@ def token_credits(
             values.append(None)
         elif not per_tactic or (token[0] < spans[0].start and token[1] <= spans[0].start):
             segments.append(TokenSegment.EXPLANATION)
-            values.append(advantages.sequence)
+            values.append(whole)
         elif (position := tactic_position(token, spans)) == len(spans):
             segments.append(TokenSegment.CLOSING)
             values.append(advantages.closing)

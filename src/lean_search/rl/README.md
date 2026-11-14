@@ -136,7 +136,14 @@ value. After a failure the closing follows masked tactics and stays untrained.
 
 A sample without a span per executed tactic (no usable block, spans not recorded) gets
 score − b on every sampled token, so an unparsed sample scores like a failing tactic over its whole completion.
-Sequence credit sees the progress and the wasted-tactic costs through the score.
+Sequence credit sees the progress and the wasted-tactic costs through the score. `proof_success` credit (the
+follow-up study's outcome-only control, `phase_proof_success.toml`) sees none of them: r = 1 when the sample advances
+on the proof graph (`GroupSample.advances_on_proof_graph`): its edge is a forward one (new state, sibling state,
+transposition: no failure, no-op, return to an ancestor or unverified proof) and the last tactic of its kept prefix
+reaching a state with a reward is labelled proof graph (a no-progress or redundant tactic after it keeps r = 1, one
+alone gets 0; a later failing tactic is free; a valid continuation off the proof graph gets 0); else 0. Every sampled
+token but the inserted ones gets r minus the group's multiplicity-weighted mean r, and a group trains only when its
+samples' r differ.
 
 Tokens are the recorded ones (`SampledCompletion.tokens.token_ids`, no re-tokenization; the prompt is the recorded
 prompt encoded without special tokens, as vLLM does). Their characters come from decoding them one by one with the
