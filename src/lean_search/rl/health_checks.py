@@ -1,13 +1,15 @@
 """Per-phase health checks of the GRPO loop: training stability, the policy's outputs, the held-out states and the
 search budget, each against a threshold; alerts go to loop.log and the dashboard (the `health` family).
 
-Absolute limits: the KL to the starting policy (version 0's is 0) and the clip fraction. Relative limits: distinct
-samples per expansion, explanation length, cut-off samples, the sampled blocks' valid-Lean rate (a free early warning
-that brings the held-out states forward) and the block habits of the reward hacking of phases 1-10 (bare-`have`
-openings, their claims proved, the median explanation characters; on the statements from below the curriculum's band
-when the phase has any) against the mean of the first `reference_phases` phases; the held-out valid-Lean rate and
-per-sample success against version 0's held-out evaluation. One check acts: a held-out valid-Lean
-rate below `stop_held_out_valid_fraction` of version 0's (a collapse). The collapsed version is rejected
+Absolute limits: the KL to the starting policy (version 0's is 0) and the clip fraction, the GRPO trainer's only (none
+in a phase without a GRPO update). Relative limits: distinct samples per expansion, explanation tokens, cut-off
+samples, the sampled blocks' valid-Lean rate (a free early warning that brings the held-out states forward) and the
+block habits of the reward hacking of phases 1-10 (bare-`have` openings, their claims proved, the median explanation
+characters, failing tactics and unproved claims after a proof-graph tactic; on the statements from below the
+curriculum's band when the phase has any) against the mean of the first `reference_phases` phases; the held-out
+valid-Lean rate and per-sample success against version 0's held-out evaluation. Every relative measurement comes from
+the phase's trees (`TreeSummary`), so it means the same whatever trains the policy. One check acts: a held-out
+valid-Lean rate below `stop_held_out_valid_fraction` of version 0's (a collapse). The collapsed version is rejected
 (`reject_version`: no later phase trains on its samples), and the loop publishes the last good version's policy again
 (`publish_rollback`) and keeps sampling; a second collapse within `rollback_window_phases` of that rollback
 closes the phase, writes `health_stop.json` and stops the loop, which refuses to start until the owner rolls back
@@ -93,6 +95,15 @@ def with_habits(
         below_band_bare_have_share=share(easier.bare_have_openings, easier.block_samples),
         below_band_claim_proved_rate=share(easier.proved_claims, easier.open_claims),
         below_band_median_explanation_characters=binned_median(easier.explanation_character_bins),
+        proof_graph_samples=every.proof_graph_samples,
+        proof_graph_sample_share=share(every.proof_graph_samples, every.block_samples),
+        failing_after_proof_graph_share=share(every.failing_after_proof_graph, every.proof_graph_samples),
+        unproved_claim_after_proof_graph_share=share(every.unproved_claim_after_proof_graph, every.proof_graph_samples),
+        below_band_proof_graph_samples=easier.proof_graph_samples or None,
+        below_band_failing_after_proof_graph_share=share(easier.failing_after_proof_graph, easier.proof_graph_samples),
+        below_band_unproved_claim_after_proof_graph_share=share(
+            easier.unproved_claim_after_proof_graph, easier.proof_graph_samples
+        ),
     )
 
 
@@ -100,12 +111,14 @@ def measurements(
     outcome: PhaseOutcome | None, entries: Sequence[TreeEntry], held_out: HeldOutRates | None
 ) -> HealthMeasurements:
     """`entries`: the phase's trees (their first-round samples, `tree_summary.py`); `held_out`: the held-out evaluation
-    after the phase, if one ran. The KL and the clip fraction are the first round's sequences' too."""
+    after the phase, if one ran. The KL and the clip fraction are the GRPO update's first-round sequences', None
+    without a GRPO update; everything else comes from the trees."""
     summaries = [entry.summary for entry in entries]
     expansions = sum(summary.policy_expansions for summary in summaries)
     samples = sum(summary.policy_samples for summary in summaries)
     policy = None if outcome is None else outcome.policy
     trained = policy is not None and policy.data.sequences > 0
+    habits = summed_habits(summary.habits for summary in summaries)
     measured = HealthMeasurements(
         kl_to_starting_policy=first_round_or_all(
             policy.result.final_first_round_kl_to_reference, policy.result.final_kl_to_reference
@@ -119,7 +132,7 @@ def measurements(
         else None,
         distinct_samples_per_expansion=share(sum(summary.distinct_blocks for summary in summaries), expansions),
         distinct_texts_per_expansion=share(sum(summary.distinct_texts for summary in summaries), expansions),
-        mean_explanation_tokens=policy.data.mean_explanation_tokens if trained else None,
+        mean_explanation_tokens=share(habits.explanation_tokens, habits.explanation_token_samples),
         cut_off_share=share(sum(summary.cut_off_samples for summary in summaries), samples),
         repetition_loop_share=share(sum(summary.repetition_loops for summary in summaries), samples),
         held_out_valid_rate=None if held_out is None else held_out.valid_rate,
@@ -149,8 +162,12 @@ def habits_text(phase: int, measured: HealthMeasurements, reward_fix_phase: int 
         f"their open claims proved, {percent(measured.proof_have_share)} open with `have … :=`, "
         f"{percent(measured.linarith_opening_share)} with linarith/nlinarith, "
         f"{percent(measured.closed_form_filler_share)} with closed-form filler, median explanation "
-        f"{number(measured.median_explanation_characters)} characters, {number(measured.valid_block_tactics, 2)} "
-        f"tactics per complete block, {percent(measured.continue_rate)} continue after a proof-graph step"
+        f"{number(measured.median_explanation_characters)} characters ({number(measured.mean_explanation_tokens)} "
+        f"tokens on average), {number(measured.valid_block_tactics, 2)} tactics per complete block, "
+        f"{percent(measured.continue_rate)} continue after a proof-graph step; "
+        f"{percent(measured.proof_graph_sample_share)} reach the proof graph, of those "
+        f"{percent(measured.failing_after_proof_graph_share)} then run a failing tactic and "
+        f"{percent(measured.unproved_claim_after_proof_graph_share)} end in an unproved claim"
     )
 
 
@@ -227,6 +244,11 @@ def scaled(value: float | None, factor: float) -> float | None:
     return None if value is None else value * factor
 
 
+def raised(value: float | None, factor: float, rise: float) -> float | None:
+    """The larger of `factor` times the value and the value plus `rise`: a floor for rare events."""
+    return None if value is None else max(value * factor, value + rise)
+
+
 def health_thresholds(
     config: HealthConfig, reference: HealthMeasurements | None, version_zero: HeldOutRates | None
 ) -> HealthThresholds:
@@ -248,6 +270,16 @@ def health_thresholds(
             min_claim_proved_rate=scaled(reference.claim_proved_rate, config.min_claim_proved_fraction),
             min_explanation_characters=scaled(
                 reference.median_explanation_characters, config.min_explanation_characters_fraction
+            ),
+            max_failing_after_proof_graph_share=raised(
+                reference.failing_after_proof_graph_share,
+                config.max_after_proof_graph_factor,
+                config.min_failing_after_proof_graph_rise,
+            ),
+            max_unproved_claim_after_proof_graph_share=raised(
+                reference.unproved_claim_after_proof_graph_share,
+                config.max_after_proof_graph_factor,
+                config.min_unproved_claim_after_proof_graph_rise,
             ),
         )
     if version_zero is not None:
@@ -296,6 +328,10 @@ def alert_title(check: HealthCheck, severity: HealthSeverity) -> str:
             return "Open claims proved dropping"
         case HealthCheck.EXPLANATION_CHARACTERS:
             return "Explanations shrinking"
+        case HealthCheck.FAILING_AFTER_PROOF_GRAPH:
+            return "Failing tactics after the proof graph rising"
+        case HealthCheck.UNPROVED_CLAIM_AFTER_PROOF_GRAPH:
+            return "Unproved claims after the proof graph rising"
 
 
 def health_alert(check: HealthCheck, severity: HealthSeverity, detail: str) -> HealthAlert:
@@ -377,6 +413,31 @@ def health_alerts(
             HealthCheck.EXPLANATION_CHARACTERS,
             f"Median explanation{where} {characters:.0f} characters < {thresholds.min_explanation_characters:.0f} "
             f"({config.min_explanation_characters_fraction:.0%} of the first phases'): the visible reasoning shrinks.",
+        )
+    reached, _ = compared(measured.below_band_proof_graph_samples, measured.proof_graph_samples)
+    enough = reached is not None and reached >= config.min_proof_graph_samples
+    failing, where = compared(
+        measured.below_band_failing_after_proof_graph_share, measured.failing_after_proof_graph_share
+    )
+    if enough and above(failing, thresholds.max_failing_after_proof_graph_share):
+        warn(
+            HealthCheck.FAILING_AFTER_PROOF_GRAPH,
+            f"{failing:.1%} of the {reached:,} samples{where} reaching the proof graph then run a failing tactic > "
+            f"{thresholds.max_failing_after_proof_graph_share:.1%} (the first phases' x "
+            f"{config.max_after_proof_graph_factor:g}, at least + {config.min_failing_after_proof_graph_rise:.0%}): a "
+            "tail that a credit stopping at the proof graph leaves uncharged.",
+        )
+    unproved, where = compared(
+        measured.below_band_unproved_claim_after_proof_graph_share, measured.unproved_claim_after_proof_graph_share
+    )
+    if enough and above(unproved, thresholds.max_unproved_claim_after_proof_graph_share):
+        warn(
+            HealthCheck.UNPROVED_CLAIM_AFTER_PROOF_GRAPH,
+            f"{unproved:.1%} of the {reached:,} samples{where} reaching the proof graph end in a claim the tree never "
+            f"proves > {thresholds.max_unproved_claim_after_proof_graph_share:.1%} (the first phases' x "
+            f"{config.max_after_proof_graph_factor:g}, at least + "
+            f"{config.min_unproved_claim_after_proof_graph_rise:.0%}): a tail that a credit stopping at the proof "
+            "graph leaves uncharged.",
         )
     valid = measured.held_out_valid_rate
     if below(valid, thresholds.stop_held_out_valid_rate):

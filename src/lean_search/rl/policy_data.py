@@ -132,6 +132,22 @@ class AdvantageSignRatios:
 
 
 @dataclass(frozen=True)
+class UpdateSize:
+    """How big a phase's step was, comparable between arms whatever they train with: the trainable parameters' change
+    over the phase, absolute and relative to their start, the mean total gradient norm before clipping, and each loss
+    term's mean magnitude per step. The GRPO surrogate's value is near 0 by construction, so the terms' values do not
+    say what share of the update each drives."""
+
+    parameter_change_norm: float
+    # None for parameters that started at 0.
+    relative_parameter_change: float | None
+    mean_gradient_norm: float
+    mean_absolute_policy_loss: float
+    mean_kl_penalty: float
+    mean_replay_loss: float
+
+
+@dataclass(frozen=True)
 class SignedRatios:
     # An update going the right way raises the positive tokens' ratio above 1 and lowers the negative ones' below.
     positive: AdvantageSignRatios

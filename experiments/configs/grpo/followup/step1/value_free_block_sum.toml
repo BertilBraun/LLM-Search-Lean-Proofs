@@ -1,0 +1,19 @@
+# Step 1's run 6 with step_log_probability = "block_sum" (DESIGN.md, "Follow-up study: controlled arms", "Step 1",
+# Q4): v0 without a value model, best-first on the path's mean step log-probability per block (row 2's search):
+# probe_evaluation.toml but for [value_free_priority]. Run with --value none; the pilot with --problems 200
+# (runs_value_free_pilots.toml), the best of the three settings' pilots in full (runs_value_free_full.toml).
+# Review AF (results/reviews/2026-11-14_review_af_signals_code.md): on 2,060 recorded expansions the top-ranked
+# sibling lies on the proof graph 42.6% (completion), 39.4% (block_sum), 42.2% (block_mean), chance 39.9%; so all
+# three settings get a pilot. Pilots of 200 statements differ by ~3 points from noise alone (review AI): the winner
+# is near-random unless one is clearly ahead, and is reported so.
+base = "experiments/configs/grpo/followup/probe_evaluation.toml"
+
+[value_free_priority]
+step_log_probability = "block_sum"
+
+# A placeholder (calibrated = false: probe_evaluate.py and the launcher refuse it) until the calibration
+# (runs_calibration.toml, then experiments/followup_step1.py automation-constant) prints the entry to put here.
+[[value_free_priority.automation_constants]]
+step_log_probability = "block_sum"
+automation_log_probability = -5.65
+calibrated = false

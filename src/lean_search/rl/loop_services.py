@@ -4,6 +4,7 @@ first-hour check of a policy server's responses."""
 
 import asyncio
 import contextlib
+import dataclasses
 import json
 import os
 import shlex
@@ -73,7 +74,7 @@ from lean_search.rl.search_models import SearchModels, open_search_models, optio
 from lean_search.rl.search_options import CONTROL_ARM, OptionsArmConfig
 from lean_search.rl.trainer_channel import TrainerChannel, TrainerCommand, TrainerCommandKind
 from lean_search.rl.training_phase import PhaseOutcome
-from lean_search.search import CompletedSearch, RunConfig, SearchConfig
+from lean_search.search import CandidateBatches, CompletedSearch, Expander, Node, RunConfig, SearchConfig, SearchContext
 from lean_search.search.records import from_json_object
 from lean_search.training.resident import HostDirectories
 from lean_search.value.benchmark import BenchmarkScores, ValueBenchmark
@@ -101,6 +102,21 @@ class OptionsArmSearch:
     models: SearchModels
 
 
+class CountingExpander:
+    """Adds each batch's generated tokens to its statement's count as the search receives it."""
+
+    def __init__(self, inner: Expander, generated_tokens: dict[str, int]) -> None:
+        self.inner = inner
+        self.generated_tokens = generated_tokens
+
+    async def expand(self, node: Node, context: SearchContext) -> CandidateBatches:
+        name = context.problem.name
+        async with contextlib.aclosing(self.inner.expand(node, context)) as batches:
+            async for batch in batches:
+                self.generated_tokens[name] = self.generated_tokens.get(name, 0) + batch.generated_tokens
+                yield batch
+
+
 class LeanTreeSearcher:
     """One search per REPL of the pool, with the served models behind the pause gate."""
 
@@ -115,20 +131,37 @@ class LeanTreeSearcher:
     ) -> None:
         self.config = config
         self.pool = pool
-        self.models = models
+        # By statement: what its search in flight generated so far, kept after a failure until it is fed again.
+        self.tokens: dict[str, int] = {}
+        self.models = dataclasses.replace(models, expander=CountingExpander(models.expander, self.tokens))
         self.gate = gate
         self.renamings = renamings
-        self.options_arm = options_arm
+        self.options_arm = (
+            None
+            if options_arm is None
+            else dataclasses.replace(
+                options_arm,
+                models=dataclasses.replace(
+                    options_arm.models, expander=CountingExpander(options_arm.models.expander, self.tokens)
+                ),
+            )
+        )
 
     async def search(self, problem: Problem, arm: str) -> CompletedSearch:
         search, models = self.config.search, self.models
         if arm and arm != CONTROL_ARM:
             assert self.options_arm is not None and arm == self.options_arm.config.name, arm
             search, models = self.options_arm.search, self.options_arm.models
+        self.tokens[problem.name] = 0
         async with self.pool.acquire() as repl:
-            return await search_problem(
+            completed = await search_problem(
                 problem, repl, models.expander, models.priority_function, search, self.renamings
             )
+        del self.tokens[problem.name]
+        return completed
+
+    def generated_tokens(self, problem_name: str) -> int:
+        return self.tokens.get(problem_name, 0)
 
     async def pause(self) -> None:
         await self.gate.pause()

@@ -1,0 +1,32 @@
+# The 200 pool statements that calibrate the value-free search's automation constant (DESIGN.md, "Follow-up study:
+# controlled arms", "Step 1", Q4), drawn by probe v2's own selection (grpo_fixed_sets.py select-by-characters,
+# CharacterStrataConfig): a tenth of probe v2's count per character band, from another hash order, outside probe v2,
+# its pool twins, the old probe, gate and overfit sets, everything grpo_loop_v1 searched, the held-out states'
+# statements and near-duplicates of the training data's roots. The arms may later train on these statements: the
+# calibration runs before any arm.
+#   python experiments/grpo_fixed_sets.py --config experiments/configs/grpo/followup/step1/calibration_statements.toml \
+#       select-by-characters --training-data $LEAN_SEARCH_DATA/sft $LEAN_SEARCH_DATA/reasoning $LEAN_SEARCH_DATA/value \
+#       --old-run-index $LEAN_SEARCH_RUNS/grpo_loop_v1/trees/index.jsonl
+edges = [500, 1000, 1500, 2000, 3000, 4500]
+counts = [15, 25, 35, 35, 40, 30, 20]
+seed = "followup-automation-calibration"
+output = "grpo/fixed_sets/calibration_200.jsonl"
+twins_output = "grpo/fixed_sets/calibration_200_twins.jsonl"
+excluded_sets = [
+    "grpo/fixed_sets/probe.jsonl",
+    "grpo/fixed_sets/gate.jsonl",
+    "grpo/fixed_sets/overfit_300.jsonl",
+    "grpo/fixed_sets/probe_v2.jsonl",
+    "grpo/fixed_sets/probe_v2_twins.jsonl",
+]
+held_out_states_file = "phase5_eval_visible_student_v2_visible/states.jsonl"
+near_duplicate_threshold = 0.7
+
+# probe v2's: the frozen pool and the follow-up curriculum's difficulty.
+[curriculum]
+verified = "followup/verified_pool_2026-11-01.jsonl"
+verified_sha256 = "1b216b06e30148a1e652291098c642842dadad83e2a6eaca9b85e3cb2aa5600c"
+unverified = ""
+proof_steps_weight = 0.0
+root_value_weight = 0.0
+characters_weight = 1.0

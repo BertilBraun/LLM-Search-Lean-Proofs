@@ -53,7 +53,6 @@ import datetime
 import functools
 import json
 import os
-import tomllib
 from pathlib import Path
 
 from lean_search.expert_iteration.curriculum import file_sha256
@@ -102,6 +101,7 @@ from lean_search.rl.probe_evaluation import (
     stops_by_stratum,
     verify_served,
 )
+from lean_search.rl.study_configs import resolved_toml
 from lean_search.search import load_run_config, read_results
 from lean_search.search.records import from_json_object, to_json
 
@@ -140,7 +140,8 @@ def log(message: str) -> None:
 
 
 def load_config(path: Path) -> ProbeEvaluationConfig:
-    return from_json_object(ProbeEvaluationConfig, tomllib.loads(path.read_text(encoding="utf-8")))
+    """The file over its `base` evaluation config, if it names one (the study's configs inherit the probe's)."""
+    return from_json_object(ProbeEvaluationConfig, resolved_toml(path, REPOSITORY_DIRECTORY))
 
 
 def checkpoint(arguments: argparse.Namespace, loop: GrpoLoopConfig) -> ProbeCheckpoint:

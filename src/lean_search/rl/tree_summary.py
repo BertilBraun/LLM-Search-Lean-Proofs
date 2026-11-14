@@ -14,13 +14,14 @@ from pathlib import Path
 
 from lean_search.lean.hypotheses import adds_only_closed_form_hypotheses
 from lean_search.lean.text import split_tactics
-from lean_search.policy.prompts import visible_explanation
+from lean_search.policy.prompts import FENCE, visible_explanation
 from lean_search.rl.advantages import CreditMode, group_advantages
 from lean_search.rl.grpo_groups import RewardConfig, policy_groups
 from lean_search.rl.phase_metrics import is_forced, repeats_itself
 from lean_search.search.graph_labels import GraphLabels, label_graph
 from lean_search.search.records import TreeRecord, read_tree
 from lean_search.search.tactic_labels import TacticLabel, TacticOutcome, policy_tactics
+from lean_search.search.texts import SampledCompletion, TokenDecoder
 from lean_search.search.tree import Edge, EdgeOutcome, FailureKind, StepSource
 
 # Anywhere in the opening: wrapped as `try have`, `all_goals have`, `any_goals have` or after `<;>` too.
@@ -66,6 +67,16 @@ class BlockHabits:
     # Tactics reaching a proof-graph state with goals left, and those of them a further tactic of the block follows.
     proof_graph_steps: int = 0
     continued_proof_graph_steps: int = 0
+    # Samples whose block has a tactic reaching a proof-graph state, and those of them that then run a failing tactic,
+    # or whose last tactic reaching a state after it is a claim the tree never proves: tails that proof-success credit
+    # pays for, as shares of the samples reaching the graph.
+    proof_graph_samples: int = 0
+    failing_after_proof_graph: int = 0
+    unproved_claim_after_proof_graph: int = 0
+    # Of all first-round samples with recorded tokens (`explanation_token_count`, with the loop's tokenizer only): the
+    # samples and their tokens up to the opening fence.
+    explanation_token_samples: int = 0
+    explanation_tokens: int = 0
     # The judged samples by the head of their opening, most frequent first.
     openings: tuple[OpeningCount, ...] = ()
 
@@ -118,6 +129,9 @@ class TreeSummary:
     # The curriculum fed the statement from below its band (`below_band_share`), not from the band.
     below_band: bool = False
     habits: BlockHabits = field(default_factory=BlockHabits)
+    # Why the block habits (health only) could not be measured, leaving them empty while the tree trains; "" when
+    # they were.
+    habits_error: str = ""
 
 
 def executed_edge(record: TreeRecord, edge: Edge) -> Edge:
@@ -181,6 +195,50 @@ def is_linarith_opening(first: str) -> bool:
     return LINARITH.match(first) is not None
 
 
+def after_proof_graph(outcomes: Sequence[TacticOutcome]) -> Sequence[TacticOutcome]:
+    """The tactics after the block's first proof-graph tactic; none when it has none."""
+    labels = [outcome.label for outcome in outcomes]
+    return outcomes[labels.index(TacticLabel.PROOF_GRAPH) + 1 :] if TacticLabel.PROOF_GRAPH in labels else ()
+
+
+def fails_after_proof_graph(outcomes: Sequence[TacticOutcome]) -> bool:
+    return any(outcome.label == TacticLabel.FAILING for outcome in after_proof_graph(outcomes))
+
+
+def ends_in_unproved_claim_after_proof_graph(outcomes: Sequence[TacticOutcome]) -> bool:
+    reached = [
+        outcome
+        for outcome in after_proof_graph(outcomes)
+        if outcome.label not in (TacticLabel.FAILING, TacticLabel.MASKED)
+    ]
+    return bool(reached) and reached[-1].label == TacticLabel.UNPROVED_CLAIM
+
+
+def explanation_token_count(decoder: TokenDecoder, completion: SampledCompletion) -> int:
+    """The shortest prefix of the sample's recorded tokens whose decoding reaches its opening fence (all of them
+    without one), by bisection over prefix decodes: the trainer's per-token offsets cost a decode per token."""
+    end = len(completion.text.partition(FENCE)[0])
+    token_ids = completion.tokens.token_ids
+    low, high = 0, len(token_ids)
+    while low < high:
+        middle = (low + high) // 2
+        if len(decoder.decode(token_ids[:middle], skip_special_tokens=False)) >= end:
+            high = middle
+        else:
+            low = middle + 1
+    return low
+
+
+def explanation_token_habits(decoder: TokenDecoder | None, completions: Iterable[SampledCompletion]) -> BlockHabits:
+    if decoder is None:
+        return BlockHabits()
+    recorded = [completion for completion in completions if completion.tokens.token_ids]
+    return BlockHabits(
+        explanation_token_samples=len(recorded),
+        explanation_tokens=sum(explanation_token_count(decoder, completion) for completion in recorded),
+    )
+
+
 def proof_graph_steps(outcomes: Sequence[TacticOutcome]) -> list[bool]:
     """Per tactic reaching a proof-graph state with goals left: whether another tactic follows it."""
     return [
@@ -224,8 +282,10 @@ def binned_median(bins: Sequence[int]) -> float | None:
     return None
 
 
-def block_habits(record: TreeRecord, tactics: Mapping[int, Sequence[TacticOutcome]]) -> BlockHabits:
-    """`tactics`: `policy_tactics`."""
+def block_habits(
+    record: TreeRecord, tactics: Mapping[int, Sequence[TacticOutcome]], decoder: TokenDecoder | None = None
+) -> BlockHabits:
+    """`tactics`: `policy_tactics`; without a `decoder` the explanation tokens are not counted."""
     habits = []
     for edge in record.edges:
         if edge.source != StepSource.POLICY or edge.feedback:
@@ -234,12 +294,13 @@ def block_habits(record: TreeRecord, tactics: Mapping[int, Sequence[TacticOutcom
         if not executed.text.strip() or not judged_by_lean(executed):
             continue
         samples = edge.sample_count
-        first = tactics[executed.edge_id][0]
+        outcomes = tactics[executed.edge_id]
+        first = outcomes[0]
         first_tactic = opening(executed.text)
         bare = is_bare_have(first_tactic)
         open_claim = bare and first.leaves_claim_open
         valid = ran_completely(executed)
-        steps = proof_graph_steps(tactics[executed.edge_id])
+        steps = proof_graph_steps(outcomes)
         habits.append(
             BlockHabits(
                 block_samples=samples,
@@ -253,16 +314,22 @@ def block_habits(record: TreeRecord, tactics: Mapping[int, Sequence[TacticOutcom
                 valid_block_tactics=samples * valid * executed.applied_tactics,
                 proof_graph_steps=samples * len(steps),
                 continued_proof_graph_steps=samples * sum(steps),
+                proof_graph_samples=samples * any(outcome.label == TacticLabel.PROOF_GRAPH for outcome in outcomes),
+                failing_after_proof_graph=samples * fails_after_proof_graph(outcomes),
+                unproved_claim_after_proof_graph=samples * ends_in_unproved_claim_after_proof_graph(outcomes),
                 openings=(OpeningCount(opening_head(first_tactic), samples),),
             )
         )
-    texts = (
-        completion.text
-        for expansion in record.expansions
-        if not expansion.feedback
-        for completion in expansion.completions
+    completions = [
+        completion for expansion in record.expansions if not expansion.feedback for completion in expansion.completions
+    ]
+    return summed_habits(
+        [
+            *habits,
+            BlockHabits(explanation_character_bins=explanation_bins(completion.text for completion in completions)),
+            explanation_token_habits(decoder, completions),
+        ]
     )
-    return summed_habits([*habits, BlockHabits(explanation_character_bins=explanation_bins(texts))])
 
 
 def tree_habits(path: Path, min_expanded_nodes: int) -> BlockHabits | None:
@@ -345,6 +412,7 @@ def tree_summary(
     expansion_budget: int,
     arm: str = "",
     below_band: bool = False,
+    decoder: TokenDecoder | None = None,
 ) -> TreeSummary:
     blocks_by_expansion: defaultdict[int, int] = defaultdict(int)
     samples = 0
@@ -378,6 +446,10 @@ def tree_summary(
     )
     accounting = record.result.accounting
     solved_at = record.result.solved_at
+    try:
+        habits, habits_error = block_habits(record, tactics, decoder), ""
+    except Exception as error:
+        habits, habits_error = BlockHabits(), f"{type(error).__name__}: {error}"
     return TreeSummary(
         expansion_budget=expansion_budget,
         solved_at_expansion=None if solved_at is None else solved_at.expansions,
@@ -407,5 +479,6 @@ def tree_summary(
             sorted({version for expansion in record.expansions if (version := expansion.policy_version) is not None})
         ),
         below_band=below_band,
-        habits=block_habits(record, tactics),
+        habits=habits,
+        habits_error=habits_error,
     )

@@ -6,8 +6,9 @@
 # - [evaluation]: nothing beside an arm. Probe and miniF2F run standalone between or after arms
 #   (experiments/probe_evaluate.py), never inside it, and no v0 baseline of either at an arm's start; the held-out
 #   states run at every pause, v0's baseline at the pause's concurrency, and the searches wait for their last checks;
-# - THROUGHPUT TEST: the sampling and held-out concurrencies are placeholders (56) until step 0's throughput test sets
-#   one sampling, one probe and one held-out concurrency, identical for every arm;
+# - the sampling concurrency 84, as the probe's, from the throughput test of 2026-11-14; the held-out states stay at
+#   56 (v0's baseline and every pause alike), identical for every arm;
+# - phases on generated tokens, 16 of 12M, the study's proposed defaults pending the owner's confirmation;
 # - [retention] every adapter kept (phases 4, 8 and 16 are evaluated afterwards); [health] reference phase 1, the loop
 #   stops at the first valid-Lean collapse instead of rolling back;
 # - no search options A/B (the feedback arm ended in grpo_loop_v1) and the KL reference back at v0 ([training]).
@@ -104,8 +105,10 @@ search_config = "experiments/configs/grpo/search/visible_student_v2.toml"
 max_expansions = 32
 # One REPL per search; most searches wait on the GPUs. Tune by the first hour (Lean cores and memory on the
 # dashboard's system page; a REPL holds 0.25-2 GiB of private memory; budget in src/lean_search/rl/README.md).
-# THROUGHPUT TEST: a placeholder; grpo_loop_v1's 112 assumed a 123-core quota, this node has 61.
-concurrency = 56
+# The throughput test of 2026-11-14 (61-core quota, v0 serving): 84 searches gave 10.0k expansions/h without CPU
+# throttling, 112 gave 11.0k; 84 leaves each REPL more of the pinned cores as later checkpoints spend longer in Lean,
+# so the wall-clock tactic limits stay a backstop (the probe's concurrency, followup/probe_evaluation.toml).
+concurrency = 84
 # Unused: nothing runs beside sampling (evaluation.beside_sampling = false).
 min_concurrency_beside_evaluations = 56
 status_seconds = 30.0
@@ -129,6 +132,11 @@ gpus = [0, 1, 2, 3]
 min_sampling_minutes = 75.0
 max_sampling_minutes = 120.0
 min_trainable_groups = 300
+# The arms' phases end on generated tokens instead (DESIGN.md, "Compute matching"; the minutes and groups above are
+# unused), the run after its last phase: 16 phases of 12M tokens, 192M per arm, are the study's proposed defaults
+# pending the owner's confirmation. A second run of an arm adds seed_offset = 1 at the top level.
+phase_generated_tokens = 12_000_000
+max_phases = 16
 check_seconds = 30.0
 # A job's first phase of a kind (model building, compilation, and with a value phase the first value training) gets 2
 # h: phase 2 (1881 groups, then 2 passes) would have passed 45 min.
@@ -257,15 +265,16 @@ every_hours = 0.0
 at_start = false
 baseline_concurrency = 0
 
-# Per-sample success and valid Lean on the 512 held-out states at every pause (due after 0.01 h of loop time, less than
-# any phase): the hard stop's signal. Version 0's run before sampling is its reference, at the pause's concurrency; the
-# loop refuses to start without it.
+# Per-sample success and valid Lean on the 512 held-out states at every pause (by phase, not by loop hours): the hard
+# stop's signal. Version 0's run before sampling is its reference, at the pause's concurrency; the loop refuses to
+# start without it.
 [evaluation.held_out_states]
 max_expansions = 1
 max_wall_seconds = 120.0
-# THROUGHPUT TEST: a placeholder, the same for v0's baseline and every pause.
+# The same for v0's baseline and every pause in every arm (kept at 56 beside the throughput test's 84).
 concurrency = 56
-every_hours = 0.01
+every_hours = 0.0
+at_each_pause = true
 at_start = true
 baseline_concurrency = 56
 

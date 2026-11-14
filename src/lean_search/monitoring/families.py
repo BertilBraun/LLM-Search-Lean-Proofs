@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import ClassVar
 
-from lean_search.rl.policy_data import SamplerAgreement, SignedRatios
+from lean_search.rl.policy_data import SamplerAgreement, SignedRatios, UpdateSize
 from lean_search.rl.tree_statistics import GraphStatistics
 from lean_search.search.tactic_labels import TacticLabelCounts
 from lean_search.value.benchmark import BenchmarkMetrics
@@ -29,6 +29,8 @@ class LoopState(StrEnum):
     EVALUATING = "evaluating"
     PAUSED = "paused"
     STOPPED = "stopped"
+    # The run ended by itself after its last phase or at its token total (`GrpoLoop.finish_run`).
+    FINISHED = "finished"
 
 
 @dataclass(frozen=True)
@@ -353,6 +355,10 @@ class GrpoPhase:
     proof_success_no_closer_share: float = 0.0
     # The searches that produced the phase's data; with training_seconds it decides one or two passes.
     sampling_seconds: float | None = None
+    # The update's size beside the other arms': its optimizer steps, and the parameter change, gradient norm and loss
+    # terms of `policy_data.UpdateSize` (None without a step and in older outcomes).
+    optimizer_steps: int = 0
+    update: UpdateSize | None = None
 
 
 @dataclass(frozen=True)
@@ -526,6 +532,11 @@ class PhaseTiming:
     trees: int
     searches_paused: int
     pause: PauseSegments = field(default_factory=PauseSegments)
+    # The phase's generated tokens (kept trees and finished searches left out of the store), those of its searches
+    # lost to a server failure or a stop (never counted), and those of the searches held at its pause so far.
+    generated_tokens: int = 0
+    lost_generated_tokens: int = 0
+    paused_search_tokens: int = 0
 
 
 @dataclass(frozen=True)
@@ -569,14 +580,16 @@ class BudgetPhase:
 class HealthMeasurements:
     """A phase's training-stability signals (rl/health_checks.py); None when not measured in this phase."""
 
-    # KL (k3, per token) of the trained policy to the starting policy and the clip fraction, both of the last pass.
+    # KL (k3, per token) of the trained policy to the starting policy and the clip fraction, both of the last pass:
+    # the GRPO trainer's, None in a phase without a GRPO update.
     kl_to_starting_policy: float | None = None
     clip_fraction: float | None = None
     # Per policy expansion of the phase's searches (n = 8 samples): distinct blocks (identical ones run once), and
     # distinct sample texts.
     distinct_samples_per_expansion: float | None = None
     distinct_texts_per_expansion: float | None = None
-    # Explanation tokens of the trained samples.
+    # Per first-round sample of the phase's trees, its tokens up to the opening fence (`BlockHabits`): the same
+    # measure whatever trains the policy.
     mean_explanation_tokens: float | None = None
     # Policy samples cut off at the token cap (their answer forced), and those repeating their own text.
     cut_off_share: float | None = None
@@ -607,6 +620,16 @@ class HealthMeasurements:
     below_band_bare_have_share: float | None = None
     below_band_claim_proved_rate: float | None = None
     below_band_median_explanation_characters: float | None = None
+    # Of the same samples, those with a tactic reaching the proof graph (their count and share), and of those the
+    # shares then running a failing tactic or ending in a claim the tree never proves (`BlockHabits`); all statements
+    # and those from below the band (None without a sample reaching the graph there).
+    proof_graph_samples: int | None = None
+    proof_graph_sample_share: float | None = None
+    failing_after_proof_graph_share: float | None = None
+    unproved_claim_after_proof_graph_share: float | None = None
+    below_band_proof_graph_samples: int | None = None
+    below_band_failing_after_proof_graph_share: float | None = None
+    below_band_unproved_claim_after_proof_graph_share: float | None = None
 
 
 @dataclass(frozen=True)
@@ -628,6 +651,8 @@ class HealthThresholds:
     max_bare_have_share: float | None = None
     min_claim_proved_rate: float | None = None
     min_explanation_characters: float | None = None
+    max_failing_after_proof_graph_share: float | None = None
+    max_unproved_claim_after_proof_graph_share: float | None = None
 
 
 class HealthCheck(StrEnum):
@@ -643,6 +668,8 @@ class HealthCheck(StrEnum):
     BARE_HAVES = "bare_haves"
     CLAIMS_PROVED = "claims_proved"
     EXPLANATION_CHARACTERS = "explanation_characters"
+    FAILING_AFTER_PROOF_GRAPH = "failing_after_proof_graph"
+    UNPROVED_CLAIM_AFTER_PROOF_GRAPH = "unproved_claim_after_proof_graph"
 
 
 class HealthSeverity(StrEnum):

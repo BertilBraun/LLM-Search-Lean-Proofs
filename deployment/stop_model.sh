@@ -30,6 +30,12 @@ for pid_file in ${pid_files[@]+"${pid_files[@]}"}; do
     fi
     # serve_model.sh starts vLLM with setsid, so its pid is the process group of the API server and engine core.
     process_group="$(cat "${pid_file}")"
+    # A pid file from before a container restart may name an unrelated process by now.
+    if [[ -r "/proc/${process_group}/cmdline" ]] && ! tr '\0' ' ' < "/proc/${process_group}/cmdline" | grep -q vllm; then
+        echo "${name}'s pid ${process_group} is no vLLM process now: its pid file is removed, nothing stopped." >&2
+        rm -f "${pid_file}"
+        continue
+    fi
     kill -TERM -- "-${process_group}" 2>/dev/null || true
     for _ in $(seq 60); do
         kill -0 -- "-${process_group}" 2>/dev/null || break

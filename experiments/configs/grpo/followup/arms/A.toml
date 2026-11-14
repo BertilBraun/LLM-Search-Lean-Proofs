@@ -1,0 +1,12 @@
+# Arm A, per-tactic graph credit GRPO (DESIGN.md, "Follow-up study: controlled arms", "Arms"): the follow-up base
+# (followup/base.toml) with its phase template (grpo/phase.toml), changed only in the lines below; the loop reads the
+# configs experiments/followup_arm.py writes from it, which refuses while a PLACEHOLDER is left.
+[loop]
+name = "followup_A"
+
+[phase.policy.data]
+credit = "per_tactic"
+
+[phase.policy.optimization]
+# Step 2's choice among 2e-5, 5e-5 and 1e-4 (experiments/rank_learning_rates.py).
+learning_rate = "PLACEHOLDER: step 2's learning rate for A"
