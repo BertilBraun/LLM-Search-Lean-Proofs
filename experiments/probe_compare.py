@@ -1,20 +1,22 @@
 """Arms compared on probe runs by the follow-up's pre-set rule (src/lean_search/rl/arm_comparison.py; DESIGN.md,
 "Follow-up study: controlled arms", "Evaluation").
 
-    python experiments/probe_compare.py pair --x $LEAN_SEARCH_RUNS/probe_evaluations/probe_A16_run1 probe_A16_run2 \
-        --y probe_B2_16_run1 probe_B2_16_run2 [--across-search-modes] [--seed 0]
-    python experiments/probe_compare.py seeds --x <A seed 1 runs> --x-second <A seed 2 runs> \
-        --y <B2 seed 1 runs> --y-second <B2 seed 2 runs>
+    python experiments/probe_compare.py pair --x probe_A_phase16_run1 probe_A_phase16_run2 --x-label A \
+        --y probe_B2_phase16_run1 probe_B2_phase16_run2 --y-label B2 --primary [--across-search-modes] [--seed 0]
+    python experiments/probe_compare.py seeds --x <A seed 1 runs> --x-second <A seed 2 runs> --x-label A \
+        --y <B2 seed 1 runs> --y-second <B2 seed 2 runs> --y-label B2
     python experiments/probe_compare.py against --reference probe_v0_run1 probe_v0_run2 \
         --variant step2_A_5e-5 probe_step2_A_5e-5 --variant step2_B2_1e-4 probe_step2_B2_1e-4
 
 A run is a probe_evaluate.py run directory (a bare name is looked up under $LEAN_SEARCH_RUNS/probe_evaluations);
 only accepted runs are compared. Each side is one checkpoint in one or two runs of one identity, pooled per statement;
 the comparison is on the statements every run searched. pair prints solved shares, the paired difference with its
-stratified 95% interval in total and per stratum, McNemar on every pair of single runs, solved within 1-16 expansions,
-which limit ended each run's searches and the rule's verdict; seeds the second-seed confirmation; against one row per
-variant against the reference (v0). Runs with another probe set, budget or wall cap are refused, and so are runs with
-another search config unless --across-search-modes (step 1's reasoning comparison, the value-free search).
+stratified 95% interval in total and per stratum, McNemar on every pair of single runs, each two-run side's run 1
+against its run 2, solved within 1-16 expansions, which limit ended each run's searches and the rule's verdict:
+"primary" only with --primary (final checkpoints, two runs per side, refused otherwise), else "descriptive". seeds
+prints the second-seed confirmation; against one row per variant against the reference (v0). Runs with another probe
+set, expansion, token or depth budget, wall cap or concurrency are refused, and so are runs with another search config
+unless --across-search-modes (step 1's reasoning comparison, the value-free search).
 """
 
 import argparse
@@ -30,6 +32,7 @@ from lean_search.rl.arm_comparison import (
     against_reference,
     compare_arms,
     confirm_with_seeds,
+    multiple_comparisons_note,
     read_arm_run,
 )
 from lean_search.rl.fixed_sets import read_fixed_set
@@ -44,11 +47,15 @@ def parse_arguments() -> argparse.Namespace:
     shared = argparse.ArgumentParser(add_help=False)
     shared.add_argument("--seed", type=int, default=0, help="the bootstrap's")
     shared.add_argument("--across-search-modes", action="store_true", help="allow different search configs")
+    labels = argparse.ArgumentParser(add_help=False)
+    labels.add_argument("--x-label", default="", help="default: the checkpoint's arm and phase")
+    labels.add_argument("--y-label", default="")
     commands = parser.add_subparsers(dest="command", required=True)
-    pair = commands.add_parser("pair", parents=[shared])
+    pair = commands.add_parser("pair", parents=[shared, labels])
     pair.add_argument("--x", nargs="+", required=True)
     pair.add_argument("--y", nargs="+", required=True)
-    seeds = commands.add_parser("seeds", parents=[shared])
+    pair.add_argument("--primary", action="store_true", help="final checkpoints, two runs each: the primary endpoint")
+    seeds = commands.add_parser("seeds", parents=[shared, labels])
     for side in ("--x", "--x-second", "--y", "--y-second"):
         seeds.add_argument(side, nargs="+", required=True)
     against = commands.add_parser("against", parents=[shared])
@@ -80,13 +87,12 @@ def points(value: float) -> str:
     return f"{100 * value:+.1f}"
 
 
+def interval_text(found: Difference) -> str:
+    return f"{points(found.difference)} [{points(found.lower)}, {points(found.upper)}]"
+
+
 def difference_cells(found: Difference) -> list[str]:
-    return [
-        str(found.statements),
-        f"{found.x_solved:.1%}",
-        f"{found.y_solved:.1%}",
-        f"{points(found.difference)} [{points(found.lower)}, {points(found.upper)}]",
-    ]
+    return [str(found.statements), f"{found.x_solved:.1%}", f"{found.y_solved:.1%}", interval_text(found)]
 
 
 def print_comparison(comparison: ArmComparison) -> None:
@@ -99,6 +105,14 @@ def print_comparison(comparison: ArmComparison) -> None:
     print()
     rows = [[item.x_run, item.y_run, item.x_only, item.y_only, f"{item.p_value:.3g}"] for item in comparison.mcnemar]
     print(markdown_table(["x run", "y run", "x only", "y only", "exact McNemar p"], rows))
+    if comparison.repeats:
+        print()
+        rows = [
+            [repeat.arm, interval_text(repeat.difference), f"{repeat.mcnemar.p_value:.3g}"]
+            + ["a run-level shift: read the pooled verdict with care" if repeat.difference.excludes_zero else ""]
+            for repeat in comparison.repeats
+        ]
+        print(markdown_table(["arm", "run 1 - run 2, points [95%]", "exact McNemar p", ""], rows))
     print()
     rows = [[item.budget, f"{item.x_solved:.1%}", f"{item.y_solved:.1%}"] for item in comparison.within]
     print(markdown_table(["solved within expansions (secondary)", x, y], rows))
@@ -117,25 +131,22 @@ def main() -> None:
     arguments = parse_arguments()
     match arguments.command:
         case "pair":
-            print_comparison(
-                compare_arms(
-                    read_arm(arguments.x), read_arm(arguments.y), arguments.seed, arguments.across_search_modes
-                )
-            )
+            x, y = read_arm(arguments.x, arguments.x_label), read_arm(arguments.y, arguments.y_label)
+            print_comparison(compare_arms(x, y, arguments.seed, arguments.across_search_modes, arguments.primary))
         case "seeds":
             x = (read_arm(arguments.x), read_arm(arguments.x_second))
             y = (read_arm(arguments.y), read_arm(arguments.y_second))
-            confirmation = confirm_with_seeds(x, y, arguments.across_search_modes)
+            x_label, y_label = arguments.x_label or x[0].label, arguments.y_label or y[0].label
+            confirmation = confirm_with_seeds(x, y, x_label, y_label, arguments.seed, arguments.across_search_modes)
             rows = [
-                [f"x seed {pair.x_seed}", f"y seed {pair.y_seed}", points(pair.difference)]
+                [f"{x_label} seed {pair.x_seed}", f"{y_label} seed {pair.y_seed}", points(pair.difference)]
                 + [pair.x_ahead, pair.y_ahead, f"{pair.p_value:.3g}"]
                 for pair in confirmation.pairs
             ]
             print(markdown_table(["", "", "x - y, points", "x ahead", "y ahead", "exact McNemar p"], rows))
             print(
-                f"\nClaimed difference {points(confirmation.claimed_difference)} points; seed gaps "
-                f"{100 * confirmation.x_seed_gap:.1f} ({x[0].label}) and {100 * confirmation.y_seed_gap:.1f} "
-                f"({y[0].label}) points."
+                f"\nSeeds pooled: {interval_text(confirmation.claimed)} points; seed gaps "
+                f"{100 * confirmation.x_seed_gap:.1f} ({x_label}) and {100 * confirmation.y_seed_gap:.1f} ({y_label})."
             )
             if confirmation.confirmed:
                 print(f"Verdict: confirmed, {confirmation.ahead} ahead")
@@ -148,13 +159,13 @@ def main() -> None:
             found = against_reference(reference, variants, arguments.seed, arguments.across_search_modes)
             rows = [
                 [row.label, row.runs, row.comparison.overall.statements, f"{row.comparison.overall.x_solved:.1%}"]
-                + [difference_cells(row.comparison.overall)[3], row.verdict]
+                + [interval_text(row.comparison.overall), row.verdict]
                 for row in found
             ]
             headers = ["variant", "runs", "statements", "solved", f"minus {reference.label}, points [95%]", "verdict"]
             print(markdown_table(headers, rows))
             print(f"\n{reference.label}: {found[0].comparison.overall.y_solved:.1%} solved")
-            print(CONFIRMATION_NOTE)
+            print(multiple_comparisons_note(len(found)))
 
 
 if __name__ == "__main__":

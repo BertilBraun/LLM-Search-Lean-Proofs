@@ -4,10 +4,13 @@
 An arm is one checkpoint searched alike (one `probe_evaluate.py` identity) in one or two accepted runs; its runs are
 pooled per statement as the mean outcome. Two arms are compared on the statements every run searched: solved shares
 and the paired per-statement difference with a 95% interval from a bootstrap over statements stratified like the probe,
-in total and per stratum; exact McNemar on every pair of single runs; solved within 1-16 expansions as a secondary
-curve. The rule: two arms differ when the interval excludes 0 and the difference is at least 3 points, provisional with
-one seed. With second seeds, a difference is confirmed only when all four cross-seed comparisons favour the same arm
-(exact McNemar p < 0.05 each) and each arm's seed gap is at most a third of the claimed difference.
+in total and per stratum; exact McNemar on every pair of single runs; each two-run arm's first run against its second
+(a run-level shift the bootstrap over statements cannot see); solved within 1-16 expansions as a secondary curve.
+
+The rule: two arms differ when the interval excludes 0 and the difference is at least 3 points, provisional with one
+seed; the verdict is the primary endpoint's only for final checkpoints with two runs per arm, else descriptive. With
+second seeds, a difference is confirmed only when the seeds-pooled difference passes the same rule, all four cross-seed
+comparisons favour the same arm (exact McNemar p < 0.05 each) and each arm's seed gap is at most a third of it.
 """
 
 import json
@@ -26,15 +29,14 @@ from lean_search.search import SearchResult, StopReason, load_run_config, read_r
 from lean_search.search.records import from_json_object
 
 MIN_DIFFERENCE = 0.03
-# Two seeds per arm confirm about 5 points at best (noise_floor.md, section 5).
-CONFIRMABLE_DIFFERENCE = 0.05
 SIGNIFICANCE = 0.05
 MAX_SEED_GAP_SHARE = 1 / 3
 BOOTSTRAP_SAMPLES = 2000
 WITHIN_BUDGETS = (1, 2, 4, 8, 16)
 CONFIRMATION_NOTE = (
-    "Differences under about 5 points cannot be confirmed with two seeds (results/followup_step0/noise_floor.md, "
-    "section 5): they are reported as such."
+    "Whether two seeds confirm a difference under about 5 points depends on the seed variance, which is unmeasured "
+    "(results/followup_step0/noise_floor.md, section 5; review AI's simulation: a true 5 points confirms ~97% "
+    "without seed spread, ~17% at a seed SD of 2 points)."
 )
 
 
@@ -69,6 +71,9 @@ class RunSettings:
     probe_set_sha256: str
     max_expansions: int
     max_wall_seconds: float
+    max_generated_tokens: int | None
+    max_depth: int
+    concurrency: int
     run_config_sha256: str
 
 
@@ -112,27 +117,34 @@ def read_arm_run(directory: Path, strata: Mapping[str, str]) -> ArmRun:
         raise ValueError(f"{directory.name} is not an accepted probe run (run.json).")
     start = from_json_object(ProbeRunStart, json.loads((directory / "checkpoint.json").read_text(encoding="utf-8")))
     paths = EvaluationPaths(directory)
-    max_depth = load_run_config(paths.config).search.max_depth
+    search = load_run_config(paths.config).search
     outcomes = tuple(
         StatementOutcome(
             result.problem_name,
             strata[result.problem_name],
             result.proved,
             (result.solved_at or result.accounting).expansions if result.proved else None,
-            search_end(result, max_depth),
+            search_end(result, search.max_depth),
             result.accounting.generated_tokens,
         )
         for result in read_results(paths.results)
     )
     settings = RunSettings(
-        start.probe_set_sha256, start.max_expansions, start.max_wall_seconds, start.run_config_sha256
+        start.probe_set_sha256,
+        start.max_expansions,
+        start.max_wall_seconds,
+        search.max_generated_tokens,
+        search.max_depth,
+        start.concurrency,
+        start.run_config_sha256,
     )
     return ArmRun(directory.name, start.identity, settings, outcomes)
 
 
 def check_comparable(arms: Sequence[Arm], across_search_modes: bool) -> None:
-    """ValueError unless each arm is one checkpoint searched alike and every run shares the probe, budget and wall cap,
-    and, unless the comparison is across search modes, the search config."""
+    """ValueError unless each arm is one checkpoint searched alike and every run shares the probe, the budgets
+    (expansions, generated tokens, depth), the wall cap and the concurrency, and, unless across search modes, the
+    search config."""
     for arm in arms:
         identities = {run.identity for run in arm.runs}
         if len(identities) != 1:
@@ -142,6 +154,9 @@ def check_comparable(arms: Sequence[Arm], across_search_modes: bool) -> None:
         ("probe set", lambda settings: settings.probe_set_sha256),
         ("expansion budget", lambda settings: settings.max_expansions),
         ("wall cap", lambda settings: settings.max_wall_seconds),
+        ("generated-token cap", lambda settings: settings.max_generated_tokens),
+        ("depth cap", lambda settings: settings.max_depth),
+        ("concurrency", lambda settings: settings.concurrency),
     ]
     if not across_search_modes:
         fields.append(("search config", lambda settings: settings.run_config_sha256))
@@ -198,6 +213,14 @@ def mcnemar_p_value(first_only: int, second_only: int) -> float:
     return min(1.0, 2 * tail / 2**discordant)
 
 
+def multiple_comparisons_note(intervals: int) -> str:
+    return (
+        f"{intervals} 95% intervals against one shared reference: the rows are correlated, and about "
+        f"{intervals * 0.05:.1f} of them exclude 0 by chance alone; an effect needs the rule's verdict, not an "
+        f"interval (or a {100 * (1 - 0.05 / intervals):.1f}% one)."
+    )
+
+
 @dataclass(frozen=True)
 class Difference:
     statements: int
@@ -207,6 +230,10 @@ class Difference:
     difference: float
     lower: float
     upper: float
+
+    @property
+    def excludes_zero(self) -> bool:
+        return self.lower > 0 or self.upper < 0
 
 
 @dataclass(frozen=True)
@@ -223,6 +250,15 @@ class McNemar:
     x_only: int
     y_only: int
     p_value: float
+
+
+@dataclass(frozen=True)
+class RepeatDifference:
+    """A two-run arm's first run against its second."""
+
+    arm: str
+    difference: Difference
+    mcnemar: McNemar
 
 
 @dataclass(frozen=True)
@@ -249,10 +285,13 @@ class Verdict:
     kind: VerdictKind
     # The arm ahead when they differ.
     ahead: str | None
+    # The primary endpoint (final checkpoints, two runs per arm); else descriptive.
+    primary: bool = False
 
     @property
     def text(self) -> str:
-        return f"{self.kind}: {self.ahead} ahead" if self.ahead else str(self.kind)
+        found = f"{self.kind}: {self.ahead} ahead" if self.ahead else str(self.kind)
+        return f"{'primary' if self.primary else 'descriptive'}, {found}"
 
 
 @dataclass(frozen=True)
@@ -265,6 +304,7 @@ class ArmComparison:
     within: tuple[WithinBudget, ...]
     ends: tuple[SearchEnds, ...]
     verdict: Verdict
+    repeats: tuple[RepeatDifference, ...] = ()
 
 
 def difference(
@@ -279,12 +319,28 @@ def difference(
     )
 
 
-def rule_verdict(found: Difference, x: str, y: str) -> Verdict:
-    excludes_zero = found.lower > 0 or found.upper < 0
+def passes_rule(found: Difference) -> bool:
     # Rounded, so that a pooled mean a float's width under 3 points still counts as 3.
-    if excludes_zero and round(abs(found.difference), 9) >= MIN_DIFFERENCE:
-        return Verdict(VerdictKind.DIFFER, x if found.difference > 0 else y)
-    return Verdict(VerdictKind.NO_DIFFERENCE, None)
+    return found.excludes_zero and round(abs(found.difference), 9) >= MIN_DIFFERENCE
+
+
+def rule_verdict(found: Difference, x: str, y: str, primary: bool = False) -> Verdict:
+    if passes_rule(found):
+        return Verdict(VerdictKind.DIFFER, x if found.difference > 0 else y, primary)
+    return Verdict(VerdictKind.NO_DIFFERENCE, None, primary)
+
+
+def run_mcnemar(x_run: ArmRun, y_run: ArmRun, problems: Sequence[str]) -> McNemar:
+    pairs = list(zip(run_outcomes(x_run, problems), run_outcomes(y_run, problems), strict=True))
+    x_only = sum(first.proved and not second.proved for first, second in pairs)
+    y_only = sum(second.proved and not first.proved for first, second in pairs)
+    return McNemar(x_run.name, y_run.name, x_only, y_only, mcnemar_p_value(x_only, y_only))
+
+
+def repeat_difference(arm: Arm, problems: Sequence[str], strata: np.ndarray, seed: int) -> RepeatDifference:
+    first, second = (Arm(arm.label, (run,)) for run in arm.runs)
+    found = difference(pooled(first, problems), pooled(second, problems), strata, seed)
+    return RepeatDifference(arm.label, found, run_mcnemar(arm.runs[0], arm.runs[1], problems))
 
 
 def search_ends(run: ArmRun, problems: Sequence[str]) -> SearchEnds:
@@ -294,8 +350,13 @@ def search_ends(run: ArmRun, problems: Sequence[str]) -> SearchEnds:
     return SearchEnds(run.name, tuple((end, count) for end, count in counts if count), tokens)
 
 
-def compare_arms(x: Arm, y: Arm, seed: int = 0, across_search_modes: bool = False) -> ArmComparison:
+def compare_arms(
+    x: Arm, y: Arm, seed: int = 0, across_search_modes: bool = False, primary: bool = False
+) -> ArmComparison:
+    """`primary`: the caller's word that both are final checkpoints; ValueError unless each has two runs."""
     check_comparable([x, y], across_search_modes)
+    if primary and (len(x.runs) != 2 or len(y.runs) != 2):
+        raise ValueError("The primary endpoint pools two runs per arm.")
     problems = common_problems([x, y])
     if not problems:
         raise ValueError(f"Arms {x.label} and {y.label} share no searched statement.")
@@ -306,21 +367,15 @@ def compare_arms(x: Arm, y: Arm, seed: int = 0, across_search_modes: bool = Fals
         StratumDifference(stratum, difference(x_pooled, y_pooled, strata, seed, strata == stratum))
         for stratum in sorted(set(strata.tolist()), key=stratum_order)
     )
-    mcnemar = []
-    for x_run in x.runs:
-        for y_run in y.runs:
-            pairs = list(zip(run_outcomes(x_run, problems), run_outcomes(y_run, problems), strict=True))
-            x_only = sum(first.proved and not second.proved for first, second in pairs)
-            y_only = sum(second.proved and not first.proved for first, second in pairs)
-            mcnemar.append(McNemar(x_run.name, y_run.name, x_only, y_only, mcnemar_p_value(x_only, y_only)))
+    mcnemar = tuple(run_mcnemar(x_run, y_run, problems) for x_run in x.runs for y_run in y.runs)
     within = tuple(
         WithinBudget(budget, pooled_within(x, problems, budget), pooled_within(y, problems, budget))
         for budget in WITHIN_BUDGETS
     )
     ends = tuple(search_ends(run, problems) for arm in (x, y) for run in arm.runs)
-    return ArmComparison(
-        x.label, y.label, overall, by_stratum, tuple(mcnemar), within, ends, rule_verdict(overall, x.label, y.label)
-    )
+    repeats = tuple(repeat_difference(arm, problems, strata, seed) for arm in (x, y) if len(arm.runs) == 2)
+    verdict = rule_verdict(overall, x.label, y.label, primary)
+    return ArmComparison(x.label, y.label, overall, by_stratum, mcnemar, within, ends, verdict, repeats)
 
 
 @dataclass(frozen=True)
@@ -333,12 +388,19 @@ class SeedPair:
     y_ahead: int
     p_value: float
 
+    @property
+    def favours_x(self) -> bool | None:
+        """True or False when the mean and the count of statements agree on the arm ahead; None otherwise."""
+        by_mean = self.difference > 0 if self.difference != 0 else None
+        by_count = self.x_ahead > self.y_ahead if self.x_ahead != self.y_ahead else None
+        return by_mean if by_mean == by_count else None
+
 
 @dataclass(frozen=True)
 class SeedConfirmation:
     pairs: tuple[SeedPair, ...]
-    # The mean of the four cross-seed differences.
-    claimed_difference: float
+    # Both seeds of x pooled per statement against both of y's (the mean of the four cross-seed differences).
+    claimed: Difference
     x_seed_gap: float
     y_seed_gap: float
     confirmed: bool
@@ -347,13 +409,23 @@ class SeedConfirmation:
 
 
 def confirm_with_seeds(
-    x_seeds: tuple[Arm, Arm], y_seeds: tuple[Arm, Arm], across_search_modes: bool = False
+    x_seeds: tuple[Arm, Arm],
+    y_seeds: tuple[Arm, Arm],
+    x_label: str,
+    y_label: str,
+    seed: int = 0,
+    across_search_modes: bool = False,
 ) -> SeedConfirmation:
     """Each seed's checkpoint pooled per statement over its runs; a pair's McNemar is the exact sign test over the
-    statements whose pooled outcomes differ (McNemar itself with one run per checkpoint)."""
+    statements whose pooled outcomes differ (McNemar itself with one run per checkpoint). ValueError for two "seeds"
+    of one checkpoint."""
     arms = [*x_seeds, *y_seeds]
     check_comparable(arms, across_search_modes)
+    for label, seeds in ((x_label, x_seeds), (y_label, y_seeds)):
+        if seeds[0].runs[0].identity == seeds[1].runs[0].identity:
+            raise ValueError(f"{label}'s two seeds are one checkpoint: {seeds[0].runs[0].identity}")
     problems = common_problems(arms)
+    strata = np.array([outcome.stratum for outcome in run_outcomes(x_seeds[0].runs[0], problems)])
     x_pooled = [pooled(arm, problems) for arm in x_seeds]
     y_pooled = [pooled(arm, problems) for arm in y_seeds]
     pairs = []
@@ -370,19 +442,21 @@ def confirm_with_seeds(
                     mcnemar_p_value(x_ahead, y_ahead),
                 )
             )
-    claimed = float(np.mean([pair.difference for pair in pairs]))
+    claimed = difference((x_pooled[0] + x_pooled[1]) / 2, (y_pooled[0] + y_pooled[1]) / 2, strata, seed)
     x_gap = abs(float(x_pooled[0].mean() - x_pooled[1].mean()))
     y_gap = abs(float(y_pooled[0].mean() - y_pooled[1].mean()))
     reasons = []
-    if len({pair.difference > 0 for pair in pairs}) > 1 or any(pair.difference == 0 for pair in pairs):
-        reasons.append("the four cross-seed comparisons do not all favour the same arm")
+    if not passes_rule(claimed):
+        reasons.append("the seeds-pooled difference is under 3 points or its 95% interval includes 0")
+    if {pair.favours_x for pair in pairs} not in ({True}, {False}):
+        reasons.append("the four cross-seed comparisons do not all favour the same arm, by mean and by count")
     if any(pair.p_value >= SIGNIFICANCE for pair in pairs):
         reasons.append(f"not every cross-seed McNemar p is below {SIGNIFICANCE}")
-    for label, gap in ((x_seeds[0].label, x_gap), (y_seeds[0].label, y_gap)):
-        if gap > MAX_SEED_GAP_SHARE * abs(claimed):
+    for label, gap in ((x_label, x_gap), (y_label, y_gap)):
+        if gap > MAX_SEED_GAP_SHARE * abs(claimed.difference):
             reasons.append(f"{label}'s seed gap {100 * gap:.1f} points exceeds a third of the claimed difference")
     confirmed = not reasons
-    ahead = (x_seeds[0].label if claimed > 0 else y_seeds[0].label) if confirmed else None
+    ahead = (x_label if claimed.difference > 0 else y_label) if confirmed else None
     return SeedConfirmation(tuple(pairs), claimed, x_gap, y_gap, confirmed, ahead, tuple(reasons))
 
 
@@ -403,7 +477,7 @@ class VariantRow:
 def against_reference(
     reference: Arm, variants: Sequence[Arm], seed: int = 0, across_search_modes: bool = False
 ) -> tuple[VariantRow, ...]:
-    """Every variant against one reference (v0), each on the statements it and the reference searched."""
+    """Every variant against one reference (v0), each on the statements it and the reference searched; descriptive."""
     return tuple(
         VariantRow(variant.label, len(variant.runs), compare_arms(variant, reference, seed, across_search_modes))
         for variant in variants

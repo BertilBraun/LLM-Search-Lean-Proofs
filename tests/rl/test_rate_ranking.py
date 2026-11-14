@@ -11,7 +11,7 @@ from lean_search.rl.single_step import SampleSuccess  # noqa: E402
 
 STATES = [f"state_{index:03d}" for index in range(512)]
 GATE = [f"gate_{index:03d}" for index in range(402)]
-SETTINGS = RunSettings("gate digest", 16, 7200.0, "search digest")
+SETTINGS = RunSettings("gate digest", 16, 7200.0, None, 16, 84, "search digest")
 
 
 def held_out(label: str, extra_successes: int = 0) -> HeldOutStates:
