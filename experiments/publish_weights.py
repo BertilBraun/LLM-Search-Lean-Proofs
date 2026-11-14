@@ -20,6 +20,7 @@ from pathlib import Path
 
 from lean_search.policy.adapters import difference_adapter, merge_adapter, merge_adapter_fp16
 from lean_search.policy.server_control import publish_weights, release_gpu, replace_adapter, restore_gpu
+from lean_search.policy.serving_lock import exit_while_served
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -75,11 +76,13 @@ def main() -> None:
             merge_adapter(arguments.base_model, arguments.adapter, arguments.output, arguments.device)
             print(json.dumps({"merge_seconds": time.monotonic() - started}))
         case "difference":
+            exit_while_served("publish_weights.py")
             difference_adapter(arguments.target, arguments.merged, arguments.output)
             written = time.monotonic()
             asyncio.run(on_servers(arguments))
             print(json.dumps({"write_seconds": written - started, "load_seconds": time.monotonic() - written}))
         case "publish" | "release" | "restore":
+            exit_while_served("publish_weights.py")
             phases = asyncio.run(on_servers(arguments))
             report = {
                 "servers": [dataclasses.asdict(phase) | {"total": phase.total} for phase in phases],

@@ -54,6 +54,14 @@ def lock_holder(path: Path) -> str | None:
         return None
 
 
+def exit_while_served(what: str) -> None:
+    """For a command that uses or swaps the node's servers: exits while a probe evaluation holds them."""
+    try:
+        refuse_while_served(serving_lock_path(Path(os.environ["LEAN_SEARCH_CHECKPOINTS"])), what)
+    except ServingBusyError as error:
+        raise SystemExit(str(error)) from error
+
+
 def refuse_while_served(path: Path, what: str) -> None:
     """Raises ServingBusyError while a probe evaluation holds the servers."""
     holder = lock_holder(path)

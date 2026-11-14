@@ -785,14 +785,15 @@ dashboard warns below `min_free_disk_gib` (50) free.
   solves about half); inside an arm only the held-out states run (at every pause).
   Any checkpoint on probe v2, outside a loop: `experiments/probe_evaluate.py` (`probe_evaluation.py`,
   `followup/probe_evaluation.toml`): a policy adapter with a value adapter, value v0 or none (row 2's value-free
-  priority), merged once per content of its weight and config files and swapped into the running servers at every
+  priority with the configured `policy.step_log_probability` and the automation constant calibrated for it; a
+  placeholder constant is refused), merged once per content of its weight and config files and swapped into the running servers at every
   session, under the node's serving lock (`$LEAN_SEARCH_CHECKPOINTS/serving.lock`, `policy/serving_lock.py`: a loop,
   `grpo_evaluate.py` and `run_search.py` refuse to start while it is held) and never while a loop runs; a session
   during which a loop came up is discarded on resume. One concurrency and a 7,200 s wall cap for every run. The budget
   rule: a run given `--search-config` searches at that file's own `max_expansions`, every other run at the config's
   `[probe] max_expansions`. Accepted only under 1% wall-clock stops (run.json, per stratum too); `probe_rating` rates
-  accepted runs only, pooled by an identity of checkpoint and search settings, against the run marked `--anchor` (v0
-  with value v0).
+  accepted runs only, pooled by an identity of checkpoint and search settings, against the run marked `--anchor` (the
+  loop config's starting policy and value adapters, checked by content).
 - `probe`: 16 expansions, no harvesting, no ε, with `evaluation.value_model` (the published value model in
   `loop.toml`), in slots: slot k searches
   part k % `probe_parts` (3) of the set (`fixed_targets.probe_part`: every third problem of each stratum, so each part
