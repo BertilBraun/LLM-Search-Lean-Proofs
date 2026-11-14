@@ -34,7 +34,7 @@ from lean_search.policy.prompts import (
 from lean_search.retrieval.provider import LemmaProvider, load_lemma_provider
 from lean_search.retrieval.statistics import LemmaStatistics
 from lean_search.search.expanders import Candidate, CandidateBatch, CandidateBatches, SearchContext
-from lean_search.search.texts import GeneratedText, UnparsedSample
+from lean_search.search.texts import GeneratedText, TokenDecoder, UnparsedSample
 from lean_search.search.tree import Edge, EdgeOutcome, FailureKind, Node, NodeStatus, SearchTree, StepSource
 
 MINIMUM_GENERATED_TOKENS = 32
@@ -46,7 +46,7 @@ FEEDBACK_FAILURE_KINDS = frozenset(
 )
 
 
-class PolicyTokenizer(ChatTemplate, Protocol):
+class PolicyTokenizer(ChatTemplate, TokenDecoder, Protocol):
     def encode(self, text: str, *, add_special_tokens: bool) -> list[int]: ...
 
 
@@ -88,6 +88,9 @@ class PolicyStatistics:
     forced_generated_tokens: int = 0
     # Feedback rounds (policy.feedback), also counted in the totals above.
     feedback_requests: int = 0
+    # policy.block_log_probability: usable samples whose tokens did not decode to their text, which kept their whole
+    # completion's log-probability.
+    unaligned_samples: int = 0
 
     def record(
         self, generation: Generation, parsed: ParsedSamples, seconds: float, forced: ForcedAnswers | None = None
@@ -118,6 +121,7 @@ class PolicyStatistics:
         self.forced_blocks += sum(candidate.forced_sample_count for candidate in parsed.candidates)
         self.forced_prompt_tokens += forced.prompt_tokens
         self.forced_generated_tokens += forced.generated_tokens
+        self.unaligned_samples += parsed.unaligned_samples
 
 
 def candidate_batch(
@@ -344,6 +348,7 @@ class PolicyExpander:
             forbidden_tokens=self.forbidden_tokens,
             forced_indices=forced.sample_indices,
             visible=self.config.visible_reasoning,
+            decoder=self.tokenizer if self.config.block_log_probability else None,
         )
         self.statistics.record(generation, parsed, seconds + forcing_seconds, forced)
         return SampledExpansion(generation, samples, parsed, forced, prompt, feedback)
