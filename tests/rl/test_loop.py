@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import dataclasses
 import json
 import tomllib
@@ -25,6 +26,7 @@ from lean_search.expert_iteration.pool import problem_name
 from lean_search.expert_iteration.serving import ModelVersion, read_current, read_versions, write_json_atomically
 from lean_search.monitoring.families import PauseSegments, ValueArmResult
 from lean_search.monitoring.store import RunReader
+from lean_search.policy.serving_lock import ServingBusyError, serving_lock, serving_lock_path
 from lean_search.rl.evaluation import EvaluationKind, EvaluationRun, EvaluationSummary
 from lean_search.rl.fixed_targets import baseline_concurrency
 from lean_search.rl.loop import (
@@ -1221,6 +1223,12 @@ def test_an_impossible_gpu_layout_is_refused(toml: str) -> None:
         parse_loop_config(toml)
 
 
+@pytest.mark.parametrize("edges", ["[]", "[0.0, 5.0]", "[5.0, 5.0]", "[10.0, 5.0]"])
+def test_difficulty_band_edges_that_do_not_increase_from_above_zero_are_refused(edges: str) -> None:
+    with pytest.raises(ValueError, match="difficulty_band_edges"):
+        parse_loop_config(LOOP_TOML + f"\n[statements]\ndifficulty_band_edges = {edges}\n")
+
+
 def training_arguments(root: Path, toml: str) -> list[str]:
     world = loop_world(root, toml=toml)
     request = TrainingRequest(1, "", root / "trees", "run", root / "checkpoints", False)
@@ -1246,3 +1254,13 @@ def test_one_training_gpu_starts_a_single_process(tmp_path: Path) -> None:
 
 def test_the_training_job_merges_the_new_adapters(tmp_path: Path) -> None:
     assert "--merge-adapters" in training_arguments(tmp_path, LOOP_TOML)
+
+
+async def test_the_loop_refuses_to_start_while_a_probe_evaluation_holds_the_servers(tmp_path: Path) -> None:
+    world = loop_world(tmp_path)
+    record_version_zero(world)
+    loop = world.loop()
+    # run_until raises once the loop stopped on a failure; the failure is the refusal.
+    with serving_lock(serving_lock_path(world.paths.checkpoints_root)), contextlib.suppress(RuntimeError):
+        await run_until(world, loop, phases=1)
+    assert isinstance(loop.failure, ServingBusyError)

@@ -1,9 +1,14 @@
 """One rating per version from every finished probe run: logit P(version v proves problem p) = ability_v - difficulty_p.
 
-Each probe slot searches a third of the probe set, so consecutive versions never share problems; the fit estimates each
-problem's difficulty from every version that searched it, which puts all versions on one scale against version 0 (an
-Elo-like curve on a fixed target). A pass pools the last run of every third into one ability, the whole set once; the
-headline compares passes. The intervals resample problems. src/lean_search/rl/README.md, "Fixed targets".
+Each probe slot searches one part of the probe set (`probe_parts`: three thirds in grpo_loop_v1), so consecutive
+versions never share problems; the fit estimates each problem's difficulty from every version that searched it, which
+puts all versions on one scale against version 0 (an Elo-like curve on a fixed target). A pass pools the last run of
+every part into one ability, the whole set once; the headline compares passes. A run of the whole set (no slot) rates
+its version but is no pass. The intervals resample problems. src/lean_search/rl/README.md, "Fixed targets".
+A standalone run (experiments/probe_evaluate.py: checkpoint.json beside it) is rated only
+once its run.json says accepted, and under its checkpoint's identity: runs are pooled by (policy version, identity),
+so two checkpoints that share a version label (v0 with another value model, two arms' phase 8) never merge; a loop's
+runs have no identity and are pooled by version as before.
 
 Reads the run directory's files directly (no model code), so the recorder beside the dashboard stays small.
 """
@@ -47,12 +52,21 @@ class ProbeRun:
     name: str
     policy_version: int
     value_version: int
-    # The third of the probe set it searched; None for a run of the whole set.
+    # The part of the probe set it searched; None for a run of the whole set.
     part: int | None
     finished_at: str
     expansion_budget: int
     wall_clock_stops: int
     outcomes: tuple[ProbeOutcome, ...]
+    # A standalone run's checkpoint identity; empty for a loop's run.
+    identity: str = ""
+    # A standalone run marked as the rating's anchor (probe_evaluate.py --anchor: v0 with value v0).
+    anchor: bool = False
+
+    @property
+    def key(self) -> tuple[int, str]:
+        """What runs are pooled by: repeats of one checkpoint share it."""
+        return self.policy_version, self.identity
 
 
 @dataclass(frozen=True)
@@ -70,8 +84,11 @@ class LoopMarkers:
 
 
 def read_probe_run(directory: Path) -> ProbeRun:
-    """summary.json (rl/evaluation.py's EvaluationSummary) and results.jsonl of a finished evaluation."""
+    """summary.json (rl/evaluation.py's EvaluationSummary) and results.jsonl of a finished evaluation, and a
+    standalone run's identity from checkpoint.json (rl/probe_evaluation.py's ProbeRunStart)."""
     summary = json.loads((directory / "summary.json").read_text(encoding="utf-8"))
+    start_path = directory / "checkpoint.json"
+    start = json.loads(start_path.read_text(encoding="utf-8")) if start_path.exists() else {}
     return ProbeRun(
         name=directory.name,
         policy_version=summary["policy_version"],
@@ -89,7 +106,17 @@ def read_probe_run(directory: Path) -> ProbeRun:
             )
             for result in read_results(directory / "results.jsonl")
         ),
+        identity=start.get("identity", ""),
+        anchor=start.get("anchor", False),
     )
+
+
+def is_accepted(directory: Path) -> bool:
+    """A loop's run always; a standalone run once its run.json says accepted (under 1% wall-clock stops)."""
+    if not (directory / "checkpoint.json").exists():
+        return True
+    record = directory / "run.json"
+    return record.exists() and bool(json.loads(record.read_text(encoding="utf-8"))["accepted"])
 
 
 def finished_probe_runs(evaluations: Path) -> FinishedRuns:
@@ -99,6 +126,14 @@ def finished_probe_runs(evaluations: Path) -> FinishedRuns:
     unreadable = 0
     for directory in sorted(evaluations.glob("probe_*")):
         if "_value_arm" in directory.name or not (directory / "summary.json").exists():
+            continue
+        try:
+            accepted = is_accepted(directory)
+        except (OSError, ValueError, KeyError) as error:
+            print(f"{directory.name} is not rated: {error!r}", file=sys.stderr)
+            unreadable += 1
+            continue
+        if not accepted:
             continue
         try:
             run = read_probe_run(directory)
@@ -227,32 +262,39 @@ class Rater:
 
 
 def probe_ratings(found: FinishedRuns, markers: LoopMarkers, seed: int = 0) -> ProbeRatings:
-    """The lowest version (version 0, whose runs come first) is the anchor at 0; runs at another expansion budget than
-    the most common one are left out, and passes leave out the anchor and the rejected versions."""
+    """The anchor at 0: the runs marked as it (probe_evaluate.py --anchor; ValueError when they name more than one
+    checkpoint), else the lowest version (a loop's version 0, whose runs come first). Runs at another expansion budget
+    than the most common one are left out, and passes leave out the anchor and the rejected versions."""
     expansion_budget = Counter(run.expansion_budget for run in found.runs).most_common(1)[0][0]
     runs = [run for run in found.runs if run.expansion_budget == expansion_budget]
     rater = Rater(runs, seed)
-    version_names = sorted({run.policy_version for run in runs})
-    version_index = {version: index for index, version in enumerate(version_names)}
-    by_version = [version_index[run.policy_version] for run in runs]
+    pinned = sorted({run.key for run in runs if run.anchor})
+    if len(pinned) > 1:
+        raise ValueError(f"Runs mark several checkpoints as the anchor: {pinned}")
+    keys = sorted({run.key for run in runs})
+    version_names = [*pinned, *(key for key in keys if key not in pinned)]
+    version_index = {key: index for index, key in enumerate(version_names)}
+    by_version = [version_index[run.key] for run in runs]
     point = rater.fit(by_version)
     lower, upper = rater.percentiles(by_version, lambda ability: ability)
     anchor = version_names[0]
     budgets = rating_budgets(expansion_budget)
     anchor_by_problem: dict[str, list[ProbeOutcome]] = {}
     for run in runs:
-        if run.policy_version == anchor:
+        if run.key == anchor:
             for outcome in run.outcomes:
                 anchor_by_problem.setdefault(outcome.problem, []).append(outcome)
 
-    def version_rating(version: int) -> VersionRating:
-        own_runs = [run for run in runs if run.policy_version == version]
+    def version_rating(key: tuple[int, str]) -> VersionRating:
+        version, identity = key
+        own_runs = [run for run in runs if run.key == key]
         own = [outcome for run in own_runs for outcome in run.outcomes]
         searched = sorted({outcome.problem for outcome in own})
         baseline = [anchor_by_problem[problem] for problem in searched if problem in anchor_by_problem]
-        index = version_index[version]
+        index = version_index[key]
         return VersionRating(
             policy_version=version,
+            identity=identity,
             value_version=max(run.value_version for run in own_runs),
             runs=len(own_runs),
             problems=len(searched),
@@ -273,9 +315,7 @@ def probe_ratings(found: FinishedRuns, markers: LoopMarkers, seed: int = 0) -> P
         )
 
     parts = sorted({run.part for run in runs if run.part is not None})
-    eligible = [
-        run for run in runs if run.policy_version != anchor and run.policy_version not in markers.rejected_versions
-    ]
+    eligible = [run for run in runs if run.key != anchor and run.policy_version not in markers.rejected_versions]
     recent = latest_pass(eligible, parts)
     previous = (
         None if recent is None else latest_pass([run for run in eligible if run.name not in names(recent)], parts)
@@ -320,13 +360,14 @@ def probe_ratings(found: FinishedRuns, markers: LoopMarkers, seed: int = 0) -> P
         )
 
     return ProbeRatings(
-        anchor_version=anchor,
+        anchor_version=anchor[0],
+        anchor_identity=anchor[1],
         expansion_budget=expansion_budget,
         budgets=budgets,
         problems=len(rater.problem_names),
         baseline_projected_solved=projected_solved(0.0, point.difficulty),
         difficulty_spread=float(np.std(point.difficulty)),
-        versions=tuple(version_rating(version) for version in version_names),
+        versions=tuple(version_rating(key) for key in version_names),
         latest_pass=None if recent is None else pass_rating(recent),
         against_previous=None if recent is None else comparison(recent, previous),
         against_pre_fix=None if recent is None else comparison(recent, pre_fix),

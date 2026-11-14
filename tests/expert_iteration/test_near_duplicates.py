@@ -1,6 +1,6 @@
 import numpy
 
-from lean_search.expert_iteration.near_duplicates import MinHasher, SimilarPair, clusters, similar_pairs
+from lean_search.expert_iteration.near_duplicates import MinHasher, SimilarPair, clusters, matches_any, similar_pairs
 
 ORIGINAL = "theorem a (x y : ℝ) (h₀ : 0 < x) (h₁ : 0 < y) (h₂ : x + y = 1) : x * y ≤ 1 / 4 := by"
 RENAMED = "theorem b (a b : ℝ) (ha : 0 < a) (hb : 0 < b) (hab : a + b = 1) : a * b ≤ 1 / 4 := by"
@@ -20,3 +20,11 @@ def test_a_renamed_formalization_is_a_near_duplicate() -> None:
 def test_a_cluster_keeps_its_first_member() -> None:
     pairs = [SimilarPair(2, 1, 0.9), SimilarPair(1, 0, 0.75), SimilarPair(3, 2, 0.5)]
     assert clusters(4, pairs, threshold=0.7) == [0, 0, 0, 3]
+
+
+def test_a_query_matches_a_renamed_reference() -> None:
+    assert matches_any(signatures(DIFFERENT, ORIGINAL), signatures(RENAMED), threshold=0.7) == [True]
+
+
+def test_a_query_unlike_every_reference_does_not_match() -> None:
+    assert matches_any(signatures(ORIGINAL, RENAMED), signatures(DIFFERENT), threshold=0.7) == [False]

@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from lean_search.corpora.records import StatementRecord
-from lean_search.expert_iteration.curriculum import CurriculumConfig, CurriculumState
+from lean_search.expert_iteration.curriculum import CurriculumConfig, CurriculumState, file_sha256
 from lean_search.expert_iteration.known_proofs import VerifiedStatement
 from lean_search.monitoring.families import BandOutcome
 from lean_search.rl.fixed_sets import HeldOutStatement, Stratum
@@ -35,9 +35,24 @@ def test_difficulty_bands(difficulty: float, band: str) -> None:
     assert difficulty_band(difficulty) == band
 
 
+CHARACTER_EDGES = (5.0, 10.0, 15.0, 20.0, 30.0, 45.0)
+
+
+@pytest.mark.parametrize(
+    ("difficulty", "band"), [(0.3, "0-5"), (5.0, "5-10"), (29.9, "20-30"), (45.0, "45+"), (120.0, "45+")]
+)
+def test_difficulty_bands_on_configured_edges(difficulty: float, band: str) -> None:
+    assert difficulty_band(difficulty, CHARACTER_EDGES) == band
+
+
 def test_outcomes_count_attempts_and_solved_per_band() -> None:
     entries = [entry(1.5, True), entry(1.2, False), entry(3.0, True)]
     assert outcomes_by_band(entries) == {"1-2": BandOutcome(2, 1), "3-4": BandOutcome(1, 1)}
+
+
+def test_outcomes_list_the_bands_by_their_low_end() -> None:
+    entries = [entry(None, True), entry(50.0, True), entry(12.0, False), entry(7.0, True)]
+    assert list(outcomes_by_band(entries, CHARACTER_EDGES)) == ["5-10", "10-15", "45+", "unknown"]
 
 
 def test_fixed_statements_cycle_in_order() -> None:
@@ -145,3 +160,17 @@ def test_statements_searched_before_a_restart_are_fed_again_below_the_band(tmp_p
 def test_a_restart_keeps_statements_searched_in_the_band_out_of_it(tmp_path: Path) -> None:
     source = restarted_below_band_three(tmp_path, ["s.t2"])
     assert "s.t2" not in fed_names(source)
+
+
+def test_a_pool_that_is_not_the_frozen_one_is_refused(tmp_path: Path) -> None:
+    write_verified(tmp_path / "pool/verified.jsonl", [2])
+    config = CurriculumConfig(verified="pool/verified.jsonl", unverified="", verified_sha256="0" * 64)
+    with pytest.raises(ValueError, match="frozen pool"):
+        CurriculumStatements(config, tmp_path, tmp_path / "curriculum.json", set(), [])
+
+
+def test_the_frozen_pool_is_accepted(tmp_path: Path) -> None:
+    write_verified(tmp_path / "pool/verified.jsonl", [2, 2])
+    digest = file_sha256(tmp_path / "pool/verified.jsonl")
+    config = CurriculumConfig(verified="pool/verified.jsonl", unverified="", verified_sha256=digest)
+    assert len(fed_names(CurriculumStatements(config, tmp_path, tmp_path / "curriculum.json", set(), []))) == 2

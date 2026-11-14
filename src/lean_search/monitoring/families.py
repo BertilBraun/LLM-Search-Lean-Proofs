@@ -251,11 +251,13 @@ class VersionRating:
     # problems (None when the anchor searched none of them).
     solved_within: tuple[float, ...]
     baseline_solved_within: tuple[float, ...] | None
+    # A standalone run's checkpoint identity (rl/probe_evaluation.py); empty for a loop's version.
+    identity: str = ""
 
 
 @dataclass(frozen=True)
 class PassRating:
-    """The last run of every third of the probe set pooled into one ability: the whole set, once."""
+    """The last run of every part of the probe set pooled into one ability: the whole set, once."""
 
     policy_versions: tuple[int, ...]
     rating: float
@@ -296,11 +298,12 @@ class ProbeRatings:
     against_previous: PassComparison | None
     against_pre_fix: PassComparison | None
     reward_fix_version: int | None
-    # Of the latest pass's thirds, those searched by a version trained with the reward fix, and all thirds.
+    # Of the latest pass's parts, those searched by a version trained with the reward fix, and all parts.
     post_fix_parts: int
     parts: int
     runs_rated: int
     runs_unreadable: int
+    anchor_identity: str = ""
 
 
 @dataclass(frozen=True)

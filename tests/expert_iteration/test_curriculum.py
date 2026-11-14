@@ -47,6 +47,11 @@ def test_the_band_starts_at_the_easiest_statements() -> None:
     assert sorted(fed_tactics(curriculum, 3)) == [1, 1, 2]
 
 
+def test_the_band_starts_at_its_configured_low_end() -> None:
+    curriculum = curriculum_with([5, 1, 2, 9, 1], dataclasses.replace(CONFIG, initial_band_low=4.5))
+    assert fed_tactics(curriculum, 1) == [5]
+
+
 def test_an_empty_band_moves_to_the_nearest_statements() -> None:
     curriculum = curriculum_with([1, 6, 7])
     fed_tactics(curriculum, 1)

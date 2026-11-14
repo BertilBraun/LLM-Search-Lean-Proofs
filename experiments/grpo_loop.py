@@ -147,9 +147,16 @@ def statement_source(config: GrpoLoopConfig, paths: GrpoLoopPaths) -> StatementS
         case StatementSourceKind.CURRICULUM:
             held_out = {entry.name for path in statements.held_out for entry in read_fixed_set(DATA_DIRECTORY / path)}
             searched = [entry.problem_name for entry in TreeStore(paths.trees).entries]
-            return CurriculumStatements(statements.curriculum, DATA_DIRECTORY, paths.curriculum, held_out, searched)
+            return CurriculumStatements(
+                statements.curriculum,
+                DATA_DIRECTORY,
+                paths.curriculum,
+                held_out,
+                searched,
+                statements.difficulty_band_edges,
+            )
         case StatementSourceKind.FIXED:
-            return FixedStatements(read_fixed_set(DATA_DIRECTORY / statements.fixed))
+            return FixedStatements(read_fixed_set(DATA_DIRECTORY / statements.fixed), statements.difficulty_band_edges)
 
 
 def value_benchmark_scoring(config: GrpoLoopConfig) -> ValueBenchmarkScoring | None:

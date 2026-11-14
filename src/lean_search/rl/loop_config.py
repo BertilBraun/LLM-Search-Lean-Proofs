@@ -9,6 +9,7 @@ from lean_search.expert_iteration.curriculum import CurriculumConfig
 from lean_search.expert_iteration.loop_config import InitialModels, ServerEndpoint, ServingConfig
 from lean_search.rl.renaming import RenamingConfig
 from lean_search.rl.search_options import CONTROL_ARM, OptionsArmConfig
+from lean_search.rl.statement_sources import DEFAULT_DIFFICULTY_BAND_EDGES
 from lean_search.search.records import from_json_object
 from lean_search.value.benchmark import BenchmarkConfig
 from lean_search.value.pair_statistics import PairStatisticConfig
@@ -29,6 +30,8 @@ class StatementsConfig:
     fixed: str = ""
     # Fixed-set files under $LEAN_SEARCH_DATA whose statements the curriculum never feeds (the probe and gate sets).
     held_out: tuple[str, ...] = ("grpo/fixed_sets/probe.jsonl", "grpo/fixed_sets/gate.jsonl")
+    # Upper edges of the curriculum family's difficulty bands (the dashboard's bins), increasing; the last band is open.
+    difficulty_band_edges: tuple[float, ...] = DEFAULT_DIFFICULTY_BAND_EDGES
 
 
 @dataclass(frozen=True)
@@ -233,6 +236,8 @@ class HealthConfig:
     # The searches resume beside the held-out states' last Lean checks only while the states finished so far reach
     # this fraction of version 0's valid rate: above the collapse line, as the slow states left are the less valid ones.
     early_resume_valid_fraction: float = 0.8
+    # False: the searches never resume beside the held-out states' last Lean checks; they wait for the result.
+    resume_beside_held_out_states: bool = True
     # Below this fraction of the reference phases' valid-block rate (the sampled blocks that run completely in Lean, a
     # free per-phase early warning) the held-out states run at the next pause. Lower than the held-out warning: the
     # rate falls with longer blocks too.
@@ -295,6 +300,9 @@ def parse_loop_config(text: str) -> GrpoLoopConfig:
         raise ValueError("sampling needs server_failure_window >= 1 and 0 < server_failure_share <= 1.")
     if config.statements.kind == StatementSourceKind.FIXED and not config.statements.fixed:
         raise ValueError('statements.kind = "fixed" needs statements.fixed.')
+    edges = config.statements.difficulty_band_edges
+    if not edges or edges[0] <= 0 or any(low >= high for low, high in zip(edges, edges[1:], strict=False)):
+        raise ValueError("statements.difficulty_band_edges must be positive and increasing.")
     training = config.training
     if not 0 < training.min_sampling_minutes <= training.max_sampling_minutes or training.min_trainable_groups < 1:
         raise ValueError(

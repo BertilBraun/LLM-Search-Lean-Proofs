@@ -641,6 +641,14 @@ async def test_the_searches_resume_beside_the_tail_only_while_the_finished_state
     assert await resumed_beside_the_tail(world, lean_checks) == resumed
 
 
+async def test_with_early_resume_off_the_searches_wait_for_the_held_out_states_result(tmp_path: Path) -> None:
+    lean_checks = asyncio.Event()
+    toml = HELD_OUT_EVERY_PHASE + "\n[health]\nresume_beside_held_out_states = false\n"
+    world = collapsing_world(tmp_path, HEALTHY, toml, lean_checks)
+    world.evaluations.finished_valid_rate = 0.7
+    assert not await resumed_beside_the_tail(world, lean_checks)
+
+
 # Two searches, at least one taking statements beside an evaluation.
 HELD_OUT_WITH_A_FLOOR = HELD_OUT_EVERY_PHASE.replace(
     "concurrency = 2\n", "concurrency = 2\nmin_concurrency_beside_evaluations = 1\n", 1

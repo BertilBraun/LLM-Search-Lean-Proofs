@@ -24,6 +24,7 @@ from pathlib import Path
 from lean_search.data import Problem, Split, load_minif2f
 from lean_search.lean import LeanReplConfig, LeanReplPool
 from lean_search.policy.expander import PolicyExpander, open_policy_expander
+from lean_search.policy.serving_lock import ServingBusyError, refuse_while_served, serving_lock_path
 from lean_search.search import (
     CompletedSearch,
     Expander,
@@ -196,6 +197,10 @@ def main() -> None:
         raise ValueError("miniF2F-test is reserved for the final ladder; pass --allow-test to use it.")
     if paths.results.exists():
         raise ValueError(f"{paths.results} exists; choose another --run-name.")
+    try:
+        refuse_while_served(serving_lock_path(Path(os.environ["LEAN_SEARCH_CHECKPOINTS"])), "run_search.py")
+    except ServingBusyError as error:
+        raise SystemExit(str(error)) from error
     config = load_run_config(arguments.config)
     problems = select_problems(arguments.split, arguments.problems, arguments.limit)
     paths.directory.mkdir(parents=True, exist_ok=True)
