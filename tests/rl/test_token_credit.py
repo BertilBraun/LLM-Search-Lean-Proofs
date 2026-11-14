@@ -3,14 +3,16 @@ from collections.abc import Sequence
 import pytest
 
 from lean_search.rl.advantages import CreditMode, SampleAdvantages
-from lean_search.rl.token_credit import (
-    TokenSegment,
+from lean_search.rl.token_credit import TokenSegment, inserted_token_indices, token_credits
+from lean_search.search.texts import (
+    CharacterSpan,
+    InsertedSpan,
+    SampledCompletion,
+    SampledTokens,
+    TokenSpan,
     decoded_offsets,
-    inserted_token_indices,
-    sampled_token_offsets,
-    token_credits,
+    token_offsets,
 )
-from lean_search.search.texts import CharacterSpan, InsertedSpan, SampledCompletion, SampledTokens, TokenSpan
 
 EXPLANATION = "Introduce x, then normalize.\n\n```lean\n"
 BLOCK = "intro x\nsimp\nring"
@@ -139,19 +141,19 @@ FORCED = forced("Thinking on and on.\n\n```lean\nsimp\n```", "\n\n```lean\n", "\
 
 
 def test_end_of_turn_after_the_inserted_fence_starts_past_it() -> None:
-    offsets = sampled_token_offsets(CharacterDecoder(), FORCED)
+    offsets = token_offsets(CharacterDecoder(), FORCED.text, FORCED.tokens)
     end_of_turn = len(FORCED.text) - len("\n```")
     assert offsets is not None and offsets[end_of_turn][0] == len(FORCED.text)
 
 
 def test_tokens_before_the_inserted_fence_keep_their_positions() -> None:
-    offsets = sampled_token_offsets(CharacterDecoder(), FORCED)
+    offsets = token_offsets(CharacterDecoder(), FORCED.text, FORCED.tokens)
     assert offsets is not None and offsets[3] == (3, 4)
 
 
 def test_tokens_that_do_not_decode_to_the_text_have_no_offsets() -> None:
     mismatched = SampledCompletion(0, "simp", (), tokens=SampledTokens((ord("x"),), (-0.1,)))
-    assert sampled_token_offsets(CharacterDecoder(), mismatched) is None
+    assert token_offsets(CharacterDecoder(), mismatched.text, mismatched.tokens) is None
 
 
 def test_inserted_token_indices_cover_the_inserted_opening() -> None:
