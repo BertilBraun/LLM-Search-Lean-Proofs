@@ -274,3 +274,51 @@ def test_problems_on_the_wall_clock_cap_leave_the_paired_difference_without_stop
     reference = dataclasses.replace(reference, outcomes=(stopped, *reference.outcomes[1:]))
     comparison = paired_comparison(run(2, set(), order=2), [reference])
     assert comparison.without_wall_clock_stops.problems == len(PARTS[0]) - 1
+
+
+def test_runs_of_one_version_with_different_identities_are_rated_apart() -> None:
+    with_value = dataclasses.replace(run(0, set(PROBLEMS[:30]), order=1), identity="v0/phase 0/value v0")
+    without_value = dataclasses.replace(run(0, set(PROBLEMS[:20]), order=2), identity="v0/phase 0/no value model")
+    assert len(ratings(with_value, without_value).versions) == 2
+
+
+def test_the_run_marked_as_anchor_is_the_anchor_whatever_sorts_first() -> None:
+    without_value = dataclasses.replace(run(0, set(PROBLEMS[:20]), order=1), identity="v0/phase 0/no value model")
+    with_value = dataclasses.replace(run(0, set(PROBLEMS[:30]), order=2), identity="v0/phase 0/value v0", anchor=True)
+    assert ratings(without_value, with_value).anchor_identity == "v0/phase 0/value v0"
+
+
+def test_the_anchor_rates_zero() -> None:
+    without_value = dataclasses.replace(run(0, set(PROBLEMS[:20]), order=1), identity="v0/phase 0/no value model")
+    with_value = dataclasses.replace(run(0, set(PROBLEMS[:30]), order=2), identity="v0/phase 0/value v0", anchor=True)
+    rated = {rating.identity: rating.rating for rating in ratings(without_value, with_value).versions}
+    assert rated["v0/phase 0/value v0"] == 0.0
+
+
+def test_two_anchors_are_refused() -> None:
+    first = dataclasses.replace(run(0, set(PROBLEMS[:20]), order=1), identity="first", anchor=True)
+    second = dataclasses.replace(run(0, set(PROBLEMS[:30]), order=2), identity="second", anchor=True)
+    with pytest.raises(ValueError, match="anchor"):
+        ratings(first, second)
+
+
+def test_a_loops_runs_of_one_version_are_pooled_as_before() -> None:
+    assert ratings(run(0, set(PROBLEMS[:30]), order=1), run(0, set(PROBLEMS[:20]), order=2)).versions[0].runs == 2
+
+
+def write_standalone_run(directory: Path, accepted: bool | None) -> None:
+    write_run(directory)
+    (directory / "checkpoint.json").write_text(json.dumps({"identity": "A/phase 8"}), encoding="utf-8")
+    if accepted is not None:
+        (directory / "run.json").write_text(json.dumps({"accepted": accepted}), encoding="utf-8")
+
+
+@pytest.mark.parametrize(("accepted", "rated"), [(True, 1), (False, 0), (None, 0)])
+def test_a_standalone_run_is_rated_only_once_accepted(tmp_path: Path, accepted: bool | None, rated: int) -> None:
+    write_standalone_run(tmp_path / "probe_a_phase_08", accepted)
+    assert len(finished_probe_runs(tmp_path).runs) == rated
+
+
+def test_a_standalone_run_carries_its_identity(tmp_path: Path) -> None:
+    write_standalone_run(tmp_path / "probe_a_phase_08", True)
+    assert finished_probe_runs(tmp_path).runs[0].identity == "A/phase 8"

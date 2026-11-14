@@ -1,0 +1,321 @@
+# The follow-up's base (DESIGN.md "Follow-up study: controlled arms"): every arm restarts from policy v0 and value v0.
+# A copy of loop.toml (the config loader has no inheritance; an arm copies this file and changes its own lines; the
+# test test_the_followup_base_differs_from_the_loop_only_in_the_followups_settings pins every difference) with:
+# - [statements]: the curriculum on proof characters / 100 from where v0 solves about half, on a frozen pool (a file
+#   copy checked by its sha256); probe v2 and its pool twins held out beside the old probe and gate;
+# - [evaluation]: nothing beside an arm. Probe and miniF2F run standalone between or after arms
+#   (experiments/probe_evaluate.py), never inside it, and no v0 baseline of either at an arm's start; the held-out
+#   states run at every pause, v0's baseline at the pause's concurrency, and the searches wait for their last checks;
+# - THROUGHPUT TEST: the sampling and held-out concurrencies are placeholders (56) until step 0's throughput test sets
+#   one sampling, one probe and one held-out concurrency, identical for every arm;
+# - [retention] every adapter kept (phases 4, 8 and 16 are evaluated afterwards); [health] reference phase 1, the loop
+#   stops at the first valid-Lean collapse instead of rolling back;
+# - no search options A/B (the feedback arm ended in grpo_loop_v1) and the KL reference back at v0 ([training]).
+# grpo_loop_v1's notes below are kept as they were where the setting is unchanged.
+#
+# The search-tree GRPO loop (experiments/grpo_loop.py, DESIGN.md "Next phase: search-tree GRPO"), on 4x RTX 3090:
+# while sampling, every GPU serves the merged policy and the merged value model; at a phase's pause every search waits,
+# the servers sleep (freeing their GPUs) and all four GPUs train data-parallel (policy GRPO, then the value model, then
+# the merges), and the servers wake with the new weights. Bring-up on a fresh node:
+# deployment/README.md, "GRPO loop"; the timing of each pause segment: src/lean_search/rl/README.md, "Timing".
+#   python experiments/grpo_loop.py --config experiments/configs/grpo/followup/<arm>.toml init
+#   python experiments/grpo_loop.py --config experiments/configs/grpo/followup/<arm>.toml run
+name = "grpo_followup_base"
+
+[initial]
+# The starting policy's own adapter: the SFT stage's winning arm (data_rewrite README, step 4; the named arm also needs
+# [renaming] enabled and its replay data below). Version 0 is it merged into serving.policy_base_model; every phase
+# continues training it on that base, so merged weights lie between bf16 grid points and small GRPO updates survive the
+# rounding (a fresh adapter on already-merged weights loses most of them). It stays the KL reference.
+policy_adapter = "/workspace/checkpoints/data_rewrite_sft_numbered/adapter"
+value_adapter = "/workspace/checkpoints/phase3_value_v0/adapter"
+
+[serving]
+# Per GPU 0.62 + 0.28 of its memory: the servers leave nothing for training, which runs while they sleep.
+# The weights the starting policy's adapter was trained on (the SFT stage continues visible student v2 on the base).
+policy_base_model = "Qwen/Qwen3.5-4B"
+value_base_model = "Qwen/Qwen3.5-2B"
+policy_model = "policy-merged"
+value_model = "value-merged"
+
+[[serving.policy_servers]]
+name = "policy-gpu0"
+gpu = 0
+url = "http://127.0.0.1:8100/v1"
+memory_share = 0.62
+
+[[serving.policy_servers]]
+name = "policy-gpu1"
+gpu = 1
+url = "http://127.0.0.1:8101/v1"
+memory_share = 0.62
+
+[[serving.policy_servers]]
+name = "policy-gpu2"
+gpu = 2
+url = "http://127.0.0.1:8102/v1"
+memory_share = 0.62
+
+[[serving.policy_servers]]
+name = "policy-gpu3"
+gpu = 3
+url = "http://127.0.0.1:8103/v1"
+memory_share = 0.62
+
+[[serving.value_servers]]
+name = "value-gpu0"
+gpu = 0
+url = "http://127.0.0.1:8200/v1"
+memory_share = 0.28
+max_num_seqs = 96
+
+[[serving.value_servers]]
+name = "value-gpu1"
+gpu = 1
+url = "http://127.0.0.1:8201/v1"
+memory_share = 0.28
+max_num_seqs = 96
+
+[[serving.value_servers]]
+name = "value-gpu2"
+gpu = 2
+url = "http://127.0.0.1:8202/v1"
+memory_share = 0.28
+max_num_seqs = 96
+
+[[serving.value_servers]]
+name = "value-gpu3"
+gpu = 3
+url = "http://127.0.0.1:8203/v1"
+memory_share = 0.28
+max_num_seqs = 96
+
+[sampling]
+# n = 8, harvesting and ε on, heartbeat limits, flattening; server URLs come from [serving].
+search_config = "experiments/configs/grpo/search/visible_student_v2.toml"
+# Expansions per training search (the shared template's 64 stays for other uses; the probe searches at 16, miniF2F at
+# 64). Harvesting adds up to 16 after the first proof. In the visible run expansions 17-64 added 8 of 171 solves. The
+# Training page's budget signals show whether 32 cuts off harder proofs (solves crowding into expansions 25-32; the
+# loop notes it in loop.log above [health] max_late_solve_share); to raise it, edit this and restart the loop.
+max_expansions = 32
+# One REPL per search; most searches wait on the GPUs. Tune by the first hour (Lean cores and memory on the
+# dashboard's system page; a REPL holds 0.25-2 GiB of private memory; budget in src/lean_search/rl/README.md).
+# THROUGHPUT TEST: a placeholder; grpo_loop_v1's 112 assumed a 123-core quota, this node has 61.
+concurrency = 56
+# Unused: nothing runs beside sampling (evaluation.beside_sampling = false).
+min_concurrency_beside_evaluations = 56
+status_seconds = 30.0
+# A search a policy or value server failed feeds its statement again, up to this many times.
+server_failure_retries = 3
+server_failure_pause_seconds = 5.0
+
+# No search options A/B: grpo_loop_v1's feedback arm ended after 3 phases (loop.toml).
+
+[training]
+phase_config = "experiments/configs/grpo/phase.toml"
+# One torchrun rank per GPU; each optimizer step equals the one-GPU step. Fallback if the pause costs too much: [0]
+# (GPU 0 trains alone, its servers sleep, the other GPUs' servers stay loaded and idle).
+gpus = [0, 1, 2, 3]
+# A phase ends once it has 300 trainable groups (proof-graph nodes of solved trees with a policy proof and a non-zero
+# advantage, counted as each tree finishes), after at least 75 and at most 120 min of sampling: the pause's fixed costs
+# (start, loads, compile, merges, wake) are paid per phase (review F, M4). The groups always pass 300 long before
+# (1368 and 1881 in phases 1-2 at 45 min), so the minutes set the phase: one pass over ~2,500 groups, ~25 min of
+# training per ~75 min of sampling (owner, 2026-10-30). An evaluation beside sampling holds a due pause up to
+# [evaluation] max_pause_wait_minutes.
+min_sampling_minutes = 75.0
+max_sampling_minutes = 120.0
+min_trainable_groups = 300
+check_seconds = 30.0
+# A job's first phase of a kind (model building, compilation, and with a value phase the first value training) gets 2
+# h: phase 2 (1881 groups, then 2 passes) would have passed 45 min.
+first_train_timeout_minutes = 120.0
+# The value model every 2 phases on the last 4 phases' trees (with 45-90-minute phases a retrain every 1.5-3 h on 3-6 h
+# of trees), continuing the last value adapter trained; every one is published and searched with, the evaluations'
+# too (no gate; the value benchmark is a trend on the dashboard). The persistent trainer labels the window while the
+# value phase samples. μ is 0 until set by hand: deployment/grpo_loop.sh value-share 0.15 (read when each phase starts
+# training).
+value_every_phases = 2
+value_window_phases = 4
+# Under $LEAN_SEARCH_DATA: the starting policy's SFT data, flat proofs without nested `have ... := by` (data_rewrite.py
+# build, data_rewrite README step 3, of the same arm as [initial]) and its math solutions (phase.toml [policy_replay]).
+lean_replay = "reasoning/visible_student_v3_numbered/train.jsonl"
+math_replay = "reasoning/visible_student_v3_numbered/math.jsonl"
+# v0's own training data (phase3_value_data.py --name v0; node_backup generated_data: data/value/v0/), replayed as
+# 10% of the value targets.
+value_replay = "value/v0/train.jsonl"
+# Before the training job starts, the paused searches' REPL processes above this private memory stop (0: all), so the
+# four ranks' parsed trees fit next to the sleeping servers; they replay their proof states on the next request.
+# Memory budget: src/lean_search/rl/README.md, "Host memory".
+paused_repl_memory_gib = 0.0
+# One training job for the whole loop, its models parked in host memory between phases and its merges handed to the
+# servers in memory (rl/README.md, "Persistent trainer"); false: grpo_phase.py per phase. The host directory needs
+# ~28 GiB of tmpfs (rent with --shm-size 32g or more).
+persistent = true
+host_directory = "/dev/shm/lean_search"
+# The KL penalty's reference (phase.toml kl_coefficient) is [initial] policy_adapter, v0: kl_reference_policy_adapter
+# unset (loop.toml's points at grpo_loop_v1's expert-iteration adapter).
+
+[statements]
+kind = "curriculum"
+# The old probe and gate stay held out, so their numbers stay comparable; probe v2 is the arms' measure, and its pool
+# twins (pool statements whose root state matches a probe statement's) are held out with it.
+held_out = [
+    "grpo/fixed_sets/probe.jsonl",
+    "grpo/fixed_sets/gate.jsonl",
+    "grpo/fixed_sets/probe_v2.jsonl",
+    "grpo/fixed_sets/probe_v2_twins.jsonl",
+]
+# The curriculum family's bins (the dashboard's "by difficulty"), in hundreds of characters: probe v2's bands 0-499,
+# ..., 4,500+ characters.
+difficulty_band_edges = [5.0, 10.0, 15.0, 20.0, 30.0, 45.0]
+
+[statements.curriculum]
+# The frozen pool, as probe v2 was drawn from: a copy of the published verified_pool/verified.jsonl (grpo_loop_v1's,
+# 2026-11-01). The loop re-reads `verified` at every tick, so an appending verifier would change an arm's pool; the
+# loop refuses to start on a file with another sha256.
+verified = "followup/verified_pool_2026-11-01.jsonl"
+verified_sha256 = "1b216b06e30148a1e652291098c642842dadad83e2a6eaca9b85e3cb2aa5600c"
+# Verified statements only: the curriculum's statements are certified provable.
+unverified = ""
+# Difficulty = characters of the shortest known proof / 100: it separates easy from hard where the tactic count hardly
+# does (pool.md, section 3). A band of 2 is 200 characters, a step 50, a fast step 150.
+proof_steps_weight = 0.0
+root_value_weight = 0.0
+characters_weight = 1.0
+band_width = 2.0
+band_step = 0.5
+# The band moves up from a 50% solve rate; v0 solves about half at 1,000-1,200 characters: 53% of 58 old-probe searches
+# there at 16 expansions (pool.md's interpolated 50% point ~1,100), and phase 1 of grpo_loop_v1 (v0, 32 expansions)
+# solved 51% from its band at a median of 1,064 characters. Without this the band would start at the shortest proof.
+initial_band_low = 10.0
+# Each band is judged on the first 50 statements fed at it (not the first 50 to finish), once 45 finished, the 5
+# still running counted unsolved: the slowest searches (p98 38 min, max 56) held a cohort past a phase and its pause,
+# and a restart starts a new cohort, so the band never moved in phases 1-3.
+window = 50
+judged_share = 0.9
+raise_solve_rate = 0.5
+fast_raise_solve_rate = 0.8
+fast_band_step = 1.5
+lower_solve_rate = 0.3
+# Owner decision 2026-10-31, after the drift of phases 1-10 (the band from 2.5 to 6.9, only hard statements trained):
+# this share is fed from verified statements below the band, outside the cohort that moves it.
+below_band_share = 0.35
+seed = "grpo-curriculum"
+
+[evaluation]
+# Unused by the loop (the probe is off below); grpo_evaluate.py --target probe would read it.
+probe_set = "grpo/fixed_sets/probe_v2.jsonl"
+# Nothing runs beside sampling: tactic timeouts are wall-clock, so load changes the labels. The held-out states run
+# at the pause (no value model).
+value_model = "published"
+beside_sampling = false
+# A phase due while they run waits at most this long, then cancels them (they run again after the pause).
+max_pause_wait_minutes = 30.0
+held_out_states_file = "phase5_eval_visible_student_v2_visible/states.jsonl"
+# Before evaluating at the pause, the paused searches' REPL processes above this private memory stop (0: all); they
+# restart and replay their proof states on the next request. Memory budget: src/lean_search/rl/README.md, "Host memory".
+paused_repl_memory_gib = 0.0
+
+probe_parts = 1
+
+# Off: probe v2 runs standalone (experiments/probe_evaluate.py, followup/probe_evaluation.toml) on retained adapters,
+# between or after arms, never beside one and never as a v0 baseline at an arm's start.
+[evaluation.probe]
+max_expansions = 16
+max_wall_seconds = 7200.0
+concurrency = 56
+every_hours = 0.0
+at_start = false
+baseline_runs = 1
+baseline_concurrency = 0
+
+# Off: the probe already searches with the published value model. With value_model = "initial", once per published
+# value model other than v0 the first probe slot after its publish would search its part again with it, paired per
+# problem with the slot's run with v0 (an alert when worse at `significance`).
+[evaluation.value_arm]
+enabled = false
+confidence = 0.95
+significance = 0.05
+
+# grpo_fixed_sets.py gate-benchmark (the gate set searched once without a value model), under $LEAN_SEARCH_RUNS: every
+# newly served value model scores it through the value servers while the searches run, a trend against v0 and the value
+# model before it (share of labelled sibling pairs ordered by h with a paired cluster bootstrap over problems; AUC,
+# Brier, calibration, Spearman of the steps).
+[evaluation.value_benchmark]
+path = "grpo_gate/benchmark.json.gz"
+
+# Off: miniF2F-valid runs standalone at an arm's end (64 expansions, its own value model), never beside an arm.
+[evaluation.minif2f]
+max_expansions = 64
+max_wall_seconds = 7200.0
+concurrency = 56
+every_hours = 0.0
+at_start = false
+baseline_concurrency = 0
+
+# Per-sample success and valid Lean on the 512 held-out states at every pause (due after 0.01 h of loop time, less than
+# any phase): the hard stop's signal. Version 0's run before sampling is its reference, at the pause's concurrency; the
+# loop refuses to start without it.
+[evaluation.held_out_states]
+max_expansions = 1
+max_wall_seconds = 120.0
+# THROUGHPUT TEST: a placeholder, the same for v0's baseline and every pause.
+concurrency = 56
+every_hours = 0.01
+at_start = true
+baseline_concurrency = 56
+
+# After each publish, the phase adapters of versions older than the last 5 are deleted unless still used (the current
+# version's, the value adapter the next value training continues, the policy adapters of the last 3 versions whose
+# held-out evaluation raised no alert: the rollback targets); 0 keeps every adapter. src/lean_search/rl/README.md,
+# "Disk".
+# The follow-up keeps every adapter (~0.5 GB a phase): phases 4, 8 and 16 are evaluated after the arm.
+[retention]
+adapter_versions = 0
+healthy_versions = 3
+
+# Per-phase health checks (src/lean_search/rl/README.md, "Health checks"): alerts in loop.log and on the dashboard's
+# Training page. First guesses, to be calibrated on the first phases (relative limits use the mean of the first
+# `reference_phases` phases or version 0's held-out evaluation).
+[health]
+# Each arm's reference is its own phase 1, which v0 sampled.
+reference_phases = 1
+# k1's mean per token over the last pass's reference sequences (the first round's; every sequence with phase.toml's KL
+# penalty, else 256), an unbiased KL that no single token dominates. The loop's KL keeps growing phase by phase: 0.5 nats per token flags a policy far from its start.
+max_kl_to_starting_policy = 0.5
+max_clip_fraction = 0.1
+min_distinct_samples_fraction = 0.75
+min_explanation_fraction = 0.5
+max_explanation_fraction = 2.0
+max_cut_off_factor = 2.0
+min_cut_off_rise = 0.01
+min_held_out_valid_fraction = 0.9
+min_held_out_success_fraction = 0.9
+# A collapse: below 0.7 of version 0's held-out valid-Lean rate the loop publishes the last healthy version's policy
+# again (an alert in loop.log and on the dashboard) and keeps sampling; a second collapse within 4 phases of that
+# rollback stops the loop (health_stop.json; grpo_loop.py rollback or clear-health-stop, then loop again). 0 never acts;
+# rollback_window_phases = 0 stops at the first collapse.
+stop_held_out_valid_fraction = 0.7
+# The follow-up stops at the first collapse: a rollback is an automatic recipe change, the owner looks first.
+rollback_window_phases = 0
+# The searches wait for the held-out states' last Lean checks instead of resuming beside them (nothing beside an arm).
+resume_beside_held_out_states = false
+# The sampled blocks' valid-Lean rate per phase (free, from the training trees) below 0.85 of the first phases': the
+# held-out states run at the next pause.
+min_valid_block_fraction = 0.85
+# Warnings on the reward hacking of phases 1-10 (owner, 2026-10-31), from the first round's samples (those from below
+# the band when a phase has any) against the first phases' (their trees measured once in the background when their
+# health lines lack them): blocks opening with a bare `have` above 1.5x, their open claims proved below 0.5x, the
+# median explanation characters before the fence below 0.7x.
+max_bare_have_factor = 1.5
+min_claim_proved_fraction = 0.5
+min_explanation_characters_fraction = 0.7
+# A note suggesting a larger [sampling] max_expansions once more than 10% of the last 3 phases' solves came in the
+# budget's last quarter.
+max_late_solve_share = 0.10
+late_solve_phases = 3
+
+# On only when the starting policy is the naming A/B's named arm (grpo_fixed_sets.py rename first).
+[renaming]
+enabled = false
+renamings = ["grpo/renamings.jsonl"]

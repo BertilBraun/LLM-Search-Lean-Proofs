@@ -1,0 +1,30 @@
+# The follow-up's probe v2 (experiments/grpo_fixed_sets.py select-by-characters; src/lean_search/rl/fixed_sets.py,
+# CharacterStrataConfig): 2,000 verified pool v3 statements stratified by the characters of the shortest known proof,
+# which separates easy from hard where the tactic count hardly does (v0 solved 84% of the old probe under 500
+# characters, 9% from 4,500 on; results/followup_step0/pool.md). 70% at 1,000-4,499 characters, where the old run moved
+# the solve rate most. Disjoint from the old probe, the gate and the overfit set, which stay as they are; statements
+# grpo_loop_v1 searched (its trees trained the old final value model and, solved, the policy), statements of the
+# held-out states and near-duplicates of the training data's root states are dropped before the draw. Pool statements
+# whose root state matches a drawn one's are written to twins_output, held out by every arm (followup/base.toml).
+#   python experiments/grpo_fixed_sets.py --config experiments/configs/grpo/followup/probe_v2.toml \
+#       select-by-characters --training-data $LEAN_SEARCH_DATA/sft $LEAN_SEARCH_DATA/reasoning $LEAN_SEARCH_DATA/value \
+#       --old-run-index $LEAN_SEARCH_RUNS/grpo_loop_v1/trees/index.jsonl
+edges = [500, 1000, 1500, 2000, 3000, 4500]
+counts = [150, 250, 350, 350, 400, 300, 200]
+seed = "grpo-probe-v2"
+output = "grpo/fixed_sets/probe_v2.jsonl"
+twins_output = "grpo/fixed_sets/probe_v2_twins.jsonl"
+excluded_sets = ["grpo/fixed_sets/probe.jsonl", "grpo/fixed_sets/gate.jsonl", "grpo/fixed_sets/overfit_300.jsonl"]
+held_out_states_file = "phase5_eval_visible_student_v2_visible/states.jsonl"
+near_duplicate_threshold = 0.7
+
+# The follow-up curriculum's difficulty (followup/base.toml), recorded with each statement: characters / 100.
+[curriculum]
+# The frozen pool: a copy of the published verified_pool/verified.jsonl (grpo_loop_v1's, 2026-11-01), which no verifier
+# appends to; the selection refuses another file.
+verified = "followup/verified_pool_2026-11-01.jsonl"
+verified_sha256 = "1b216b06e30148a1e652291098c642842dadad83e2a6eaca9b85e3cb2aa5600c"
+unverified = ""
+proof_steps_weight = 0.0
+root_value_weight = 0.0
+characters_weight = 1.0

@@ -3,6 +3,7 @@
 //
 // series: {label, field} | {label, fields: [...]} (summed) | {label, mean: "prefix."} | {label, sum: "prefix.", suffix}
 //         | {expand: "prefix.", label} (one series per column), optionally {over: "field" | "prefix."} (a ratio)
+//         | {strata: "prefix."} (per stratum found, <prefix><stratum>.solved over .attempts)
 //         and dashed: true (a threshold, drawn dashed)
 // chart:  {title, family, kind: "line" | "stacked" | "bands" | "reliability" | "histogram", x: "time" | "policy_version"
 //          | "value_version" | "phase" | a numeric field such as "probe_slot", unit, series, compare (overlay the other
@@ -38,8 +39,6 @@ const TACTIC_LABELS = (prefix) => [
   { label: "Masked", field: `${prefix}masked` },
 ];
 
-const STRATA = ["easy", "medium", "hard"];
-
 const FIXED = {
   minif2f: {
     title: "miniF2F-valid solved", subtitle: "fixed search budget, by policy version; dashed: control run",
@@ -53,36 +52,32 @@ const FIXED = {
   },
   probe: {
     title: "Probe set solve rate",
-    subtitle: "16 expansions, the published value model; each slot a stratified third, the curve the last three slots (the whole set)",
+    subtitle: "16 expansions, the published value model; each slot a stratified part, the curve the last probe_parts slots (the whole set)",
     family: "fixed_targets", x: "probe_slot", unit: "share", compare: true, allTime: true,
     series: [
-      { label: "slot (a third)", field: "probe_solved", over: "probe_problems" },
-      { label: "last three slots", field: "probe_rolling_solved", over: "probe_rolling_problems" },
+      { label: "slot (a part)", field: "probe_solved", over: "probe_problems" },
+      { label: "last slots, each part once", field: "probe_rolling_solved", over: "probe_rolling_problems" },
     ],
   },
   probeDifference: {
     title: "Probe set against version 0",
-    subtitle: "each slot's solve rate minus version 0's two runs of the same third (the thirds' difficulty cancels), and its mean over the last three slots",
+    subtitle: "each slot's solve rate minus version 0's runs of the same part (the parts' difficulty cancels), and its mean over the last probe_parts slots",
     family: "fixed_targets", x: "probe_slot", unit: "share", compare: true, allTime: true,
     references: [{ value: 0, label: "version 0", kind: "baseline" }],
     series: [
       { label: "slot minus v0", field: "probe_baseline_difference" },
-      { label: "last three slots", field: "probe_rolling_baseline_difference" },
+      { label: "last slots, each part once", field: "probe_rolling_baseline_difference" },
     ],
   },
   probeBands: {
-    title: "Probe set by difficulty, last three slots", subtitle: "solve rate per stratum over the whole set",
+    title: "Probe set by difficulty, last slots", subtitle: "solve rate per stratum over the whole set (each part once)",
     family: "fixed_targets", x: "probe_slot", unit: "share", compare: true, allTime: true,
-    series: STRATA.map((stratum) => ({
-      label: stratum, field: `probe_rolling_by_difficulty.${stratum}.solved`, over: `probe_rolling_by_difficulty.${stratum}.attempts`,
-    })),
+    series: [{ strata: "probe_rolling_by_difficulty." }],
   },
   probeSlotBands: {
-    title: "Probe set by difficulty, per slot", subtitle: "solve rate per stratum of each slot's third",
+    title: "Probe set by difficulty, per slot", subtitle: "solve rate per stratum of each slot's part",
     family: "fixed_targets", x: "probe_slot", unit: "share", allTime: true, dots: true,
-    series: STRATA.map((stratum) => ({
-      label: stratum, field: `probe_by_difficulty.${stratum}.solved`, over: `probe_by_difficulty.${stratum}.attempts`,
-    })),
+    series: [{ strata: "probe_by_difficulty." }],
   },
   probeNoise: {
     title: "Probe run-to-run noise", subtitle: "version 0, each part searched twice: second run minus first, and problems solved by one run only",

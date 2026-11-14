@@ -10,19 +10,21 @@ from the band [low, low + width]. The first `window` statements fed since the ba
 `judged_share` of them finished, the ones still running counted unsolved (solved searches finish much sooner than
 unsolved ones, so the first outcomes to arrive alone would overstate the solve rate), the band moves up by `step`
 when at least `raise_solve_rate` were solved (by `fast_band_step` at `fast_raise_solve_rate`) and down when fewer than
-`lower_solve_rate`. A cohort statement that ends
-without an outcome (abandoned) leaves room for the next one fed. When the band holds no statement it moves to the
-nearest one. Statements the automation tactics alone close never enter. With `below_band_share`, that share of the
-statements fed are verified ones below the band (never above it): first ones not fed yet, at random, then ones searched
-before, least recently first; they never join a cohort.
+`lower_solve_rate`. The first band starts at `initial_band_low`, else at the easiest statement. A cohort statement
+that ends without an outcome (abandoned) leaves room for the next one fed. When the band holds no statement it moves
+to the nearest one. Statements the automation tactics alone close never enter. With `below_band_share`, that share of
+the statements fed are verified ones below the band (never above it): first ones not fed yet, at random, then ones
+searched before, least recently first; they never join a cohort.
 """
 
 import bisect
+import hashlib
 import math
 import random
 import statistics
 from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass
+from pathlib import Path
 
 from lean_search.corpora.records import StatementRecord
 from lean_search.expert_iteration.known_proofs import IndexedStatement, VerifiedStatement
@@ -35,6 +37,8 @@ CHARACTERS_UNIT = 100
 class CurriculumConfig:
     # Under $LEAN_SEARCH_DATA: phase6_pool_v3.py --step verify appends to it while the loop runs.
     verified: str = "expert_iteration/pool_v3/verified.jsonl"
+    # The verified file's sha256 for a frozen pool (a copy no verifier appends to); empty: not checked.
+    verified_sha256: str = ""
     # Known-proof statements not verified yet (phase6_pool_v3.py --step index), fed as well (86-98% verify); a
     # verification later certifies them or takes them out. Empty feeds verified statements only.
     unverified: str = "expert_iteration/pool_v3/index.jsonl"
@@ -45,6 +49,8 @@ class CurriculumConfig:
     characters_weight: float = 0.0
     band_width: float = 1.0
     band_step: float = 0.5
+    # The first band's low end; None: the easiest statement's difficulty.
+    initial_band_low: float | None = None
     window: int = 50
     # The cohort's slowest searches can outlast a phase and its pause; below 1 the last ones count as unsolved.
     judged_share: float = 1.0
@@ -59,6 +65,20 @@ class CurriculumConfig:
     root_value_refresh: int = 4096
     reload_seconds: float = 300.0
     seed: str = "curriculum"
+
+
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def check_frozen_pool(config: CurriculumConfig, data_root: Path) -> None:
+    """Raises ValueError when the config names a frozen pool and the verified file is not that file."""
+    if config.verified_sha256 and file_sha256(data_root / config.verified) != config.verified_sha256:
+        raise ValueError(f"{data_root / config.verified} is not the frozen pool (sha256 {config.verified_sha256}).")
 
 
 @dataclass(frozen=True)
@@ -218,7 +238,7 @@ class Curriculum:
         if not ordered:
             return None
         if self.band_low is None:
-            self.band_low = ordered[0][0]
+            self.band_low = ordered[0][0] if self.config.initial_band_low is None else self.config.initial_band_low
         start, end = self._band_range()
         if start == end:
             self._move_to_nearest(start)

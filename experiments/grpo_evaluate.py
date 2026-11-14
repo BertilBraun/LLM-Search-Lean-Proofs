@@ -35,6 +35,7 @@ from pathlib import Path
 
 from lean_search.expert_iteration.serving import read_current, read_versions
 from lean_search.monitoring.store import LoopContext, MetricsWriter
+from lean_search.policy.serving_lock import ServingBusyError, refuse_while_served, serving_lock_path
 from lean_search.rl.evaluation import (
     EvaluationKind,
     EvaluationPaths,
@@ -112,6 +113,10 @@ def served_value_version(config: GrpoLoopConfig, paths: GrpoLoopPaths, value_mod
 
 async def evaluate(arguments: argparse.Namespace) -> None:
     run = evaluation_run(arguments)
+    try:
+        refuse_while_served(serving_lock_path(CHECKPOINTS_DIRECTORY), "grpo_evaluate.py")
+    except ServingBusyError as error:
+        raise SystemExit(str(error)) from error
     config = load_loop_config(arguments.loop_directory / "loop.toml")
     paths = GrpoLoopPaths(RUNS_DIRECTORY, DATA_DIRECTORY, CHECKPOINTS_DIRECTORY, config.name)
     current = read_current(paths.models)
