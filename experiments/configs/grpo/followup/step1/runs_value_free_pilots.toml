@@ -1,0 +1,35 @@
+# Step 1's run 6 pilots (DESIGN.md, "Follow-up study: controlled arms", "Step 1", Q4): v0 without a value model at 16
+# expansions on the first 200 probe statements (strata in turn), once per step_log_probability setting, each with its
+# calibrated automation constant. The setting with the most solved goes to the full run (runs_value_free_full.toml);
+# on a tie the one review AF ranked higher (top candidate on the proof graph: completion 42.6%, block_mean 42.2%,
+# block_sum 39.4%, chance 39.9%). A pilot against run 1: probe_compare.py pair --across-search-modes (paired on the
+# 200 statements both searched).
+[[runs]]
+name = "step1_run6_pilot_completion"
+arm = "v0"
+phase = 0
+policy_adapter = "/workspace/checkpoints/data_rewrite_sft_numbered/adapter"
+value = "none"
+config = "experiments/configs/grpo/followup/step1/value_free_completion.toml"
+problems = 200
+purpose = "which step log-probability serves the value-free search best"
+
+[[runs]]
+name = "step1_run6_pilot_block_sum"
+arm = "v0"
+phase = 0
+policy_adapter = "/workspace/checkpoints/data_rewrite_sft_numbered/adapter"
+value = "none"
+config = "experiments/configs/grpo/followup/step1/value_free_block_sum.toml"
+problems = 200
+purpose = "which step log-probability serves the value-free search best"
+
+[[runs]]
+name = "step1_run6_pilot_block_mean"
+arm = "v0"
+phase = 0
+policy_adapter = "/workspace/checkpoints/data_rewrite_sft_numbered/adapter"
+value = "none"
+config = "experiments/configs/grpo/followup/step1/value_free_block_mean.toml"
+problems = 200
+purpose = "which step log-probability serves the value-free search best"

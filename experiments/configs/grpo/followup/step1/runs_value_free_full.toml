@@ -1,0 +1,11 @@
+# Step 1's run 6 (DESIGN.md, "Follow-up study: controlled arms", "Step 1", Q4): v0 without a value model at 16
+# expansions on the whole probe, with the setting whose pilot solved most (runs_value_free_pilots.toml). Against
+# runs 1-2: probe_compare.py pair --across-search-modes.
+[[runs]]
+name = "step1_run6_v0_no_value"
+arm = "v0"
+phase = 0
+policy_adapter = "/workspace/checkpoints/data_rewrite_sft_numbered/adapter"
+value = "none"
+config = "PLACEHOLDER: experiments/configs/grpo/followup/step1/value_free_<the best pilot's setting>.toml"
+purpose = "Q4: does the value model matter at 16 expansions (none against v0)"

@@ -1,0 +1,13 @@
+# Arm B2, pure proof success, the closed-loop outcome-only control (DESIGN.md, "Follow-up study: controlled arms",
+# "Arms"): r = 1 when the sample advances along the found proof, every sampled token gets r minus the group's mean r
+# (grpo/phase_proof_success.toml's credit). The follow-up base and its phase template changed only in the lines below
+# (experiments/followup_arm.py writes the loop's configs).
+[loop]
+name = "followup_B2"
+
+[phase.policy.data]
+credit = "proof_success"
+
+[phase.policy.optimization]
+# Step 2's choice among 2e-5, 5e-5 and 1e-4 (experiments/rank_learning_rates.py).
+learning_rate = "PLACEHOLDER: step 2's learning rate for B2"

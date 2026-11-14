@@ -1,0 +1,27 @@
+# Step 1's optional runs 7-9 (DESIGN.md, "Follow-up study: controlled arms", "Step 1", Q4), only if runs 5 and 6 leave
+# Q4 ambiguous: grpo_loop_v1's v35 policy with its final value model, value v0 and no value model, at 16 expansions.
+[[runs]]
+name = "step1_run7_v35_value_final"
+arm = "grpo_loop_v1"
+phase = 35
+policy_adapter = "PLACEHOLDER: the path of grpo_loop_v1's v35 policy adapter"
+value = "PLACEHOLDER: the path of grpo_loop_v1's final value adapter"
+value_version = 35
+purpose = "Q4 with a trained policy: the loop's final value model"
+
+[[runs]]
+name = "step1_run8_v35_value_v0"
+arm = "grpo_loop_v1"
+phase = 35
+policy_adapter = "PLACEHOLDER: the path of grpo_loop_v1's v35 policy adapter"
+value = "v0"
+purpose = "Q4 with a trained policy: value v0"
+
+[[runs]]
+name = "step1_run9_v35_no_value"
+arm = "grpo_loop_v1"
+phase = 35
+policy_adapter = "PLACEHOLDER: the path of grpo_loop_v1's v35 policy adapter"
+value = "none"
+config = "PLACEHOLDER: experiments/configs/grpo/followup/step1/value_free_<the best pilot's setting>.toml"
+purpose = "Q4 with a trained policy: no value model"

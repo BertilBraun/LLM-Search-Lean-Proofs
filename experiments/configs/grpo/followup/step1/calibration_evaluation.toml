@@ -1,0 +1,9 @@
+# The value-free search's automation constants (DESIGN.md, "Follow-up study: controlled arms", "Step 1", Q4): an
+# ordinary run, v0 with value v0, visible, 16 expansions, on the 200 calibration statements (calibration_statements.toml:
+# pool statements outside every held-out set), into its own output so the probe rating never sees it. A* with
+# policy_prior_weight 0 never reads a step's log-probability, so the trees record every depth's step values unaffected
+# by any constant; experiments/followup_step1.py automation-constant then computes, per edge as the search would score
+# it, the constant for each step_log_probability setting (runs_calibration.toml).
+base = "experiments/configs/grpo/followup/probe_evaluation.toml"
+probe_set = "grpo/fixed_sets/calibration_200.jsonl"
+output = "calibration_evaluations"
