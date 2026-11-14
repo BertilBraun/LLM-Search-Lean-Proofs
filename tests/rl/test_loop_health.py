@@ -701,7 +701,7 @@ async def test_the_phase_timing_counts_the_searches_its_pause_held(tmp_path: Pat
     loop.log = messages.append
     await through_a_held_out_tail(world, lean_checks, loop=loop)
     paused = next(message for message in messages if message.startswith("Phase 1: "))
-    held = int(paused.removesuffix(" searches paused").rsplit("; ", 1)[1])
+    held = int(paused.rsplit("; ", 1)[1].split(" searches paused", 1)[0])
     assert RunReader(world.paths.directory).series("timing").columns["searches_paused"][0] == held
 
 

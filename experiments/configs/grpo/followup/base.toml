@@ -125,6 +125,11 @@ gpus = [0, 1, 2, 3]
 min_sampling_minutes = 75.0
 max_sampling_minutes = 120.0
 min_trainable_groups = 300
+# Each arm ends its phases on generated tokens instead (DESIGN.md, "Compute matching"; the minutes and groups above are
+# then unused), and the run after its last phase, e.g. 16 phases of 12M tokens; a second run of an arm adds
+# seed_offset = 1 at the top level:
+#   phase_generated_tokens = 12_000_000
+#   max_phases = 16
 check_seconds = 30.0
 # A job's first phase of a kind (model building, compilation, and with a value phase the first value training) gets 2
 # h: phase 2 (1881 groups, then 2 passes) would have passed 45 min.
@@ -253,15 +258,16 @@ every_hours = 0.0
 at_start = false
 baseline_concurrency = 0
 
-# Per-sample success and valid Lean on the 512 held-out states at every pause (due after 0.01 h of loop time, less than
-# any phase): the hard stop's signal. Version 0's run before sampling is its reference, at the pause's concurrency; the
-# loop refuses to start without it.
+# Per-sample success and valid Lean on the 512 held-out states at every pause (by phase, not by loop hours): the hard
+# stop's signal. Version 0's run before sampling is its reference, at the pause's concurrency; the loop refuses to
+# start without it.
 [evaluation.held_out_states]
 max_expansions = 1
 max_wall_seconds = 120.0
 # THROUGHPUT TEST: a placeholder, the same for v0's baseline and every pause.
 concurrency = 56
-every_hours = 0.01
+every_hours = 0.0
+at_each_pause = true
 at_start = true
 baseline_concurrency = 56
 

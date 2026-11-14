@@ -1,5 +1,6 @@
 """Configuration of the search-tree GRPO loop (experiments/grpo_loop.py), loaded from TOML."""
 
+import dataclasses
 import tomllib
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -77,6 +78,16 @@ class LoopTrainingConfig:
     min_sampling_minutes: float = 45.0
     max_sampling_minutes: float = 90.0
     min_trainable_groups: int = 300
+    # Above 0 a phase ends on generated tokens instead, the minutes and groups unused: phase k at the first check at
+    # which the searches that finished in phases 1..k hold k times this many (`TreeStore.generated_tokens`), so an
+    # overshoot is paid back by the next phase.
+    phase_generated_tokens: int = 0
+    # With `phase_generated_tokens`: an alert in loop.log once a phase has sampled this long; nothing else changes.
+    sampling_alert_hours: float = 4.0
+    # The run ends once phase `max_phases` closed (trained, published, evaluated), or once the finished searches hold
+    # `max_generated_tokens` while no phase is due (a sampling-only run: no phase ever trains); 0: never.
+    max_phases: int = 0
+    max_generated_tokens: int = 0
     check_seconds: float = 30.0
     # The value model trains every this many phases (0 never) on the trees of the last `value_window_phases` phases,
     # continuing the last value adapter trained; every one is published with the next version. With 45-90-minute
@@ -132,6 +143,8 @@ class EvaluationTarget:
     # Only the first this many problems (the probe's strata in turn; held-out states: states), 0 all: a smoke test's
     # tiny evaluations.
     problems: int = 0
+    # At every phase's pause, however long the phase: a schedule by phases, not by loop hours.
+    at_each_pause: bool = False
 
 
 class EvaluationValueModel(StrEnum):
@@ -269,6 +282,9 @@ class GrpoLoopConfig:
     renaming: RenamingConfig = field(default_factory=RenamingConfig)
     retention: RetentionConfig = field(default_factory=RetentionConfig)
     health: HealthConfig = field(default_factory=HealthConfig)
+    # A second run of the same arm: shifts the trainer's, the replay draw's, the exploration's and the curriculum's
+    # seeds together (`offset_seed`); 0 keeps every seed as it was. The probe and the evaluations never move.
+    seed_offset: int = 0
 
     def released_servers(self) -> tuple[ServerEndpoint, ...]:
         """Servers on the training GPUs: asleep while a phase trains."""
@@ -281,6 +297,23 @@ class GrpoLoopConfig:
     def reference_policy_adapter(self) -> str:
         """The KL reference's adapter: `training.kl_reference_policy_adapter`, else the starting policy's."""
         return self.training.kl_reference_policy_adapter or self.initial.policy_adapter
+
+    def curriculum(self) -> CurriculumConfig:
+        """The curriculum with its seed moved by `seed_offset`."""
+        curriculum = self.statements.curriculum
+        return dataclasses.replace(curriculum, seed=offset_seed(curriculum.seed, self.seed_offset))
+
+
+# Integer seeds move by this much per seed offset, so that no phase's seed under one offset is another offset's.
+SEEDS_PER_OFFSET = 1_000_000
+
+
+def offset_seed(seed: str, offset: int) -> str:
+    return seed if not offset else f"{seed}/offset-{offset}"
+
+
+def offset_number_seed(seed: int, offset: int) -> int:
+    return seed + SEEDS_PER_OFFSET * offset
 
 
 def parse_loop_config(text: str) -> GrpoLoopConfig:
@@ -308,6 +341,12 @@ def parse_loop_config(text: str) -> GrpoLoopConfig:
         raise ValueError(
             "training needs 0 < min_sampling_minutes <= max_sampling_minutes and min_trainable_groups >= 1."
         )
+    if min(training.phase_generated_tokens, training.max_phases, training.max_generated_tokens, config.seed_offset) < 0:
+        raise ValueError(
+            "training.phase_generated_tokens, max_phases, max_generated_tokens and seed_offset must not be negative."
+        )
+    if training.phase_generated_tokens and training.sampling_alert_hours <= 0:
+        raise ValueError("training.phase_generated_tokens needs sampling_alert_hours > 0.")
     if sampling.max_expansions < 1:
         raise ValueError("sampling.max_expansions must be at least 1.")
     if sampling.options_arm.name == CONTROL_ARM:
@@ -327,6 +366,11 @@ def parse_loop_config(text: str) -> GrpoLoopConfig:
     targets = (evaluation.probe, evaluation.minif2f, evaluation.held_out_states)
     if any(target.baseline_runs < 1 or target.baseline_concurrency < 0 for target in targets):
         raise ValueError("evaluation targets need baseline_runs >= 1 and baseline_concurrency >= 0.")
+    if training.phase_generated_tokens and any(target.every_hours for target in targets):
+        raise ValueError(
+            "With training.phase_generated_tokens nothing runs by loop hours: set every_hours = 0 and schedule the "
+            "evaluations by phase (at_each_pause)."
+        )
     if evaluation.probe_parts < 1:
         raise ValueError("evaluation needs probe_parts >= 1.")
     if evaluation.beside_sampling and (

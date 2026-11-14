@@ -21,6 +21,7 @@ from lean_search.rl.loop_config import (
     HealthConfig,
     StatementSourceKind,
     load_loop_config,
+    parse_loop_config,
 )
 from lean_search.rl.policy_trainer import GrpoConfig, ReferencePolicy
 from lean_search.rl.search_options import OptionsArmConfig, SearchOptions
@@ -421,7 +422,9 @@ def test_the_followup_base_differs_from_the_loop_only_in_the_followups_settings(
         probe_parts=1,
         probe=EvaluationTarget(16, 7200.0, 56, every_hours=0.0, at_start=False, baseline_runs=1),
         minif2f=EvaluationTarget(64, 7200.0, 56, every_hours=0.0, at_start=False),
-        held_out_states=EvaluationTarget(1, 120.0, 56, every_hours=0.01, at_start=True, baseline_concurrency=56),
+        held_out_states=EvaluationTarget(
+            1, 120.0, 56, every_hours=0.0, at_start=True, baseline_concurrency=56, at_each_pause=True
+        ),
     )
     health = dataclasses.replace(
         old.health, reference_phases=1, rollback_window_phases=0, resume_beside_held_out_states=False
@@ -476,7 +479,13 @@ def test_the_followup_runs_nothing_beside_sampling() -> None:
 
 
 def test_the_followup_held_out_states_are_due_at_every_pause() -> None:
-    assert followup().evaluation.held_out_states.every_hours * 3600 < 60
+    assert followup().evaluation.held_out_states.at_each_pause
+
+
+def test_an_arm_on_the_followup_base_may_end_its_phases_on_generated_tokens() -> None:
+    text = (CONFIGS / "grpo/followup/base.toml").read_text(encoding="utf-8")
+    arm = text.replace("check_seconds = 30.0\n", "check_seconds = 30.0\nphase_generated_tokens = 12_000_000\n")
+    assert parse_loop_config(arm).training.phase_generated_tokens == 12_000_000
 
 
 def test_version_zeros_held_out_baseline_runs_at_the_pauses_concurrency() -> None:

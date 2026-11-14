@@ -526,6 +526,11 @@ class PhaseTiming:
     trees: int
     searches_paused: int
     pause: PauseSegments = field(default_factory=PauseSegments)
+    # The phase's generated tokens (kept trees and finished searches left out of the store), those of its searches
+    # lost to a server failure or a stop (never counted), and those of the searches held at its pause so far.
+    generated_tokens: int = 0
+    lost_generated_tokens: int = 0
+    paused_search_tokens: int = 0
 
 
 @dataclass(frozen=True)

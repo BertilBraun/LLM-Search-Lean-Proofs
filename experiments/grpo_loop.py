@@ -138,7 +138,7 @@ def by_hand_publisher(config: GrpoLoopConfig, paths: GrpoLoopPaths) -> MergedPub
 def search_run_config(config: GrpoLoopConfig) -> RunConfig:
     """The search template on the loop's servers at the loop's budget, one REPL per concurrent search."""
     template = served_run_config(load_run_config(REPOSITORY_DIRECTORY / config.sampling.search_config), config.serving)
-    return training_run_config(template, config.sampling)
+    return training_run_config(template, config.sampling, config.seed_offset)
 
 
 def statement_source(config: GrpoLoopConfig, paths: GrpoLoopPaths) -> StatementSource:
@@ -148,7 +148,7 @@ def statement_source(config: GrpoLoopConfig, paths: GrpoLoopPaths) -> StatementS
             held_out = {entry.name for path in statements.held_out for entry in read_fixed_set(DATA_DIRECTORY / path)}
             searched = [entry.problem_name for entry in TreeStore(paths.trees).entries]
             return CurriculumStatements(
-                statements.curriculum,
+                config.curriculum(),
                 DATA_DIRECTORY,
                 paths.curriculum,
                 held_out,

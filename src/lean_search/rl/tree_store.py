@@ -5,6 +5,11 @@ started); a phase trains on its own directory. The
 index (trees/index.jsonl, one `TreeEntry` per tree) is what a restart reads back: per-phase counts, the statements
 already searched, the curriculum outcomes and each tree's `TreeSummary` (trainable groups, budget and health signals).
 Tree files are written to a temporary name and renamed, so a crash never leaves a truncated tree for the trainer.
+
+Searches that end without a tree in the store are recorded in trees/searches_without_tree.jsonl with their generated
+tokens (`SearchWithoutTree`): those that finished count towards a phase's generated tokens like the kept trees (the
+budget is what a run sampled), those lost to a server failure or a stop are logged only (a failed statement is fed
+again). Both files are append-only, so the counts a restart recomputes from them are the ones before it.
 """
 
 import gzip
@@ -12,12 +17,14 @@ import json
 import os
 import time
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 
 from lean_search.rl.tree_summary import TreeSummary
 from lean_search.search.records import TreeRecord, from_json_object, read_tree, to_json
 
 INDEX_FILE = "index.jsonl"
+WITHOUT_TREE_FILE = "searches_without_tree.jsonl"
 
 
 @dataclass(frozen=True)
@@ -52,6 +59,32 @@ class TreeEntry:
         return max(0.0, self.wall_seconds - self.paused_seconds)
 
 
+class SearchEnd(StrEnum):
+    # Finished, its summary failed (`GrpoLoop.keep_tree`): left out of the store and of training.
+    SUMMARY_FAILED = "summary_failed"
+    # Finished without a tree: its proof of the renamed statement failed against the original (`search_problem`).
+    NO_TREE = "no_tree"
+    # Lost: a policy or value server failed the search, or a stop or crash cut it off.
+    SERVER_FAILURE = "server_failure"
+    STOPPED = "stopped"
+
+    @property
+    def counted(self) -> bool:
+        """Towards the phase's generated tokens: a finished search's, as a kept tree's."""
+        return self in (SearchEnd.SUMMARY_FAILED, SearchEnd.NO_TREE)
+
+
+@dataclass(frozen=True)
+class SearchWithoutTree:
+    problem_name: str
+    # The phase collecting when the search ended.
+    phase: int
+    # A finished search's accounting; a lost one's tokens so far.
+    generated_tokens: int
+    end: SearchEnd
+    finished_time: float
+
+
 def phase_directory_name(phase: int) -> str:
     return f"phase_{phase:04d}"
 
@@ -64,6 +97,13 @@ class TreeStore:
         if self.index.exists():
             with self.index.open(encoding="utf-8") as lines:
                 self.entries = [from_json_object(TreeEntry, json.loads(line)) for line in lines if line.strip()]
+        self.without_tree_file = directory / WITHOUT_TREE_FILE
+        self.without_tree: list[SearchWithoutTree] = []
+        if self.without_tree_file.exists():
+            with self.without_tree_file.open(encoding="utf-8") as lines:
+                self.without_tree = [
+                    from_json_object(SearchWithoutTree, json.loads(line)) for line in lines if line.strip()
+                ]
 
     def phase_directory(self, phase: int) -> Path:
         return self.directory / phase_directory_name(phase)
@@ -109,8 +149,32 @@ class TreeStore:
         self.entries.append(entry)
         return entry
 
+    def add_without_tree(self, problem_name: str, phase: int, generated_tokens: int, end: SearchEnd) -> None:
+        record = SearchWithoutTree(problem_name, phase, generated_tokens, end, time.time())
+        self.directory.mkdir(parents=True, exist_ok=True)
+        with self.without_tree_file.open("a", encoding="utf-8") as handle:
+            handle.write(to_json(record) + "\n")
+        self.without_tree.append(record)
+
     def phase_entries(self, phase: int) -> list[TreeEntry]:
         return [entry for entry in self.entries if entry.phase == phase]
+
+    def generated_tokens(self, first_phase: int, last_phase: int) -> int:
+        """Of the searches that finished in these phases: the kept trees' and those left out
+        (`SearchEnd.counted`)."""
+        kept = sum(entry.summary.generated_tokens for entry in self.entries if first_phase <= entry.phase <= last_phase)
+        left_out = sum(
+            search.generated_tokens
+            for search in self.without_tree
+            if search.end.counted and first_phase <= search.phase <= last_phase
+        )
+        return kept + left_out
+
+    def lost_tokens(self, phase: int) -> int:
+        """Of the searches a server failure or a stop cut off in the phase: generated, never counted."""
+        return sum(
+            search.generated_tokens for search in self.without_tree if not search.end.counted and search.phase == phase
+        )
 
     def records(self, phase: int) -> list[TreeRecord]:
         return [read_tree(self.directory / entry.file) for entry in self.phase_entries(phase)]
