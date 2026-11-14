@@ -121,3 +121,30 @@ on the proof graph: block sum 39.4%, per-token mean 42.0%, whole sample 41.8%, c
 No regressions found: A's and B1's token credits are unchanged (pinned example, same code path), `parse_samples` without
 a decoder orders as before, the round-1 configs keep `window_phases = 0` and the reward-fix path still gives v16. Step
 2's GRPO trees are v0's only, so the trainer's start policy is the sampler for the importance ratio.
+
+## Re-review (fixes up to f14b28d)
+
+604 tests on the fix commits' suites pass in WSL; reran on the same 400 trees through the production code (`rerun.py`).
+1. **Resolved.** Slice directories (`expert_iteration_trees.round_trees`) read every `*.json.gz` as `grpo_phase.py
+   --trees` does, so slice 4 against slices 1-4 builds what step 2 needs. Version rule (from 0, rejected aside, a mix
+   refused) is right for a v0-only run. Minor: `below_band` is always False there, so the summary's share reads 0.
+2. **Resolved; a new must-fix sits next to it.** All three settings match their definitions: max over each
+   candidate's samples recomputed, 0 mismatches (1,799 merged `block_mean` candidates; 1 unaligned sample). Proof-graph
+   top candidate at 2,060 expansions: completion 42.6%, block_sum 39.4%, block_mean 42.2%, chance 39.9%. Minor: an
+   unaligned sample falls back to its completion sum (about −49), 400× off `block_mean`'s scale; use the completion's
+   per-token mean. **Must fix before run 6:** `probe_evaluation.probe_run_config`'s value-free branch sets the kind and
+   `automation_log_probability = −2.8` but leaves `policy.step_log_probability` at the template's `completion`. Run 6
+   would order whole completions (about −49 a step) against automation at −2.8, so sweep children always go first. Put
+   the setting in `ValueFreePriority` with a constant calibrated for it, and test it.
+3. **Groups kept:** A 2,240, B1 2,212, B2 1,973 (−12%). r = 1 for 10,069: 23.5% with a failing tactic, 9.9% ending off
+   graph, unknown or in a claim (303 claims), 10.5% no closer; only 6 r = 0 samples touch the graph. Sample sign
+   agreement 97.3% (B1 97.5%); token sign agreement 89.0% (5.1% opposite; was 86.4 / 7.4%); within-group rank 0.76.
+   For a 0/1 reward, sample sign agreement is the wrong yardstick: A and B2 now differ in magnitude (δ, local term,
+   \|A\| up to 5.7) and in where credit lands, not sign. Not pointless: the tokens are below the ~95% gate and a step-2
+   round is cheap; a closed-loop pair only if step 2 separates them. Still outcome-only. **Should:** the README's "neither
+   charged nor credited, as in per-tactic credit's global part" is wrong at token level: B2 pushes tail tokens
+   (failing tactics, trailing bare claims) up by r − b̄ > 0 where A charges −c or −2c. Correct it, and alert on claims
+   and failing tails after the graph in B2 (only bare-`have` openings alert today).
+4. **Not removed, partly documented:** A still keeps 8.6% of tokens (masked tactics, the closing after a failure) out
+   of loss and KL; B1 and B2 train them. The README table lacks a proof_success column and the KL consequence.
+5. Nothing else new. Verdict: **merge**; the run-6 config before run 6, the README sentence before step 2.
