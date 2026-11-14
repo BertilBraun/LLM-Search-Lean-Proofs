@@ -1,9 +1,10 @@
 """One rating per version from every finished probe run: logit P(version v proves problem p) = ability_v - difficulty_p.
 
-Each probe slot searches a third of the probe set, so consecutive versions never share problems; the fit estimates each
-problem's difficulty from every version that searched it, which puts all versions on one scale against version 0 (an
-Elo-like curve on a fixed target). A pass pools the last run of every third into one ability, the whole set once; the
-headline compares passes. The intervals resample problems. src/lean_search/rl/README.md, "Fixed targets".
+Each probe slot searches one part of the probe set (`probe_parts`: three thirds in grpo_loop_v1), so consecutive
+versions never share problems; the fit estimates each problem's difficulty from every version that searched it, which
+puts all versions on one scale against version 0 (an Elo-like curve on a fixed target). A pass pools the last run of
+every part into one ability, the whole set once; the headline compares passes. A run of the whole set (no slot) rates
+its version but is no pass. The intervals resample problems. src/lean_search/rl/README.md, "Fixed targets".
 
 Reads the run directory's files directly (no model code), so the recorder beside the dashboard stays small.
 """
@@ -47,7 +48,7 @@ class ProbeRun:
     name: str
     policy_version: int
     value_version: int
-    # The third of the probe set it searched; None for a run of the whole set.
+    # The part of the probe set it searched; None for a run of the whole set.
     part: int | None
     finished_at: str
     expansion_budget: int

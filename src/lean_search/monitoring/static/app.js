@@ -208,7 +208,24 @@ function points(data, axis, values) {
   return result;
 }
 
+// The old probe's strata in difficulty order; numbered ones ("500-999", "4500+") by their low end.
+const NAMED_STRATA = ["easy", "medium", "hard"];
+
+function strataRank(stratum) {
+  const named = NAMED_STRATA.indexOf(stratum);
+  return named >= 0 ? named - NAMED_STRATA.length : parseFloat(stratum);
+}
+
 function expandedSpecs(data, spec) {
+  if (spec.strata) {
+    const suffix = ".attempts";
+    const names = Object.keys(data.columns)
+      .filter((name) => name.startsWith(spec.strata) && name.endsWith(suffix))
+      .map((name) => name.slice(spec.strata.length, -suffix.length));
+    return names.sort((first, second) => strataRank(first) - strataRank(second)).map((stratum) => ({
+      label: stratum, field: `${spec.strata}${stratum}.solved`, over: `${spec.strata}${stratum}${suffix}`,
+    }));
+  }
   if (!spec.expand) return [spec];
   return Object.keys(data.columns)
     .filter((name) => name.startsWith(spec.expand))

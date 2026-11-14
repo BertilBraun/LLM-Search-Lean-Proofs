@@ -255,7 +255,7 @@ class VersionRating:
 
 @dataclass(frozen=True)
 class PassRating:
-    """The last run of every third of the probe set pooled into one ability: the whole set, once."""
+    """The last run of every part of the probe set pooled into one ability: the whole set, once."""
 
     policy_versions: tuple[int, ...]
     rating: float
@@ -296,7 +296,7 @@ class ProbeRatings:
     against_previous: PassComparison | None
     against_pre_fix: PassComparison | None
     reward_fix_version: int | None
-    # Of the latest pass's thirds, those searched by a version trained with the reward fix, and all thirds.
+    # Of the latest pass's parts, those searched by a version trained with the reward fix, and all parts.
     post_fix_parts: int
     parts: int
     runs_rated: int

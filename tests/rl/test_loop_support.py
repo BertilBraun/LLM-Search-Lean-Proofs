@@ -29,7 +29,9 @@ from lean_search.rl.evaluation import (
     value_arm_result,
 )
 from lean_search.rl.fixed_targets import first_problems_by_stratum, probe_part, run_target
+from lean_search.rl.loop import GrpoLoopPaths
 from lean_search.rl.loop_config import EvaluationConfig, EvaluationTarget, SamplingConfig, ValueArmConfig
+from lean_search.rl.probe_rating import finished_probe_runs
 from lean_search.rl.renaming import (
     RenamedStatement,
     StatementRenamings,
@@ -42,6 +44,7 @@ from lean_search.rl.tree_store import TreeStore
 from lean_search.rl.tree_summary import TreeSummary
 from lean_search.search import Accounting, RunConfig, SearchResult, StopReason, tree_record
 from lean_search.search.config import parse_run_config
+from lean_search.search.records import to_json
 
 REPOSITORY_DIRECTORY = Path(__file__).resolve().parents[2]
 TEMPLATE = REPOSITORY_DIRECTORY / "experiments/configs/grpo/search/visible_student_v2.toml"
@@ -343,6 +346,25 @@ def test_character_bands_are_summarized_by_their_low_end() -> None:
     problems = stratified({"4500+": 1, "500-999": 1, "0-499": 1, "1000-1499": 1})
     strata = [outcome.stratum for outcome in stratum_outcomes(problems, [])]
     assert strata == ["0-499", "500-999", "1000-1499", "4500+"]
+
+
+def test_a_standalone_run_of_the_whole_seven_band_probe_is_rated_as_one_run(tmp_path: Path) -> None:
+    bands = ["0-499", "500-999", "1000-1499", "1500-1999", "2000-2999", "3000-4499", "4500+"]
+    problems = [
+        EvaluationProblem(dataclasses.replace(PROBLEM, name=f"test.t{number}"), bands[number % 7])
+        for number in range(14)
+    ]
+    stops = [StopReason.PROVED, StopReason.EXPANSION_BUDGET]
+    results = [result(problem.problem.name, stops[number % 2]) for number, problem in enumerate(problems)]
+    config = evaluation_run_config(template(), EvaluationTarget(16, 1800.0, 56))
+    summary = search_summary(EvaluationKind.PROBE, "probe_v0000", (0, 0), problems, results, config, "", 1.0)
+    paths = GrpoLoopPaths(tmp_path, tmp_path, tmp_path, "loop")
+    evaluation = EvaluationPaths(paths.evaluation_directory(EvaluationRun(EvaluationKind.PROBE), 0))
+    evaluation.directory.mkdir(parents=True)
+    evaluation.results.write_text("".join(to_json(item) + "\n" for item in results), encoding="utf-8")
+    evaluation.summary.write_text(to_json(summary), encoding="utf-8")
+    (found,) = finished_probe_runs(paths.evaluations).runs
+    assert (found.part, len(found.outcomes), found.expansion_budget) == (None, 14, 16)
 
 
 def slot_summary(slot: int, solved: int, outcomes: tuple[StratumOutcome, ...]) -> EvaluationSummary:
