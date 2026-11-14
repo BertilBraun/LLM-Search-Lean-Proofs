@@ -117,3 +117,39 @@ harvesting is off in evaluations.
     unless one is far ahead; say so where reported. `confirm_with_seeds` names the winner "A1"; print the arm's name.
 
 Verdict: **merge after fixes** (items 1-2; 3-10 before the runs they affect).
+
+## Re-review (fix round 970a3db..a2a7750)
+
+The six touched test files: 181 passed in WSL. Simulations and fixtures rerun on a2a7750 with the same scripts.
+1. **Resolved.** `confirm_with_seeds` requires `passes_rule` on the seeds-pooled difference. Fixture: 2 points comes back not
+   confirmed ("under 3 points or its interval includes 0"), 3.00 points confirmed. Seed rule, two runs pooled, 500
+   probes (false confirmation / 3 / 5 / 8 points): s = 0: 0.0 / 43% / 97% / 100%; s = 1: 0.2 / 16 / 51 / 83%; s = 2:
+   1.8 / 9 / 16 / 40%; s = 3: 2.6 / 7 / 13 / 20%. The floor cut 3-point power at s = 0 from 74% to 43%, as it should.
+2. **Resolved.** `RunSettings` holds the token cap, depth cap and concurrency, checked in every mode. Two seeds with one
+   identity are refused. `favours_x` requires the mean and the count to agree (old minor 11).
+3. **Resolved.** The verdict is "primary" only with `--primary` (refused unless both sides have two runs), otherwise
+   "descriptive". Each two-run side shows run 1 against run 2, flagged when that interval excludes 0. `against` and
+   `rank_learning_rates` print the multiple-comparisons line.
+4. **Resolved.** Gate ties use the paired interval to the gate leader, then the lower rate; the tied rates' gate
+   intervals are printed. The probe flag needs both intervals to exclude 0. Partial or other-states held-out runs are
+   refused, and n is printed.
+5. **Resolved; it is the quantity the search compares.** The constant is computed per edge (first run of a block, max
+   over merged samples, an unaligned sample keeping its completion value, as `parse_samples` does), at every depth, from
+   a value-v0 run where the constant is inert. Under each setting this is the step value the per-block-mean path score
+   averages. On the old v0 probe trees (1,002 trees with texts, 15,780 progressing edges, none dropped, Qwen3.5-2B
+   tokenizer of the same family), the production functions give: **completion -56.1, block_sum -4.96, block_mean
+   -0.135** (the placeholder is -0.12; review AF had -5.65). Medians by depth, 1 / 2 / 3 / 4+: block_sum -3.8 / -4.4 /
+   -5.6 / -5.4, block_mean flat at -0.13 to -0.14, completion -49 / -54 / -58 / -59. Minor: children kept from a block's
+   prefix after a failing tactic are ranked by the search but left out here, and the value-guided depth mix is not the
+   value-free search's; say both in the configs' comment.
+6. **Resolved, nearly.** Records hold the difficulty range, counts and solves per character band, below-band share,
+   distinct statements and those seen before, trainable groups and mean expansions. Still missing: proof-graph blocks
+   (C's training unit; trainable groups are GRPO's) and the statements still in flight at the stop.
+7. **New.**
+   - Should: run 3 against run 1, the pre-set depth_weight caveat named in `runs_reasoning.toml` and
+     `token_capped_visible.toml`, cannot be run, because `pair` refuses different expansion and token budgets. Add a
+     descriptive `--across-budgets` mode or name another tool.
+   - Minor: the A/A flag fires on about 5% of two-run arms by chance; say so beside it. `multiple_comparisons_note(1)`
+     reads "1 95% intervals ... 0.1 of them".
+
+Verdict: **merge.** Item 7's should-fix is due before step 1's run 3 is compared.

@@ -148,3 +148,57 @@ held lock refusing `check`, and `read_held_out` refusing a run without `summary.
 
 **Verdict: merge after fixes.** Fix 1 at merge. Fixes 2–4 before the first node run. Fixes 5–6 before step 3 and
 step 2's ranking.
+
+## Re-review (a2a7750)
+
+Branch suites plus `test_loop_budget.py`: 381 passed. `bash -n` is clean for both scripts. A, B1, B2, a seed-1 A and the
+shared-sampling overlay were generated with `followup_arm.py` against the real `base.toml` (no diff to master's).
+
+**Earlier findings:**
+- 1 (seed offset), 5 (token budget) and the arm diff: resolved. Arms differ from base only in `name`/`phase_config`
+  (`seed_offset` 1 for the seed run), phases only in `credit`. Each has 12M per phase and 16 phases. The overlay loads
+  with `sampling_only()` True (1B per phase, 48M total, `max_phases` 0). Missing budgets are refused.
+- 2 (concurrency): resolved. All step-1 configs reach 84 through `base`. `resolved_toml` merges table by table, replaces
+  arrays whole, cannot drop a key, and a mistyped key still fails as unknown.
+- 3 (detach and log): resolved. Refusals print before detaching; then a log, pid file and ledger paths.
+- 4 (pinning): resolved against the cgroup quota and the allowed CPUs, recorded per session in `pinning.jsonl`.
+- 6 (partial held-out runs) and 11 (held-out pinning, states sha256, concurrency on resume): resolved.
+- 8 (pilot first) and 9 (up-front checks for adapters, probe set, value version, anchor): resolved.
+- 12 (slicing while a loop writes) and 14 (`stop_model.sh` checks the cmdline first, still a kill by pid): resolved.
+- 7 (identity before skip or resume): partial. `start_mismatches` compares the search config by *path*, not the run
+  config digest. An accepted run whose search file changed in place (T corrected after run 3) is still skipped.
+  Fix: compare `run_config_sha256` with the digest of the planned run config (should).
+
+**New:**
+1. **Operational, before the launcher runs anything on the node:** stop the node-local supervisor, by its PID only, once
+   the anchors are accepted. `servers-free` sees only the flock and `loop.pid`. A supervisor that resumes "without a swap"
+   or restarts servers would then search, or kill, under the launcher. Run 5 swaps in the final value model.
+2. **Should: `arm_loop.sh` never starts servers.** It runs `init` then `loop`. The loop's `servers.check()` raises after
+   detaching, while the script has already printed success. Fix: add `grpo_loop.sh servers` before `loop`.
+   No problems found in the rest of `arm_loop.sh`:
+   - it refuses a second start through `servers-free`, which lists the arm's own `loop.pid`;
+   - it does not start a run whose `finished.json` exists, and reports the servers that are still up;
+   - `--status` is read-only apart from rewriting the identical configs;
+   - it never kills anything.
+3. **Anchors made by the node's tool:** `next` parses `checkpoint.json` strictly (`ProbeRunStart`) and `ledger_line`
+   parses `run.json` strictly. If the older or patched record is missing a field or has an extra one, the list stops with
+   a traceback. If it parses, the run is accepted only when name, adapter paths, problems, anchor mark, search config
+   path, probe set, 7,200 s and 84 all match. `probe_runs.py next <list>` is read-only, so dry-run it first.
+   Simplest: leave `runs_anchor.toml` out of the launcher. Run `token-budget` on the anchor directories (raw JSON), fill
+   in T, then launch `runs_calibration.toml` and `runs_reasoning.toml`. The value-free pilots wait for the calibration.
+4. **Merge order with `worktree-agent-ad4eaf34f0251a7ca`.** Several parts of this branch rely on what that branch
+   changes:
+   - `held_out_evaluate.py` imports `serve_checkpoint`, `remove_merges`, `remove_stale_merges` and `checkpoint_merges`.
+     Under `swap = "restart"` it still deletes the merge the restarted servers started from (its `finally`), so a later
+     restart or skip has no source.
+   - The launcher's start-up `grpo_loop.sh servers` serves base's v0 from init's merge. The skip-when-identical path
+     only saves restarts if that merge is byte-identical to the probe's CPU merge (verify).
+   - `run_state`/`ledger_line` read `run.json`, which gains defaulted fields and an `accepted` that now also requires no
+     dropped statements. This is compatible.
+
+   Until ad4 merges, every launcher run swaps in place, the node's suspected segfault trigger. Merge this branch first,
+   then ad4 with `held_out_evaluate.py` adapted (keep merges that are being served, pass `servers_directory`). Start no
+   swapping run (run 5, 7–9, step 2) before both are in.
+
+**Verdict: merge.** New 2 and the partial fix of 7 can follow as small fixes. New 1 and 4 decide when to start runs on
+the node.
