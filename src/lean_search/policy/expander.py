@@ -30,7 +30,7 @@ from lean_search.policy.prompts import (
     stop_sequences,
     truncated_before_answer,
 )
-from lean_search.policy.rotation import ServerRotation
+from lean_search.policy.rotation import RequestFailures, ServerRotation
 from lean_search.retrieval.provider import LemmaProvider, load_lemma_provider
 from lean_search.retrieval.statistics import LemmaStatistics
 from lean_search.search.expanders import Candidate, CandidateBatch, CandidateBatches, SearchContext
@@ -262,6 +262,7 @@ class PolicyExpander:
         max_model_length: int,
         forbidden_steps: Sequence[str] = (),
         lemma_provider: LemmaProvider | None = None,
+        request_failures: RequestFailures | None = None,
     ) -> None:
         self.config = config
         self.tokenizer = tokenizer
@@ -269,7 +270,7 @@ class PolicyExpander:
         self.forbidden_tokens = FORBIDDEN_TOKENS | frozenset(forbidden_steps)
         self.lemma_provider = lemma_provider
         self.statistics = PolicyStatistics(lemmas=lemma_provider.statistics if lemma_provider else None)
-        self.rotation = ServerRotation(clients)
+        self.rotation = ServerRotation(clients, request_failures=request_failures)
         self._first_request_started: float | None = None
 
     async def expand(self, node: Node, context: SearchContext) -> CandidateBatches:
@@ -432,7 +433,7 @@ async def served_max_model_length(server_url: str, model: str) -> int:
 
 @contextlib.asynccontextmanager
 async def open_policy_expander(
-    config: PolicyConfig, forbidden_steps: Sequence[str] = ()
+    config: PolicyConfig, forbidden_steps: Sequence[str] = (), request_failures: RequestFailures | None = None
 ) -> AsyncIterator[PolicyExpander]:
     tokenizer = load_tokenizer(config.tokenizer)
     max_model_length = min(
@@ -446,6 +447,8 @@ async def open_policy_expander(
             )
             for server_url in config.server_urls
         ]
-        expander = PolicyExpander(config, tokenizer, clients, max_model_length, forbidden_steps, lemma_provider)
+        expander = PolicyExpander(
+            config, tokenizer, clients, max_model_length, forbidden_steps, lemma_provider, request_failures
+        )
         stack.push_async_callback(expander.rotation.close)
         yield expander

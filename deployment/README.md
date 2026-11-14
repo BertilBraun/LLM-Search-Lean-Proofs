@@ -234,7 +234,20 @@ layout (the GPUs in parallel, a GPU's two servers in turn) at every publish and 
 place; the merges handed off in `/dev/shm` are started from as they are, and the persistent trainer's ~1 GiB CUDA
 context fits in the 10% of each GPU the servers' shares leave. Two servers segfaulted minutes after in-place swaps on
 the 2026-11-14 node (`results/followup_progress.md`); the follow-up study runs on the cold path. A start moves the
-previous log to `<name>.<UTC time>.log`; `CORE_DUMPS=1` makes a segfault leave a core file.
+previous log to `<name>.<UTC time>.log`; `CORE_DUMPS=1` makes a segfault leave a core file (up to the container's hard
+limit, relative patterns under `servers/cores/`). A failed start is tried twice more, each failed log kept as
+`<name>.failed-<attempt>.<time>.log`, before the loop or the probe tool gives up. A loop on the restart path starts
+without checking the servers (the training GPUs' are stopped by design, so a crash in training resumes by itself).
+
+Pid files are trusted only for a vLLM started with them (`deployment/server_pid.sh`: its command line names the
+server, and it started within 60 s of the file): `stop_model.sh` removes a stale one (a pid reused after a reboot)
+without signalling it, and stops a server whose API process died but whose engine lives on by its process group.
+`serve_model.sh` refuses a port that already answers. The tooling writes `<name>.swapped` before it sleeps or swaps a
+server in place, and a start removes it; the probe tool skips the swap only for a server without that mark, with a
+trusted pid file, awake, and (on vLLM 0.31.0 only; on another version never) a log without sleep, wake or reload
+lines. After every start or swap the probe tool holds each
+server to its merge's fingerprint (`fingerprint.json`: the top-5 next tokens of three fixed prompts, written from the
+first server started from the merge; 0.05 nats tolerance, to be measured on the node).
 
 Re-scoring a frontier after a new value version: all 14,879 open states of the 244 row-4 trees take 105 s on both
 GPUs' merged value instances (141 states/s, ~17k prompt tokens/s per GPU, compute-bound; the value prompts share no

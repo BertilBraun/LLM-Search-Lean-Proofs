@@ -957,6 +957,35 @@ async def test_a_restart_wakes_no_server_while_an_earlier_loops_job_runs(tmp_pat
     assert world.servers.served == []
 
 
+async def crashed_in_training_on_the_restart_path(tmp_path: Path) -> LoopWorld:
+    """A loop on the restart path whose training failed: its training GPUs' servers stopped and left down."""
+    world = loop_world(tmp_path, trainer=FakeTrainer(fail_phases={1}))
+    world.servers.restart_path = True
+    record_version_zero(world)
+    with pytest.raises(RuntimeError):
+        await run_until(world, world.loop(), phases=1)
+    return world
+
+
+async def test_on_the_restart_path_a_crash_in_training_leaves_the_released_servers_down(tmp_path: Path) -> None:
+    world = await crashed_in_training_on_the_restart_path(tmp_path)
+    assert world.servers.down == set(world.servers.released)
+
+
+async def test_on_the_restart_path_a_loop_that_crashed_in_training_resumes_by_itself(tmp_path: Path) -> None:
+    world = await crashed_in_training_on_the_restart_path(tmp_path)
+    world.trainer.fail_phases.clear()
+    await run_until(world, world.loop(), phases=1)
+    assert world.phases_done() == 1
+
+
+async def test_on_the_restart_path_the_resumed_phase_publishes_onto_started_servers(tmp_path: Path) -> None:
+    world = await crashed_in_training_on_the_restart_path(tmp_path)
+    world.trainer.fail_phases.clear()
+    await run_until(world, world.loop(), phases=1)
+    assert (world.servers.served[-1], world.servers.down) == (1, set())
+
+
 async def test_an_interrupted_phase_is_recorded_as_training(tmp_path: Path) -> None:
     world = loop_world(tmp_path, trainer=FakeTrainer(fail_phases={1}))
     record_version_zero(world)

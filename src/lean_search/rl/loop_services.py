@@ -5,6 +5,7 @@ first-hour check of a policy server's responses."""
 import asyncio
 import contextlib
 import dataclasses
+import datetime
 import json
 import os
 import shlex
@@ -47,6 +48,7 @@ from lean_search.policy.server_control import (
     release_gpu,
     restore_gpu,
 )
+from lean_search.policy.server_processes import mark_swapped
 from lean_search.rl.evaluation import (
     EvaluationKind,
     EvaluationPaths,
@@ -647,20 +649,44 @@ def serve_command(
     return weights_start_command(serving, server, publisher.weights(version, server))
 
 
-async def start_server(start: ServerStart) -> None:
-    """Stops what is left of the server, then starts it; serve_model.sh returns once it answers."""
+# A start that fails (one of the node's three segfaults was at a fresh start) is tried this many times more.
+START_RETRIES = 2
+
+
+async def run_command(command: str) -> int:
+    """`bash -c` in the repository; its exit status. A cancelled wait terminates the command (by its pid) and waits
+    for it: serve_model.sh writes its vLLM's pid file before it waits for /health, so stop_model.sh finds that."""
+    process = await asyncio.create_subprocess_exec("bash", "-c", command, cwd=REPOSITORY_DIRECTORY)
+    try:
+        return await process.wait()
+    finally:
+        if process.returncode is None:
+            process.terminate()
+            await process.wait()
+
+
+async def start_server(start: ServerStart, servers_directory: Path, log: Callable[[str], None]) -> None:
+    """Stops what is left of the server, then starts it (serve_model.sh returns once it answers). A failed start is
+    tried again up to START_RETRIES times, its log kept as <name>.failed-<attempt>.<UTC time>.log."""
     name = start.server.name
-    for command in (f"deployment/stop_model.sh {name}", start.command):
-        process = await asyncio.create_subprocess_exec("bash", "-c", command, cwd=REPOSITORY_DIRECTORY)
-        if await process.wait():
-            raise RuntimeError(f"Starting {name} failed ({command}); see $LEAN_SEARCH_RUNS/servers/{name}.log")
+    for attempt in range(1, START_RETRIES + 2):
+        if await run_command(f"deployment/stop_model.sh {name}"):
+            raise RuntimeError(f"Stopping {name} failed")
+        if not await run_command(start.command):
+            return
+        stamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%S.%fZ")
+        kept = servers_directory / f"{name}.failed-{attempt}.{stamp}.log"
+        with contextlib.suppress(FileNotFoundError):
+            os.replace(servers_directory / f"{name}.log", kept)
+        if attempt > START_RETRIES:
+            raise RuntimeError(f"Starting {name} failed {attempt} times ({start.command}); the last log: {kept}")
+        log(f"Starting {name} failed (attempt {attempt} of {START_RETRIES + 1}); its log kept as {kept}; again")
 
 
 async def stop_servers(servers: Sequence[ServerEndpoint]) -> None:
-    """By their process groups (serve_model.sh's pid files)."""
+    """By their process groups (serve_model.sh's pid files, trusted only for a vLLM started with them)."""
     command = "deployment/stop_model.sh " + " ".join(server.name for server in servers)
-    process = await asyncio.create_subprocess_exec("bash", "-c", command, cwd=REPOSITORY_DIRECTORY)
-    if await process.wait():
+    if await run_command(command):
         raise RuntimeError(f"Stopping the servers failed ({command})")
 
 
@@ -675,21 +701,30 @@ class ServedWeightsOn:
     weights: str
 
 
-async def put_weights(serving: ServingConfig, assignments: Sequence[ServedWeightsOn]) -> PhaseSeconds:
+async def put_weights(
+    serving: ServingConfig,
+    assignments: Sequence[ServedWeightsOn],
+    servers_directory: Path,
+    log: Callable[[str], None],
+) -> PhaseSeconds:
     """The weights onto the servers by `serving.swap`: swapped in place, or the servers (re)started from them; then
     every one must answer."""
     started = time.monotonic()
     match serving.swap:
         case SwapMethod.IN_PLACE:
             seconds = slowest(
-                await asyncio.gather(*(swap_in_place(assigned.server, assigned.weights) for assigned in assignments))
+                await asyncio.gather(
+                    *(swap_in_place(assigned.server, assigned.weights, servers_directory) for assigned in assignments)
+                )
             )
         case SwapMethod.RESTART:
             await start_servers(
                 [
                     ServerStart(assigned.server, weights_start_command(serving, assigned.server, assigned.weights))
                     for assigned in assignments
-                ]
+                ],
+                servers_directory,
+                log,
             )
             seconds = PhaseSeconds(0.0, time.monotonic() - started, 0.0)
     down = await unhealthy_servers([assigned.server for assigned in assignments])
@@ -698,14 +733,15 @@ async def put_weights(serving: ServingConfig, assignments: Sequence[ServedWeight
     return seconds
 
 
-async def swap_in_place(server: ServerEndpoint, weights: str) -> PhaseSeconds:
+async def swap_in_place(server: ServerEndpoint, weights: str, servers_directory: Path) -> PhaseSeconds:
+    mark_swapped(servers_directory, server.name)
     # An in-place reload needs ~1.2 GiB beyond the KV cache, more than a GPU shared by two servers keeps free.
     if not await is_sleeping(server.url):
         await release_gpu(server.url)
     return await restore_gpu(server.url, Path(weights))
 
 
-async def start_servers(starts: Sequence[ServerStart]) -> None:
+async def start_servers(starts: Sequence[ServerStart], servers_directory: Path, log: Callable[[str], None]) -> None:
     """The servers of one GPU one after another (each sizes itself by the memory the others left), the GPUs in
     parallel."""
     by_gpu: dict[int, list[ServerStart]] = {}
@@ -714,7 +750,7 @@ async def start_servers(starts: Sequence[ServerStart]) -> None:
 
     async def start_in_turn(group: Sequence[ServerStart]) -> None:
         for start in group:
-            await start_server(start)
+            await start_server(start, servers_directory, log)
 
     outcomes = await asyncio.gather(*(start_in_turn(group) for group in by_gpu.values()), return_exceptions=True)
     failures = [str(outcome) for outcome in outcomes if isinstance(outcome, BaseException)]
@@ -727,12 +763,25 @@ class VllmServers:
     version is swapped in; restart: those servers stop for training, and every server starts again from each version's
     merged weights (the merges handed off in host memory included)."""
 
-    def __init__(self, serving: ServingConfig, released: Sequence[ServerEndpoint], publisher: MergedPublisher) -> None:
+    def __init__(
+        self,
+        serving: ServingConfig,
+        released: Sequence[ServerEndpoint],
+        publisher: MergedPublisher,
+        servers_directory: Path,
+        log: Callable[[str], None],
+    ) -> None:
         self.serving = serving
         self.released = tuple(released)
         self.publisher = publisher
+        self.servers_directory = servers_directory
+        self.log = log
 
     async def check(self) -> None:
+        """In place every server must answer; on the restart path a server down is the training's or a crash's, and
+        the next `serve` starts it."""
+        if self.serving.swap == SwapMethod.RESTART:
+            return
         down = await self.unhealthy()
         if down:
             raise RuntimeError(f"Servers not answering: {down}; start them (grpo_loop.py start-servers).")
@@ -746,12 +795,16 @@ class VllmServers:
                 ServerStart(server, serve_command(self.serving, self.publisher, version, server))
                 for server in self.serving.servers
                 if server.name in names
-            ]
+            ],
+            self.servers_directory,
+            self.log,
         )
 
     async def release(self) -> PhaseSeconds:
         match self.serving.swap:
             case SwapMethod.IN_PLACE:
+                for server in self.released:
+                    mark_swapped(self.servers_directory, server.name)
                 return slowest(await asyncio.gather(*(release_gpu(server.url) for server in self.released)))
             case SwapMethod.RESTART:
                 started = time.monotonic()
@@ -762,10 +815,17 @@ class VllmServers:
         return await put_weights(
             self.serving,
             [ServedWeightsOn(server, self.publisher.weights(version, server)) for server in self.serving.servers],
+            self.servers_directory,
+            self.log,
         )
 
     async def serve_value(self, weights: str) -> None:
-        await put_weights(self.serving, [ServedWeightsOn(server, weights) for server in self.serving.value_servers])
+        await put_weights(
+            self.serving,
+            [ServedWeightsOn(server, weights) for server in self.serving.value_servers],
+            self.servers_directory,
+            self.log,
+        )
 
 
 class SubprocessEvaluations:

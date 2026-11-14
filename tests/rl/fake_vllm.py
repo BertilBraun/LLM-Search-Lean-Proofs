@@ -1,7 +1,9 @@
 """A stand-in for the vLLM server endpoints that `policy.server_control` and the policy client call (health, sleep,
 wake, weight reload, models, completions), on a local port: it records which weights each reload loaded, answers a
-completion with its prompt, and can fail: a 500 for the next requests or for given prompts, or die (stop listening,
-the request in flight unanswered) after a number of completions; `revive` starts it again on its port."""
+completion with its prompt (the top next tokens' log-probabilities shifted by `logprob_shift`: other weights), and
+can fail: a 500 for the next requests or for given prompts, a 400 for given prompts, a 503 for the next /health
+checks, 500s while asleep, or die (stop listening, the request in flight unanswered) after a number of completions.
+`revive` starts it again on its port as a fresh server would (awake, without pending failures)."""
 
 import json
 import threading
@@ -18,25 +20,33 @@ class FakeServerState:
     root: str = "/started/from"
     # The next completions answered with a 500.
     failures_left: int = 0
-    # Prompts always answered with a 500.
+    # Prompts always answered with a 500, and with a 400 (a request the server refuses).
     failing_prompts: set[str] = field(default_factory=set)
+    refused_prompts: set[str] = field(default_factory=set)
+    # The next /health checks answered with a 503.
+    health_failures_left: int = 0
     # After this many more completions the server dies; 0: never.
     completions_until_death: int = 0
     completions: int = 0
     # Dead: no request is answered, on kept-alive connections either.
     dead: bool = False
+    # Added to every top log-probability: a server holding other weights.
+    logprob_shift: float = 0.0
 
 
-def completion(prompt: str) -> dict:
+def choice(index: int, prompt: str, shift: float) -> dict:
+    top = {"token_id:1": -0.1 + shift, "token_id:2": -2.5 + shift, "token_id:3": -3.0, "token_id:4": -4.0}
     return {
-        "choices": [
-            {
-                "index": 0,
-                "text": f"answer to {prompt}",
-                "logprobs": {"tokens": ["token_id:1"], "token_logprobs": [-0.5]},
-                "finish_reason": "stop",
-            }
-        ],
+        "index": index,
+        "text": f"answer to {prompt}",
+        "logprobs": {"tokens": ["token_id:1"], "token_logprobs": [-0.5], "top_logprobs": [top]},
+        "finish_reason": "stop",
+    }
+
+
+def completion(prompts: list[str], shift: float) -> dict:
+    return {
+        "choices": [choice(index, prompt, shift) for index, prompt in enumerate(prompts)],
         "usage": {"prompt_tokens": 1, "completion_tokens": 1},
     }
 
@@ -45,6 +55,7 @@ class FakeVllmServer:
     def __init__(self) -> None:
         self.state = FakeServerState()
         self.deaths = 0
+        self.listening = False
         state = self.state
         fake = self
 
@@ -69,6 +80,9 @@ class FakeVllmServer:
                 if not self.answers():
                     return
                 match urlparse(self.path).path:
+                    case "/health" if state.health_failures_left:
+                        state.health_failures_left -= 1
+                        self.reply({}, 503)
                     case "/health":
                         self.reply({})
                     case "/is_sleeping":
@@ -84,7 +98,8 @@ class FakeVllmServer:
                 body = json.loads(self.rfile.read(length)) if length else {}
                 match request.path:
                     case "/v1/completions":
-                        self.complete(body["prompt"])
+                        prompt = body["prompt"]
+                        self.complete(prompt if isinstance(prompt, list) else [prompt])
                         return
                     case "/sleep":
                         state.sleeping = True
@@ -97,7 +112,7 @@ class FakeVllmServer:
                         return
                 self.reply({})
 
-            def complete(self, prompt: str) -> None:
+            def complete(self, prompts: list[str]) -> None:
                 state.completions += 1
                 if state.completions_until_death and state.completions >= state.completions_until_death:
                     # A segfaulting engine: the request in flight is never answered and the port closes.
@@ -106,11 +121,14 @@ class FakeVllmServer:
                     self.close_connection = True
                     threading.Thread(target=fake.die).start()
                     return
-                if state.failures_left or prompt in state.failing_prompts:
+                if set(prompts) & state.refused_prompts:
+                    self.reply({"error": "This model's maximum context length is 8192 tokens"}, 400)
+                    return
+                if state.failures_left or state.sleeping or set(prompts) & state.failing_prompts:
                     state.failures_left = max(0, state.failures_left - 1)
                     self.reply({"error": "EngineCore encountered an issue"}, 500)
                     return
-                self.reply(completion(prompt))
+                self.reply(completion(prompts, state.logprob_shift))
 
         self.handler = Handler
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -118,6 +136,7 @@ class FakeVllmServer:
         self.serve()
 
     def serve(self) -> None:
+        self.listening = True
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
 
@@ -131,12 +150,19 @@ class FakeVllmServer:
         self.close()
 
     def revive(self, completions_until_death: int = 0) -> None:
+        if self.listening:
+            self.close()
         self.state.dead = False
+        self.state.sleeping = False
+        self.state.failures_left = 0
+        self.state.health_failures_left = 0
         self.state.completions = 0
         self.state.completions_until_death = completions_until_death
         self.server = ThreadingHTTPServer(("127.0.0.1", self.port), self.handler)
         self.serve()
 
     def close(self) -> None:
-        self.server.shutdown()
-        self.server.server_close()
+        if self.listening:
+            self.listening = False
+            self.server.shutdown()
+            self.server.server_close()

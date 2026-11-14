@@ -23,16 +23,22 @@ and refuses while a loop under $LEAN_SEARCH_RUNS runs (its loop.pid, or a job it
 loop.pid counts as not running and is reported). Every session merges the adapters on the CPU once per content (their
 weight and config files; under $LEAN_SEARCH_CHECKPOINTS/<output>/weights/) and puts them on the servers by the loop
 config's serving.swap: swapped in place as the loop does at a publish, or the servers restarted from the merges. A
-server that started from byte-identical weights and never swapped since (its serve_model.sh log and pid file) is left
-as it is. Then each server answers one check request. So a resumed run never searches with what the servers held
-before; the merges are deleted when the run ends, fails or is interrupted (unless --keep-merge), and those a killed run
-left are deleted at the next start. A loop started later serves its own current version again when it starts.
+server that provably started from byte-identical weights and never slept or swapped since (its trusted pid file, no
+<name>.swapped mark, and on vLLM 0.31 its log; probe_evaluation.holds_start_weights) is left as it is. Then each server
+answers check requests, and the fixed prompts as its merge's fingerprint says (taken from the first server started
+from the merge). So a resumed run never searches with what the servers held before; the merges are deleted when the
+run ends, fails or is interrupted (unless --keep-merge or a server runs from one), and those a killed run left are
+deleted at the next start. SIGTERM cancels the run so that this clean-up runs (exit status 143). A loop started later
+serves its own current version again when it starts.
 
-A server failure does not end the run: a statement whose search fails on a server is searched again from scratch (at
-most [server_failure_retries] times; failures.jsonl), after the servers were checked with no new search starting; a
-dead server is restarted from the merges by serve_model.sh, verified and recorded as a new session (at most
-[max_server_restarts] times a run, then the run stops and a rerun resumes it). A statement that still fails is left
-without a result, never recorded as unsolved, and the run is not accepted.
+A server failure does not end the run: a statement whose search fails on a server (no answer or a 5xx; any other error
+ends the run with its traceback) is searched again from scratch, at most [server_failure_retries] times over all of
+the run's processes (failures.jsonl), after the servers were checked with no new search starting. A server is dead
+after 5 server errors in a row on its requests, or 3 failed /health checks 10 s apart (or asleep); a dead one is
+restarted from the merges by serve_model.sh, verified and recorded as a new session, at most [max_server_restarts]
+times over all of the run's processes (sessions.jsonl); then the run stops with exit status 4, which a supervisor must
+not resume before someone looked at the servers. A statement that still fails is left without a result, counted as
+dropped (never as unsolved), and the run is not accepted.
 
 The run goes to $LEAN_SEARCH_RUNS/<output>/probe_<name>/: results.jsonl (one per statement), summary.json, trees and
 config.toml as a loop's probe run; checkpoint.json (the checkpoint, the run config's digest, concurrency, wall cap and
@@ -53,11 +59,13 @@ import datetime
 import functools
 import json
 import os
+import signal
 from pathlib import Path
 
 from lean_search.expert_iteration.curriculum import file_sha256
 from lean_search.lean.repl import PROJECT_DIRECTORY
 from lean_search.policy.adapters import merge_adapter
+from lean_search.policy.rotation import RequestFailures
 from lean_search.policy.serving_lock import ServingBusyError, serving_lock, serving_lock_path
 from lean_search.rl.evaluation import (
     EvaluationKind,
@@ -69,7 +77,9 @@ from lean_search.rl.evaluation import (
 )
 from lean_search.rl.fixed_targets import first_problems_by_stratum, probe_problems
 from lean_search.rl.loop_config import GrpoLoopConfig, load_loop_config
+from lean_search.rl.loop_services import start_servers
 from lean_search.rl.probe_evaluation import (
+    DeathRule,
     ProbeCheckpoint,
     ProbeEvaluationConfig,
     ProbeRunStart,
@@ -85,6 +95,7 @@ from lean_search.rl.probe_evaluation import (
     dropped_statements,
     keep_merges,
     mark_spoiled,
+    merges_in_use,
     probe_run_config,
     read_sessions,
     remove_merges,
@@ -113,6 +124,9 @@ CHECKPOINTS_DIRECTORY = Path(os.environ["LEAN_SEARCH_CHECKPOINTS"])
 SERVERS_DIRECTORY = RUNS_DIRECTORY / "servers"
 FAILURES_FILE = "failures.jsonl"
 REJECTED_EXIT_STATUS = 3
+# The servers kept dying through the run's restarts: a supervisor must not resume it before someone looked.
+RECOVERY_EXIT_STATUS = 4
+TERMINATED_EXIT_STATUS = 143
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -228,15 +242,15 @@ async def evaluate(arguments: argparse.Namespace) -> int:
     try:
         with serving_lock(serving_lock_path(CHECKPOINTS_DIRECTORY)):
             refuse_while_loops_run()
-            for stale in remove_stale_merges(weights_root):
+            for stale in remove_stale_merges(weights_root, merges_in_use(SERVERS_DIRECTORY, loop.serving)):
                 log(f"Removed {stale}, a merge a dead run left")
             discarded = discard_spoiled_results(directory, paths.results, paths.trees)
             if discarded:
                 log(f"Discarded {discarded} results of a session a loop spoiled; they are searched again")
             try:
-                verify = functools.partial(verify_served, run_config)
+                verify = functools.partial(verify_served, run_config, log)
                 served = await serve_checkpoint(
-                    loop.serving, chosen, weights_root, merge_adapter, SERVERS_DIRECTORY, verify
+                    loop.serving, chosen, weights_root, merge_adapter, SERVERS_DIRECTORY, verify, log
                 )
                 log(f"Weights put on {list(served.swapped)} ({served.swap}); already held by {list(served.skipped)}")
                 directory.mkdir(parents=True, exist_ok=True)
@@ -244,9 +258,26 @@ async def evaluate(arguments: argparse.Namespace) -> int:
                 session = start_session(
                     directory, chosen, paths.results, SessionServing(served.swap, served.swapped, served.skipped)
                 )
-                servers = ProbeServers(loop.serving, served, chosen, directory, paths.results, verify)
+                request_failures = RequestFailures()
+                servers = ProbeServers(
+                    loop.serving,
+                    served,
+                    chosen,
+                    directory,
+                    paths.results,
+                    verify,
+                    functools.partial(start_servers, servers_directory=SERVERS_DIRECTORY, log=log),
+                    request_failures,
+                    DeathRule(),
+                )
+                restarts_before = sum(bool(session.serving.restarted) for session in read_sessions(directory))
                 tolerance = FailureTolerance(
-                    servers, config.server_failure_retries, config.max_server_restarts, directory / FAILURES_FILE
+                    servers,
+                    config.server_failure_retries,
+                    config.max_server_restarts,
+                    directory / FAILURES_FILE,
+                    restarts_before,
+                    request_failures,
                 )
                 log(f"{len(problems)} problems of {config.probe_set} into {directory}")
                 summary = await run_problem_set_evaluation(
@@ -270,8 +301,12 @@ async def evaluate(arguments: argparse.Namespace) -> int:
                 if arguments.keep_merge:
                     keep_merges([merge for merge in merges if merge.is_dir()])
                 else:
-                    remove_merges(merges)
-    except (ServingBusyError, ServersDownError, ServersUnsoundError, ServerRecoveryError) as error:
+                    for kept in remove_merges(merges, merges_in_use(SERVERS_DIRECTORY, loop.serving)):
+                        log(f"Kept {kept}: a server runs from it (removed by the next run once none does)")
+    except ServerRecoveryError as error:
+        log(str(error))
+        return RECOVERY_EXIT_STATUS
+    except (ServingBusyError, ServersDownError, ServersUnsoundError) as error:
         raise SystemExit(str(error)) from error
     results = read_results(paths.results)
     by_stratum = stops_by_stratum(problems, results)
@@ -297,8 +332,20 @@ async def evaluate(arguments: argparse.Namespace) -> int:
     return 0 if record.accepted else REJECTED_EXIT_STATUS
 
 
+async def evaluate_until_terminated(arguments: argparse.Namespace) -> int:
+    """SIGTERM cancels the run, so that its clean-up (the merges, a server start in progress) runs."""
+    task = asyncio.current_task()
+    assert task is not None
+    asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, task.cancel)
+    return await evaluate(arguments)
+
+
 def main() -> None:
-    raise SystemExit(asyncio.run(evaluate(parse_arguments())))
+    try:
+        status = asyncio.run(evaluate_until_terminated(parse_arguments()))
+    except asyncio.CancelledError:
+        status = TERMINATED_EXIT_STATUS
+    raise SystemExit(status)
 
 
 if __name__ == "__main__":

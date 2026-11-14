@@ -11,11 +11,14 @@
 # Refuses without a run list, without BACKGROUND_CPUS (every evaluation runs pinned through background.sh; the pinned
 # set must lie below the cgroup quota) or PROBE_CONCURRENCY (the throughput test's one probe concurrency, which every
 # run's evaluation config must hold), on a placeholder or a missing adapter or probe set, while the serving lock is
-# held or a loop runs, and while the same lists already run. Starts the servers that do not answer
+# held, a loop runs or a process of RESPECTED_PID_FILES (a colon-separated list of pid files, e.g. a node-local
+# supervisor's) lives, and while the same lists already run. Starts the servers that do not answer
 # (deployment/grpo_loop.sh servers with the runs' loop config, initialized once with grpo_loop.sh init). Each run
 # records its CPUs and the quota in its pinning.jsonl. A finished run is skipped and an interrupted one resumed, both
 # only when its record matches the list, so rerun the same command after an interruption; a rejected run (exit
-# status 3: too many wall-clock stops) stops the lists.
+# status 3: too many wall-clock stops) or one whose servers kept dying (exit status 4) stops the lists. Runs that put
+# other weights on the servers than they started from need the swap skip, the restart path and the failure tolerance
+# of probe_evaluate.py (serving resilience, 2026-11-14): never start one from an older checkout.
 
 set -euo pipefail
 
@@ -28,7 +31,7 @@ if [[ "${1:-}" == --foreground ]]; then
     foreground=1
     shift
 fi
-[[ $# -ge 1 ]] || { sed -n '2,18p' "$0" >&2; exit 2; }
+[[ $# -ge 1 ]] || { sed -n '2,21p' "$0" >&2; exit 2; }
 [[ -n "${BACKGROUND_CPUS:-}" ]] || { echo "Set BACKGROUND_CPUS: every evaluation runs pinned (DESIGN.md, Load)." >&2; exit 2; }
 [[ -n "${PROBE_CONCURRENCY:-}" ]] || { echo "Set PROBE_CONCURRENCY to the throughput test's probe concurrency." >&2; exit 2; }
 
@@ -84,6 +87,11 @@ while true; do
     python experiments/probe_runs.py record "$@"
     case "${status}" in
         0) ;;
+        4)
+            echo "The servers kept dying through the run's restarts (exit 4): look at the servers' logs and the node" \
+                "before rerunning this command; the restarts count on in the run." >&2
+            exit 4
+            ;;
         3)
             echo "The run was rejected (too many wall-clock stops): repeat it under another name with the wall cap" \
                 "doubled, and every run it is compared with at that cap. The lists stop here." >&2

@@ -1,22 +1,29 @@
-"""How a probe run's weights reach the servers: skipped where a server already holds byte-identical weights it started
-from (serve_model.sh's log and pid file), and how run.json records the run's sessions, restarts and dropped
-statements."""
+"""How a probe run's weights reach the servers: skipped only where a server provably holds byte-identical weights it
+started from (its trusted pid file, no swap mark, its log on the checked vLLM version, awake), every server held to its
+merge's fingerprint, and how run.json records the run's sessions, restarts and dropped statements."""
 
 import asyncio
+import contextlib
+import dataclasses
 import json
 import os
-import shutil
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 from fake_vllm import FakeVllmServer
+from server_process_fakes import age_file, fake_server_process
 
 from lean_search.expert_iteration.loop_config import ServerEndpoint, ServingConfig, SwapMethod
+from lean_search.policy.rotation import RequestFailures
+from lean_search.policy.server_processes import mark_swapped, server_process
 from lean_search.rl.evaluation import EvaluationKind, EvaluationSummary, FailureOutcome, SearchFailure
-from lean_search.rl.loop_services import ServerStart
+from lean_search.rl.loop_services import ServedWeightsOn, ServerStart
 from lean_search.rl.probe_evaluation import (
+    FINGERPRINT_FILE,
+    SWAP_MARKERS_VLLM,
+    DeathRule,
     ProbeCheckpoint,
     ProbeRunStart,
     ProbeServers,
@@ -25,12 +32,19 @@ from lean_search.rl.probe_evaluation import (
     RunEnvironment,
     ServedWeights,
     ServerRestart,
+    ServersUnsoundError,
     SessionServing,
+    TokenLogProbability,
+    check_fingerprints,
+    fingerprints_agree,
     holds_start_weights,
+    merges_in_use,
+    read_fingerprint,
     run_record,
     same_served_weights,
     serve_checkpoint,
 )
+from lean_search.search import load_run_config
 from lean_search.search.records import from_json_object
 
 CHECKPOINT = ProbeCheckpoint("A", 2, "/policy", "p" * 64, "/value", "v" * 64, 0, 2, 1)
@@ -39,33 +53,71 @@ ENVIRONMENT = RunEnvironment("node", "leanprover/lean4:v4.9.0", "0.31.0", "2.13.
 FRESH_LOG = "(APIServer pid={pid}) INFO 11-14 14:43:39 [api_utils.py:286] non-default args: {{}}\n"
 WAKE_LINE = "(APIServer pid={pid}) INFO 11-14 14:47:39 [api_router.py:42] wake up the engine with tags: ['weights']\n"
 RELOAD_LINE = "(EngineCore pid=7) INFO 11-14 14:47:39 [gpu_model_runner.py:5543] Reloading weights inplace...\n"
-
-
-def server_files(directory: Path, name: str, log: str, process_id: int) -> None:
-    directory.mkdir(parents=True, exist_ok=True)
-    (directory / f"{name}.pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
-    (directory / f"{name}.log").write_text(log.format(pid=process_id), encoding="utf-8")
+SLEEP_LINE = "(EngineCore pid=7) INFO 11-14 14:47:39 [gpu_worker.py:303] Sleep mode freed 5.36 GiB memory\n"
+REPOSITORY_DIRECTORY = Path(__file__).resolve().parents[2]
 
 
 @pytest.mark.parametrize(
-    ("log", "process_id", "holds"),
+    ("log", "holds"),
     [
-        (FRESH_LOG, os.getpid(), True),
-        (FRESH_LOG + WAKE_LINE, os.getpid(), False),
-        (FRESH_LOG + RELOAD_LINE, os.getpid(), False),
-        (FRESH_LOG, os.getpid() + 100000, False),
+        (FRESH_LOG, True),
+        (FRESH_LOG + WAKE_LINE, False),
+        (FRESH_LOG + RELOAD_LINE, False),
+        (FRESH_LOG + SLEEP_LINE, False),
     ],
-    ids=["fresh", "woken", "reloaded", "another_process"],
+    ids=["fresh", "woken", "reloaded", "slept"],
 )
-def test_a_server_holds_its_start_weights_only_without_a_wake_or_reload_since(
-    tmp_path: Path, log: str, process_id: int, holds: bool
+def test_a_server_holds_its_start_weights_only_without_a_sleep_wake_or_reload_in_its_log(
+    tmp_path: Path, log: str, holds: bool
 ) -> None:
-    server_files(tmp_path, "policy-gpu0", log, process_id)
-    assert holds_start_weights(tmp_path, "policy-gpu0") == holds
+    with fake_server_process(tmp_path / "servers", "policy-gpu0", tmp_path / "merge", log):
+        assert holds_start_weights(tmp_path / "servers", "policy-gpu0", SWAP_MARKERS_VLLM) == holds
+
+
+def test_a_server_the_tooling_marked_as_swapped_holds_nothing_known(tmp_path: Path) -> None:
+    servers = tmp_path / "servers"
+    with fake_server_process(servers, "policy-gpu0", tmp_path / "merge", FRESH_LOG):
+        mark_swapped(servers, "policy-gpu0")
+        assert not holds_start_weights(servers, "policy-gpu0", SWAP_MARKERS_VLLM)
+
+
+def test_on_another_vllm_version_no_server_holds_anything_known(tmp_path: Path) -> None:
+    with fake_server_process(tmp_path / "servers", "policy-gpu0", tmp_path / "merge", FRESH_LOG):
+        assert not holds_start_weights(tmp_path / "servers", "policy-gpu0", "0.32.0")
+
+
+def test_a_log_of_another_process_holds_nothing_known(tmp_path: Path) -> None:
+    servers = tmp_path / "servers"
+    with fake_server_process(servers, "policy-gpu0", tmp_path / "merge", FRESH_LOG):
+        (servers / "policy-gpu0.log").write_text(FRESH_LOG.format(pid=1), encoding="utf-8")
+        assert not holds_start_weights(servers, "policy-gpu0", SWAP_MARKERS_VLLM)
 
 
 def test_a_server_without_a_pid_file_holds_nothing_known(tmp_path: Path) -> None:
-    assert not holds_start_weights(tmp_path, "policy-gpu0")
+    assert not holds_start_weights(tmp_path, "policy-gpu0", SWAP_MARKERS_VLLM)
+
+
+def test_a_pid_file_naming_another_program_is_not_trusted(tmp_path: Path) -> None:
+    (tmp_path / "policy-gpu0.pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
+    assert server_process(tmp_path, "policy-gpu0") is None
+
+
+def test_a_pid_file_written_long_before_its_process_started_is_not_trusted(tmp_path: Path) -> None:
+    with fake_server_process(tmp_path, "policy-gpu0", tmp_path / "merge"):
+        age_file(tmp_path / "policy-gpu0.pid", 3600)
+        assert server_process(tmp_path, "policy-gpu0") is None
+
+
+def test_a_pid_file_of_another_servers_vllm_is_not_trusted(tmp_path: Path) -> None:
+    with fake_server_process(tmp_path, "value-gpu0", tmp_path / "merge"):
+        os.replace(tmp_path / "value-gpu0.pid", tmp_path / "policy-gpu0.pid")
+        assert server_process(tmp_path, "policy-gpu0") is None
+
+
+def test_a_trusted_servers_start_weights_are_in_use(tmp_path: Path) -> None:
+    serving = ServingConfig("policy-base", "value-base", (ServerEndpoint("policy-gpu0", 0, "http://x/v1"),), ())
+    with fake_server_process(tmp_path, "policy-gpu0", tmp_path / "merge"):
+        assert merges_in_use(tmp_path, serving) == {(tmp_path / "merge").resolve()}
 
 
 def weights(directory: Path, content: bytes) -> Path:
@@ -91,19 +143,21 @@ def test_weights_missing_a_file_are_not_the_same(tmp_path: Path) -> None:
 class SkipHistory:
     served: ServedWeights
     reloads: tuple[tuple[str, ...], ...]
+    fresh: frozenset[str]
 
 
 @pytest.fixture(scope="module")
 def skip_history(tmp_path_factory: pytest.TempPathFactory) -> SkipHistory:
-    """policy-gpu0 started from byte-identical weights and never swapped, policy-gpu1 woke since its start, value-gpu0
-    started from other weights."""
+    """policy-gpu0 started from byte-identical weights and never swapped, policy-gpu1 woke since its start, policy-gpu2
+    started from them but is asleep, value-gpu0 started from other weights."""
     root = tmp_path_factory.mktemp("skip")
-    fakes = [FakeVllmServer(), FakeVllmServer(), FakeVllmServer()]
+    fakes = [FakeVllmServer() for _ in range(4)]
+    names = ("policy-gpu0", "policy-gpu1", "policy-gpu2", "value-gpu0")
     serving = ServingConfig(
         "policy-base",
         "value-base",
-        (ServerEndpoint("policy-gpu0", 0, fakes[0].url), ServerEndpoint("policy-gpu1", 1, fakes[1].url)),
-        (ServerEndpoint("value-gpu0", 0, fakes[2].url),),
+        tuple(ServerEndpoint(name, index, fakes[index].url) for index, name in enumerate(names[:3])),
+        (ServerEndpoint("value-gpu0", 0, fakes[3].url),),
     )
 
     def merge(base_model: str, adapter: Path, output: Path) -> None:
@@ -116,37 +170,116 @@ def skip_history(tmp_path_factory: pytest.TempPathFactory) -> SkipHistory:
     other = root / "other"
     other.mkdir()
     (other / "model.safetensors").write_text("value-base merged long ago", encoding="utf-8")
-    for fake, directory in zip(fakes, (started_from, started_from, other), strict=True):
+    for fake, directory in zip(fakes, (started_from, started_from, started_from, other), strict=True):
         fake.state.root = str(directory)
+    fakes[2].state.sleeping = True
     servers = root / "servers"
-    server_files(servers, "policy-gpu0", FRESH_LOG, os.getpid())
-    server_files(servers, "policy-gpu1", FRESH_LOG + WAKE_LINE, os.getpid())
-    server_files(servers, "value-gpu0", FRESH_LOG, os.getpid())
-    served = asyncio.run(serve_checkpoint(serving, CHECKPOINT, root / "weights", merge, servers))
+    fresh: list[frozenset[str]] = []
+
+    async def record_fresh(assignments: Sequence[ServedWeightsOn], started: frozenset[str]) -> None:
+        fresh.append(started)
+
+    logs = (FRESH_LOG, FRESH_LOG + WAKE_LINE, FRESH_LOG, FRESH_LOG)
+    with contextlib.ExitStack() as stack:
+        for name, log, directory in zip(names, logs, (started_from, started_from, started_from, other), strict=True):
+            stack.enter_context(fake_server_process(servers, name, directory, log))
+        served = asyncio.run(
+            serve_checkpoint(serving, CHECKPOINT, root / "weights", merge, servers, record_fresh, print)
+        )
     reloads = tuple(tuple(fake.state.reloads) for fake in fakes)
     for fake in fakes:
         fake.close()
-    shutil.rmtree(root)
-    return SkipHistory(served, reloads)
+    return SkipHistory(served, reloads, fresh[0])
 
 
 def test_a_server_holding_identical_start_weights_is_not_swapped(skip_history: SkipHistory) -> None:
     assert skip_history.reloads[0] == ()
 
 
-def test_a_server_that_swapped_since_its_start_is_swapped(skip_history: SkipHistory) -> None:
+def test_a_server_that_woke_since_its_start_is_swapped(skip_history: SkipHistory) -> None:
     assert skip_history.reloads[1] == (str(skip_history.served.policy),)
 
 
+def test_a_sleeping_server_is_swapped(skip_history: SkipHistory) -> None:
+    assert skip_history.reloads[2] == (str(skip_history.served.policy),)
+
+
 def test_a_server_holding_other_weights_is_swapped(skip_history: SkipHistory) -> None:
-    assert skip_history.reloads[2] == (str(skip_history.served.value),)
+    assert skip_history.reloads[3] == (str(skip_history.served.value),)
 
 
 def test_the_skipped_and_swapped_servers_are_named(skip_history: SkipHistory) -> None:
     assert (skip_history.served.skipped, skip_history.served.swapped) == (
         ("policy-gpu0",),
-        ("policy-gpu1", "value-gpu0"),
+        ("policy-gpu1", "policy-gpu2", "value-gpu0"),
     )
+
+
+def test_a_skipped_server_may_give_its_weights_their_fingerprint(skip_history: SkipHistory) -> None:
+    assert skip_history.fresh == frozenset({"policy-gpu0"})
+
+
+def fingerprint(shift: float = 0.0, first: str = "token_id:1") -> tuple[tuple[TokenLogProbability, ...], ...]:
+    tokens = (first, "token_id:2", "token_id:3")
+    return ((TokenLogProbability(tokens[0], -0.1 + shift), *(TokenLogProbability(t, -3.0) for t in tokens[1:])),)
+
+
+@pytest.mark.parametrize(
+    ("observed", "agree"),
+    [(fingerprint(0.01), True), (fingerprint(0.2), False), (fingerprint(first="token_id:9"), False)],
+    ids=["within_tolerance", "shifted", "another_top_token"],
+)
+def test_fingerprints_agree_only_on_the_top_token_and_within_the_tolerance(
+    observed: tuple[tuple[TokenLogProbability, ...], ...], agree: bool
+) -> None:
+    assert fingerprints_agree(fingerprint(), observed) == agree
+
+
+@dataclass(frozen=True)
+class FingerprintCheck:
+    reference_written: bool
+    error: str
+
+
+async def check_two_servers(directory: Path, shift: float, fresh: frozenset[str]) -> FingerprintCheck:
+    fakes = [FakeVllmServer(), FakeVllmServer()]
+    fakes[1].state.logprob_shift = shift
+    template = load_run_config(REPOSITORY_DIRECTORY / "experiments/configs/grpo/search/visible_student_v2.toml")
+    urls = tuple(fake.url for fake in fakes)
+    run_config = dataclasses.replace(template, policy=dataclasses.replace(template.policy, server_urls=urls))
+    merge = directory / "merge"
+    merge.mkdir()
+    assignments = [
+        ServedWeightsOn(ServerEndpoint(f"policy-gpu{index}", index, fake.url), str(merge))
+        for index, fake in enumerate(fakes)
+    ]
+    error = ""
+    try:
+        await check_fingerprints(run_config, assignments, fresh, SWAP_MARKERS_VLLM, print)
+    except ServersUnsoundError as unsound:
+        error = str(unsound)
+    for fake in fakes:
+        fake.close()
+    return FingerprintCheck((merge / FINGERPRINT_FILE).exists(), error)
+
+
+def test_the_first_server_started_from_a_merge_writes_its_fingerprint(tmp_path: Path) -> None:
+    assert asyncio.run(check_two_servers(tmp_path, 0.0, frozenset({"policy-gpu0"}))).reference_written
+
+
+def test_a_server_answering_unlike_its_merges_fingerprint_is_unsound(tmp_path: Path) -> None:
+    assert "policy-gpu1" in asyncio.run(check_two_servers(tmp_path, 0.5, frozenset({"policy-gpu0"}))).error
+
+
+def test_servers_swapped_in_place_are_held_to_each_other_without_a_fingerprint(tmp_path: Path) -> None:
+    check = asyncio.run(check_two_servers(tmp_path, 0.5, frozenset()))
+    assert (check.reference_written, "policy-gpu1" in check.error) == (False, True)
+
+
+def test_a_written_fingerprint_reads_back(tmp_path: Path) -> None:
+    asyncio.run(check_two_servers(tmp_path, 0.0, frozenset({"policy-gpu0"})))
+    reference = read_fingerprint(tmp_path / "merge")
+    assert reference is not None and reference.server == "policy-gpu0"
 
 
 def summary(problems: int, stops: int) -> EvaluationSummary:
@@ -188,14 +321,20 @@ def test_a_run_record_lists_the_server_restarts_with_their_times() -> None:
 
 
 @pytest.mark.parametrize(
-    ("swapped", "skipped"), [((), ("policy-gpu0", "value-gpu0")), (("policy-gpu0",), ("value-gpu0",))]
+    ("swapped", "skipped", "restarted"),
+    [
+        ((), ("policy-gpu0", "value-gpu0"), ()),
+        (("policy-gpu0",), ("value-gpu0",), ()),
+        ((), ("policy-gpu0", "value-gpu0"), ("value-gpu0",)),
+    ],
+    ids=["all_skipped", "one_swapped", "one_restarted"],
 )
 def test_a_run_skipped_the_swap_only_when_no_session_put_weights_on_a_server(
-    swapped: tuple[str, ...], skipped: tuple[str, ...]
+    swapped: tuple[str, ...], skipped: tuple[str, ...], restarted: tuple[str, ...]
 ) -> None:
-    sessions = [session(SessionServing(SwapMethod.IN_PLACE, swapped, skipped))]
+    sessions = [session(SessionServing(SwapMethod.IN_PLACE, swapped, skipped, restarted))]
     record = run_record(START, ENVIRONMENT, summary(2000, 0), (), 0.01, sessions)
-    assert record.swap_skipped == (not swapped)
+    assert record.swap_skipped == (not swapped and not restarted)
 
 
 def test_a_session_written_before_the_serving_record_reads_back() -> None:
@@ -206,31 +345,54 @@ def test_a_session_written_before_the_serving_record_reads_back() -> None:
     assert from_json_object(ProbeSession, json.loads(line)).serving == SessionServing()
 
 
-async def restart_commands(directory: Path) -> list[str]:
+@dataclass(frozen=True)
+class Restart:
+    commands: list[str]
+    ports: tuple[int, int]
+
+
+async def restart_from_merges(directory: Path) -> Restart:
+    fakes = [FakeVllmServer(), FakeVllmServer()]
     serving = ServingConfig(
         "policy-base",
         "value-base",
-        (ServerEndpoint("policy-gpu0", 0, "http://127.0.0.1:8100/v1", memory_share=0.62),),
-        (ServerEndpoint("value-gpu0", 0, "http://127.0.0.1:8200/v1", memory_share=0.28),),
+        (ServerEndpoint("policy-gpu0", 0, fakes[0].url, memory_share=0.62),),
+        (ServerEndpoint("value-gpu0", 0, fakes[1].url, memory_share=0.28),),
     )
     started: list[ServerStart] = []
 
     async def start(starts: Sequence[ServerStart]) -> None:
         started.extend(starts)
+        fakes[0].state.root, fakes[1].state.root = "/merges/policy", "/merges/value"
 
-    async def verify(servers: Sequence[ServerEndpoint]) -> None:
+    async def verify(assignments: Sequence[ServedWeightsOn], fresh: frozenset[str]) -> None:
         return
 
     served = ServedWeights(Path("/merges/policy"), Path("/merges/value"), SwapMethod.RESTART)
-    servers = ProbeServers(serving, served, CHECKPOINT, directory, directory / "results.jsonl", verify, start)
+    servers = ProbeServers(
+        serving,
+        served,
+        CHECKPOINT,
+        directory,
+        directory / "results.jsonl",
+        verify,
+        start,
+        RequestFailures(),
+        DeathRule(),
+    )
     await servers.restart(["policy-gpu0", "value-gpu0"])
-    return [start.command for start in started]
+    for fake in fakes:
+        fake.close()
+    return Restart([start.command for start in started], (fakes[0].port, fakes[1].port))
 
 
 def test_a_dead_server_is_started_again_from_the_runs_merges(tmp_path: Path) -> None:
-    assert asyncio.run(restart_commands(tmp_path)) == [
-        "GPU_MEMORY_UTILIZATION=0.62 SLEEP_MODE=1 deployment/serve_model.sh policy-gpu0 /merges/policy 0 8100 "
-        "--served-model-name policy-merged --no-enable-lora --dtype bfloat16 --logprobs-mode processed_logprobs",
-        "GPU_MEMORY_UTILIZATION=0.28 SLEEP_MODE=1 deployment/serve_model.sh value-gpu0 /merges/value 0 8200 "
+    restart = asyncio.run(restart_from_merges(tmp_path))
+    policy_port, value_port = restart.ports
+    assert restart.commands == [
+        "GPU_MEMORY_UTILIZATION=0.62 SLEEP_MODE=1 deployment/serve_model.sh policy-gpu0 /merges/policy 0 "
+        f"{policy_port} --served-model-name policy-merged --no-enable-lora --dtype bfloat16 "
+        "--logprobs-mode processed_logprobs",
+        f"GPU_MEMORY_UTILIZATION=0.28 SLEEP_MODE=1 deployment/serve_model.sh value-gpu0 /merges/value 0 {value_port} "
         "--served-model-name value-merged --no-enable-lora --dtype bfloat16",
     ]

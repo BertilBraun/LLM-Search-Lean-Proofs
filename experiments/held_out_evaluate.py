@@ -14,7 +14,10 @@ compares every variant with this tool's own v0 run on this node, never with the 
 node, quota and pinning).
 
 The run holds the node's serving lock and refuses while a loop runs, merges the adapter on the CPU (probe_evaluate.py's
-merges, deleted afterwards) and swaps it into the servers. Results in
+merges, deleted afterwards unless a server runs from one) and puts it on the policy servers as probe_evaluate.py does
+(the loop config's serving.swap, the skip where a server provably holds it, the check requests and the fingerprint),
+with its tolerance of server failures (failures.jsonl, sessions.jsonl; a state left without a tree is named in
+summary.json's `dropped`, exit status 4 after the restarts are used up). Results in
 $LEAN_SEARCH_RUNS/held_out_evaluations/held_out_<name>/: summary.json (once every state is sampled), trees/ (one per
 state), pinning.jsonl and checkpoint.json (the adapter, the states file's sha256 and the concurrency); a rerun resumes
 the states without a tree, and another adapter, states file or concurrency under the name is refused.
@@ -23,26 +26,38 @@ the states without a tree, and another adapter, states file or concurrency under
 import argparse
 import asyncio
 import datetime
+import functools
 import json
 import os
 from pathlib import Path
 
 from lean_search.expert_iteration.curriculum import file_sha256
 from lean_search.policy.adapters import merge_adapter
+from lean_search.policy.rotation import RequestFailures
 from lean_search.policy.serving_lock import ServingBusyError, serving_lock, serving_lock_path
+from lean_search.rl.evaluation import FailureTolerance, ServerRecoveryError
 from lean_search.rl.fixed_targets import evaluate_held_out_states
 from lean_search.rl.loop_config import load_loop_config
+from lean_search.rl.loop_services import start_servers
 from lean_search.rl.node_pinning import append_pinning, current_pinning, pinned_as_background
 from lean_search.rl.probe_evaluation import (
     NO_VALUE_VERSION,
+    DeathRule,
     ProbeCheckpoint,
+    ProbeServers,
     ServersDownError,
+    ServersUnsoundError,
+    SessionServing,
     adapter_digest,
     checkpoint_merges,
+    merges_in_use,
+    read_sessions,
     remove_merges,
     remove_stale_merges,
     running_loops,
     serve_checkpoint,
+    start_session,
+    verify_served,
 )
 from lean_search.rl.rate_ranking import HeldOutRunStart
 from lean_search.rl.search_models import served_run_config
@@ -54,6 +69,12 @@ REPOSITORY_DIRECTORY = Path(__file__).resolve().parents[1]
 RUNS_DIRECTORY = Path(os.environ["LEAN_SEARCH_RUNS"])
 CHECKPOINTS_DIRECTORY = Path(os.environ["LEAN_SEARCH_CHECKPOINTS"])
 OUTPUT = "held_out_evaluations"
+SERVERS_DIRECTORY = RUNS_DIRECTORY / "servers"
+# As probe_evaluate.py's defaults (ProbeEvaluationConfig).
+SERVER_FAILURE_RETRIES = 3
+MAX_SERVER_RESTARTS = 3
+# The servers kept dying through the run's restarts: a supervisor must not resume it before someone looked.
+RECOVERY_EXIT_STATUS = 4
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -102,21 +123,61 @@ async def evaluate(arguments: argparse.Namespace) -> None:
         with serving_lock(serving_lock_path(CHECKPOINTS_DIRECTORY)):
             if running_loops(RUNS_DIRECTORY).running:
                 raise SystemExit("A loop runs on this node; a held-out evaluation runs with none beside.")
-            remove_stale_merges(weights_root)
+            for stale in remove_stale_merges(weights_root, merges_in_use(SERVERS_DIRECTORY, loop.serving)):
+                log(f"Removed {stale}, a merge a dead run left")
             try:
-                await serve_checkpoint(loop.serving, chosen, weights_root, merge_adapter)
+                verify = functools.partial(verify_served, template, log)
+                served = await serve_checkpoint(
+                    loop.serving, chosen, weights_root, merge_adapter, SERVERS_DIRECTORY, verify, log
+                )
+                log(f"Weights put on {list(served.swapped)} ({served.swap}); already held by {list(served.skipped)}")
                 directory.mkdir(parents=True, exist_ok=True)
                 record.write_text(to_json(start), encoding="utf-8")
                 append_pinning(directory)
+                results = directory / "results.jsonl"
+                start_session(directory, chosen, results, SessionServing(served.swap, served.swapped, served.skipped))
+                request_failures = RequestFailures()
+                servers = ProbeServers(
+                    loop.serving,
+                    served,
+                    chosen,
+                    directory,
+                    results,
+                    verify,
+                    functools.partial(start_servers, servers_directory=SERVERS_DIRECTORY, log=log),
+                    request_failures,
+                    DeathRule(),
+                )
+                tolerance = FailureTolerance(
+                    servers,
+                    SERVER_FAILURE_RETRIES,
+                    MAX_SERVER_RESTARTS,
+                    directory / "failures.jsonl",
+                    sum(bool(session.serving.restarted) for session in read_sessions(directory)),
+                    request_failures,
+                )
                 summary = await evaluate_held_out_states(
-                    states_path, template, target, directory, (chosen.policy_version, chosen.value_version), log
+                    states_path,
+                    template,
+                    target,
+                    directory,
+                    (chosen.policy_version, chosen.value_version),
+                    log,
+                    tolerance,
                 )
             finally:
-                remove_merges(checkpoint_merges(loop.serving, chosen, weights_root))
+                merges = checkpoint_merges(loop.serving, chosen, weights_root)
+                for kept in remove_merges(merges, merges_in_use(SERVERS_DIRECTORY, loop.serving)):
+                    log(f"Kept {kept}: a server runs from it (removed by the next run once none does)")
             if running_loops(RUNS_DIRECTORY).running:
                 raise SystemExit(f"A loop came up during the run: delete {directory} and run it again.")
-    except (ServingBusyError, ServersDownError) as error:
+    except ServerRecoveryError as error:
+        log(str(error))
+        raise SystemExit(RECOVERY_EXIT_STATUS) from error
+    except (ServingBusyError, ServersDownError, ServersUnsoundError) as error:
         raise SystemExit(str(error)) from error
+    if summary.dropped:
+        log(f"Left without a tree after repeated server failures (rerun under the name): {list(summary.dropped)}")
     log(
         f"{directory}: {summary.samples} samples on {summary.problems} states, valid Lean "
         f"{summary.valid_samples / summary.samples:.1%}, success {summary.solved / summary.samples:.1%}"

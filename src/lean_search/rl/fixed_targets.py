@@ -24,6 +24,7 @@ from lean_search.rl.evaluation import (
     EvaluationProblem,
     EvaluationRun,
     EvaluationSummary,
+    FailureTolerance,
     now,
     run_problem_set_evaluation,
 )
@@ -37,6 +38,7 @@ from lean_search.rl.single_step import (
     search_states,
     single_step_run_config,
     state_problem,
+    state_tree_path,
     total_success,
 )
 from lean_search.search import RunConfig
@@ -110,15 +112,19 @@ async def evaluate_held_out_states(
     directory: Path,
     versions: tuple[int, int],
     log: Callable[[str], None],
+    tolerance: FailureTolerance | None = None,
 ) -> EvaluationSummary:
+    """Over the states with a tree: one a server failure left without one (`tolerance`) is dropped, not failed."""
     started_at = now()
     started = time.monotonic()
     states = [state_problem(state) for state in read_records(states_path, ReasoningState)]
     states = states[: target.problems] if target.problems else states
     config = single_step_run_config(evaluation_run_config(template, target))
-    records = await search_states(states, config, directory / "trees", log, EvaluationPaths(directory).progress)
+    trees = directory / "trees"
+    records = await search_states(states, config, trees, log, EvaluationPaths(directory).progress, tolerance)
+    searched = [state for state in states if state_tree_path(trees, state).exists()]
     success = total_success(
-        [sample_success(record, state.reference_keys) for record, state in zip(records, states, strict=True)]
+        [sample_success(record, state.reference_keys) for record, state in zip(records, searched, strict=True)]
     )
     summary = EvaluationSummary(
         kind=EvaluationKind.HELD_OUT_STATES,
@@ -137,6 +143,7 @@ async def evaluate_held_out_states(
         finished_at=now(),
         samples=success.samples,
         valid_samples=success.valid,
+        dropped=tuple(state.problem.name for state in states if state not in searched),
     )
     write_json_atomically(directory / "summary.json", summary)
     return summary

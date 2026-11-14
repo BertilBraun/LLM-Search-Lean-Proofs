@@ -29,6 +29,7 @@ from lean_search.expert_iteration.pool_search import PRELOADED_HEADER_SHARE, com
 from lean_search.expert_iteration.serving import write_json_atomically
 from lean_search.lean import LeanReplConfig, LeanReplPool
 from lean_search.monitoring.families import BandOutcome, FixedTargets, PairedDifference, ValueArmResult
+from lean_search.policy.rotation import RequestFailures, is_server_error
 from lean_search.rl.fixed_sets import stratum_order
 from lean_search.rl.loop_config import ValueArmConfig
 from lean_search.rl.renaming import StatementRenamings, search_problem
@@ -98,6 +99,8 @@ class EvaluationSummary:
     part: int | None = None
     # A value arm: the paired comparison with the slot's run.
     value_arm: ValueArmResult | None = None
+    # Problems left without a result after repeated server failures (a standalone run's tolerance); not in `problems`.
+    dropped: tuple[str, ...] = ()
 
     @property
     def solve_rate(self) -> float:
@@ -201,14 +204,18 @@ def search_summary(
     started_at: str,
     wall_seconds: float,
 ) -> EvaluationSummary:
+    """Over the problems with a result: one a server failure left without a result counts as dropped, not unsolved."""
+    finished = {result.problem_name for result in results}
+    dropped = tuple(problem.problem.name for problem in problems if problem.problem.name not in finished)
+    searched = [problem for problem in problems if problem.problem.name in finished]
     return EvaluationSummary(
         kind=kind,
         run_name=run_name,
         policy_version=versions[0],
         value_version=versions[1],
-        problems=len(problems),
+        problems=len(searched),
         solved=sum(result.proved for result in results),
-        by_stratum=tuple(stratum_outcomes(problems, results)),
+        by_stratum=tuple(stratum_outcomes(searched, results)),
         expansion_budget=config.search.max_expansions,
         expansions=sum(result.accounting.expansions for result in results),
         generated_tokens=sum(result.accounting.generated_tokens for result in results),
@@ -217,6 +224,7 @@ def search_summary(
         started_at=started_at,
         finished_at=now(),
         wall_clock_stops=sum(result.stop_reason == StopReason.WALL_CLOCK_BUDGET for result in results),
+        dropped=dropped,
     )
 
 
@@ -492,6 +500,10 @@ def keep_config(paths: EvaluationPaths, config: RunConfig) -> None:
     paths.config.write_text(text, encoding="utf-8")
 
 
+def problem_name(problem: Problem) -> str:
+    return problem.name
+
+
 class ServerRecoveryError(RuntimeError):
     """The servers could not be brought back within the run's restarts."""
 
@@ -515,8 +527,12 @@ class FailureTolerance:
     # Searches of a statement after its first failed one; a statement that fails beyond is left without a result.
     retries: int
     max_restarts: int
-    # One SearchFailure a line, appended.
+    # One SearchFailure a line, appended; the failed searches of earlier processes of the run are counted from it.
     failures: Path
+    # The restarts earlier processes of the run made (a resumed run's cap counts them).
+    restarts_before: int
+    # Where the run's clients count each server's server errors in a row (the recovery reads it).
+    request_failures: RequestFailures
 
 
 class FailureOutcome(StrEnum):
@@ -541,32 +557,44 @@ def read_failures(path: Path) -> list[SearchFailure]:
     return [from_json_object(SearchFailure, json.loads(line)) for line in lines if line.strip()]
 
 
-class ToleratedSearches[Outcome]:
-    """Feeds the problems to `concurrency` searches at once. Without a tolerance a server error ends the run. With
-    one, a search that fails on a server (any httpx error) is searched again from scratch, at most `retries` times;
-    every failure has the servers checked first, no new search starting meanwhile, and the dead ones restarted (at
-    most `max_restarts` times a run, then ServerRecoveryError). The searches in flight run on meanwhile."""
+class ToleratedSearches[Item, Outcome]:
+    """Feeds the items (named by `name_of`) to `concurrency` searches at once. Without a tolerance a server error ends
+    the run. With one, a search that fails on a server (no answer or a 5xx, `rotation.is_server_error`; any other error
+    ends the run) is searched again from scratch, at most `retries` times over the run's processes; every failure has
+    the servers checked first, no new search starting meanwhile, the dead ones restarted (at most `max_restarts` times
+    over the run's processes, then ServerRecoveryError) and the servers checked again until none is dead. The searches
+    in flight run on meanwhile."""
 
     def __init__(
-        self, problems: Sequence[Problem], tolerance: FailureTolerance | None, log: Callable[[str], None]
+        self,
+        items: Sequence[Item],
+        name_of: Callable[[Item], str],
+        tolerance: FailureTolerance | None,
+        log: Callable[[str], None],
     ) -> None:
-        self.queue = collections.deque(problems)
+        self.queue = collections.deque(items)
+        self.name_of = name_of
         self.tolerance = tolerance
         self.log = log
+        # Failed searches per statement and restarts so far, earlier processes of the run included.
         self.failures: dict[str, int] = {}
-        self.dropped: list[str] = []
         self.restarts = 0
+        if tolerance is not None:
+            for failure in read_failures(tolerance.failures):
+                self.failures[failure.problem_name] = max(self.failures.get(failure.problem_name, 0), failure.failures)
+            self.restarts = tolerance.restarts_before
+        self.dropped: list[str] = []
         self.searching = 0
         self.feeding = asyncio.Event()
         self.feeding.set()
         self.recovery_lock = asyncio.Lock()
-        # Failures before this were covered by a check of the servers that ended after them.
+        # When the last check that found every server alive began: a failure after it is checked again.
         self.checked_at = -math.inf
 
     async def run(
         self,
         concurrency: int,
-        search: Callable[[Problem], Awaitable[Outcome]],
+        search: Callable[[Item], Awaitable[Outcome]],
         completed: Callable[[Outcome], Awaitable[None]],
     ) -> None:
         try:
@@ -579,67 +607,71 @@ class ToleratedSearches[Outcome]:
 
     async def work(
         self,
-        search: Callable[[Problem], Awaitable[Outcome]],
+        search: Callable[[Item], Awaitable[Outcome]],
         completed: Callable[[Outcome], Awaitable[None]],
     ) -> None:
         while True:
             await self.feeding.wait()
             if not self.queue:
                 return
-            problem = self.queue.popleft()
+            item = self.queue.popleft()
             self.searching += 1
             try:
-                outcome = await search(problem)
+                outcome = await search(item)
             except httpx.HTTPError as error:
-                if self.tolerance is None:
+                if self.tolerance is None or not is_server_error(error):
                     raise
                 failed_at = time.monotonic()
-                self.failed(problem, error, self.tolerance)
+                self.failed(item, error, self.tolerance)
                 await self.check_servers(failed_at, self.tolerance)
                 continue
             finally:
                 self.searching -= 1
             await completed(outcome)
 
-    def failed(self, problem: Problem, error: httpx.HTTPError, tolerance: FailureTolerance) -> None:
-        failures = self.failures.get(problem.name, 0) + 1
-        self.failures[problem.name] = failures
+    def failed(self, item: Item, error: httpx.HTTPError, tolerance: FailureTolerance) -> None:
+        name = self.name_of(item)
+        failures = self.failures.get(name, 0) + 1
+        self.failures[name] = failures
         outcome = FailureOutcome.RETRIED if failures <= tolerance.retries else FailureOutcome.DROPPED
         match outcome:
             case FailureOutcome.RETRIED:
-                self.queue.appendleft(problem)
+                self.queue.appendleft(item)
                 what = "searched again once the servers answer"
             case FailureOutcome.DROPPED:
-                self.dropped.append(problem.name)
+                self.dropped.append(name)
                 what = "left without a result, so the run will not be accepted"
         text = f"{type(error).__name__}: {error}"
         tolerance.failures.parent.mkdir(parents=True, exist_ok=True)
         with tolerance.failures.open("a", encoding="utf-8") as handle:
-            handle.write(to_json(SearchFailure(problem.name, failures, text, outcome, now())) + "\n")
-        self.log(f"{problem.name}: {text}; {what} ({failures} failed searches)")
+            handle.write(to_json(SearchFailure(name, failures, text, outcome, now())) + "\n")
+        self.log(f"{name}: {text}; {what} ({failures} failed searches)")
 
     async def check_servers(self, failed_at: float, tolerance: FailureTolerance) -> None:
         async with self.recovery_lock:
             if failed_at <= self.checked_at:
                 return
             self.feeding.clear()
-            dead = await tolerance.recovery.dead_servers()
-            if dead and self.restarts >= tolerance.max_restarts:
-                raise ServerRecoveryError(
-                    f"Servers {list(dead)} do not answer and the run has used its {tolerance.max_restarts} restarts: "
-                    "it stops; its results are kept, and a rerun under the same name resumes it."
-                )
-            if dead:
+            while True:
+                checking_since = time.monotonic()
+                dead = await tolerance.recovery.dead_servers()
+                if not dead:
+                    break
+                if self.restarts >= tolerance.max_restarts:
+                    raise ServerRecoveryError(
+                        f"Servers {list(dead)} do not answer and the run has used its {tolerance.max_restarts} "
+                        "restarts: it stops; its results are kept. Look at the servers' logs before a rerun: the "
+                        "restarts and the failed searches count on in it."
+                    )
                 self.restarts += 1
                 self.log(
                     f"Servers not answering: {list(dead)}; restarting them (restart {self.restarts} of "
                     f"{tolerance.max_restarts}), no new search starting meanwhile"
                 )
                 await tolerance.recovery.restart(dead)
-                self.log(f"Restarted {list(dead)}; the searches resume")
-            else:
-                self.log("Every server answers; the searches resume")
-            self.checked_at = time.monotonic()
+                self.log(f"Restarted {list(dead)}; checking every server again")
+            self.log("Every server answers; the searches resume")
+            self.checked_at = checking_since
             self.feeding.set()
 
 
@@ -673,9 +705,10 @@ async def search_problem_set(
         log(f"[{len(results)}/{len(problems)}] {result.problem_name}: {result.stop_reason} | solved {solved}")
 
     if pending:
-        searches = ToleratedSearches[CompletedSearch](pending, tolerance, log)
+        searches = ToleratedSearches[Problem, CompletedSearch](pending, problem_name, tolerance, log)
+        request_failures = None if tolerance is None else tolerance.request_failures
         async with contextlib.AsyncExitStack() as stack:
-            models = await stack.enter_async_context(open_search_models(config))
+            models = await stack.enter_async_context(open_search_models(config, None, request_failures))
             pool = await stack.enter_async_context(
                 LeanReplPool(config.lean.pool_size, LeanReplConfig(), config.lean.restart_fraction)
             )

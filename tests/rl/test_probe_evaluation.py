@@ -5,7 +5,7 @@ import os
 import subprocess
 import sys
 import tomllib
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -24,6 +24,7 @@ from lean_search.policy.serving_lock import (
 )
 from lean_search.rl.evaluation import EvaluationKind, EvaluationProblem, EvaluationSummary
 from lean_search.rl.loop_config import EvaluationTarget, load_loop_config
+from lean_search.rl.loop_services import ServedWeightsOn
 from lean_search.rl.probe_evaluation import (
     NO_VALUE_VERSION,
     AutomationConstant,
@@ -42,6 +43,7 @@ from lean_search.rl.probe_evaluation import (
     keep_merges,
     mark_spoiled,
     probe_run_config,
+    remove_merges,
     remove_stale_merges,
     resolve_value_adapter,
     run_directory,
@@ -348,15 +350,27 @@ def test_a_discarded_session_is_not_discarded_twice(tmp_path: Path) -> None:
 
 def test_a_merge_left_by_a_dead_run_is_removed(tmp_path: Path) -> None:
     (tmp_path / "left").mkdir()
-    remove_stale_merges(tmp_path)
+    remove_stale_merges(tmp_path, set())
     assert not (tmp_path / "left").exists()
 
 
 def test_a_kept_merge_stays(tmp_path: Path) -> None:
     (tmp_path / "kept").mkdir()
     keep_merges([tmp_path / "kept"])
-    remove_stale_merges(tmp_path)
+    remove_stale_merges(tmp_path, set())
     assert (tmp_path / "kept").exists()
+
+
+def test_a_stale_merge_a_server_runs_from_stays(tmp_path: Path) -> None:
+    (tmp_path / "served").mkdir()
+    remove_stale_merges(tmp_path, {(tmp_path / "served").resolve()})
+    assert (tmp_path / "served").exists()
+
+
+def test_a_finished_runs_merge_a_server_runs_from_is_kept(tmp_path: Path) -> None:
+    (tmp_path / "served").mkdir()
+    remove_merges([tmp_path / "served"], {(tmp_path / "served").resolve()})
+    assert (tmp_path / "served").exists()
 
 
 def test_a_second_holder_of_the_serving_lock_is_refused(tmp_path: Path) -> None:
@@ -374,6 +388,10 @@ class ServeHistory:
     policy_reloads: tuple[tuple[str, ...], ...]
     value_reloads: tuple[str, ...]
     merged_contents: tuple[str, ...]
+
+
+async def accept_all(assignments: Sequence[ServedWeightsOn], fresh: frozenset[str]) -> None:
+    return
 
 
 @pytest.fixture(scope="module")
@@ -414,7 +432,9 @@ def history(tmp_path_factory: pytest.TempPathFactory) -> Iterator[ServeHistory]:
             8,
             1 if value_adapter else NO_VALUE_VERSION,
         )
-        return asyncio.run(serve_checkpoint(serving, chosen, root / "weights", merge))
+        return asyncio.run(
+            serve_checkpoint(serving, chosen, root / "weights", merge, root / "servers", accept_all, print)
+        )
 
     first = run(value)
     second = run(None)

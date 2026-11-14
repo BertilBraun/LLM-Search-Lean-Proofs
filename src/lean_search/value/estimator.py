@@ -10,7 +10,7 @@ import httpx
 
 from lean_search.policy.client import NextTokenDistributions, PolicyClient
 from lean_search.policy.expander import load_tokenizer, served_max_model_length
-from lean_search.policy.rotation import ServerRotation
+from lean_search.policy.rotation import RequestFailures, ServerRotation
 from lean_search.search.priority import ValueEstimates
 from lean_search.search.tree import Node
 from lean_search.value.bins import BIN_COUNT, DEAD_BIN, BinDistribution, bin_distribution
@@ -61,14 +61,19 @@ class ValueStatistics:
 
 class ValueModelEstimator:
     def __init__(
-        self, config: ValueConfig, tokenizer: ValueTokenizer, clients: Sequence[PolicyClient], max_model_length: int
+        self,
+        config: ValueConfig,
+        tokenizer: ValueTokenizer,
+        clients: Sequence[PolicyClient],
+        max_model_length: int,
+        request_failures: RequestFailures | None = None,
     ) -> None:
         self.config = config
         self.tokenizer = tokenizer
         self.max_model_length = max_model_length
         self.bin_token_ids = bin_token_ids(tokenizer)
         self.statistics = ValueStatistics()
-        self.rotation = ServerRotation(clients)
+        self.rotation = ServerRotation(clients, request_failures=request_failures)
 
     async def estimate(self, nodes: Sequence[Node]) -> ValueEstimates:
         scored = await self.score_states([node.goals for node in nodes])
@@ -123,7 +128,9 @@ class ValueModelEstimator:
 
 
 @contextlib.asynccontextmanager
-async def open_value_estimator(config: ValueConfig) -> AsyncIterator[ValueModelEstimator]:
+async def open_value_estimator(
+    config: ValueConfig, request_failures: RequestFailures | None = None
+) -> AsyncIterator[ValueModelEstimator]:
     tokenizer = load_tokenizer(config.tokenizer)
     max_model_length = min([await served_max_model_length(url, config.model) for url in config.server_urls])
     async with contextlib.AsyncExitStack() as stack:
@@ -133,6 +140,6 @@ async def open_value_estimator(config: ValueConfig) -> AsyncIterator[ValueModelE
             )
             for url in config.server_urls
         ]
-        estimator = ValueModelEstimator(config, tokenizer, clients, max_model_length)
+        estimator = ValueModelEstimator(config, tokenizer, clients, max_model_length, request_failures)
         stack.push_async_callback(estimator.rotation.close)
         yield estimator
