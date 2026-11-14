@@ -9,6 +9,7 @@ from typing import Protocol
 
 from lean_search.lean.text import FORBIDDEN_TOKENS, find_forbidden_tokens
 from lean_search.policy.client import ChatMessage, Sample
+from lean_search.policy.config import StepLogProbability
 from lean_search.search.texts import (
     CharacterSpan,
     InsertedSpan,
@@ -410,27 +411,52 @@ def parse_sample(
             return failure
 
 
-def block_log_probability(sample: Sample, block: NormalizedBlock, decoder: TokenDecoder) -> float | None:
-    """The sampled log-probabilities of the tokens with a character from the block's first to its last character in
-    the sample's text (a token straddling a fence counts), or None when the tokens do not decode to the text."""
+@dataclass(frozen=True)
+class BlockTokens:
+    log_probability: float
+    count: int
+
+
+def block_tokens(sample: Sample, block: NormalizedBlock, decoder: TokenDecoder) -> BlockTokens | None:
+    """The sampled tokens with a character from the block's first to its last character in the sample's text (a token
+    straddling a fence counts), or None when the tokens do not decode to the text."""
     offsets = token_offsets(decoder, sample.text, sample.tokens)
     if offsets is None:
         return None
     span = CharacterSpan(block.positions[0], block.positions[-1])
     total = 0.0
+    count = 0
     for token, log_probability in zip(offsets, sample.tokens.log_probabilities, strict=True):
         if overlaps(token, span):
             # Only a forced sample's inserted opening has none, and it ends where the block starts.
             assert log_probability is not None
             total += log_probability
-    return total
+            count += 1
+    return BlockTokens(total, count)
+
+
+def sample_log_probability(
+    sample: Sample, block: NormalizedBlock, setting: StepLogProbability, decoder: TokenDecoder | None
+) -> float | None:
+    """The sample's log-probability under `setting`; None when a block setting finds no block tokens (the sample's
+    tokens do not decode to its text)."""
+    if setting == StepLogProbability.COMPLETION:
+        return sample.cumulative_logprob
+    assert decoder is not None
+    tokens = block_tokens(sample, block, decoder)
+    if tokens is None:
+        return None
+    match setting:
+        case StepLogProbability.BLOCK_SUM:
+            return tokens.log_probability
+        case StepLogProbability.BLOCK_MEAN:
+            return tokens.log_probability / tokens.count
 
 
 @dataclass(frozen=True)
 class TacticCandidate:
     tactic_block: str
-    # The highest log-probability among the samples that produced this block: their whole completions', or with a
-    # decoder in parse_samples their blocks' tokens only.
+    # The highest log-probability among the samples that produced this block, per the StepLogProbability setting.
     log_probability: float
     generated_tokens: int
     sample_count: int
@@ -452,7 +478,7 @@ class ParsedSamples:
     failed_generated_tokens: int
     # The sample behind each failure.
     failed_sample_indices: tuple[int, ...] = ()
-    # With a decoder: usable samples whose tokens did not decode to their text, which kept their completion's
+    # Under a block setting: usable samples whose tokens did not decode to their text, which kept their completion's
     # log-probability.
     unaligned_samples: int = 0
 
@@ -468,10 +494,11 @@ def parse_samples(
     forbidden_tokens: frozenset[str] = FORBIDDEN_TOKENS,
     forced_indices: frozenset[int] = frozenset(),
     visible: bool = False,
+    step_log_probability: StepLogProbability = StepLogProbability.COMPLETION,
     decoder: TokenDecoder | None = None,
 ) -> ParsedSamples:
     """Distinct usable tactic blocks, most likely first; identical blocks merge and keep the best log-probability.
-    A sample's log-probability is its whole completion's, or with a decoder its block's (block_log_probability)."""
+    The block settings of `step_log_probability` need the policy tokenizer as `decoder`."""
     candidates: dict[str, TacticCandidate] = {}
     failures: list[ParseFailure] = []
     failed_indices: list[int] = []
@@ -485,13 +512,10 @@ def parse_samples(
                 failed_indices.append(index)
                 failed_generated_tokens += sample.token_count
             case NormalizedBlock(text=block, positions=positions) as normalized:
-                log_probability = sample.cumulative_logprob
-                if decoder is not None:
-                    in_block = block_log_probability(sample, normalized, decoder)
-                    if in_block is None:
-                        unaligned_samples += 1
-                    else:
-                        log_probability = in_block
+                log_probability = sample_log_probability(sample, normalized, step_log_probability, decoder)
+                if log_probability is None:
+                    unaligned_samples += 1
+                    log_probability = sample.cumulative_logprob
                 earlier = candidates.get(block)
                 if earlier is None:
                     candidates[block] = TacticCandidate(

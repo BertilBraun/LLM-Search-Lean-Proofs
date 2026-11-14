@@ -4,12 +4,14 @@ import pytest
 from piece_tokens import PieceDecoder, token_id, tokenized
 
 from lean_search.policy import Sample
+from lean_search.policy.config import StepLogProbability
 from lean_search.policy.prompts import (
     END_OF_TURN,
     FENCE,
     FEW_SHOT_EXAMPLES,
     SYSTEM_PROMPT,
     FailedAttempt,
+    ParsedSamples,
     ParseFailure,
     answer_opening,
     error_summary,
@@ -298,27 +300,81 @@ VISIBLE_PIECES = [
         ),
     ],
 )
-def test_with_a_decoder_a_candidate_counts_only_its_blocks_tokens(
+def test_the_block_sum_counts_only_the_blocks_tokens(
     pieces: list[tuple[str, float]], hidden: str, finish_reason: str, thinking: bool, visible: bool, expected: float
 ) -> None:
     samples = [tokenized(pieces, hidden=hidden, finish_reason=finish_reason)]
-    (candidate,) = parse_samples(samples, thinking=thinking, visible=visible, decoder=PieceDecoder()).candidates
+    (candidate,) = parsed_blocks(samples, thinking=thinking, visible=visible).candidates
     assert candidate.log_probability == expected
 
 
-def test_without_a_decoder_a_candidate_counts_its_whole_completion() -> None:
+def parsed_blocks(
+    samples: list[Sample],
+    setting: StepLogProbability = StepLogProbability.BLOCK_SUM,
+    *,
+    thinking: bool = False,
+    visible: bool = True,
+    forced_indices: frozenset[int] = frozenset(),
+) -> ParsedSamples:
+    return parse_samples(
+        samples,
+        thinking=thinking,
+        visible=visible,
+        forced_indices=forced_indices,
+        step_log_probability=setting,
+        decoder=PieceDecoder(),
+    )
+
+
+@pytest.mark.parametrize(
+    ("pieces", "expected"),
+    [
+        # Both bytes of the block's first character count; the explanation's tokens do not.
+        ([("Go.\n```lean\n", -1.0), (b"\xc2", -2.0), (b"\xb7 simp", -4.0), ("\n```", -8.0)], -6.0),
+        # A token that ends with the first byte of the block's first character shares that character, so it counts.
+        ([(b"Go.\n```lean\n\xc2", -1.0), (b"\xb7 simp", -2.0), ("\n```", -4.0)], -3.0),
+    ],
+)
+def test_tokens_sharing_the_blocks_first_character_count(
+    pieces: list[tuple[str | bytes, float]], expected: float
+) -> None:
+    (candidate,) = parsed_blocks([tokenized(pieces)]).candidates
+    assert candidate.log_probability == expected
+
+
+@pytest.mark.parametrize(
+    ("pieces", "expected"),
+    [
+        ([("Go.\n```lean\n", -1.0), ("simp", -0.5), ("\n```", -2.0)], -0.5),
+        ([("Go.\n```lean\n", -1.0), ("intro x", -0.2), ("\n", -0.4), ("simp", -0.6), ("\n```", -2.0)], -0.4),
+    ],
+)
+def test_the_block_mean_divides_the_block_sum_by_its_tokens(pieces: list[tuple[str, float]], expected: float) -> None:
+    (candidate,) = parsed_blocks([tokenized(pieces)], StepLogProbability.BLOCK_MEAN).candidates
+    assert candidate.log_probability == pytest.approx(expected)
+
+
+def test_the_completion_setting_counts_the_whole_completion() -> None:
     samples = [tokenized(VISIBLE_PIECES, hidden=END_OF_TURN)]
     (candidate,) = parse_samples(samples, thinking=False, visible=True).candidates
     assert candidate.log_probability == -511.0
 
 
-def test_merged_samples_keep_the_best_block_log_probability() -> None:
+@pytest.mark.parametrize(
+    ("setting", "expected"),
+    [
+        (StepLogProbability.COMPLETION, -5.0),
+        (StepLogProbability.BLOCK_SUM, -1.0),
+        (StepLogProbability.BLOCK_MEAN, -0.5),
+    ],
+)
+def test_merged_samples_keep_the_best_value_of_the_setting(setting: StepLogProbability, expected: float) -> None:
     samples = [
-        tokenized([("A long explanation.\n```lean\n", -50.0), ("simp", -0.5), ("\n```", -1.0)]),
+        tokenized([("A long explanation.\n```lean\n", -50.0), ("si", -0.5), ("mp", -0.5), ("\n```", -1.0)]),
         tokenized([("Short.\n```lean\n", -1.0), ("simp", -3.0), ("\n```", -1.0)]),
     ]
-    (candidate,) = parse_samples(samples, thinking=False, visible=True, decoder=PieceDecoder()).candidates
-    assert candidate.log_probability == -0.5
+    (candidate,) = parsed_blocks(samples, setting).candidates
+    assert candidate.log_probability == expected
 
 
 def test_candidates_are_ordered_by_block_log_probability() -> None:
@@ -326,7 +382,7 @@ def test_candidates_are_ordered_by_block_log_probability() -> None:
         tokenized([("Short.\n```lean\n", -1.0), ("omega", -3.0), ("\n```", -1.0)]),
         tokenized([("A long explanation.\n```lean\n", -50.0), ("simp", -0.5), ("\n```", -1.0)]),
     ]
-    parsed = parse_samples(samples, thinking=False, visible=True, decoder=PieceDecoder())
+    parsed = parsed_blocks(samples)
     assert [candidate.tactic_block for candidate in parsed.candidates] == ["simp", "omega"]
 
 
@@ -344,9 +400,7 @@ CUT_OFF_EXPLANATION = tokenized([("Both sides", -1.0), (" are linear", -2.0)], f
 )
 def test_a_forced_sample_counts_its_continuations_block_tokens(continuation: Sample, expected: float) -> None:
     forced = forced_sample(CUT_OFF_EXPLANATION, FORCED_OPENING, continuation, visible=True)
-    parsed = parse_samples(
-        [forced], thinking=False, visible=True, forced_indices=frozenset({0}), decoder=PieceDecoder()
-    )
+    parsed = parsed_blocks([forced], forced_indices=frozenset({0}))
     assert parsed.candidates[0].log_probability == expected
 
 
@@ -355,11 +409,13 @@ UNALIGNED = Sample(
 )
 
 
-def test_a_sample_whose_tokens_do_not_decode_to_its_text_keeps_its_completions_log_probability() -> None:
-    (candidate,) = parse_samples([UNALIGNED], thinking=False, visible=True, decoder=PieceDecoder()).candidates
+@pytest.mark.parametrize("setting", [StepLogProbability.BLOCK_SUM, StepLogProbability.BLOCK_MEAN])
+def test_a_sample_whose_tokens_do_not_decode_to_its_text_keeps_its_completions_log_probability(
+    setting: StepLogProbability,
+) -> None:
+    (candidate,) = parsed_blocks([UNALIGNED], setting).candidates
     assert candidate.log_probability == -7.0
 
 
 def test_samples_whose_tokens_do_not_decode_to_their_text_are_counted() -> None:
-    parsed = parse_samples([UNALIGNED, UNALIGNED], thinking=False, visible=True, decoder=PieceDecoder())
-    assert parsed.unaligned_samples == 2
+    assert parsed_blocks([UNALIGNED, UNALIGNED]).unaligned_samples == 2

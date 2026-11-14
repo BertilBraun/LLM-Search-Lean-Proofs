@@ -88,7 +88,7 @@ class PolicyStatistics:
     forced_generated_tokens: int = 0
     # Feedback rounds (policy.feedback), also counted in the totals above.
     feedback_requests: int = 0
-    # policy.block_log_probability: usable samples whose tokens did not decode to their text, which kept their whole
+    # A block step_log_probability: usable samples whose tokens did not decode to their text, which kept their whole
     # completion's log-probability.
     unaligned_samples: int = 0
 
@@ -348,7 +348,8 @@ class PolicyExpander:
             forbidden_tokens=self.forbidden_tokens,
             forced_indices=forced.sample_indices,
             visible=self.config.visible_reasoning,
-            decoder=self.tokenizer if self.config.block_log_probability else None,
+            step_log_probability=self.config.step_log_probability,
+            decoder=self.tokenizer,
         )
         self.statistics.record(generation, parsed, seconds + forcing_seconds, forced)
         return SampledExpansion(generation, samples, parsed, forced, prompt, feedback)

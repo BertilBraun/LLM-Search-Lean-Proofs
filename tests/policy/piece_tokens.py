@@ -5,18 +5,29 @@ from lean_search.search.texts import SampledTokens
 
 
 class PieceDecoder:
-    """A token id is its piece's UTF-8 bytes read as one integer, so any piece of text can be one token."""
+    """A token id is its piece's UTF-8 bytes read as one integer, so any piece of text, or of a character's bytes, can
+    be one token."""
 
     def decode(self, token_ids: Sequence[int], *, skip_special_tokens: bool) -> str:
-        return "".join(token.to_bytes((token.bit_length() + 7) // 8, "big").decode() for token in token_ids)
+        return b"".join(token.to_bytes((token.bit_length() + 7) // 8, "big") for token in token_ids).decode(
+            errors="replace"
+        )
 
 
-def token_id(piece: str) -> int:
-    return int.from_bytes(piece.encode(), "big")
+def piece_bytes(piece: str | bytes) -> bytes:
+    match piece:
+        case bytes():
+            return piece
+        case str():
+            return piece.encode()
+
+
+def token_id(piece: str | bytes) -> int:
+    return int.from_bytes(piece_bytes(piece), "big")
 
 
 def tokenized(
-    pieces: Sequence[tuple[str, float]],
+    pieces: Sequence[tuple[str | bytes, float]],
     *,
     hidden: str = "",
     finish_reason: str = "stop",
@@ -24,7 +35,7 @@ def tokenized(
 ) -> Sample:
     """A sample written as these (piece, log-probability) tokens; vLLM's text omits a trailing end of turn or stop
     string (`hidden`), its tokens do not."""
-    written = "".join(piece for piece, _ in pieces)
+    written = b"".join(piece_bytes(piece) for piece, _ in pieces).decode()
     assert written.endswith(hidden)
     log_probabilities = tuple(log_probability for _, log_probability in pieces)
     tokens = SampledTokens(tuple(token_id(piece) for piece, _ in pieces), log_probabilities)
