@@ -2,8 +2,9 @@
 # run 4 (token_capped_no_reasoning.toml), which it alone is compared with (experiments/probe_compare.py pair
 # --across-search-modes). visible_student_v2.toml with an expansion budget and depth cap at four times the expected
 # counts, the generated-token cap T (SearchConfig.max_generated_tokens, checked before each expansion, so the last one
-# overshoots by up to ~3% of T) and depth_weight 0. Each search records which limit ended it. If run 3 lands 3 or
-# more points below run 1, Q3 is reported with the caveat that depth_weight 0 changed the tuned search.
+# overshoots by up to one expansion: ~1.7k tokens, ~6% of T, visible) and depth_weight 0. Each search records which
+# limit ended it. If run 3 lands 3 or more points below run 1, Q3 is reported with the caveat that depth_weight 0
+# changed the tuned search.
 [search]
 # Four times the expected ~160 expansions at T: the token cap ends the search, not this.
 max_expansions = 1024
