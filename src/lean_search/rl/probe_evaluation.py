@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from lean_search.expert_iteration.loop_config import ServingConfig
+from lean_search.policy.config import StepLogProbability
 from lean_search.policy.server_control import is_healthy, is_sleeping, release_gpu, restore_gpu
 from lean_search.rl.evaluation import EvaluationProblem, EvaluationSummary
 from lean_search.rl.loop_config import EvaluationTarget
@@ -49,14 +50,45 @@ Merge = Callable[[str, Path, Path], None]
 
 
 @dataclass(frozen=True)
+class AutomationConstant:
+    """An automation step's log-probability for one step log-probability setting: on the scale of the policy's step
+    values, so each setting needs its own (policy/README.md, "Candidate log-probability")."""
+
+    step_log_probability: StepLogProbability
+    automation_log_probability: float
+    # False: a placeholder until the calibration on 200 pool statements outside every held-out set fills it in; a
+    # value-free run refuses it.
+    calibrated: bool
+
+
+@dataclass(frozen=True)
 class ValueFreePriority:
     """The value-free search of the design's Q4 (row 2's, experiments/configs/phase2_sft_v2_search.toml): best-first by
-    the path's mean step log-probability per block; the search config's other priority settings are kept."""
+    the path's mean step log-probability per block; the search config's other priority settings are kept. The policy's
+    step log-probability and the automation constant calibrated for it are set together."""
 
     length_exponent: float = 1.0
-    # An automation step's log-probability: row 2's median over the samples that made progress (-2.79), until the
-    # study calibrates it on 200 pool statements outside every held-out set.
-    automation_log_probability: float = -2.8
+    step_log_probability: StepLogProbability = StepLogProbability.COMPLETION
+    # Row 2's: the median whole-completion log-probability of the samples that made progress (-2.79).
+    automation_constants: tuple[AutomationConstant, ...] = (
+        AutomationConstant(StepLogProbability.COMPLETION, -2.8, calibrated=True),
+    )
+
+    def automation_log_probability(self) -> float:
+        """Raises ValueError when the setting has no constant, or only a placeholder."""
+        constants = [
+            constant
+            for constant in self.automation_constants
+            if constant.step_log_probability == self.step_log_probability
+        ]
+        if not constants:
+            raise ValueError(f"No automation constant for step_log_probability = {self.step_log_probability!r}.")
+        if not constants[0].calibrated:
+            raise ValueError(
+                f"The automation constant for step_log_probability = {self.step_log_probability!r} is a placeholder "
+                f"({constants[0].automation_log_probability}): calibrate it first."
+            )
+        return constants[0].automation_log_probability
 
 
 @dataclass(frozen=True)
@@ -99,10 +131,28 @@ class ProbeCheckpoint:
         return f"{self.arm}/phase {self.phase}/policy {self.policy_digest[:12]}/{value}{pilot}"
 
 
-def run_identity(checkpoint: ProbeCheckpoint, run_config_sha256: str, max_expansions: int, wall_seconds: float) -> str:
+def run_identity(checkpoint: ProbeCheckpoint, run_config: RunConfig) -> str:
     """What `probe_rating` pools runs by: two runs of one identity are repeats of one checkpoint searched alike (the
-    search config, budget, wall cap and concurrency all inside the run config's digest)."""
-    return f"{checkpoint.label}/search {run_config_sha256[:12]} ({max_expansions} expansions, {wall_seconds:g} s cap)"
+    search config, budget, wall cap, concurrency and step log-probability all inside the run config's digest)."""
+    search = run_config.search
+    return (
+        f"{checkpoint.label}/steps {run_config.policy.step_log_probability}/search "
+        f"{run_config_sha256(run_config)[:12]} ({search.max_expansions} expansions, {search.max_wall_seconds:g} s cap)"
+    )
+
+
+def anchor_problem(
+    checkpoint: ProbeCheckpoint, v0_policy_digest: str, v0_value_digest: str, own_search: bool
+) -> str | None:
+    """Why the checkpoint cannot be the rating's anchor (v0's policy and value v0 by content, the whole probe at the
+    standard settings); None when it can."""
+    if checkpoint.policy_digest != v0_policy_digest:
+        return "its policy adapter is not the loop config's starting adapter"
+    if checkpoint.value_digest != v0_value_digest:
+        return "its value adapter is not value v0"
+    if checkpoint.problems or own_search:
+        return "it runs a pilot or its own search config"
+    return None
 
 
 @dataclass(frozen=True)
@@ -193,16 +243,22 @@ def probe_run_config(
     template_budget: bool,
 ) -> RunConfig:
     """The template on the servers at the probe's wall cap and REPLs (and budget, unless `template_budget`: then the
-    template's), harvesting, exploration and search options off. With `value_free` no value model and the value-free
-    priority; the template's other priority settings are kept."""
+    template's), harvesting, exploration and search options off. With `value_free` no value model, the value-free
+    priority and the policy's step log-probability with its automation constant (ValueError for a placeholder); the
+    template's other priority settings are kept."""
     if value_free is not None:
         priority = dataclasses.replace(
             template.priority,
             kind=PriorityKind.CUMULATIVE_LOG_PROBABILITY,
             length_exponent=value_free.length_exponent,
-            automation_log_probability=value_free.automation_log_probability,
+            automation_log_probability=value_free.automation_log_probability(),
         )
-        template = dataclasses.replace(template, value=dataclasses.replace(template.value, model=""), priority=priority)
+        template = dataclasses.replace(
+            template,
+            policy=dataclasses.replace(template.policy, step_log_probability=value_free.step_log_probability),
+            value=dataclasses.replace(template.value, model=""),
+            priority=priority,
+        )
     if template_budget:
         target = dataclasses.replace(target, max_expansions=template.search.max_expansions)
     return evaluation_run_config(served_run_config(without_search_options(template), serving), target)

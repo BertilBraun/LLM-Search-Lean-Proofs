@@ -21,9 +21,23 @@ max_wall_seconds = 7200.0
 # THROUGHPUT TEST: a placeholder; the throughput test sets one probe concurrency for every run of the study.
 concurrency = 56
 
-# --value none: row 2's value-free search (experiments/configs/phase2_sft_v2_search.toml): the path's mean step
-# log-probability per block; an automation step counts -2.8, row 2's median log-probability of the samples that made
-# progress (-2.79), until the study calibrates it on 200 pool statements outside every held-out set.
+# --value none: the value-free search (DESIGN.md, Q4): best-first by the path's mean step log-probability per block
+# (row 2's experiments/configs/phase2_sft_v2_search.toml), each step's value the sum over its Lean block's tokens
+# (policy.step_log_probability, policy/README.md "Candidate log-probability"). The automation constant must be on the
+# same scale, so each setting has its own; a run refuses a setting without one or with a placeholder (calibrated =
+# false) until the calibration on 200 pool statements outside every held-out set fills it in.
 [value_free_priority]
 length_exponent = 1.0
+step_log_probability = "block_sum"
+
+# Row 2's: the median whole-completion log-probability of the SFT v2 probe samples that made progress (-2.79).
+[[value_free_priority.automation_constants]]
+step_log_probability = "completion"
 automation_log_probability = -2.8
+calibrated = true
+
+# PLACEHOLDER: review AF's rule on the old run's trees (the median block sum of samples that made progress).
+[[value_free_priority.automation_constants]]
+step_log_probability = "block_sum"
+automation_log_probability = -5.65
+calibrated = false
