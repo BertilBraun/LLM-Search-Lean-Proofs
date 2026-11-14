@@ -56,7 +56,7 @@ Generation then has no stop string (fences appear inside thoughts) and costs abo
 | `render_completion(tactic_block) -> str` | SFT target after the prompt: block, closing fence, `<|im_end|>` |
 | `prompt_messages(goals, lemmas=(), *, few_shot=False) -> list[ChatMessage]`, `assistant_message(block)` | the same as chat messages, for chat-format SFT data |
 | `parse_sample(sample, *, thinking, forbidden_tokens) -> str \| ParseFailure` | one sample's normalized block (dedented, trailing spaces and a leading bare `by` line removed), or `TRUNCATED`, `NO_BLOCK`, `EMPTY`, `FORBIDDEN` |
-| `parse_samples(samples, *, thinking, forbidden_tokens) -> ParsedSamples` | distinct blocks, most likely first; duplicates merge, keep the best log-probability and sum their tokens |
+| `parse_samples(samples, *, thinking, forbidden_tokens, step_log_probability=COMPLETION, decoder=None) -> ParsedSamples` | distinct blocks, most likely first; duplicates merge, keep the best log-probability (per the setting, below) and sum their tokens |
 | `PolicyExpander.expand(node, context)` | one request with n samples per expansion; yields one `CandidateBatch` of the distinct candidates and the request's cost, also when no sample parsed |
 | `candidate_batch(parsed, generation) -> CandidateBatch` | that batch: prompt and completion tokens of the whole request |
 | `open_policy_expander(config, forbidden_steps)` | async context manager: loads the chat template, reads `max_model_len` from the server, opens one client per server URL, loads the retriever when `policy.retrieval.lemma_count > 0` |
@@ -96,6 +96,32 @@ holds exactly what the model saw. The forced sample's text is the cut-off text, 
 log-probabilities are `None`) and, when the continuation ran out of tokens or ended its turn without closing the block,
 the closing fence appended to the text, which has no tokens (an empty token span at the end). A fence the continuation
 wrote itself is sampled and not marked.
+
+## Candidate log-probability
+
+A candidate's `log_probability` orders its batch, becomes its child's step log-probability for
+`cumulative_log_probability` and A*'s `policy_prior_weight` (a name repair's child inherits the sampled block's), and is
+the highest among the samples behind the block. `policy.step_log_probability` chooses what a sample's value covers:
+
+- `completion` (default): the sum over every sampled token, explanation (or thoughts), fences, block and what followed.
+- `block_sum`: the sum over the Lean block's tokens.
+- `block_mean`: that sum divided by the number of the block's tokens.
+
+The automation constant `priority.automation_log_probability` is a step value on the same scale, so each setting needs
+its own calibration: the old -2.8 fits neither block setting (review AF's rule, the median step value of samples that
+made progress, gives -5.65 for block sums on the old run's trees).
+
+A block's tokens are the sampled tokens with a character from the normalized block's first to its last character in the
+sample's text (`block_tokens`), aligned like the trainer's per-tactic credit (`search/texts.token_offsets`): a token
+straddling a fence (the opening line's newline with the first code characters, or the last code characters with the
+closing fence) counts, as does a token sharing a multi-byte character with the block; the fences, the newlines around
+the block, a dropped leading `by` line, a plain-mode stop fence and the end of turn do not. A forced sample counts its
+continuation's block tokens (the inserted opening ends where the block starts, an inserted closing fence has no tokens),
+also when the forced block was cut by `forced_answer_tokens`. The whole block counts even when the search keeps only a
+prefix of it (the search counts such children, `Accounting.partial_policy_children`). A usable sample whose tokens do
+not decode to its text keeps its completion's log-probability and is counted (`PolicyStatistics.unaligned_samples`).
+The alignment decodes every token of each usable sample, about 10 ms of CPU per expansion of 8 samples of 160 tokens
+with the Qwen3.5 tokenizer (against 1.5 ms for parsing alone), so it runs only under a block setting.
 
 ## Overlap and early value scoring
 

@@ -5,6 +5,7 @@ import pytest
 from graph_trees import GraphBuilder
 from tactic_trees import example_tree
 
+from lean_search.rl.advantages import CreditMode
 from lean_search.rl.grpo_groups import RewardConfig, policy_groups
 from lean_search.rl.tree_statistics import (
     EdgeKindCounts,
@@ -27,13 +28,13 @@ READOUT = RemainingStepsReadout()
 REWARDS = RewardConfig()
 
 
-def statistics_of(record: TreeRecord) -> GraphStatistics:
+def statistics_of(record: TreeRecord, credit: CreditMode = CreditMode.PER_TACTIC) -> GraphStatistics:
     labels = label_graph(record)
     estimates = recorded_estimates(record, READOUT)
     targets = value_targets(record, labels, estimates, ValueTargetConfig())
     tactics = policy_tactics(record, labels, REWARDS.off_graph_min_expanded_nodes)
     groups = policy_groups(record, labels, tactics, estimates, REWARDS)
-    return graph_statistics(record, labels, targets, tactics, groups)
+    return graph_statistics(record, labels, targets, tactics, groups, credit)
 
 
 def statistics() -> GraphStatistics:
@@ -166,3 +167,16 @@ def test_harvest_counts_the_proofs_after_the_first() -> None:
     accounting = dataclasses.replace(record.result.accounting, expansions=2, harvest_expansions=1, proofs=2)
     record = dataclasses.replace(record, result=dataclasses.replace(record.result, accounting=accounting))
     assert (statistics_of(record).harvest_proofs, statistics_of(record).proofs) == (1, 2)
+
+
+def two_proofs_tree() -> TreeRecord:
+    """The root proved in one step and in two: every sample of each group reaches the proof graph."""
+    builder = GraphBuilder("⊢ p")
+    middle = builder.child(builder.root, "⊢ q", text="intro")
+    builder.tree.mark_proof_path(builder.child(middle, text="close"))
+    return builder.record(builder.child(builder.root, text="exact p"))
+
+
+@pytest.mark.parametrize(("credit", "groups"), [(CreditMode.PER_TACTIC, 1), (CreditMode.PROOF_SUCCESS, 0)])
+def test_groups_with_signal_are_counted_with_the_phases_credit(credit: CreditMode, groups: int) -> None:
+    assert statistics_of(two_proofs_tree(), credit).groups_with_signal == groups

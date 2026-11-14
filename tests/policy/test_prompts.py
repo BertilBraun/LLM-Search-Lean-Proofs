@@ -1,14 +1,21 @@
 import textwrap
 
 import pytest
+from piece_tokens import PieceDecoder, token_id, tokenized
 
 from lean_search.policy import Sample
+from lean_search.policy.config import StepLogProbability
 from lean_search.policy.prompts import (
+    END_OF_TURN,
+    FENCE,
     FEW_SHOT_EXAMPLES,
     SYSTEM_PROMPT,
     FailedAttempt,
+    ParsedSamples,
     ParseFailure,
+    answer_opening,
     error_summary,
+    forced_sample,
     normalize_tactic_block,
     normalized_block,
     parse_sample,
@@ -20,6 +27,7 @@ from lean_search.policy.prompts import (
     stop_sequences,
     user_message,
 )
+from lean_search.search.texts import SampledTokens
 
 GOALS = ("x : ℕ\nh : x + 1 = 3\n⊢ x = 2", "case right\n⊢ 0 < 1")
 
@@ -234,3 +242,180 @@ def test_error_summary_drops_the_goal_dump(message: str, summary: str) -> None:
 
 def test_shortened_text_ends_in_an_ellipsis_within_the_limit() -> None:
     assert shortened("linarith failed to find a contradiction", 12) == "linarith fa…"
+
+
+VISIBLE_PIECES = [
+    ("Use simp.", -1.0),
+    ("\n\n", -2.0),
+    ("```", -4.0),
+    ("lean", -8.0),
+    ("\n", -16.0),
+    ("simp", -32.0),
+    ("\n", -64.0),
+    ("```", -128.0),
+    (END_OF_TURN, -256.0),
+]
+
+
+@pytest.mark.parametrize(
+    ("pieces", "hidden", "finish_reason", "thinking", "visible", "expected"),
+    [
+        (VISIBLE_PIECES, END_OF_TURN, "stop", False, True, -32.0),
+        # A token straddling the opening fence counts.
+        (
+            [("Use simp.\n\n", -1.0), ("```", -2.0), ("lean\nsi", -4.0), ("mp", -8.0), ("\n```", -16.0)],
+            "",
+            "stop",
+            False,
+            True,
+            -12.0,
+        ),
+        # A token straddling the closing fence counts.
+        (
+            [("Use simp.\n\n```lean\n", -1.0), ("simp\n```", -2.0), (END_OF_TURN, -4.0)],
+            END_OF_TURN,
+            "stop",
+            False,
+            True,
+            -2.0,
+        ),
+        # Text after the block does not, also when the token cap cut it.
+        (
+            [("Go.\n```lean\n", -1.0), ("simp", -2.0), ("\n```", -4.0), ("\nMore", -8.0)],
+            "",
+            "length",
+            False,
+            True,
+            -2.0,
+        ),
+        # Plain mode: a dropped leading `by` line and the stop fence do not count.
+        ([("by\n", -1.0), ("  intro x\n", -2.0), ("  simp", -4.0), ("\n```", -8.0)], FENCE, "stop", False, False, -6.0),
+        (
+            [("Short.\n</think>\n\n", -1.0), ("```lean\n", -2.0), ("omega", -4.0), ("\n```", -8.0)],
+            "",
+            "stop",
+            True,
+            False,
+            -4.0,
+        ),
+    ],
+)
+def test_the_block_sum_counts_only_the_blocks_tokens(
+    pieces: list[tuple[str, float]], hidden: str, finish_reason: str, thinking: bool, visible: bool, expected: float
+) -> None:
+    samples = [tokenized(pieces, hidden=hidden, finish_reason=finish_reason)]
+    (candidate,) = parsed_blocks(samples, thinking=thinking, visible=visible).candidates
+    assert candidate.log_probability == expected
+
+
+def parsed_blocks(
+    samples: list[Sample],
+    setting: StepLogProbability = StepLogProbability.BLOCK_SUM,
+    *,
+    thinking: bool = False,
+    visible: bool = True,
+    forced_indices: frozenset[int] = frozenset(),
+) -> ParsedSamples:
+    return parse_samples(
+        samples,
+        thinking=thinking,
+        visible=visible,
+        forced_indices=forced_indices,
+        step_log_probability=setting,
+        decoder=PieceDecoder(),
+    )
+
+
+@pytest.mark.parametrize(
+    ("pieces", "expected"),
+    [
+        # Both bytes of the block's first character count; the explanation's tokens do not.
+        ([("Go.\n```lean\n", -1.0), (b"\xc2", -2.0), (b"\xb7 simp", -4.0), ("\n```", -8.0)], -6.0),
+        # A token that ends with the first byte of the block's first character shares that character, so it counts.
+        ([(b"Go.\n```lean\n\xc2", -1.0), (b"\xb7 simp", -2.0), ("\n```", -4.0)], -3.0),
+    ],
+)
+def test_tokens_sharing_the_blocks_first_character_count(
+    pieces: list[tuple[str | bytes, float]], expected: float
+) -> None:
+    (candidate,) = parsed_blocks([tokenized(pieces)]).candidates
+    assert candidate.log_probability == expected
+
+
+@pytest.mark.parametrize(
+    ("pieces", "expected"),
+    [
+        ([("Go.\n```lean\n", -1.0), ("simp", -0.5), ("\n```", -2.0)], -0.5),
+        ([("Go.\n```lean\n", -1.0), ("intro x", -0.2), ("\n", -0.4), ("simp", -0.6), ("\n```", -2.0)], -0.4),
+    ],
+)
+def test_the_block_mean_divides_the_block_sum_by_its_tokens(pieces: list[tuple[str, float]], expected: float) -> None:
+    (candidate,) = parsed_blocks([tokenized(pieces)], StepLogProbability.BLOCK_MEAN).candidates
+    assert candidate.log_probability == pytest.approx(expected)
+
+
+def test_the_completion_setting_counts_the_whole_completion() -> None:
+    samples = [tokenized(VISIBLE_PIECES, hidden=END_OF_TURN)]
+    (candidate,) = parse_samples(samples, thinking=False, visible=True).candidates
+    assert candidate.log_probability == -511.0
+
+
+@pytest.mark.parametrize(
+    ("setting", "expected"),
+    [
+        (StepLogProbability.COMPLETION, -5.0),
+        (StepLogProbability.BLOCK_SUM, -1.0),
+        (StepLogProbability.BLOCK_MEAN, -0.5),
+    ],
+)
+def test_merged_samples_keep_the_best_value_of_the_setting(setting: StepLogProbability, expected: float) -> None:
+    samples = [
+        tokenized([("A long explanation.\n```lean\n", -50.0), ("si", -0.5), ("mp", -0.5), ("\n```", -1.0)]),
+        tokenized([("Short.\n```lean\n", -1.0), ("simp", -3.0), ("\n```", -1.0)]),
+    ]
+    (candidate,) = parsed_blocks(samples, setting).candidates
+    assert candidate.log_probability == expected
+
+
+def test_candidates_are_ordered_by_block_log_probability() -> None:
+    samples = [
+        tokenized([("Short.\n```lean\n", -1.0), ("omega", -3.0), ("\n```", -1.0)]),
+        tokenized([("A long explanation.\n```lean\n", -50.0), ("simp", -0.5), ("\n```", -1.0)]),
+    ]
+    parsed = parsed_blocks(samples)
+    assert [candidate.tactic_block for candidate in parsed.candidates] == ["simp", "omega"]
+
+
+FORCED_OPENING = (token_id(answer_opening(visible=True)),)
+CUT_OFF_EXPLANATION = tokenized([("Both sides", -1.0), (" are linear", -2.0)], finish_reason="length")
+
+
+@pytest.mark.parametrize(
+    ("continuation", "expected"),
+    [
+        (tokenized([("linarith", -4.0), ("\n```", -8.0)], hidden=FENCE, stop_string=FENCE), -4.0),
+        # The forced block cut by the token cap: the harness appends the closing fence, without tokens.
+        (tokenized([("nlinarith [sq_nonneg", -4.0), (" (a", -8.0)], finish_reason="length"), -12.0),
+    ],
+)
+def test_a_forced_sample_counts_its_continuations_block_tokens(continuation: Sample, expected: float) -> None:
+    forced = forced_sample(CUT_OFF_EXPLANATION, FORCED_OPENING, continuation, visible=True)
+    parsed = parsed_blocks([forced], forced_indices=frozenset({0}))
+    assert parsed.candidates[0].log_probability == expected
+
+
+UNALIGNED = Sample(
+    "Use simp.\n```lean\nsimp\n```", -7.0, 2, "stop", SampledTokens((token_id("Use omega."),) * 2, (-3.0, -4.0))
+)
+
+
+@pytest.mark.parametrize("setting", [StepLogProbability.BLOCK_SUM, StepLogProbability.BLOCK_MEAN])
+def test_a_sample_whose_tokens_do_not_decode_to_its_text_keeps_its_completions_log_probability(
+    setting: StepLogProbability,
+) -> None:
+    (candidate,) = parsed_blocks([UNALIGNED], setting).candidates
+    assert candidate.log_probability == -7.0
+
+
+def test_samples_whose_tokens_do_not_decode_to_their_text_are_counted() -> None:
+    assert parsed_blocks([UNALIGNED, UNALIGNED]).unaligned_samples == 2

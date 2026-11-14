@@ -102,3 +102,27 @@ of phases 20, 25, 30 of `grpo_loop_v1` (17,784 group samples, 2,223 groups) with
     `test_per_tactic_and_sequence_advantages_of_the_design_example_are_unchanged` would fail on any change to group
     advantages, the pre-existing per-segment tests on token credits. Style is fine; `labels: tuple` in
     `test_advantages.py` lacks its element type.
+
+## Re-review (6816f30, 61dce9b, bc44e8a, bcc0da0, 6e534f8, c98ff60, 22ffac4; probe package ignored)
+
+Affected suites 573 passed, ruff clean. Audit with production code, 500 solved trees of phases 4/20/25/30 (14,272
+samples): `reaches_audit.py` beside the first script.
+1. **Resolved.** No sample scores 1 without a proof-graph tactic or on a non-forward edge. The 0s with a proof-graph
+   tactic are all unverified proofs (26). The 0s whose forward child is on the graph are all the accepted redundant
+   precedence (12). 22% of positives pass through the graph into an off-graph child, as intended. Failing and valid
+   tails now score alike. `training_signal.py` uses `tree_policy_data(credit=proof_success)` and `reaches_proof_graph`,
+   so the analysis agrees by construction.
+2. **Resolved.** `tree_directories` (exclusive with `last_phase`/`window_phases`) read every `*.json.gz` like
+   `grpo_phase.py --trees`, from version 0 minus rejected ones. A first-round version mix is refused unless
+   `allow_mixed_versions`. Tested on tmp runs. Minor: `build` refuses a mix only after labelling (run `count` first);
+   the below-band share reads 0 for directories; unrecorded versions under `allow_mixed_versions` drop silently.
+3. **Resolved.** Segments by position; trained values are `whole` (sequence/proof success) or unchanged (per-tactic),
+   identical by construction. 0 mismatches on the 14,272 samples. Equal explanation means across modes pinned by a test.
+4. **Resolved.** New tests: sibling, transposition, merged repeat, unverified proof, `round_trees` on tmp runs, the
+   repair's log-probability, and a multi-byte first character.
+5. **New, minor.** `block_mean`'s unaligned fallback stays conservative (completion sum ≤ block mean). `reward_replay`
+   builds `TacticReward` without `steps_gained`, so take no no-closer share from replays. Failing tails are 37% of
+   positives here, but stopping scores the same, so no incentive is left. Neither this nor the redundant precedence
+   needs a change before step 2.
+
+**Verdict: merge.**

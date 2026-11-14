@@ -2,26 +2,23 @@
 
 Kept current by the orchestrator. Details live in the linked files.
 
-**Last update:** 2026-11-14, 12:45 UTC.
+**Last update:** 2026-11-14, 13:35 UTC.
 
 ## Where we are
 
-Step 0 is nearly done: all four analyses, the design (two reviews, both re-checked) and three implementation packages
-are finished; the packages are in code review. The node's environment and Lean are installed, but its model downloads
-stalled and are being fixed, so nothing has run on the GPUs yet.
+Step 0 is finishing. The analyses and the design are done; the probe package is merged; the node is running its first
+jobs (v0 reproduction and the throughput test), which set the fixed concurrencies step 1 needs.
 
 | Item | State | Result or file |
 |---|---|---|
-| Node: 4x RTX 3090, 61-core CPU quota, $0.89/h, billing since about 11:20 UTC | rented | `ssh -p 16657 root@104.233.209.157` |
-| Node setup | environment and Lean done; model and dataset downloads stalled, being fixed; then v0 reproduction and throughput test | |
-| Analysis: compute and hardware of the old run | done | `results/followup_step0/throughput_and_hardware.md` |
-| Analysis: pool difficulty | done | `results/followup_step0/pool.md` |
-| Analysis: noise floor | done | `results/followup_step0/noise_floor.md` |
-| Analysis: training signal per scheme | done | `results/followup_step0/training_signal.md` |
+| Node: 4x RTX 3090, 61-core CPU quota, $0.89/h, billing since about 11:20 UTC | running the v0 reproduction and throughput test since about 13:15 UTC | `ssh -p 16657 root@104.233.209.157` |
+| Node setup | environment, Lean, base models and adapters done (Hugging Face connections kept hanging; fetched in resumable ranges); our dataset still downloading | |
+| Four step-0 analyses | done | `results/followup_step0/` |
 | Design section in `DESIGN.md` ("Follow-up study: controlled arms") | done, reviewed twice, re-checked | `results/reviews/2026-11-14_review_aa_*`, `_ab_*` |
-| Package: probe v2, near-duplicate guard, curriculum by characters, evaluation of any checkpoint | implemented, two code reviews running | branch `worktree-agent-afca96780ff18295f` |
-| Package: Lean-block-only log-probability; pure proof-success credit; expert-iteration window | implemented, two code reviews running | branch `followup-signals` |
-| Packages still to write: token-budget phases and seeds, health checks per arm, study tooling (launcher, slicing, arm comparison) | next | |
+| Package: probe v2, near-duplicate guard, curriculum by characters, base config, evaluation of any checkpoint | merged on master after two reviews and two fix rounds; a final check of the last fixes is running | reviews `_ac_`, `_ad_` |
+| Package: log-probability setting for the value-free search; pure proof-success credit; expert-iteration data from tree folders | reviewed twice; fixes done for the first, in progress for the other two; then re-review and merge | reviews `_ae_`, `_af_`; branch `followup-signals` |
+| Package: token-budget phases, a defined end, seeds; health checks that mean the same in every arm | being implemented | |
+| Package: study tooling (arm comparison with the pre-set rule, slicing shared trees, learning-rate ranking, step-1 configs, launcher) | being implemented | |
 | Package: expert iteration inside the loop | only after step 2, if that arm goes on | |
 
 ## Findings so far
@@ -80,7 +77,7 @@ stalled and are being fixed, so nothing has run on the GPUs yet.
 
 | Item | Amount |
 |---|---|
-| Node, 2026-11-14 11:20 UTC to 12:45 UTC | about $1.3 |
+| Node, 2026-11-14 11:20 UTC to 13:35 UTC | about $2.0 |
 
 ## For the owner's next check-in
 

@@ -76,6 +76,30 @@ async def test_repair_runs_as_a_search_step_of_its_own(tmp_path: Path) -> None:
     assert (edge.source, edge.text, edge.outcome) == (StepSource.REPAIR, CLOSING, EdgeOutcome.CHILD)
 
 
+async def test_a_repair_and_its_child_carry_the_sampled_blocks_log_probability(tmp_path: Path) -> None:
+    sampled = Candidate("rw [Nat.add_zeroo]", StepSource.POLICY, log_probability=-0.37)
+    completed = await search(tmp_path, Batches(CandidateBatch((sampled,))), {CLOSING: ()}, repair=True)
+    assert completed.tree is not None
+    repair = completed.tree.edges[1]
+    assert repair.target_id is not None
+    child = completed.tree.node(repair.target_id)
+    assert (repair.source, repair.log_probability, child.log_probability) == (StepSource.REPAIR, -0.37, -0.37)
+
+
+async def test_the_search_counts_policy_children_that_kept_only_a_prefix_of_their_block(tmp_path: Path) -> None:
+    partial = f"{CLOSING}\nsimp"
+    repl = ScriptedRepl(tmp_path, {"simp": ("a : ℕ\n⊢ a = a",)}, failing_tails={partial: ("⊢ False",)})
+    expander = Batches(policy_batch("simp", partial))
+    config = SearchConfig(
+        max_expansions=1,
+        name_inaccessible_hypotheses=False,
+        environment_names_directory=str(write_environment_names(tmp_path, CONSTANTS)),
+    )
+    completed = await search_theorem(PROBLEM, repl, expander, DepthPlusGoals(), config, root_state())
+    accounting = completed.result.accounting
+    assert (accounting.policy_children, accounting.partial_policy_children) == (2, 1)
+
+
 async def test_repair_edge_names_its_repair(tmp_path: Path) -> None:
     edge = (await repaired_edges(tmp_path))[1]
     assert edge.name_repairs == (NameRepair("Nat.add_zeroo", "Nat.add_zero"),)

@@ -1,7 +1,7 @@
 from collections.abc import Mapping, Sequence
 
 import pytest
-from rl_samples import FAILING, MASKED, PROOF_GRAPH, UNKNOWN, group, sample
+from rl_samples import FAILING, MASKED, NODE_STEPS, PROOF_GRAPH, UNKNOWN, group, sample
 
 from lean_search.policy.prompts import END_OF_TURN
 from lean_search.rl.advantages import CreditMode
@@ -10,6 +10,7 @@ from lean_search.rl.policy_data import (
     ExpansionTexts,
     PolicyData,
     PolicyDataConfig,
+    PolicyDataMetrics,
     PolicySequence,
     PolicyTree,
     SampledCompletion,
@@ -107,8 +108,9 @@ def test_every_recorded_completion_of_a_trained_group_is_a_sequence() -> None:
     assert [sequence.edge_id for sequence in policy_data().sequences] == [0, 0, 1]
 
 
-def test_groups_without_a_non_zero_advantage_are_dropped() -> None:
-    assert {sequence.node_id for sequence in policy_data().sequences} == {0}
+@pytest.mark.parametrize("credit", list(CreditMode))
+def test_groups_without_a_non_zero_advantage_are_dropped(credit: CreditMode) -> None:
+    assert {sequence.node_id for sequence in policy_data(credit=credit).sequences} == {0}
 
 
 def test_sequences_train_on_the_recorded_token_ids() -> None:
@@ -168,6 +170,17 @@ def test_sequence_credit_trains_every_token_of_a_failed_sample() -> None:
     assert all(policy_data(credit=CreditMode.SEQUENCE).sequences[2].trained)
 
 
+@pytest.mark.parametrize("credit", [CreditMode.SEQUENCE, CreditMode.PROOF_SUCCESS])
+def test_explanation_tokens_mean_the_same_in_every_credit_mode(credit: CreditMode) -> None:
+    expected = policy_data().metrics.mean_explanation_tokens
+    assert policy_data(credit=credit).metrics.mean_explanation_tokens == expected
+
+
+def test_proof_success_credit_gives_every_token_of_a_failed_sample_minus_the_mean_r() -> None:
+    sequence = policy_data(credit=CreditMode.PROOF_SUCCESS).sequences[2]
+    assert (set(sequence.advantages), all(sequence.trained)) == ({-0.5}, True)
+
+
 def test_tactic_counts_of_the_trained_groups() -> None:
     tactics = policy_data().metrics.tactics
     assert (tactics.proof_graph, tactics.failing, tactics.masked) == (1, 1, 1)
@@ -217,3 +230,26 @@ def test_inserted_tokens_are_untrained_in_every_credit_mode(credit: CreditMode) 
     data = single_tree_data([group_with_forced], texts, PolicyDataConfig(credit))
     opening = data.sequences[0].sampler_log_probabilities.index(None)
     assert not any(data.sequences[0].trained[opening : opening + 10])
+
+
+def proof_success_metrics() -> PolicyDataMetrics:
+    """A group whose samples reaching the proof graph are one with a failing tail and one no closer than the node."""
+    mixed = group(
+        sample("tail", PROOF_GRAPH, FAILING, MASKED, edge_id=0),
+        sample("sideways", PROOF_GRAPH, steps=(NODE_STEPS,), edge_id=1),
+        sample("error", FAILING, edge_id=2),
+    )
+    return single_tree_data([mixed], [], PolicyDataConfig(CreditMode.PROOF_SUCCESS)).metrics
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("mean_proof_success", 2 / 3),
+        ("trained_mean_proof_success", 2 / 3),
+        ("proof_success_failing_tail_share", 0.5),
+        ("proof_success_no_closer_share", 0.5),
+    ],
+)
+def test_proof_success_metrics_of_a_phase(field: str, value: float) -> None:
+    assert getattr(proof_success_metrics(), field) == pytest.approx(value)

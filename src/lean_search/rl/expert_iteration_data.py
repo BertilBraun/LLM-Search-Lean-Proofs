@@ -17,6 +17,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from lean_search.expert_iteration.mixing import is_held_out
+from lean_search.expert_iteration.serving import ModelVersion
 from lean_search.policy.prompts import render_prompt, visible_explanation
 from lean_search.reasoning.dataset import read_examples as read_reasoning_examples
 from lean_search.reasoning.dataset import tokenize_reasoning_example
@@ -48,9 +49,17 @@ LONGEST_COUNTED_BLOCK = 8
 class ExpertIterationDataConfig:
     # The loop's run directory under $LEAN_SEARCH_RUNS.
     loop: str = "grpo_loop_v1"
-    # Phases from the reward fix's first phase (reward_fix.json) to this one; 0: up to the phase before the one
-    # collecting now, whose trees are partial.
+    # The window's last phase; 0: the phase before the one collecting now, whose trees are partial.
     last_phase: int = 0
+    # The last `window_phases` phases up to last_phase (fewer while fewer have finished), with the samples of the
+    # versions serving while they sampled; 0: from the reward fix's first phase (reward_fix.json), with the samples of
+    # the version it published or later.
+    window_phases: int = 0
+    # In place of the phases: tree directories (each one slice, its *.json.gz files as grpo_phase.py --trees reads
+    # them; under $LEAN_SEARCH_RUNS unless absolute), every version's samples but the rejected ones', and all of one
+    # version unless allow_mixed_versions.
+    tree_directories: tuple[str, ...] = ()
+    allow_mixed_versions: bool = False
     blocks_per_state: int = 2
     states_per_statement: int = 6
     # A state is easy when at least this share of its first-round samples, pooled over every tree, ran a block whose
@@ -93,6 +102,10 @@ def parse_expert_iteration_config(text: str) -> ExpertIterationConfig:
     data = config.data
     if data.blocks_per_state < 1 or data.states_per_statement < 1:
         raise ValueError("data needs blocks_per_state >= 1 and states_per_statement >= 1.")
+    if data.last_phase < 0 or data.window_phases < 0:
+        raise ValueError("data needs last_phase >= 0 and window_phases >= 0.")
+    if data.tree_directories and (data.window_phases or data.last_phase):
+        raise ValueError("data takes tree_directories or a phase window (last_phase, window_phases), not both.")
     if not 0 <= data.max_easy_share < 1 or not 0 <= data.validation_fraction < 1:
         raise ValueError("data needs 0 <= max_easy_share < 1 and 0 <= validation_fraction < 1.")
     if not 0 < data.easy_proof_graph_share <= 1:
@@ -107,10 +120,49 @@ def parse_expert_iteration_config(text: str) -> ExpertIterationConfig:
 
 
 @dataclass(frozen=True)
+class PhaseWindow:
+    first_phase: int
+    last_phase: int
+    # Samples of earlier versions, and of unrecorded ones, are left out.
+    minimum_version: int
+
+    def holds(self, phase: int) -> bool:
+        return self.first_phase <= phase <= self.last_phase
+
+
+def published_by_phase(versions: Sequence[ModelVersion], phase: int) -> int | None:
+    """The version the phase's training published (`loop.phase_trigger`), as `probe_rating.read_markers` finds it."""
+    return next((version.version for version in versions if version.trigger == f"phase {phase}"), None)
+
+
+def phase_window(
+    window_phases: int, last_phase: int, versions: Sequence[ModelVersion], reward_fix_phase: int | None
+) -> PhaseWindow:
+    """`last_phase` resolved (never 0), `versions` the run's models/versions.jsonl, `reward_fix_phase` its
+    reward_fix.json's first phase (None without one). A window's samples are those of the version the phase before it
+    published (version 0 before any) or later: a rollback's re-publish is newer, so it counts. A window ignores
+    reward_fix.json, so on a run with one it may reach into the phases before the fix."""
+    if window_phases == 0:
+        if reward_fix_phase is None:
+            raise ValueError("The run has no reward_fix.json: its first phase is unknown; set [data] window_phases.")
+        first_phase = reward_fix_phase
+        minimum_version = published_by_phase(versions, reward_fix_phase)
+        if minimum_version is None:
+            raise ValueError(f"No version was published by phase {first_phase}, the reward fix's first phase.")
+    else:
+        first_phase = max(1, last_phase - window_phases + 1)
+        earlier = (published_by_phase(versions, phase) for phase in range(first_phase - 1, 0, -1))
+        minimum_version = next((version for version in earlier if version is not None), 0)
+    if last_phase < first_phase:
+        raise ValueError(f"The phase window {first_phase}-{last_phase} is empty: no phase in it has finished.")
+    return PhaseWindow(first_phase, last_phase, minimum_version)
+
+
+@dataclass(frozen=True)
 class CompletionFilter:
     """What the loop must not train on again, and what the evaluations hold out."""
 
-    # Samples of earlier versions, and of unrecorded ones, predate the reward fix.
+    # Samples of earlier versions, and of unrecorded ones, predate the phase window (`PhaseWindow`).
     minimum_version: int
     rejected_versions: frozenset[int] = frozenset()
     held_out_statements: frozenset[str] = frozenset()
@@ -208,6 +260,8 @@ class TreeCompletions:
     completions: tuple[ProofGraphCompletion, ...] = ()
     counts: FilterCounts = field(default_factory=FilterCounts)
     samples: tuple[StateSamples, ...] = ()
+    # `sampling_versions` of the tree.
+    sampling_versions: frozenset[int | None] = frozenset()
 
 
 def is_easy(samples: int, proof_graph_blocks: int, config: ExpertIterationDataConfig) -> bool:
@@ -296,6 +350,11 @@ def token_verdict(tokens: CompletionTokens) -> Verdict:
     return Verdict.KEPT
 
 
+def sampling_versions(record: TreeRecord) -> frozenset[int | None]:
+    """The policy versions of the tree's first-round samples; None for unrecorded ones."""
+    return frozenset(expansion.policy_version for expansion in record.expansions if not expansion.feedback)
+
+
 def proof_graph_completions(
     record: TreeRecord,
     tokenizer: PolicyTokenizer,
@@ -361,7 +420,9 @@ def proof_graph_completions(
                     below_band=below_band,
                 )
             )
-    return TreeCompletions(tuple(capped_blocks(kept, config)), FilterCounts.of(verdicts), tuple(samples))
+    return TreeCompletions(
+        tuple(capped_blocks(kept, config)), FilterCounts.of(verdicts), tuple(samples), sampling_versions(record)
+    )
 
 
 def file_completions(

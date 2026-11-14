@@ -160,3 +160,23 @@ digest in the configs equals the published `verified.jsonl`'s sha256.
   an upper bound). A boolean switch can come later.
 
 Verdict: **merge**. Fix A and B before step 1's probe runs and C before the first rating of step 1.
+
+## Final check (085d78d, 9147f21)
+
+Tests at 9147f21: 283 passed (probe evaluation, rating, overlap, shipped configs, loop health).
+
+- **A resolved.** The identity now carries the run config's digest (search config, budget, cap, concurrency).
+- **B resolved.** The loop's start (`GrpoLoop.session`), `grpo_evaluate.py` and `run_search.py` refuse while the
+  node-wide lock is held. A session during which a loop came up is cut back to where it started, together with its
+  trees and summary. A crash leaves no stale lock: `flock` dies with its holder, and the lock file's existence means
+  nothing. The lock is released on every exit path. A loop that restarts after a crash is refused only while a probe
+  evaluation really runs, which is the intent.
+- **C resolved.** The anchor is pinned by `--anchor`, and two pinned checkpoints raise. Without an anchor the old
+  lowest-key rule applies, so loop runs (identity "", never pinned) are rated exactly as before.
+- **Renamed duplicates fixed.** Hypotheses are ordered by their type with the variables anonymized first.
+- **Sessions.** Results from before the spoiled session's start are kept. Results from an interrupted but unspoiled
+  session are kept, which is safe because the lock now keeps any loop off.
+- **Minor.** By-hand tools that swap weights still ignore the lock (`publish_weights.py`, `grpo_single_step.py`), and
+  so would go unseen during a probe run. `--anchor` does not check that the policy adapter is v0's.
+
+Verdict: nothing must be fixed before the first probe run on the node.

@@ -18,6 +18,7 @@ from lean_search.expert_iteration.shards import now
 from lean_search.monitoring.families import GrpoPhase
 from lean_search.policy.adapters import MergeSeconds, PremergedWeights, premerge_adapter
 from lean_search.reasoning.dataset import ReasoningExample, tokenize_reasoning_example
+from lean_search.rl.advantages import CreditMode
 from lean_search.rl.grpo_groups import PolicyGroup, RewardConfig, policy_groups
 from lean_search.rl.policy_data import (
     PolicyData,
@@ -83,6 +84,10 @@ class TrainingPhaseConfig:
     value: GraphValueConfig | None = None
     # Policy versions the loop rolled back from: their groups leave the policy data, their trees the value window.
     excluded_policy_versions: tuple[int, ...] = ()
+
+    @property
+    def credit(self) -> CreditMode:
+        return CreditMode.PER_TACTIC if self.policy is None else self.policy.data.credit
 
 
 @dataclass(frozen=True)
@@ -213,7 +218,7 @@ def label_phase_data(records: Sequence[TreeRecord], config: TrainingPhaseConfig)
         trees.append(LabelledTree(record, labels, targets))
         groups = groups_not_sampled_by(tree_groups.groups, record.expansions, config.excluded_policy_versions)
         policy_trees.append(PolicyTree(groups, record.expansions))
-        statistics.append(graph_statistics(record, labels, targets, tactics, tree_groups))
+        statistics.append(graph_statistics(record, labels, targets, tactics, tree_groups, config.credit))
     return LabelledPhaseData(tuple(trees), tuple(policy_trees), total_statistics(statistics))
 
 
@@ -520,6 +525,10 @@ def grpo_phase_record(
         ratios_by_pass={str(number): ratios for number, ratios in enumerate(result.ratios_by_pass, start=1)},
         forced_answers_kept=data.forced_sequences,
         retokenized_sequences=data.retokenized_sequences,
+        mean_proof_success=data.mean_proof_success,
+        trained_mean_proof_success=data.trained_mean_proof_success,
+        proof_success_failing_tail_share=data.proof_success_failing_tail_share,
+        proof_success_no_closer_share=data.proof_success_no_closer_share,
         sampling_seconds=sampling_seconds,
     )
 

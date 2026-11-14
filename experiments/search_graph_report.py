@@ -14,6 +14,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from lean_search.rl.advantages import CreditMode
 from lean_search.rl.grpo_groups import RewardConfig, policy_groups
 from lean_search.rl.tree_statistics import GraphStatistics, TreeStatistics, graph_statistics, total_statistics
 from lean_search.search import read_tree
@@ -56,7 +57,7 @@ def run_report(
         targets = value_targets(record, labels, estimates, target_config)
         tactics = policy_tactics(record, labels, reward_config.off_graph_min_expanded_nodes)
         groups = policy_groups(record, labels, tactics, estimates, reward_config)
-        statistics = graph_statistics(record, labels, targets, tactics, groups)
+        statistics = graph_statistics(record, labels, targets, tactics, groups, CreditMode.PER_TACTIC)
         trees.append(TreeStatistics(record.problem_name, statistics))
     return RunReport(str(directory), total_statistics([tree.statistics for tree in trees]), tuple(trees))
 
