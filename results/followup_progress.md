@@ -2,7 +2,7 @@
 
 Kept current by the orchestrator. Details live in the linked files.
 
-**Last update:** 2026-11-14, 14:45 UTC.
+**Last update:** 2026-11-14, 15:20 UTC.
 
 ## Where we are
 
@@ -21,6 +21,19 @@ Step 0 is done on the node; step 1 has started with the probe draw and the two a
 | Package: study tooling (arm comparison, slicing, learning-rate ranking, step-1 run lists, launcher, arm configs) | implemented; two code reviews running | branch `worktree-agent-acedfb3c2cd157ac3` |
 | Package: expert iteration inside the loop | only after step 2, if that arm goes on | |
 | Watchdog | every 15 minutes while this session is open | |
+
+## Open problem (2026-11-14, 15:20 UTC)
+
+**Model servers segfault after an in-place weight swap.** Anchor run 1 crashed twice, each time minutes after the
+probe tool swapped weights into the running servers (14:58 value server on GPU 0; 15:09 policy server on GPU 3). The
+same servers ran 1.5 hours under load without a swap and without a crash. The loop publishes new versions through the
+same swap, so the arms would be hit too.
+
+- Now: the anchor runs restart on fresh servers without any swap (v0's weights are already what the servers load).
+  271 of 2,000 statements of run 1 are kept.
+- In parallel: diagnosis from the crash logs and the old run's logs; a restart-based way to bring a checkpoint up as a
+  fallback; probe runs that survive a server failure (today one failed request ends a 2,000-statement run).
+- Probe v2 is drawn: 2,000 statements, 33 twins held out; copies in `node_backup/2026-11-14/probe_v2/`.
 
 ## Node results (2026-11-14)
 
@@ -92,7 +105,7 @@ Step 0 is done on the node; step 1 has started with the probe draw and the two a
 
 | Item | Amount |
 |---|---|
-| Node, 2026-11-14 11:20 UTC to 14:45 UTC | about $3.0 |
+| Node, 2026-11-14 11:20 UTC to 15:20 UTC | about $3.6 |
 
 ## For the owner's next check-in
 
