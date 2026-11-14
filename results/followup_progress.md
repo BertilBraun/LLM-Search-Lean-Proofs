@@ -2,24 +2,39 @@
 
 Kept current by the orchestrator. Details live in the linked files.
 
-**Last update:** 2026-11-14, 13:35 UTC.
+**Last update:** 2026-11-14, 14:45 UTC.
 
 ## Where we are
 
-Step 0 is finishing. The analyses and the design are done; the probe package is merged; the node is running its first
-jobs (v0 reproduction and the throughput test), which set the fixed concurrencies step 1 needs.
+Step 0 is done on the node; step 1 has started with the probe draw and the two anchor runs (v0 with value v0 on the
+2,000-statement probe).
 
 | Item | State | Result or file |
 |---|---|---|
-| Node: 4x RTX 3090, 61-core CPU quota, $0.89/h, billing since about 11:20 UTC | running the v0 reproduction and throughput test since about 13:15 UTC | `ssh -p 16657 root@104.233.209.157` |
-| Node setup | environment, Lean, base models and adapters done (Hugging Face connections kept hanging; fetched in resumable ranges); our dataset still downloading | |
-| Four step-0 analyses | done | `results/followup_step0/` |
-| Design section in `DESIGN.md` ("Follow-up study: controlled arms") | done, reviewed twice, re-checked | `results/reviews/2026-11-14_review_aa_*`, `_ab_*` |
-| Package: probe v2, near-duplicate guard, curriculum by characters, base config, evaluation of any checkpoint | merged on master after two reviews and two fix rounds; a final check of the last fixes is running | reviews `_ac_`, `_ad_` |
-| Package: log-probability setting for the value-free search; pure proof-success credit; expert-iteration data from tree folders | reviewed twice; fixes done for the first, in progress for the other two; then re-review and merge | reviews `_ae_`, `_af_`; branch `followup-signals` |
-| Package: token-budget phases, a defined end, seeds; health checks that mean the same in every arm | being implemented | |
-| Package: study tooling (arm comparison with the pre-set rule, slicing shared trees, learning-rate ranking, step-1 configs, launcher) | being implemented | |
+| Node: 4x RTX 3090, 61-core CPU quota, $0.89/h, billing since about 11:20 UTC | set up; v0 reproduced; throughput measured | `ssh -p 16657 root@104.233.209.157` |
+| Step 1, probe v2 draw and anchor runs 1 and 2 | started about 14:40 UTC | results to `node_backup/2026-11-14/` |
+| Step 1, value-free calibration and pilots, reasoning at equal tokens, old final value model | waits for the launcher (in review) and the anchor runs | |
+| Four step-0 analyses, design with two reviews | done | `results/followup_step0/`, `results/reviews/2026-11-14_review_aa_*`, `_ab_*` |
+| Package: probe v2, near-duplicate guard, curriculum by characters, base config, evaluation of any checkpoint | merged (reviews `_ac_`, `_ad_`, re-reviewed, final check) | master |
+| Package: step log-probability setting, pure proof-success credit, expert-iteration data from tree folders | merged (reviews `_ae_`, `_af_`, re-reviewed) | master |
+| Package: token-budget phases, a defined end, seeds; health checks that mean the same in every arm | implemented; two code reviews running | branch `worktree-agent-a1f7eaa0dbb612621` |
+| Package: study tooling (arm comparison, slicing, learning-rate ranking, step-1 run lists, launcher, arm configs) | implemented; two code reviews running | branch `worktree-agent-acedfb3c2cd157ac3` |
 | Package: expert iteration inside the loop | only after step 2, if that arm goes on | |
+| Watchdog | every 15 minutes while this session is open | |
+
+## Node results (2026-11-14)
+
+- **v0 reproduced.** Held-out states: 33.6% success, 59.3% valid Lean on this node, against 32.2% / 57.2% published;
+  paired per state the difference is within noise.
+- **Throughput with v0 serving** (probe statements, 16 expansions): 56 searches 7.8k expansions/h; 84 searches 10.0k;
+  112 searches 11.0k; 168 searches 10.4k. No CPU throttling in any of them, so v0 searches are GPU-bound here. The
+  quota does bind on Lean-heavy bursts (the held-out evaluation at 112: throttled 46% of the time).
+- **Fixed numbers for the study.** Probe concurrency 84 (set); Lean pinned to 52 CPUs; held-out states at 56. The
+  sampling concurrency is set when the token-budget package merges.
+- **A full probe run for v0 should take about 2-2.5 hours**, about $2.
+- **Network.** The node's link kept dropping to 0.1-3 MB/s, which cost about 75 minutes of setup; SSH drops at times.
+- **Persistence.** `/workspace` is not a volume: everything on the node is lost if the instance is destroyed, so
+  results are copied to the PC as they finish.
 
 ## Findings so far
 
@@ -77,7 +92,7 @@ jobs (v0 reproduction and the throughput test), which set the fixed concurrencie
 
 | Item | Amount |
 |---|---|
-| Node, 2026-11-14 11:20 UTC to 13:35 UTC | about $2.0 |
+| Node, 2026-11-14 11:20 UTC to 14:45 UTC | about $3.0 |
 
 ## For the owner's next check-in
 
