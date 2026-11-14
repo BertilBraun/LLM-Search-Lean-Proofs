@@ -4,8 +4,8 @@ experiments/configs/grpo/phase.toml:
 
 - per_tactic: the loop's search-tree GRPO (`policy_data.tree_policy_data`, credit "per_tactic");
 - sequence: the same groups with credit "sequence" (every sampled token gets the sample's score minus the baseline);
-- outcome: in the same expansion groups, reward 1 for a sample with a tactic on the proof graph, else 0, minus the
-  group's mean, on every sampled token (no division by a standard deviation, like the loop);
+- outcome: the same groups with credit "proof_success" (`CreditMode.PROOF_SUCCESS`: r = 1 for a sample reaching the
+  proof graph, `GroupSample.reaches_proof_graph`, minus the group's mean r, on every sampled token);
 - expert iteration: the round's selection (`expert_iteration_data.proof_graph_completions` and `CompletionSelector`)
   per phase.
 
@@ -30,7 +30,7 @@ from multiprocessing import Pool
 from pathlib import Path
 
 from lean_search.policy.expander import load_tokenizer
-from lean_search.rl.advantages import ZERO_ADVANTAGE, CreditMode, SampleAdvantages
+from lean_search.rl.advantages import ZERO_ADVANTAGE, CreditMode, group_advantages
 from lean_search.rl.expert_iteration_data import (
     CompletionFilter,
     CompletionSelector,
@@ -39,14 +39,12 @@ from lean_search.rl.expert_iteration_data import (
     TreeCompletions,
     proof_graph_completions,
 )
-from lean_search.rl.grpo_groups import REACHED_STATE_LABELS, GroupSample, PolicyGroup, RewardConfig
+from lean_search.rl.grpo_groups import REACHED_STATE_LABELS, GroupSample, RewardConfig
 from lean_search.rl.health_checks import read_rejected_versions
 from lean_search.rl.policy_data import (
     PolicyDataConfig,
     PolicySequence,
     PolicyTokenizer,
-    PolicyTree,
-    policy_sequence,
     tree_policy_data,
 )
 from lean_search.rl.reward_replay import added, added_all
@@ -163,17 +161,6 @@ class Settings:
     completion_filter: CompletionFilter
 
 
-def on_proof_graph(sample: GroupSample) -> bool:
-    return any(tactic.label == TacticLabel.PROOF_GRAPH for tactic in sample.tactics)
-
-
-def outcome_advantages(group: PolicyGroup) -> tuple[float, ...]:
-    rewards = [float(on_proof_graph(sample)) for sample in group.samples]
-    weights = [sample.multiplicity for sample in group.samples]
-    mean = sum(reward * weight for reward, weight in zip(rewards, weights, strict=True)) / sum(weights)
-    return tuple(reward - mean for reward in rewards)
-
-
 def sign(value: float) -> int:
     return 0 if abs(value) <= ZERO_ADVANTAGE else (1 if value > 0 else -1)
 
@@ -197,7 +184,7 @@ def sequence_tally(
             continue
         magnitude = sum(abs(advantage) for advantage, _ in values)
         outcome_sign = sign(outcome_by_edge[sequence.edge_id])
-        on_graph = on_proof_graph(samples_by_edge[sequence.edge_id])
+        on_graph = samples_by_edge[sequence.edge_id].reaches_proof_graph
         tallies.append(
             SignalTally(
                 samples=1,
@@ -225,33 +212,6 @@ def sequence_tally(
             contributing_unsolved_trees=int(not solved and total.samples > 0),
         ),
     )
-
-
-def outcome_sequences(
-    tree: PolicyTree, tokenizer: PolicyTokenizer, outcome_by_edge: dict[int, float]
-) -> tuple[list[PolicySequence], int]:
-    """The outcome scheme's sequences (sequence credit, no prompt: only the completion tokens are counted) and its
-    groups with a non-zero advantage."""
-    texts_by_prompt = {(expansion.node_id, expansion.feedback): expansion for expansion in tree.texts}
-    sequences = []
-    groups = 0
-    for group in tree.groups:
-        advantages = [outcome_by_edge[sample.edge_ids[0]] for sample in group.samples]
-        if all(sign(advantage) == 0 for advantage in advantages):
-            continue
-        groups += 1
-        expansion = texts_by_prompt.get((group.node_id, group.feedback))
-        if expansion is None:
-            continue
-        for sample, advantage in zip(group.samples, advantages, strict=True):
-            credit = SampleAdvantages(advantage, tuple(None for _ in sample.tactics), None)
-            for completion in expansion.completions:
-                if completion.edge_id in sample.edge_ids:
-                    sequence, _ = policy_sequence(
-                        tokenizer, group, expansion, (), completion, 1.0, credit, CreditMode.SEQUENCE
-                    )
-                    sequences.append(sequence)
-    return sequences, groups
 
 
 def expansion_counts(record: TreeRecord, blocks: TreeBlocks) -> ExpansionCounts:
@@ -284,21 +244,18 @@ def tree_outcome(record: TreeRecord, tokenizer: PolicyTokenizer, settings: Setti
         edge_id: sample for group in tree.groups for sample in group.samples for edge_id in sample.edge_ids
     }
     outcome_by_edge = {
-        edge_id: advantage
+        edge_id: advantages.proof_success
         for group in tree.groups
-        for sample, advantage in zip(group.samples, outcome_advantages(group), strict=True)
+        for sample, advantages in zip(group.samples, group_advantages(group).samples, strict=True)
         for edge_id in sample.edge_ids
     }
     tallies = []
     mismatches = 0
-    for credit in (CreditMode.PER_TACTIC, CreditMode.SEQUENCE):
+    for credit in (CreditMode.PER_TACTIC, CreditMode.SEQUENCE, CreditMode.PROOF_SUCCESS):
         parts = tree_policy_data(tree, tokenizer, PolicyDataConfig(credit=credit))
         mismatches = parts.mismatches
         tally = sequence_tally(parts.sequences, samples_by_edge, outcome_by_edge, solved)
         tallies.append(added(tally, SignalTally(groups=len(parts.trained_groups))))
-    sequences, outcome_groups = outcome_sequences(tree, tokenizer, outcome_by_edge)
-    tally = sequence_tally(sequences, samples_by_edge, outcome_by_edge, solved)
-    tallies.append(added(tally, SignalTally(groups=outcome_groups)))
     blocks = TreeBlocks(record, settings.expert_iteration)
     completions = proof_graph_completions(record, tokenizer, settings.expert_iteration, settings.completion_filter)
     signal = TreeSignal(

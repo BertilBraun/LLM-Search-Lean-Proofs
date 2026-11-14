@@ -159,6 +159,10 @@ class Accounting:
     harvest_expansions: int = 0
     # Expansions whose state was drawn by exploration rather than taken as the best.
     exploration_expansions: int = 0
+    # Children of policy and repair steps, and those whose block failed after the prefix the child kept: their step
+    # log-probability also covers the tokens of the failed tail.
+    policy_children: int = 0
+    partial_policy_children: int = 0
 
 
 @dataclass
@@ -730,6 +734,9 @@ class _TheoremSearch:
             lean_seconds,
         )
         self.accounting.nodes += 1
+        if candidate.source != StepSource.AUTOMATION:
+            self.accounting.policy_children += 1
+            self.accounting.partial_policy_children += int(applied_tactics < result.total_tactics)
         return edge, child
 
     def _record(

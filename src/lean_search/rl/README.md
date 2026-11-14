@@ -136,7 +136,15 @@ value. After a failure the closing follows masked tactics and stays untrained.
 
 A sample without a span per executed tactic (no usable block, spans not recorded) gets
 score − b on every sampled token, so an unparsed sample scores like a failing tactic over its whole completion.
-Sequence credit sees the progress and the wasted-tactic costs through the score.
+Sequence credit sees the progress and the wasted-tactic costs through the score. `proof_success` credit (the
+follow-up study's outcome-only control, `phase_proof_success.toml`) sees none of them: r = 1 when the sample reaches
+the proof graph (`GroupSample.reaches_proof_graph`): its edge is a forward one (new state, sibling state,
+transposition, a repeat by its executed edge: no failure, unparsed sample, no-op, return to an ancestor or unverified
+proof) and a tactic of its kept prefix is labelled proof graph; else 0. As in per-tactic credit's global part, what
+follows the first proof-graph state is neither charged nor credited: a failing tactic, a valid continuation into an
+unknown or off-graph state, a detour on the proof graph (no δ). A redundant step is labelled redundant before the
+proof-graph check, so a lone redundant `have` on a found proof gets 0. Every sampled token but the inserted ones gets
+r minus the group's multiplicity-weighted mean r, and a group trains only when its samples' r differ.
 
 Tokens are the recorded ones (`SampledCompletion.tokens.token_ids`, no re-tokenization; the prompt is the recorded
 prompt encoded without special tokens, as vLLM does). Their characters come from decoding them one by one with the
@@ -839,27 +847,31 @@ variants train on the same data (`experiments/configs/grpo/expert_iteration_1.to
 two validation losses; the best two are published and evaluated, the winner kept.
 
 **Data** (`build`, a CPU process pool beside the sampling loop). The trees of the phases from the reward fix's first
-phase (`reward_fix.json`) to `[data] last_phase`, labelled with the loop's own `label_graph` and `policy_tactics`. A
-recorded sample is an example when its node is on the proof graph, it is a first-round sample (not the feedback
-round's) of a version from the one the fix's first phase published on (`probe_rating.read_markers`), never a rejected
-version's, its every tactic is on the proof graph, none leaves a claim open, and it is on a shortest route: its last
-state is as many steps closer to a proof as it has tactics. The example is the recorded prompt's ids plus the recorded
-token ids, the loop's `PolicySequence.tokenized`; samples tokenized again, forced at the token cap or whose tokens do
-not decode to their text are dropped. Trees of the probe, gate and miniF2F statements and states equal to a held-out
-state are dropped too (both counts should be 0). Then: one example per state across trees, at most `blocks_per_state`
-(2) distinct blocks per state and `states_per_statement` (6) states per statement (those on the root's shortest route
-first), both by a seeded hash so that block length plays no part; easy states at most `max_easy_share` (20%) of the
-examples, a state being easy when at least `easy_proof_graph_share` (7 of 8) of its first-round samples, pooled over
-every tree that searched it (the below-band statements are searched again and again), ran a proof-graph block (GRPO
-gives those little advantage); 5% of the statements for validation (`mixing.is_held_out`). `CompletionSelector`
-selects as the workers' trees arrive, keeping per state only the blocks the caps can keep, so the parent's memory stays
-bounded; a worker that dies (killed for memory) fails the build with nothing written. `count` reads only the tree index
-(every tree of the phases, whichever version sampled it); both tolerate the half-written last index line of the
-running loop. The build's README.md gives the count per filter, the selection, the pooled easy states, block lengths,
-explanation characters, the easy share, the share from below the band, the share ending in an end of turn and the
-prompts unlike the replay's (`render_prompt` with visible reasoning). The node's first build (phases from the fix to
-25): 2,947 solved trees, 13,168 blocks kept before the caps, 6,826 training and 292 validation examples, 2.9M tokens
-(1.28M completion), in ~80 s on 16 processes.
+phase (`reward_fix.json`) to `[data] last_phase`, labelled with the loop's own `label_graph` and `policy_tactics`; with
+`[data] window_phases` = W instead the last W phases up to `last_phase` (fewer while fewer have finished; no
+`reward_fix.json` needed), the follow-up study's sliding window (`phase_window`); with `[data] tree_directories` instead
+every tree of those directories (step 2's slices of a run that never ends a phase; `expert_iteration_trees`), every
+version's samples but a rejected one's, refused when they mix versions unless `allow_mixed_versions`. A recorded sample
+is an example when its node is on the proof graph, it is a first-round sample (not the feedback round's) of a version
+from the one the fix's first phase published on (`probe_rating.read_markers`; in a window: from the one the phase before
+it published, version 0 before any), never a rejected version's, its every tactic is on the proof graph, none leaves a
+claim open, and it is on a shortest route: its last state is as many steps closer to a proof as it has tactics. The
+example is the recorded prompt's ids plus the recorded token ids, the loop's `PolicySequence.tokenized`; samples
+tokenized again, forced at the token cap or whose tokens do not decode to their text are dropped. Trees of the probe,
+gate and miniF2F statements and states equal to a held-out state are dropped too (both counts should be 0). Then: one
+example per state across trees, at most `blocks_per_state` (2) distinct blocks per state and `states_per_statement` (6)
+states per statement (those on the root's shortest route first), both by a seeded hash so that block length plays no
+part; easy states at most `max_easy_share` (20%) of the examples, a state being easy when at least
+`easy_proof_graph_share` (7 of 8) of its first-round samples, pooled over every tree that searched it (the below-band
+statements are searched again and again), ran a proof-graph block (GRPO gives those little advantage); 5% of the
+statements for validation (`mixing.is_held_out`). `CompletionSelector` selects as the workers' trees arrive, keeping per
+state only the blocks the caps can keep, so the parent's memory stays bounded; a worker that dies (killed for memory)
+fails the build with nothing written. `count` reads only the tree index (every tree of the phases, whichever version
+sampled it); both tolerate the half-written last index line of the running loop. The build's README.md gives the count
+per filter, the selection, the pooled easy states, block lengths, explanation characters, the easy share, the share from
+below the band, the share ending in an end of turn and the prompts unlike the replay's (`render_prompt` with visible
+reasoning). The node's first build (phases from the fix to 25): 2,947 solved trees, 13,168 blocks kept before the caps,
+6,826 training and 292 validation examples, 2.9M tokens (1.28M completion), in ~80 s on 16 processes.
 
 **Training** (`train`, torchrun on the 4 GPUs with the loop stopped; `train --dry-run` on the CPU beside the loop
 assembles the data and prints the examples, the completion-token shares and the steps). `training/sft.py` continues

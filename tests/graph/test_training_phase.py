@@ -51,14 +51,16 @@ def test_shipped_phase_configs_train_both_models(path: Path) -> None:
     assert config.policy is not None and config.value is not None
 
 
-def test_sequence_credit_config_differs_only_in_the_credit() -> None:
+@pytest.mark.parametrize(
+    ("name", "credit"),
+    [("phase_sequence_credit.toml", CreditMode.SEQUENCE), ("phase_proof_success.toml", CreditMode.PROOF_SUCCESS)],
+)
+def test_other_credit_configs_differ_only_in_the_credit(name: str, credit: CreditMode) -> None:
     per_tactic = load(CONFIG_DIRECTORY / "phase.toml")
-    sequence = load(CONFIG_DIRECTORY / "phase_sequence_credit.toml")
-    assert per_tactic.policy is not None and sequence.policy is not None
-    expected = dataclasses.replace(
-        per_tactic.policy, data=dataclasses.replace(per_tactic.policy.data, credit=CreditMode.SEQUENCE)
-    )
-    assert sequence == dataclasses.replace(per_tactic, policy=expected)
+    other = load(CONFIG_DIRECTORY / name)
+    assert per_tactic.policy is not None and other.policy is not None
+    expected = dataclasses.replace(per_tactic.policy, data=dataclasses.replace(per_tactic.policy.data, credit=credit))
+    assert other == dataclasses.replace(per_tactic, policy=expected)
 
 
 def phase_tree() -> TreeRecord:

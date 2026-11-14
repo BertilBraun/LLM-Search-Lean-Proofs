@@ -3,19 +3,21 @@ from collections.abc import Sequence
 import pytest
 
 from lean_search.rl.advantages import CreditMode, SampleAdvantages
-from lean_search.rl.token_credit import (
-    TokenSegment,
+from lean_search.rl.token_credit import TokenSegment, inserted_token_indices, token_credits
+from lean_search.search.texts import (
+    CharacterSpan,
+    InsertedSpan,
+    SampledCompletion,
+    SampledTokens,
+    TokenSpan,
     decoded_offsets,
-    inserted_token_indices,
-    sampled_token_offsets,
-    token_credits,
+    token_offsets,
 )
-from lean_search.search.texts import CharacterSpan, InsertedSpan, SampledCompletion, SampledTokens, TokenSpan
 
 EXPLANATION = "Introduce x, then normalize.\n\n```lean\n"
 BLOCK = "intro x\nsimp\nring"
 COMPLETION = EXPLANATION + BLOCK + "\n```<|im_end|>"
-ADVANTAGES = SampleAdvantages(sequence=0.5, tactics=(0.8, -0.3, None), closing=None)
+ADVANTAGES = SampleAdvantages(sequence=0.5, tactics=(0.8, -0.3, None), closing=None, proof_success=-0.25)
 
 
 class ByteDecoder:
@@ -73,7 +75,7 @@ def test_token_credit_of_each_part(needle: str, segment: TokenSegment, advantage
 
 
 def test_closing_tokens_of_a_complete_block_get_the_last_tactic_advantage() -> None:
-    complete = SampleAdvantages(sequence=0.5, tactics=(0.8, 0.2, 0.4), closing=0.4)
+    complete = SampleAdvantages(sequence=0.5, tactics=(0.8, 0.2, 0.4), closing=0.4, proof_success=0.75)
     credits, positions = credits_at("<|im_end|>", complete)
     assert {credits.advantages[index] for index in positions} == {0.4}
 
@@ -92,6 +94,25 @@ def test_sequence_credit_gives_every_token_the_sequence_advantage() -> None:
         CreditMode.SEQUENCE,
     )
     assert set(credits.advantages) == {0.5}
+
+
+def test_proof_success_credit_gives_every_token_the_proof_success_advantage() -> None:
+    credits = token_credits(
+        character_offsets(COMPLETION),
+        spans(COMPLETION, "intro x", "simp", "ring"),
+        frozenset(),
+        ADVANTAGES,
+        CreditMode.PROOF_SUCCESS,
+    )
+    assert (set(credits.advantages), set(credits.trained)) == ({-0.25}, {True})
+
+
+@pytest.mark.parametrize("mode", [CreditMode.SEQUENCE, CreditMode.PROOF_SUCCESS])
+def test_segments_are_by_position_in_every_credit_mode(mode: CreditMode) -> None:
+    layout = spans(COMPLETION, "intro x", "simp", "ring")
+    per_tactic = token_credits(character_offsets(COMPLETION), layout, frozenset(), ADVANTAGES, CreditMode.PER_TACTIC)
+    other = token_credits(character_offsets(COMPLETION), layout, frozenset(), ADVANTAGES, mode)
+    assert other.segments == per_tactic.segments
 
 
 def test_without_a_span_per_tactic_every_token_gets_the_sequence_advantage() -> None:
@@ -139,19 +160,19 @@ FORCED = forced("Thinking on and on.\n\n```lean\nsimp\n```", "\n\n```lean\n", "\
 
 
 def test_end_of_turn_after_the_inserted_fence_starts_past_it() -> None:
-    offsets = sampled_token_offsets(CharacterDecoder(), FORCED)
+    offsets = token_offsets(CharacterDecoder(), FORCED.text, FORCED.tokens)
     end_of_turn = len(FORCED.text) - len("\n```")
     assert offsets is not None and offsets[end_of_turn][0] == len(FORCED.text)
 
 
 def test_tokens_before_the_inserted_fence_keep_their_positions() -> None:
-    offsets = sampled_token_offsets(CharacterDecoder(), FORCED)
+    offsets = token_offsets(CharacterDecoder(), FORCED.text, FORCED.tokens)
     assert offsets is not None and offsets[3] == (3, 4)
 
 
 def test_tokens_that_do_not_decode_to_the_text_have_no_offsets() -> None:
     mismatched = SampledCompletion(0, "simp", (), tokens=SampledTokens((ord("x"),), (-0.1,)))
-    assert sampled_token_offsets(CharacterDecoder(), mismatched) is None
+    assert token_offsets(CharacterDecoder(), mismatched.text, mismatched.tokens) is None
 
 
 def test_inserted_token_indices_cover_the_inserted_opening() -> None:

@@ -1,6 +1,18 @@
 from dataclasses import dataclass, field
+from enum import StrEnum
 
 from lean_search.retrieval.config import RetrievalConfig
+
+
+class StepLogProbability(StrEnum):
+    """Which sampled tokens a candidate's log-probability covers."""
+
+    # Every token of the completion: explanation or thoughts, fences, block and whatever followed.
+    COMPLETION = "completion"
+    # The sum over the Lean block's tokens.
+    BLOCK_SUM = "block_sum"
+    # The mean over the Lean block's tokens.
+    BLOCK_MEAN = "block_mean"
 
 
 @dataclass(frozen=True)
@@ -47,6 +59,9 @@ class PolicyConfig:
     feedback: FeedbackConfig = field(default_factory=FeedbackConfig)
     # One prompt line naming the automation tactics that failed at the node; the automation must finish first.
     failed_automation_in_prompt: bool = False
+    # What a candidate's log-probability covers: it orders its batch and is the step value of the search's path
+    # log-probability and of A*'s policy prior.
+    step_log_probability: StepLogProbability = StepLogProbability.COMPLETION
 
     @property
     def reasons(self) -> bool:

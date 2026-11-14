@@ -345,6 +345,12 @@ class GrpoPhase:
     forced_answers_kept: int = 0
     # Sequences from records without token ids, tokenized again.
     retokenized_sequences: int = 0
+    # Proof-success r (`PolicyDataMetrics`): mean over all groups and over the trained ones; of the trained r = 1
+    # samples, the shares with a failing tactic and with no state closer to a proof than the node.
+    mean_proof_success: float = 0.0
+    trained_mean_proof_success: float = 0.0
+    proof_success_failing_tail_share: float = 0.0
+    proof_success_no_closer_share: float = 0.0
     # The searches that produced the phase's data; with training_seconds it decides one or two passes.
     sampling_seconds: float | None = None
 

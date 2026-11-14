@@ -3,16 +3,9 @@
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Protocol
 
 from lean_search.rl.advantages import CreditMode, SampleAdvantages
-from lean_search.search.texts import CharacterSpan, SampledCompletion
-
-INCOMPLETE_CHARACTER = "�"
-
-
-class TokenDecoder(Protocol):
-    def decode(self, token_ids: Sequence[int], *, skip_special_tokens: bool) -> str: ...
+from lean_search.search.texts import CharacterSpan, SampledCompletion, overlaps
 
 
 class TokenSegment(StrEnum):
@@ -33,61 +26,10 @@ class TokenCredits:
     segments: tuple[TokenSegment, ...]
 
 
-def decoded_offsets(decoder: TokenDecoder, token_ids: Sequence[int]) -> tuple[list[tuple[int, int]], str]:
-    """Each token's characters in the decoded text; tokens sharing a multi-byte character share its range."""
-    offsets: list[tuple[int, int]] = []
-    pieces: list[str] = []
-    length = 0
-    pending = 0
-    for index in range(len(token_ids)):
-        piece = decoder.decode(token_ids[pending : index + 1], skip_special_tokens=False)
-        if piece.endswith(INCOMPLETE_CHARACTER) and index + 1 < len(token_ids):
-            continue
-        offsets.extend([(length, length + len(piece))] * (index + 1 - pending))
-        pieces.append(piece)
-        length += len(piece)
-        pending = index + 1
-    return offsets, "".join(pieces)
-
-
-def text_position(position: int, removed: Sequence[CharacterSpan], inclusive: bool) -> int:
-    """A position in the decoded text as a position in the text that also holds the removed spans."""
-    for span in removed:
-        if span.start < position or (inclusive and span.start == position):
-            position += span.end - span.start
-    return position
-
-
-def sampled_token_offsets(decoder: TokenDecoder, completion: SampledCompletion) -> tuple[tuple[int, int], ...] | None:
-    """Each recorded token's characters in the completion text; None when the tokens do not decode to the text."""
-    text = completion.text
-    removed = sorted(
-        (span.characters for span in completion.tokens.inserted if span.tokens.start == span.tokens.end),
-        key=lambda span: span.start,
-    )
-    expected = text
-    for span in reversed(removed):
-        expected = expected[: span.start] + expected[span.end :]
-    offsets, decoded = decoded_offsets(decoder, completion.tokens.token_ids)
-    if not decoded.startswith(expected):
-        return None
-    return tuple(
-        (text_position(start, removed, inclusive=True), text_position(end, removed, inclusive=False))
-        for start, end in offsets
-    )
-
-
 def inserted_token_indices(completion: SampledCompletion) -> frozenset[int]:
     return frozenset(
         index for span in completion.tokens.inserted for index in range(span.tokens.start, span.tokens.end)
     )
-
-
-def overlaps(token: tuple[int, int], span: CharacterSpan) -> bool:
-    start, end = token
-    if start == end:
-        return span.start <= start < span.end
-    return span.start < end and start < span.end
 
 
 def tactic_position(token: tuple[int, int], spans: Sequence[CharacterSpan]) -> int:
@@ -105,23 +47,31 @@ def token_credits(
     advantages: SampleAdvantages,
     mode: CreditMode,
 ) -> TokenCredits:
-    """Without one span per tactic (no usable block, or none recorded) every sampled token gets the sequence credit."""
-    per_tactic = mode == CreditMode.PER_TACTIC and bool(spans) and len(spans) == len(advantages.tactics)
+    """Segments by position whatever the mode when there is one span per tactic, else every sampled token is the
+    explanation. Per-tactic credit gives the tactics and the closing part their own advantages and the rest the
+    sequence credit; the other modes give every sampled token the sample's one advantage."""
+    by_position = bool(spans) and len(spans) == len(advantages.tactics)
+    per_tactic = mode == CreditMode.PER_TACTIC
+    match mode:
+        case CreditMode.PER_TACTIC | CreditMode.SEQUENCE:
+            whole = advantages.sequence
+        case CreditMode.PROOF_SUCCESS:
+            whole = advantages.proof_success
     segments: list[TokenSegment] = []
     values: list[float | None] = []
     for index, token in enumerate(offsets):
         if index in inserted:
             segments.append(TokenSegment.INSERTED)
             values.append(None)
-        elif not per_tactic or (token[0] < spans[0].start and token[1] <= spans[0].start):
+        elif not by_position or (token[0] < spans[0].start and token[1] <= spans[0].start):
             segments.append(TokenSegment.EXPLANATION)
-            values.append(advantages.sequence)
+            values.append(whole)
         elif (position := tactic_position(token, spans)) == len(spans):
             segments.append(TokenSegment.CLOSING)
-            values.append(advantages.closing)
+            values.append(advantages.closing if per_tactic else whole)
         else:
             segments.append(TokenSegment.TACTIC)
-            values.append(advantages.tactics[position])
+            values.append(advantages.tactics[position] if per_tactic else whole)
     return TokenCredits(
         advantages=tuple(0.0 if value is None else value for value in values),
         trained=tuple(value is not None for value in values),

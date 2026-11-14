@@ -34,6 +34,8 @@ class ScriptedRepl:
     outcomes: Mapping[str, tuple[str, ...]]
     error: str = "linarith failed"
     blocks: list[str] = field(default_factory=list)
+    # Block text to the goals its first tactic reaches before the next one fails with `error`.
+    failing_tails: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
 
     @property
     def config(self) -> LeanReplConfig:
@@ -45,6 +47,12 @@ class ScriptedRepl:
         self.blocks.append(plan.block)
         if plan.rejection is not None:
             return BlockResult(state, (), len(plan.tactics), plan.rejection, 0.0, plan.tactics)
+        tail_goals = self.failing_tails.get(plan.block)
+        if tail_goals is not None:
+            first = plan.tactics[0].text
+            kept = ProofState(state.header, state.statement, (*state.tactics, first), tail_goals, 0, 0)
+            failure = LeanError(self.error)
+            return BlockResult(kept, (first,), len(plan.tactics), failure, 0.0, plan.tactics, False, (kept,))
         goals = self.outcomes.get(plan.block)
         if goals is None:
             return BlockResult(state, (), len(plan.tactics), LeanError(self.error), 0.0, plan.tactics)

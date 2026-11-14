@@ -18,7 +18,7 @@ from rl_samples import (
 
 from lean_search.rl.advantages import CreditMode, group_advantages, local_share_of_advantages
 from lean_search.rl.grpo_groups import tactic_reward
-from lean_search.search.tactic_labels import TacticOutcome
+from lean_search.search.tactic_labels import TacticLabel, TacticOutcome
 
 STEP = 0.2
 COST = 0.1
@@ -285,3 +285,60 @@ def test_equal_scores_with_different_tactics_carry_a_per_tactic_signal_only() ->
 )
 def test_local_share_of_advantages(first: object, second: object, share: float) -> None:
     assert local_share_of_advantages([group_advantages(group(first, second))]) == pytest.approx(share)
+
+
+def test_proof_success_advantage_is_r_minus_the_multiplicity_weighted_mean_r() -> None:
+    advantages = group_advantages(
+        group(sample("a", PROOF_GRAPH), sample("b", FAILING, multiplicity=2), sample("c", UNKNOWN, PROOF_GRAPH))
+    )
+    assert [item.proof_success for item in advantages.samples] == pytest.approx([0.5, -0.5, 0.5])
+
+
+def test_group_with_every_sample_on_the_proof_graph_has_no_proof_success_signal() -> None:
+    advantages = group_advantages(group(sample("a", PROOF_GRAPH), sample("b", UNKNOWN, PROOF_GRAPH, multiplicity=3)))
+    assert advantages.has_signal(CreditMode.PROOF_SUCCESS) is False
+
+
+def test_proof_success_ignores_progress_and_wasted_tactics() -> None:
+    advantages = group_advantages(
+        group(sample("a", PROOF_GRAPH, PROOF_GRAPH, steps=(3, 2)), sample("b", PROOF_GRAPH, FAILING, MASKED))
+    )
+    signals = (advantages.has_signal(CreditMode.SEQUENCE), advantages.has_signal(CreditMode.PROOF_SUCCESS))
+    assert signals == (True, False)
+
+
+@pytest.mark.parametrize(
+    ("labels", "reaches"),
+    [
+        ((PROOF_GRAPH,), True),
+        ((PROOF_GRAPH, FAILING, MASKED), True),
+        ((UNKNOWN, PROOF_GRAPH), True),
+        ((PROOF_GRAPH, NO_PROGRESS), True),
+        ((PROOF_GRAPH, OFF_GRAPH), True),
+        ((PROOF_GRAPH, UNKNOWN), True),
+        ((FAILING,), False),
+        ((NO_PROGRESS,), False),
+        ((REDUNDANT,), False),
+        ((NO_PROGRESS, FAILING, MASKED), False),
+        ((UNKNOWN, FAILING, MASKED), False),
+        ((UNPROVED_CLAIM, FAILING, MASKED), False),
+    ],
+    ids=[
+        "proof graph",
+        "proof graph then a failing tactic",
+        "unknown then the proof graph",
+        "proof graph then a no-op",
+        "proof graph then a valid step off it",
+        "proof graph then a valid step into an unknown state",
+        "first tactic fails",
+        "no progress",
+        "redundant",
+        "no-op then a failing tactic",
+        "unknown then a failing tactic",
+        "unproved claim",
+    ],
+)
+def test_sample_reaches_the_proof_graph_with_any_tactic_of_its_kept_prefix(
+    labels: tuple[TacticLabel, ...], reaches: bool
+) -> None:
+    assert sample("s", *labels).reaches_proof_graph is reaches
