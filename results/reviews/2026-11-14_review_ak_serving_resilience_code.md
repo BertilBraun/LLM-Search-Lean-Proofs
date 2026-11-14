@@ -126,3 +126,47 @@ failures skip the check, so the next failure must trigger one).
 
 Merge after fixes 1-3. Run no arm with `swap = "restart"` (719f539 makes it the study's default) before 4-6, and run
 none on the skip before finding 7's fingerprint, or turn the skip off.
+
+## Re-review (a285a03..302372b)
+The suites touched (394 tests) pass in WSL. Scratch: `...\scratchpad\review_ak\orphan_probe.sh`.
+- **1, 2, 4, 5 resolved.** A sleeping server is never skipped. Only `is_server_error` is retried; a 4xx raises with
+  its traceback. Skipping `check()` on the restart path hides nothing: `serve()` starts every server and
+  `put_weights` raises on one that stays down, and in place the check is unchanged. A start is retried twice, its
+  logs kept. Minor: `arm_loop.sh`'s `grpo_loop.sh servers` is a second cold start (~200 s) on the restart path.
+- **3 resolved for the loop's paths.** `mark_swapped` lives in `loop_services` only. `expert_iteration/serving.py`
+  l. 302, `publish_weights.py` and `grpo_single_step.py` swap without it, which leaves the four 0.31.0 log strings,
+  tested only on synthetic logs. I found no pass if the strings are right. Should: write the marker inside
+  `server_control`, and grep one real swapped log on the node for each string.
+- **6 holds servers to each other, not to the merge.** A skipped server counts as fresh, so a wrong skip writes a
+  wrong reference. Fully in place, no reference is ever written. Top-5 of 3 generic prompts within 0.05 nats does not
+  separate adjacent GRPO versions (~1e-3 to 1e-2 nats a token per phase). A near-tie top-1 can flip under bf16. The
+  stored vLLM version is never compared. On the restart path, `check_started_from` (a digest-addressed merge as the
+  root) already guarantees the weights. Sound would be: a CPU reference at merge time, `prompt_logprobs` over ~256
+  tokens of a real proof, and a node-measured noise floor at least 5x below the adjacent-version distance. Until
+  then the docs should not claim it detects wrong weights.
+- **7: new must-fix.** `orphaned_server_group` (server_pid.sh l. 262) signals an unrelated group after a reboot.
+  Its only guard, `started >= written - 60`, has no upper bound, and after a reboot every process is newer than the
+  stale pid file. Reproduced: a live child of an exited leader, against a 3-hour-old pid file, returns that group,
+  so `stop_model.sh` (run at every start) would TERM and then KILL it. Fix: a pid file older than `/proc/stat` btime
+  is stale and never signalled (also in `server_processes.py`), each member's command line must be vLLM's, and its
+  start must fall before `written + SERVER_START_TIMEOUT`. `trusted_server_pid` is sound. Minor: it greps the name
+  as a regex, and the final `KILL` goes out even to an empty group. Nothing kills by name.
+- **8: none needed before an arm.** `recover_servers` reading the current version is correct under `pause_lock`.
+  The outage bias affects probe ratings only (should). The loop's restart cap per hour and the launch arguments in
+  the skip are shoulds.
+
+**Verdict**: merge after fix 7. Arms may run on the restart path after the node measurements (GPU memory per start,
+pause segments), with the fingerprint tolerance measured there first: a false mismatch stops a probe run.
+
+## Final check (21fe885)
+- **1 Kill safety: no wrong signal found.** `orphan_probe2.sh` (scratchpad) runs on harmless sleeps of its own:
+  - Refused: a pid file 10 s older than boot (stale, status 1); a foreign leaderless group with no record, or forged into `.members` (status 2, nothing signalled, pid file kept); a `VLLM::EngineCore`-titled child unrecorded, recorded with another start, or older than `written + 900` s.
+  - Accepted only: the titled child recorded exactly as `serve_model.sh` would record it.
+  - A reused pid needs the same start second and membership of the dead server's group, so only the server's own descendants qualify. A `.members` file from before a reboot cannot match a start time after boot, and a by-hand restart leaves an empty old group (stale, nothing signalled). No KILL goes to an empty group; nothing matches by name.
+- **The opposite failure is real.** `trusted_server_pid` needs, for the live leader: argv[0] or argv[1] equal to `vllm` or ending `/vllm`; an argv element exactly `serve`; `--served-model-name` immediately followed by exactly `<name>`; the pid file written since boot; and the process start within 60 s of the pid file's mtime. If vLLM 0.31 retitles its API process (setproctitle), or `setsid` forks, a live server is reported stale: its pid file is removed, nothing is stopped, and the next start refuses the port. That fails safe but strands GPU memory. Verify once on the node with:
+  `source deployment/environment.sh; source deployment/server_pid.sh; for f in "$LEAN_SEARCH_RUNS"/servers/*.pid; do n=$(basename "$f" .pid); p=$(cat "$f"); echo "$n pid=$p pgid=$(ps -o pgid= -p "$p" | tr -d ' ') trusted=$(trusted_server_pid "$f" "$n" || echo NO)"; for m in $(live_group_members "$p"); do echo "  $m $(tr '\0' ' ' < /proc/$m/cmdline | cut -c1-80) member=$(server_member "$m" "${f%.pid}.members" "$(stat -c %Y "$f")" && echo yes || echo NO)"; done; done`
+  Pass: `trusted` equals `pid` equals `pgid` for every server, and every member reads `member=yes`.
+- **2 Fingerprint: no silent wrong weights on the restart path.** The guarantee there is the content-addressed merge plus `check_started_from` (realpath root equals the merge). A reference is written only from such a start. The 20 listed tokens make a missing reference token unlikely. What remains uncaught is a merge that is wrong for its own digest (a merge bug, disk corruption): every reference comes from those same files. That needs the CPU reference and is not a blocker.
+- **3 Loop: no gap.** `stop` is set only by a terminal stop (a failure, a signal, a hard stop, the end). A loop that is not stopping takes the unchanged path, and an early return under `stop` ends the worker (`while not stop.is_set()`).
+
+**Verdict: safe to merge.** Run the command above on the node before the first arm on the restart path.
