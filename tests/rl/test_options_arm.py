@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import httpx
 import pytest
 from loop_fakes import LOOP_TOML, LoopWorld, loop_world, record_version_zero, run_until, statement
 
@@ -36,8 +37,10 @@ from lean_search.rl.statement_sources import FixedStatements
 from lean_search.rl.tree_store import TreeEntry, TreeStore
 from lean_search.rl.tree_summary import TreeSummary
 from lean_search.search import (
+    CandidateBatch,
     CandidateBatches,
     DepthPlusGoals,
+    Expander,
     Node,
     RunConfig,
     SearchConfig,
@@ -377,6 +380,37 @@ async def test_the_searcher_routes_each_statement_to_its_arms_expander() -> None
     for name in names:
         await searcher.search(Problem(name, Split.VALID, "", "theorem t : True := by", "", ""), search_arm(ARM, name))
     assert expanded == [(search_arm(ARM, name), name) for name in names]
+
+
+class FailingAfterABatch:
+    """Pays for one batch of 40 tokens, then a server fails."""
+
+    async def expand(self, node: Node, context: SearchContext) -> CandidateBatches:
+        yield CandidateBatch((), generated_tokens=40)
+        raise httpx.ConnectError("policy server down")
+
+
+def token_searcher(expander: Expander) -> LeanTreeSearcher:
+    search = SearchConfig(max_expansions=2, check_identifiers=False, name_inaccessible_hypotheses=False)
+    config = dataclasses.replace(template(), search=search)
+    models = SearchModels(expander, DepthPlusGoals(), None)
+    return LeanTreeSearcher(config, OneReplPool(), models, PauseGate(), None)
+
+
+PROBLEM = Problem("statement", Split.VALID, "", "theorem t : True := by", "", "")
+
+
+async def test_a_failed_search_keeps_the_tokens_it_generated() -> None:
+    searcher = token_searcher(FailingAfterABatch())
+    with pytest.raises(httpx.ConnectError):
+        await searcher.search(PROBLEM, "")
+    assert searcher.generated_tokens(PROBLEM.name) == 40
+
+
+async def test_a_finished_search_leaves_no_tokens_in_flight() -> None:
+    searcher = token_searcher(RecordingExpander(CONTROL_ARM))
+    await searcher.search(PROBLEM, "")
+    assert searcher.generated_tokens(PROBLEM.name) == 0
 
 
 def options_arm_toml(max_phases: int = 0) -> str:

@@ -455,6 +455,8 @@ THRESHOLDS = HealthThresholds(
     max_bare_have_share=0.3,
     min_claim_proved_rate=0.01,
     min_explanation_characters=100.0,
+    max_failing_after_proof_graph_share=0.15,
+    max_unproved_claim_after_proof_graph_share=0.06,
 )
 HEALTHY = HealthMeasurements(
     0.001,
@@ -471,6 +473,9 @@ HEALTHY = HealthMeasurements(
     claim_proved_rate=0.02,
     closed_form_filler_share=0.01,
     median_explanation_characters=140.0,
+    proof_graph_samples=5000,
+    failing_after_proof_graph_share=0.1,
+    unproved_claim_after_proof_graph_share=0.04,
 )
 QUIET_BUDGET = BudgetPhase(100, 50, 200, 32, 1, 0.02, 0.02, 3, 0.1)
 
@@ -499,6 +504,8 @@ def test_a_healthy_phase_has_no_alerts() -> None:
         ({"bare_have_share": 0.4}, HealthCheck.BARE_HAVES),
         ({"claim_proved_rate": 0.005}, HealthCheck.CLAIMS_PROVED),
         ({"median_explanation_characters": 90.0}, HealthCheck.EXPLANATION_CHARACTERS),
+        ({"failing_after_proof_graph_share": 0.2}, HealthCheck.FAILING_AFTER_PROOF_GRAPH),
+        ({"unproved_claim_after_proof_graph_share": 0.1}, HealthCheck.UNPROVED_CLAIM_AFTER_PROOF_GRAPH),
     ],
 )
 def test_a_signal_beyond_its_threshold_alerts(change: dict[str, float], check: HealthCheck) -> None:
@@ -507,8 +514,20 @@ def test_a_signal_beyond_its_threshold_alerts(change: dict[str, float], check: H
 
 @pytest.mark.parametrize(
     "change",
-    [{"bare_have_share": 0.4}, {"claim_proved_rate": 0.005}, {"median_explanation_characters": 90.0}],
-    ids=["bare haves", "claims proved", "explanation characters"],
+    [
+        {"bare_have_share": 0.4},
+        {"claim_proved_rate": 0.005},
+        {"median_explanation_characters": 90.0},
+        {"failing_after_proof_graph_share": 0.2},
+        {"unproved_claim_after_proof_graph_share": 0.1},
+    ],
+    ids=[
+        "bare haves",
+        "claims proved",
+        "explanation characters",
+        "failing after the proof graph",
+        "unproved claims after the proof graph",
+    ],
 )
 def test_habit_alerts_are_warnings(change: dict[str, float]) -> None:
     alerts = health_alerts(dataclasses.replace(HEALTHY, **change), THRESHOLDS, QUIET_BUDGET, CONFIG)
@@ -521,8 +540,19 @@ def test_habit_alerts_are_warnings(change: dict[str, float]) -> None:
         ({"below_band_bare_have_share": 0.4}, HealthCheck.BARE_HAVES),
         ({"below_band_claim_proved_rate": 0.005}, HealthCheck.CLAIMS_PROVED),
         ({"below_band_median_explanation_characters": 90.0}, HealthCheck.EXPLANATION_CHARACTERS),
+        ({"below_band_failing_after_proof_graph_share": 0.2}, HealthCheck.FAILING_AFTER_PROOF_GRAPH),
+        (
+            {"below_band_unproved_claim_after_proof_graph_share": 0.1},
+            HealthCheck.UNPROVED_CLAIM_AFTER_PROOF_GRAPH,
+        ),
     ],
-    ids=["bare haves", "claims proved", "explanation characters"],
+    ids=[
+        "bare haves",
+        "claims proved",
+        "explanation characters",
+        "failing after the proof graph",
+        "unproved claims after the proof graph",
+    ],
 )
 def test_habit_alerts_compare_the_statements_from_below_the_band(change: dict[str, float], check: HealthCheck) -> None:
     assert checks(dataclasses.replace(HEALTHY, **change)) == [check]
