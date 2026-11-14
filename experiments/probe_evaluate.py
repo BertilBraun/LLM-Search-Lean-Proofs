@@ -3,7 +3,8 @@
     python experiments/probe_evaluate.py --config experiments/configs/grpo/followup/probe_evaluation.toml \
         --name v0_value_v0_run1 --arm v0 --phase 0 --anchor \
         --policy-adapter /workspace/checkpoints/data_rewrite_sft_numbered/adapter --value v0 \
-        [--search-config experiments/configs/grpo/search/<other>.toml] [--problems 200] [--keep-merge]
+        [--search-config experiments/configs/grpo/search/<other>.toml] [--problems 200] [--keep-merge] \
+        [--allow-restarts N]
     --value none             no value model: best-first on the path's mean step log-probability per block (the
                              config's [value_free_priority]: the policy's step log-probability and its calibrated
                              automation constant; refused for a placeholder; other priority settings kept)
@@ -24,21 +25,24 @@ loop.pid counts as not running and is reported). Every session merges the adapte
 weight and config files; under $LEAN_SEARCH_CHECKPOINTS/<output>/weights/) and puts them on the servers by the loop
 config's serving.swap: swapped in place as the loop does at a publish, or the servers restarted from the merges. A
 server that provably started from byte-identical weights and never slept or swapped since (its trusted pid file, no
-<name>.swapped mark, and on vLLM 0.31 its log; probe_evaluation.holds_start_weights) is left as it is. Then each server
-answers check requests, and the fixed prompts as its merge's fingerprint says (taken from the first server started
-from the merge). So a resumed run never searches with what the servers held before; the merges are deleted when the
-run ends, fails or is interrupted (unless --keep-merge or a server runs from one), and those a killed run left are
-deleted at the next start. SIGTERM cancels the run so that this clean-up runs (exit status 143). A loop started later
-serves its own current version again when it starts.
+port_<port>.swapped mark, and on vLLM 0.31 its log; probe_evaluation.holds_start_weights) is left as it is. Then each
+server answers check requests, and the fixed prompts near its merge's fingerprint (taken from the first server freshly
+started from the merge, its root checked; a difference above the tolerance is a warning in the session and run.json,
+above 1 nat a failed start; it catches gross mix-ups, not adjacent versions). So a resumed run never searches with
+what the servers held before; the merges are deleted when the run ends, fails or is interrupted (unless --keep-merge
+or a server runs from one), and those a killed run left are deleted at the next start. SIGTERM cancels the run so
+that this clean-up runs (exit status 143). A loop started later serves its own current version again when it starts.
 
 A server failure does not end the run: a statement whose search fails on a server (no answer or a 5xx; any other error
 ends the run with its traceback) is searched again from scratch, at most [server_failure_retries] times over all of
 the run's processes (failures.jsonl), after the servers were checked with no new search starting. A server is dead
-after 5 server errors in a row on its requests, or 3 failed /health checks 10 s apart (or asleep); a dead one is
-restarted from the merges by serve_model.sh, verified and recorded as a new session, at most [max_server_restarts]
-times over all of the run's processes (sessions.jsonl); then the run stops with exit status 4, which a supervisor must
-not resume before someone looked at the servers. A statement that still fails is left without a result, counted as
-dropped (never as unsolved), and the run is not accepted.
+after 5 server errors in a row on its requests and a failed short completion after them, or 3 failed /health
+checks 10 s apart (or asleep); a dead one is
+restarted from the merges by serve_model.sh, verified and recorded as a new session (before it starts, so a restart
+cut off midway counts), at most [max_server_restarts] times over all of the run's processes (sessions.jsonl), plus
+what --allow-restarts granted (recorded in its session and run.json); then the run stops with exit status 4, which a
+supervisor must not resume before someone looked at the servers and granted more. A statement that still fails is
+left without a result, counted as dropped (never as unsolved), and the run is not accepted.
 
 The run goes to $LEAN_SEARCH_RUNS/<output>/probe_<name>/: results.jsonl (one per statement), summary.json, trees and
 config.toml as a loop's probe run; checkpoint.json (the checkpoint, the run config's digest, concurrency, wall cap and
@@ -101,6 +105,7 @@ from lean_search.rl.probe_evaluation import (
     remove_merges,
     remove_stale_merges,
     resolve_value_adapter,
+    restart_allowance,
     run_config_sha256,
     run_directory,
     run_environment,
@@ -108,6 +113,7 @@ from lean_search.rl.probe_evaluation import (
     run_record,
     running_loops,
     serve_checkpoint,
+    server_restarts,
     start_session,
     stops_by_stratum,
     verify_served,
@@ -146,6 +152,12 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--problems", type=int, default=0, help="only the first N, strata in turn (a pilot)")
     parser.add_argument("--anchor", action="store_true", help="the rating's anchor (v0 with value v0, standard)")
     parser.add_argument("--keep-merge", action="store_true", help="keep the merged weights after the run")
+    parser.add_argument(
+        "--allow-restarts",
+        type=int,
+        default=0,
+        help="server restarts granted beyond the config's (after exit status 4, once the servers were looked at)",
+    )
     return parser.parse_args()
 
 
@@ -255,9 +267,14 @@ async def evaluate(arguments: argparse.Namespace) -> int:
                 log(f"Weights put on {list(served.swapped)} ({served.swap}); already held by {list(served.skipped)}")
                 directory.mkdir(parents=True, exist_ok=True)
                 (directory / "checkpoint.json").write_text(to_json(start), encoding="utf-8")
-                session = start_session(
-                    directory, chosen, paths.results, SessionServing(served.swap, served.swapped, served.skipped)
+                serving = SessionServing(
+                    served.swap,
+                    served.swapped,
+                    served.skipped,
+                    restarts_granted=arguments.allow_restarts,
+                    fingerprint_warnings=served.fingerprint_warnings,
                 )
+                session = start_session(directory, chosen, paths.results, serving)
                 request_failures = RequestFailures()
                 servers = ProbeServers(
                     loop.serving,
@@ -270,13 +287,13 @@ async def evaluate(arguments: argparse.Namespace) -> int:
                     request_failures,
                     DeathRule(),
                 )
-                restarts_before = sum(bool(session.serving.restarted) for session in read_sessions(directory))
+                sessions = read_sessions(directory)
                 tolerance = FailureTolerance(
                     servers,
                     config.server_failure_retries,
-                    config.max_server_restarts,
+                    restart_allowance(sessions, config.max_server_restarts),
                     directory / FAILURES_FILE,
-                    restarts_before,
+                    len(server_restarts(sessions)),
                     request_failures,
                 )
                 log(f"{len(problems)} problems of {config.probe_set} into {directory}")

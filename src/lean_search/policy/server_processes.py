@@ -1,7 +1,8 @@
 """serve_model.sh's records of a running server under $LEAN_SEARCH_RUNS/servers/: <name>.pid (the process group of
-its vLLM, deployment/server_pid.sh), trusted only when that process is a vLLM started for the server about when the
-file was written (a pid reused after a reboot or by another job is not); <name>.swapped, written before the tooling
-swaps or sleeps the server in place and removed by serve_model.sh at a start."""
+its vLLM, deployment/server_pid.sh), trusted only when written since the host booted and its process is a vLLM
+started for the server about when the file was written (a pid reused after a reboot or by another job is not);
+port_<port>.swapped, written by `server_control` before it sleeps or swaps the server on that port in place, removed
+by serve_model.sh at a start."""
 
 import os
 from collections.abc import Sequence
@@ -16,14 +17,15 @@ def pid_file(servers_directory: Path, name: str) -> Path:
     return servers_directory / f"{name}.pid"
 
 
-def swapped_marker(servers_directory: Path, name: str) -> Path:
-    return servers_directory / f"{name}.swapped"
+def swapped_marker(servers_directory: Path, port: int) -> Path:
+    """By port: `server_control` knows a server by its URL only."""
+    return servers_directory / f"port_{port}.swapped"
 
 
-def mark_swapped(servers_directory: Path, name: str) -> None:
+def mark_swapped(servers_directory: Path, port: int) -> None:
     """Before an in-place sleep or swap: from here on the server may hold other weights than it started from."""
     servers_directory.mkdir(parents=True, exist_ok=True)
-    swapped_marker(servers_directory, name).write_text("swapped or slept in place since its start\n", encoding="utf-8")
+    swapped_marker(servers_directory, port).write_text("slept or swapped in place since its start\n", encoding="utf-8")
 
 
 def command_line(process_id: int) -> list[str] | None:
@@ -34,17 +36,21 @@ def command_line(process_id: int) -> list[str] | None:
     return [argument.decode(errors="replace") for argument in raw.split(b"\0") if argument]
 
 
+def boot_time() -> int:
+    """Seconds since the epoch at which the host booted."""
+    boot = Path("/proc/stat").read_text(encoding="utf-8")
+    return next(int(line.split()[1]) for line in boot.splitlines() if line.startswith("btime"))
+
+
 def process_start_time(process_id: int) -> float | None:
     """Seconds since the epoch."""
     try:
         stat = Path(f"/proc/{process_id}/stat").read_text(encoding="utf-8")
-        boot = Path("/proc/stat").read_text(encoding="utf-8")
     except OSError:
         return None
     # The fields after the command name, which may hold spaces; the start time is the 22nd field of the line.
     start_ticks = int(stat.rsplit(")", 1)[1].split()[19])
-    boot_time = next(int(line.split()[1]) for line in boot.splitlines() if line.startswith("btime"))
-    return boot_time + start_ticks / os.sysconf("SC_CLK_TCK")
+    return boot_time() + start_ticks / os.sysconf("SC_CLK_TCK")
 
 
 def is_server_command(arguments: Sequence[str], name: str) -> bool:
@@ -65,14 +71,15 @@ class ServerProcess:
 
 
 def server_process(servers_directory: Path, name: str) -> ServerProcess | None:
-    """The process its pid file names, when that is a live vLLM started for `name` about when the file was written."""
+    """The process its pid file names, when the file was written since the host booted and the process is a live vLLM
+    started for `name` about when the file was written."""
     path = pid_file(servers_directory, name)
     try:
         text = path.read_text(encoding="utf-8").strip()
         written = path.stat().st_mtime
     except OSError:
         return None
-    if not text.isdigit():
+    if not text.isdigit() or written < boot_time():
         return None
     process_id = int(text)
     arguments = command_line(process_id)

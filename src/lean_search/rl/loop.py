@@ -1198,7 +1198,9 @@ class GrpoLoop:
         (stopped is better than idle GPUs until someone looks). An evaluation beside sampling is not paused: its
         requests to a server that does not answer, or restarts, fail it, and it runs again after the next pause."""
         async with self.pause_lock:
-            if not self.servers_failing() and not await self.servers.unhealthy():
+            assert self.stop is not None
+            # A loop stopping on a failure (one in training leaves the restart path's servers stopped) restarts none.
+            if self.stop.is_set() or (not self.servers_failing() and not await self.servers.unhealthy()):
                 return
             self.log(
                 f"{sum(self.recent_searches)} of the last {len(self.recent_searches)} searches failed on a server: "

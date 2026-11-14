@@ -390,8 +390,8 @@ class ServeHistory:
     merged_contents: tuple[str, ...]
 
 
-async def accept_all(assignments: Sequence[ServedWeightsOn], fresh: frozenset[str]) -> None:
-    return
+async def accept_all(assignments: Sequence[ServedWeightsOn], fresh: frozenset[str]) -> tuple[str, ...]:
+    return ()
 
 
 @pytest.fixture(scope="module")

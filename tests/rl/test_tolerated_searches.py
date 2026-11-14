@@ -37,6 +37,7 @@ from lean_search.rl.probe_evaluation import (
     ServedWeights,
     ServersUnsoundError,
     read_sessions,
+    server_restarts,
 )
 from lean_search.search import Accounting, SearchResult, StopReason, load_run_config
 from lean_search.search.records import to_json
@@ -72,6 +73,10 @@ class Scenario:
     # Earlier processes of the run: their restarts and failed searches.
     restarts_before: int = 0
     failures_before: tuple[SearchFailure, ...] = ()
+    # Policy completions answered late (seconds) and the clients' timeout.
+    policy_stalls: tuple[int, int] = (0, 0)
+    stall_seconds: float = 0.0
+    client_timeout_seconds: float = 1800.0
 
 
 @dataclass
@@ -84,10 +89,11 @@ class RunOutcome:
     restarted: list[str] = field(default_factory=list)
 
 
-async def verify_health(assignments: Sequence[ServedWeightsOn], fresh: frozenset[str]) -> None:
+async def verify_health(assignments: Sequence[ServedWeightsOn], fresh: frozenset[str]) -> tuple[str, ...]:
     down = await unhealthy_servers([assigned.server for assigned in assignments])
     if down:
         raise ServersUnsoundError(f"{down} do not answer")
+    return ()
 
 
 async def run_scenario(scenario: Scenario, directory: Path) -> RunOutcome:
@@ -100,6 +106,8 @@ async def run_scenario(scenario: Scenario, directory: Path) -> RunOutcome:
         fake.state.health_failures_left = scenario.policy_health_failures[index]
         fake.state.sleeping = scenario.policy_asleep[index]
         fake.state.completions_until_death = scenario.policy_deaths[index]
+        fake.state.slow_completions_left = scenario.policy_stalls[index]
+        fake.state.completion_delay_seconds = scenario.stall_seconds
         fake.state.root = str(directory / "policy-merge")
     value_fake.state.completions_until_death = scenario.value_deaths
     value_fake.state.root = str(directory / "value-merge")
@@ -143,7 +151,10 @@ async def run_scenario(scenario: Scenario, directory: Path) -> RunOutcome:
     tolerance = FailureTolerance(servers, 3, 3, run.failures_path, scenario.restarts_before, request_failures)
     async with contextlib.AsyncExitStack() as stack:
         policy_clients = [
-            await stack.enter_async_context(PolicyClient(fake.url, "policy-merged")) for fake in policy_fakes
+            await stack.enter_async_context(
+                PolicyClient(fake.url, "policy-merged", timeout_seconds=scenario.client_timeout_seconds)
+            )
+            for fake in policy_fakes
         ]
         value_client = await stack.enter_async_context(PolicyClient(value_fake.url, "value-merged"))
         policy = ServerRotation(policy_clients, recheck_seconds=0.05, request_failures=request_failures)
@@ -189,6 +200,7 @@ SCENARIOS = {
     "answers_health_fails_requests": Scenario(policy_failures=(0, 10_000)),
     "one_slow_health": Scenario(policy_failures=(1, 0), policy_health_failures=(1, 0)),
     "asleep": Scenario(policy_asleep=(False, True)),
+    "stalled": Scenario(policy_stalls=(0, 8), stall_seconds=0.6, client_timeout_seconds=0.2),
     "restarts_used_before": Scenario(policy_deaths=(0, 10), restarts_before=3),
     "failed_before": Scenario(
         failing_prompts=frozenset({"s.t3 step 1"}),
@@ -207,7 +219,7 @@ def failed_problems(run: RunOutcome) -> set[str]:
 
 
 def restart_sessions(run: RunOutcome) -> list[tuple[str, ...]]:
-    return [session.serving.restarted for session in read_sessions(run.directory)]
+    return [restart.servers for restart in server_restarts(read_sessions(run.directory))]
 
 
 ALL = {problem.name for problem in PROBLEMS}
@@ -221,8 +233,8 @@ def test_a_statement_whose_search_got_a_500_is_searched_again(runs: dict[str, Ru
     assert set(runs["one_500"].outcomes) == ALL
 
 
-@pytest.mark.parametrize("scenario", ["one_500", "one_slow_health"])
-def test_a_server_that_stumbles_once_is_not_restarted(scenario: str, runs: dict[str, RunOutcome]) -> None:
+@pytest.mark.parametrize("scenario", ["one_500", "one_slow_health", "stalled"])
+def test_a_server_that_stumbles_is_not_restarted(scenario: str, runs: dict[str, RunOutcome]) -> None:
     assert restart_sessions(runs[scenario]) == []
 
 
@@ -252,9 +264,12 @@ def test_a_run_through_a_dead_server_searches_every_statement(runs: dict[str, Ru
     assert set(runs["one_death"].outcomes) == ALL
 
 
-def test_the_restart_is_recorded_as_a_session_from_the_merges(runs: dict[str, RunOutcome]) -> None:
-    (session,) = read_sessions(runs["one_death"].directory)
-    assert session.serving.swap == SwapMethod.RESTART
+def test_the_restart_is_recorded_before_and_after_it_from_the_merges(runs: dict[str, RunOutcome]) -> None:
+    sessions = read_sessions(runs["one_death"].directory)
+    assert [(session.serving.swap, session.serving.completed) for session in sessions] == [
+        (SwapMethod.RESTART, False),
+        (SwapMethod.RESTART, True),
+    ]
 
 
 def test_a_dead_server_is_left_out_so_few_searches_fail(runs: dict[str, RunOutcome]) -> None:

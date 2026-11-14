@@ -48,7 +48,6 @@ from lean_search.policy.server_control import (
     release_gpu,
     restore_gpu,
 )
-from lean_search.policy.server_processes import mark_swapped
 from lean_search.rl.evaluation import (
     EvaluationKind,
     EvaluationPaths,
@@ -713,9 +712,7 @@ async def put_weights(
     match serving.swap:
         case SwapMethod.IN_PLACE:
             seconds = slowest(
-                await asyncio.gather(
-                    *(swap_in_place(assigned.server, assigned.weights, servers_directory) for assigned in assignments)
-                )
+                await asyncio.gather(*(swap_in_place(assigned.server, assigned.weights) for assigned in assignments))
             )
         case SwapMethod.RESTART:
             await start_servers(
@@ -733,8 +730,7 @@ async def put_weights(
     return seconds
 
 
-async def swap_in_place(server: ServerEndpoint, weights: str, servers_directory: Path) -> PhaseSeconds:
-    mark_swapped(servers_directory, server.name)
+async def swap_in_place(server: ServerEndpoint, weights: str) -> PhaseSeconds:
     # An in-place reload needs ~1.2 GiB beyond the KV cache, more than a GPU shared by two servers keeps free.
     if not await is_sleeping(server.url):
         await release_gpu(server.url)
@@ -803,8 +799,6 @@ class VllmServers:
     async def release(self) -> PhaseSeconds:
         match self.serving.swap:
             case SwapMethod.IN_PLACE:
-                for server in self.released:
-                    mark_swapped(self.servers_directory, server.name)
                 return slowest(await asyncio.gather(*(release_gpu(server.url) for server in self.released)))
             case SwapMethod.RESTART:
                 started = time.monotonic()

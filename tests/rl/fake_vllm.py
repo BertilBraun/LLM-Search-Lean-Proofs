@@ -7,6 +7,7 @@ checks, 500s while asleep, or die (stop listening, the request in flight unanswe
 
 import json
 import threading
+import time
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
@@ -32,6 +33,9 @@ class FakeServerState:
     dead: bool = False
     # Added to every top log-probability: a server holding other weights.
     logprob_shift: float = 0.0
+    # The next completions answered only after this delay (a stall).
+    slow_completions_left: int = 0
+    completion_delay_seconds: float = 0.0
 
 
 def choice(index: int, prompt: str, shift: float) -> dict:
@@ -49,6 +53,12 @@ def completion(prompts: list[str], shift: float) -> dict:
         "choices": [choice(index, prompt, shift) for index, prompt in enumerate(prompts)],
         "usage": {"prompt_tokens": 1, "completion_tokens": 1},
     }
+
+
+class QuietServer(ThreadingHTTPServer):
+    def handle_error(self, request: object, client_address: object) -> None:
+        # A client that timed out a stalled answer closed its connection.
+        return
 
 
 class FakeVllmServer:
@@ -114,6 +124,9 @@ class FakeVllmServer:
 
             def complete(self, prompts: list[str]) -> None:
                 state.completions += 1
+                if state.slow_completions_left:
+                    state.slow_completions_left -= 1
+                    time.sleep(state.completion_delay_seconds)
                 if state.completions_until_death and state.completions >= state.completions_until_death:
                     # A segfaulting engine: the request in flight is never answered and the port closes.
                     state.completions_until_death = 0
@@ -131,7 +144,7 @@ class FakeVllmServer:
                 self.reply(completion(prompts, state.logprob_shift))
 
         self.handler = Handler
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.server = QuietServer(("127.0.0.1", 0), Handler)
         self.port = self.server.server_address[1]
         self.serve()
 
@@ -158,7 +171,7 @@ class FakeVllmServer:
         self.state.health_failures_left = 0
         self.state.completions = 0
         self.state.completions_until_death = completions_until_death
-        self.server = ThreadingHTTPServer(("127.0.0.1", self.port), self.handler)
+        self.server = QuietServer(("127.0.0.1", self.port), self.handler)
         self.serve()
 
     def close(self) -> None:

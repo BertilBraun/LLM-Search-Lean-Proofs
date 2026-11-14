@@ -26,6 +26,7 @@ import os
 import re
 import shutil
 import socket
+import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -33,7 +34,7 @@ from pathlib import Path
 import httpx
 
 from lean_search.expert_iteration.loop_config import ServerEndpoint, ServingConfig, SwapMethod
-from lean_search.expert_iteration.serving import write_json_atomically
+from lean_search.expert_iteration.serving import server_port, write_json_atomically
 from lean_search.policy.config import StepLogProbability
 from lean_search.policy.rotation import RequestFailures
 from lean_search.policy.server_control import is_healthy, is_sleeping
@@ -213,12 +214,17 @@ class RunEnvironment:
 class SessionServing:
     """How the session's weights reached the servers: put on by `swap` (in place, or the servers restarted from the
     merges), or already held (the servers started from byte-identical weights and never swapped since); `restarted`:
-    the servers started again after a failure, the session beginning then."""
+    the servers started again after a failure, the session beginning then (written before the start, `completed`
+    False, and again once they answer); `restarts_granted`: restarts this session's command granted beyond the
+    config's (--allow-restarts); `fingerprint_warnings`: servers answering the fixed prompts off their reference."""
 
     swap: SwapMethod = SwapMethod.IN_PLACE
     swapped: tuple[str, ...] = ()
     skipped: tuple[str, ...] = ()
     restarted: tuple[str, ...] = ()
+    completed: bool = True
+    restarts_granted: int = 0
+    fingerprint_warnings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -238,6 +244,25 @@ class ProbeSession:
 class ServerRestart:
     at: str
     servers: tuple[str, ...]
+    # False: the restart was cut off before its servers answered (it counts all the same).
+    completed: bool = True
+
+
+def server_restarts(sessions: Sequence[ProbeSession]) -> tuple[ServerRestart, ...]:
+    """One per restart session (its begun and completed lines share the session's name), in order."""
+    restarts: dict[str, ServerRestart] = {}
+    for session in sessions:
+        if not session.serving.restarted:
+            continue
+        earlier = restarts.get(session.session)
+        completed = session.serving.completed or (earlier is not None and earlier.completed)
+        restarts[session.session] = ServerRestart(session.started_at, session.serving.restarted, completed)
+    return tuple(restarts.values())
+
+
+def restart_allowance(sessions: Sequence[ProbeSession], max_restarts: int) -> int:
+    """The config's restarts and every session's grants."""
+    return max_restarts + sum(session.serving.restarts_granted for session in sessions)
 
 
 @dataclass(frozen=True)
@@ -265,6 +290,9 @@ class ProbeRunRecord:
     # Statements searched again after a server failed their search, and those left without a result.
     retried_statements: tuple[RetriedStatement, ...] = ()
     dropped_statements: tuple[str, ...] = ()
+    # Restarts granted beyond the config's by --allow-restarts, over the run's sessions.
+    restarts_granted: int = 0
+    fingerprint_warnings: tuple[str, ...] = ()
 
 
 def adapter_digest(directory: Path) -> str:
@@ -385,14 +413,15 @@ API_SERVER_PROCESS = re.compile(r"\(APIServer pid=(\d+)\)")
 SERVED_FILES = ("config.json", "*.safetensors")
 
 
-def holds_start_weights(servers_directory: Path, name: str, vllm_version: str) -> bool:
+def holds_start_weights(servers_directory: Path, server: ServerEndpoint, vllm_version: str) -> bool:
     """Whether the server provably holds the weights it started from: its pid file names a vLLM started for it
     (server_processes), the tooling never slept or swapped it in place since (no <name>.swapped), and its log is that
     process's and shows no sleep, wake or reload (on the vLLM version the lines were checked on). Anything unknown:
     False."""
-    process = server_process(servers_directory, name)
-    log = servers_directory / f"{name}.log"
-    if process is None or swapped_marker(servers_directory, name).exists() or not log.exists():
+    process = server_process(servers_directory, server.name)
+    log = servers_directory / f"{server.name}.log"
+    marked = swapped_marker(servers_directory, server_port(server)).exists()
+    if process is None or marked or not log.exists():
         return False
     if vllm_version != SWAP_MARKERS_VLLM:
         return False
@@ -438,7 +467,7 @@ async def answers_awake(server_url: str) -> bool:
 async def already_serves(servers_directory: Path, server: ServerEndpoint, weights: Path, vllm_version: str) -> bool:
     """The server is awake, never slept or swapped since it started, and started from weights byte-identical to
     `weights`."""
-    if not await answers_awake(server.url) or not holds_start_weights(servers_directory, server.name, vllm_version):
+    if not await answers_awake(server.url) or not holds_start_weights(servers_directory, server, vllm_version):
         return False
     root = await served_model_root(server.url)
     return await asyncio.to_thread(same_served_weights, root, weights)
@@ -453,6 +482,7 @@ class ServedWeights:
     swap: SwapMethod = SwapMethod.IN_PLACE
     swapped: tuple[str, ...] = ()
     skipped: tuple[str, ...] = ()
+    fingerprint_warnings: tuple[str, ...] = ()
 
     def assignments(self, serving: ServingConfig) -> list[ServedWeightsOn]:
         """The weights each server the run needs serves."""
@@ -464,9 +494,9 @@ class ServedWeights:
 
 
 # Checks the servers answer the way the search needs, from the weights assigned (`verify_served`); the second argument
-# names the servers just started from their weights (or found holding byte-identical ones), whose answer may become
-# the weights' reference. Raises ServersUnsoundError.
-Verify = Callable[[Sequence[ServedWeightsOn], frozenset[str]], Awaitable[None]]
+# names the servers just started from their weights with their root checked, whose answer may become the weights'
+# reference. Raises ServersUnsoundError; returns the fingerprint warnings.
+Verify = Callable[[Sequence[ServedWeightsOn], frozenset[str]], Awaitable[tuple[str, ...]]]
 
 
 class ServersUnsoundError(RuntimeError):
@@ -528,12 +558,13 @@ async def serve_checkpoint(
     skipped = tuple(assigned.server.name for assigned, holds in zip(assignments, held, strict=True) if holds)
     if to_put:
         await put_weights(serving, to_put, servers_directory, log)
-    fresh = set(skipped)
+    fresh: frozenset[str] = frozenset()
     if serving.swap == SwapMethod.RESTART:
         await check_started_from(to_put)
-        fresh |= {assigned.server.name for assigned in to_put}
-    await verify(assignments, frozenset(fresh))
-    return dataclasses.replace(served, swapped=tuple(assigned.server.name for assigned in to_put), skipped=skipped)
+        fresh = frozenset(assigned.server.name for assigned in to_put)
+    warnings = await verify(assignments, fresh)
+    swapped = tuple(assigned.server.name for assigned in to_put)
+    return dataclasses.replace(served, swapped=swapped, skipped=skipped, fingerprint_warnings=warnings)
 
 
 @dataclass(frozen=True)
@@ -545,7 +576,9 @@ class TokenLogProbability:
 @dataclass(frozen=True)
 class WeightsFingerprint:
     """The top next tokens of the fixed prompts, as one vLLM server answered them right after it started from the
-    weights (or was found holding byte-identical ones): the reference every later start or swap of them is held to."""
+    weights, its root checked: the reference every later start, swap or skip of them is held to. It holds servers to
+    each other and catches gross mix-ups (another model, a broken load); it does not tell adjacent RL versions apart
+    (they differ by ~1e-3 to 1e-2 nats a token), so on the restart path the content-addressed root is the guarantee."""
 
     prompts: tuple[tuple[TokenLogProbability, ...], ...]
     server: str
@@ -558,10 +591,13 @@ FINGERPRINT_PROMPTS = (
     "x : ℝ\nh₀ : 3 * x + 2 = 11\n⊢ x = 3\n",
     "Lean 4 tactic proof:\n",
 )
+# The reference keeps the top tokens; a server is asked for more, so that it lists every reference token.
 FINGERPRINT_TOKENS = 5
-# Two servers of one bf16 checkpoint differ by kernel and batch order only, far below what a training phase moves.
-# NOT YET MEASURED on the node (the report's node commands): widen it if two fresh starts of one merge disagree.
+FINGERPRINT_ASKED_TOKENS = 20
+# Above this a difference is a warning (recorded, the start stands), above GROSS a failed start. The tolerance is NOT
+# YET MEASURED: two cold starts of one merge on the node set the noise floor (the report's node commands).
 FINGERPRINT_TOLERANCE = 0.05
+FINGERPRINT_GROSS = 1.0
 
 
 async def server_fingerprint(server_url: str, model: str) -> tuple[tuple[TokenLogProbability, ...], ...]:
@@ -572,7 +608,7 @@ async def server_fingerprint(server_url: str, model: str) -> tuple[tuple[TokenLo
         "temperature": 1.0,
         "top_p": 1.0,
         "seed": 0,
-        "logprobs": FINGERPRINT_TOKENS,
+        "logprobs": FINGERPRINT_ASKED_TOKENS,
         "return_tokens_as_token_ids": True,
     }
     async with httpx.AsyncClient(timeout=120.0) as http:
@@ -590,20 +626,19 @@ async def server_fingerprint(server_url: str, model: str) -> tuple[tuple[TokenLo
     )
 
 
-def fingerprints_agree(
+def fingerprint_distance(
     reference: tuple[tuple[TokenLogProbability, ...], ...], observed: tuple[tuple[TokenLogProbability, ...], ...]
-) -> bool:
-    """The same most likely token for every prompt, and the log-probabilities of the tokens both list within the
-    tolerance, all but one of the top tokens shared."""
+) -> float:
+    """The largest difference between a reference token's log-probability and the server's, over the prompts; a
+    reference token the server does not list among its top tokens is infinitely far."""
+    worst = 0.0
     for expected, answered in zip(reference, observed, strict=True):
-        expected_by_token = {entry.token: entry.log_probability for entry in expected}
         answered_by_token = {entry.token: entry.log_probability for entry in answered}
-        shared = expected_by_token.keys() & answered_by_token.keys()
-        if expected[0].token != answered[0].token or len(shared) < len(expected) - 1:
-            return False
-        if any(abs(expected_by_token[token] - answered_by_token[token]) > FINGERPRINT_TOLERANCE for token in shared):
-            return False
-    return True
+        for entry in expected:
+            if entry.token not in answered_by_token:
+                return math.inf
+            worst = max(worst, abs(entry.log_probability - answered_by_token[entry.token]))
+    return worst
 
 
 def read_fingerprint(weights: Path) -> WeightsFingerprint | None:
@@ -619,36 +654,45 @@ async def check_fingerprints(
     fresh: frozenset[str],
     vllm_version: str,
     log: Callable[[str], None],
-) -> None:
+) -> tuple[str, ...]:
     """Every server's answer to the fixed prompts against its weights' reference (<merge>/fingerprint.json). Without
-    one, the first server just started from the weights (or found holding them) writes it; without such a server
-    (swapped in place only), the servers of one weights directory are held to each other."""
+    one, the first server in `fresh` (just started from the weights, its root checked) writes it; without such a
+    server (in place, or skipped) the servers of one weights directory are held to the first of them. A difference
+    above the tolerance is returned as a warning; above FINGERPRINT_GROSS it raises ServersUnsoundError."""
     by_weights: dict[str, list[ServedWeightsOn]] = {}
     for assigned in assignments:
         by_weights.setdefault(assigned.weights, []).append(assigned)
+    warnings = []
     for weights, group in by_weights.items():
-        model = (
-            run_config.policy.model if group[0].server.url in run_config.policy.server_urls else run_config.value.model
-        )
+        policy = group[0].server.url in run_config.policy.server_urls
+        model = run_config.policy.model if policy else run_config.value.model
         answers = {assigned.server.name: await server_fingerprint(assigned.server.url, model) for assigned in group}
         reference = read_fingerprint(Path(weights))
         if reference is None:
             starter = next((assigned.server.name for assigned in group if assigned.server.name in fresh), None)
             if starter is None:
                 starter = group[0].server.name
-                log(f"No fingerprint of {weights} and no server started from it: its servers are held to {starter}")
-            else:
-                write_json_atomically(
-                    Path(weights) / FINGERPRINT_FILE, WeightsFingerprint(answers[starter], starter, vllm_version)
-                )
+                log(f"No fingerprint of {weights} and no server just started from it: its servers held to {starter}")
+            top = tuple(prompt[:FINGERPRINT_TOKENS] for prompt in answers[starter])
+            reference = WeightsFingerprint(top, starter, vllm_version)
+            if starter in fresh:
+                write_json_atomically(Path(weights) / FINGERPRINT_FILE, reference)
                 log(f"Fingerprint of {weights} taken from {starter}, just started from it")
-            reference = WeightsFingerprint(answers[starter], starter, vllm_version)
         for name, answer in answers.items():
-            if not fingerprints_agree(reference.prompts, answer):
+            distance = fingerprint_distance(reference.prompts, answer)
+            if distance > FINGERPRINT_GROSS:
                 raise ServersUnsoundError(
-                    f"{name} answers the fixed prompts unlike {reference.server}, the reference of {weights}: it holds "
-                    f"other weights ({answer} against {reference.prompts})"
+                    f"{name} answers the fixed prompts {distance:.3g} nats off {reference.server}, the reference of "
+                    f"{weights}: it holds other weights ({answer} against {reference.prompts})"
                 )
+            if distance > FINGERPRINT_TOLERANCE:
+                warning = (
+                    f"{name} answers the fixed prompts {distance:.3f} nats off {reference.server}, the reference of "
+                    f"{weights} (tolerance {FINGERPRINT_TOLERANCE}, unmeasured)"
+                )
+                log(f"Warning: {warning}")
+                warnings.append(warning)
+    return tuple(warnings)
 
 
 async def verify_served(
@@ -656,10 +700,10 @@ async def verify_served(
     log: Callable[[str], None],
     assignments: Sequence[ServedWeightsOn],
     fresh: frozenset[str],
-) -> None:
+) -> tuple[str, ...]:
     """Every server answers /health awake; each policy server one search request with usable blocks whose tokens
     decode to their text, each value server one state with most of its next-token mass on the bins; and every server
-    the fixed prompts as its weights' reference does (`check_fingerprints`)."""
+    the fixed prompts near its weights' reference (`check_fingerprints`, whose warnings it returns)."""
     servers = [assigned.server for assigned in assignments]
     awake = await asyncio.gather(*(answers_awake(server.url) for server in servers))
     down = [server.name for server, up in zip(servers, awake, strict=True) if not up]
@@ -677,7 +721,7 @@ async def verify_served(
             mass = sum(probabilities)
             if not (math.isfinite(mass) and mass >= MINIMUM_BIN_MASS):
                 raise ServersUnsoundError(f"{server.name}: the value model puts {mass:.3f} on its bins")
-    await check_fingerprints(run_config, assignments, fresh, package_version("vllm"), log)
+    return await check_fingerprints(run_config, assignments, fresh, package_version("vllm"), log)
 
 
 # A trained value model answers with a bin token; a broken load spreads its mass elsewhere.
@@ -687,12 +731,14 @@ MINIMUM_BIN_MASS = 0.5
 @dataclass(frozen=True)
 class DeathRule:
     """When a server counts as dead: this many server errors in a row on its requests (it answers /health but not its
-    requests), or every one of `health_probes` /health checks `probe_interval_seconds` apart failing (or finding it
-    asleep): one slow /health under load is no death."""
+    requests) and then one short completion with a generous timeout failing too, or every one of `health_probes`
+    /health checks `probe_interval_seconds` apart failing (or finding it asleep): a burst of errors or one slow
+    /health under load is no death."""
 
     failing_requests: int = 5
     health_probes: int = 3
     probe_interval_seconds: float = 10.0
+    confirm_timeout_seconds: float = 120.0
 
 
 class ProbeServers:
@@ -722,9 +768,21 @@ class ProbeServers:
         self.request_failures = request_failures
         self.rule = rule
 
+    async def answers_request(self, server: ServerEndpoint) -> bool:
+        model = self.serving.policy_model if server in self.serving.policy_servers else self.serving.value_model
+        body = {"model": model, "prompt": "1", "max_tokens": 1, "temperature": 0.0}
+        async with httpx.AsyncClient(timeout=self.rule.confirm_timeout_seconds) as http:
+            try:
+                (await http.post(f"{server.url.rstrip('/')}/completions", json=body)).raise_for_status()
+            except httpx.HTTPError:
+                return False
+        return True
+
     async def is_dead(self, server: ServerEndpoint) -> bool:
         if self.request_failures.streak(server.url) >= self.rule.failing_requests:
-            return True
+            if not await self.answers_request(server):
+                return True
+            self.request_failures.succeeded(server.url)
         for probe in range(self.rule.health_probes):
             if probe:
                 await asyncio.sleep(self.rule.probe_interval_seconds)
@@ -743,18 +801,25 @@ class ProbeServers:
             ServerStart(assigned.server, weights_start_command(self.serving, assigned.server, assigned.weights))
             for assigned in restarted
         ]
+        # Recorded before the start: a restart cut off midway counts against the cap all the same.
+        begun = start_session(
+            self.directory,
+            self.checkpoint,
+            self.results,
+            SessionServing(SwapMethod.RESTART, restarted=tuple(names), completed=False),
+        )
         try:
             await self.start(starts)
             await check_started_from(restarted)
-            await self.verify(restarted, frozenset(names))
+            warnings = await self.verify(restarted, frozenset(names))
         except (RuntimeError, httpx.HTTPError) as error:
             raise ServerRecoveryError(
                 f"Restarting {list(names)} failed: {error} (logs: $LEAN_SEARCH_RUNS/servers/)"
             ) from error
         for assigned in restarted:
             self.request_failures.succeeded(assigned.server.url)
-        serving = SessionServing(SwapMethod.RESTART, restarted=tuple(names))
-        start_session(self.directory, self.checkpoint, self.results, serving)
+        serving = dataclasses.replace(begun.serving, completed=True, fingerprint_warnings=warnings)
+        append_session(self.directory, dataclasses.replace(begun, serving=serving))
 
 
 def merges_in_use(servers_directory: Path, serving: ServingConfig) -> set[Path]:
@@ -840,7 +905,7 @@ def start_session(directory: Path, checkpoint: ProbeCheckpoint, results: Path, s
     count = len(results.read_text(encoding="utf-8").splitlines()) if results.exists() else 0
     started = datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds")
     session = ProbeSession(
-        f"{started} pid {os.getpid()}",
+        f"{started} pid {os.getpid()} {uuid.uuid4().hex[:8]}",
         count,
         checkpoint.policy_digest,
         checkpoint.value_digest,
@@ -939,11 +1004,9 @@ def run_record(
         sessions=tuple(sessions),
         swap_skipped=bool(sessions)
         and not any(session.serving.swapped or session.serving.restarted for session in sessions),
-        server_restarts=tuple(
-            ServerRestart(session.started_at, session.serving.restarted)
-            for session in sessions
-            if session.serving.restarted
-        ),
+        server_restarts=server_restarts(sessions),
+        restarts_granted=sum(session.serving.restarts_granted for session in sessions),
+        fingerprint_warnings=tuple(warning for session in sessions for warning in session.serving.fingerprint_warnings),
         retried_statements=retried_statements(failures),
         dropped_statements=dropped,
     )

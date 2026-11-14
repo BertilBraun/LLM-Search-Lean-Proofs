@@ -54,8 +54,10 @@ from lean_search.rl.probe_evaluation import (
     read_sessions,
     remove_merges,
     remove_stale_merges,
+    restart_allowance,
     running_loops,
     serve_checkpoint,
+    server_restarts,
     start_session,
     verify_served,
 )
@@ -84,6 +86,12 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--phase", type=int, required=True)
     parser.add_argument("--policy-adapter", type=Path, required=True)
     parser.add_argument("--loop-config", type=Path, default=Path("experiments/configs/grpo/followup/base.toml"))
+    parser.add_argument(
+        "--allow-restarts",
+        type=int,
+        default=0,
+        help="server restarts granted beyond the config's (after exit status 4, once the servers were looked at)",
+    )
     return parser.parse_args()
 
 
@@ -135,7 +143,14 @@ async def evaluate(arguments: argparse.Namespace) -> None:
                 record.write_text(to_json(start), encoding="utf-8")
                 append_pinning(directory)
                 results = directory / "results.jsonl"
-                start_session(directory, chosen, results, SessionServing(served.swap, served.swapped, served.skipped))
+                serving = SessionServing(
+                    served.swap,
+                    served.swapped,
+                    served.skipped,
+                    restarts_granted=arguments.allow_restarts,
+                    fingerprint_warnings=served.fingerprint_warnings,
+                )
+                start_session(directory, chosen, results, serving)
                 request_failures = RequestFailures()
                 servers = ProbeServers(
                     loop.serving,
@@ -148,12 +163,13 @@ async def evaluate(arguments: argparse.Namespace) -> None:
                     request_failures,
                     DeathRule(),
                 )
+                sessions = read_sessions(directory)
                 tolerance = FailureTolerance(
                     servers,
                     SERVER_FAILURE_RETRIES,
-                    MAX_SERVER_RESTARTS,
+                    restart_allowance(sessions, MAX_SERVER_RESTARTS),
                     directory / "failures.jsonl",
-                    sum(bool(session.serving.restarted) for session in read_sessions(directory)),
+                    len(server_restarts(sessions)),
                     request_failures,
                 )
                 summary = await evaluate_held_out_states(

@@ -245,9 +245,22 @@ without signalling it, and stops a server whose API process died but whose engin
 `serve_model.sh` refuses a port that already answers. The tooling writes `<name>.swapped` before it sleeps or swaps a
 server in place, and a start removes it; the probe tool skips the swap only for a server without that mark, with a
 trusted pid file, awake, and (on vLLM 0.31.0 only; on another version never) a log without sleep, wake or reload
-lines. After every start or swap the probe tool holds each
-server to its merge's fingerprint (`fingerprint.json`: the top-5 next tokens of three fixed prompts, written from the
-first server started from the merge; 0.05 nats tolerance, to be measured on the node).
+lines. After every start, swap or skip the probe tool holds each
+server to its merge's fingerprint (`fingerprint.json`: the log-probabilities of the top-5 next tokens of three fixed
+prompts, written only from a server freshly started from that merge whose root is the merge). What it proves: the
+servers of a merge answer alike, and none holds grossly other weights (another model, a broken load: above 1.0 nat on
+a reference token the start fails). What it does not: it does not tell adjacent RL versions apart (they differ by
+~1e-3 to 1e-2 nats a token); on the restart path the guarantee is the content-addressed merge each server reports as
+its root. A difference above the tolerance (0.05 nats, not yet measured on the node) is a warning in the session entry
+and run.json, not a failed start. In place, without a fresh start, the servers are held to each other only.
+
+Pid files are written since the boot or they are stale; a server's processes are recorded (`<name>.members`, pid and
+start) once it answers, and stop_model.sh signals a group whose API process died only if every live member is such a
+recorded vLLM process (otherwise it reports, keeps the pid file and signals nothing).
+
+Known limits of the restart path, left for later: a loop resumed during publishing starts every server twice (its
+session's start, then the publish), ~400 s; `arm_loop.sh` cold-starts down servers before the loop starts them again;
+the loop has no cap on restarts per hour (the probe tool's cap is per run).
 
 Re-scoring a frontier after a new value version: all 14,879 open states of the 244 row-4 trees take 105 s on both
 GPUs' merged value instances (141 states/s, ~17k prompt tokens/s per GPU, compute-bound; the value prompts share no

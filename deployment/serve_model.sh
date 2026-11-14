@@ -56,7 +56,7 @@ if [[ -f "${log_file}" ]]; then
     mv "${log_file}" "${server_directory}/${name}.$(date -u +%Y%m%dT%H%M%S.%NZ).log"
 fi
 # This server holds the weights it starts from (policy/server_processes.py: the swap skip trusts no older marker).
-rm -f "${server_directory}/${name}.swapped"
+rm -f "${server_directory}/${name}.swapped" "${server_directory}/port_${port}.swapped"
 working_directory="$(pwd)"
 if [[ "${CORE_DUMPS:-0}" == 1 ]]; then
     # As far as the container's hard limit allows; a relative core_pattern writes into the working directory.
@@ -104,6 +104,7 @@ fi
 
 # Persisting Triton autotuning results removes about a minute of warmup from later starts.
 cd "${working_directory}"
+rm -f "${server_directory}/${name}.members"
 CUDA_VISIBLE_DEVICES="${gpu}" VLLM_ALLOW_RUNTIME_LORA_UPDATING=True VLLM_SERVER_DEV_MODE=1 TRITON_CACHE_AUTOTUNING=1 \
     setsid nohup vllm "${arguments[@]}" "$@" >> "${log_file}" 2>&1 < /dev/null &
 # Written before the wait below, so that an interrupted start leaves a server stop_model.sh can find.
@@ -121,4 +122,6 @@ until curl -sf "http://127.0.0.1:${port}/health" > /dev/null; do
     fi
     sleep 2
 done
+# Its processes, for stop_model.sh to stop an engine its dead API process left (and nothing else).
+record_server_members "$(cat "${pid_file}")" "${server_directory}/${name}.members"
 echo "Server ${name} is healthy after ${SECONDS} s at http://127.0.0.1:${port}/v1"
