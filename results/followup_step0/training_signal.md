@@ -22,19 +22,22 @@ phase in 16-26 (942) match the logged `groups_trained` (954); recorded token ids
 
 ## Accounting per phase (whole-phase estimates)
 
-(a) loop credit "per_tactic"; (b) loop credit "sequence" (`CreditMode.SEQUENCE`, still in the code); (c), defined in
-the script: in the same expansion groups a sample scores 1 if a tactic of it reaches the proof graph, else 0, minus the
-group's mean, on every sampled token (no division by a standard deviation, as in the loop). Samples are recorded
+(a) loop credit "per_tactic"; (b) loop credit "sequence" (`CreditMode.SEQUENCE`, still in the code); (c) loop credit
+"proof_success" (`CreditMode.PROOF_SUCCESS`, WP3): in the same expansion groups a sample scores r = 1 if its edge is a
+forward one and a tactic of its kept prefix reaches the proof graph (`GroupSample.reaches_proof_graph`), else 0, minus
+the group's mean r, on every sampled token (no division by a standard deviation, as in the loop). Since 2026-11-14 the
+script scores (c) with that production mode, so (c) is the B2 arm's definition; the rerun on the same samples moved only
+(c), by under 0.2% (the forward-edge condition: unverified proofs and blocks ending at their node or an ancestor now 0). Samples are recorded
 completions; "+ / -": samples with any positive / negative token. Shares are of the summed |advantage| over tokens.
 
 | scheme, phases | trees (solved / unsolved) | groups | samples (+ / -) | tokens + / - | from unsolved / off-graph / on-graph | on explanation | same sign as (c) / opposite / (c) zero | mean abs adv per token | sum abs adv |
 |---|---|---|---|---|---|---|---|---|---|
 | (a) per-tactic, 1-4 | 335 / 0 | 1,438 | 11,508 (5,272 / 8,618) | 644k / 985k | 0 / 46% / 54% | 83% | 94% / 2% / 4% | 0.40 | 0.65M |
 | (a) per-tactic, 16-26 | 278 / 0 | 942 | 7,538 (3,219 / 6,173) | 413k / 712k | 0 / 44% / 56% | 79% | 92% / 2% / 6% | 0.41 | 0.46M |
-| (b) sequence, 1-4 | 335 / 0 | 1,425 | 11,384 (4,743 / 6,641) | 743k / 1,163k | 0 / 46% / 54% | (all) | 95% / 1% / 4% | 0.46 | 0.88M |
-| (b) sequence, 16-26 | 278 / 0 | 922 | 7,370 (2,671 / 4,700) | 530k / 1,069k | 0 / 44% / 56% | (all) | 94% / 1% / 5% | 0.60 | 0.95M |
-| (c) outcome, 1-4 | 308 / 0 | 1,233 | 9,864 (4,049 / 5,815) | 661k / 1,027k | 0 / 49% / 51% | (all) | 100% | 0.35 | 0.58M |
-| (c) outcome, 16-26 | 258 / 0 | 780 | 6,243 (2,231 / 4,012) | 474k / 938k | 0 / 49% / 51% | (all) | 100% | 0.32 | 0.45M |
+| (b) sequence, 1-4 | 335 / 0 | 1,425 | 11,384 (4,743 / 6,641) | 743k / 1,163k | 0 / 46% / 54% | - | 95% / 1% / 4% | 0.46 | 0.88M |
+| (b) sequence, 16-26 | 278 / 0 | 922 | 7,370 (2,671 / 4,700) | 530k / 1,069k | 0 / 44% / 56% | - | 94% / 1% / 5% | 0.60 | 0.95M |
+| (c) outcome, 1-4 | 308 / 0 | 1,233 | 9,864 (4,043 / 5,821) | 660k / 1,028k | 0 / 49% / 51% | - | 100% | 0.35 | 0.58M |
+| (c) outcome, 16-26 | 258 / 0 | 781 | 6,249 (2,235 / 4,014) | 474k / 938k | 0 / 49% / 51% | - | 100% | 0.32 | 0.45M |
 
 A phase has 2,252/4 = 563 trees (1-4) and ~447 (16-26) of 12-20M sampled tokens; all three schemes touch the same
 ~60% solved trees and put a non-zero advantage on 9-12% of the sampled tokens. (c) loses the 14-17% of groups in which
@@ -90,11 +93,12 @@ unknown tactics became trained. All phases: `training_signal.py --logged`.
 
 ## Code that would make an arm unfair or broken
 
-- (c) is not in the code (needs a reward or credit mode); (b) works via `phase_sequence_credit.toml`.
+- (c) is in the code since WP3 (`phase_proof_success.toml`, the definition above); (b) works via
+  `phase_sequence_credit.toml`.
 - No advantage normalization in any scheme: the summed |advantage| per phase differs ~2x between (b) and (a)/(c).
-- (d) is a one-off script, not a loop stage: `grpo_expert_iteration.loop_inputs` needs `reward_fix.json` and a
-  reward-fix version marker (SystemExit otherwise), the window always starts at the reward fix's first phase (no
-  sliding window), and `train` refuses unless the loop is stopped in sampling. A per-phase arm needs a window option.
+- (d) is a one-off script, not a loop stage, and `train` refuses unless the loop is stopped in sampling. Since WP4a
+  it takes a sliding phase window (`[data] window_phases`, no `reward_fix.json` needed) or explicit tree directories
+  (`[data] tree_directories`, step 2's slices); inside the loop it is WP4b.
 - Not determined: whether the shaping in (a) helps (offline counts cannot say); the evaluations' held-out goal keys
   were not applied to (d) (file not local; few states); counts are sample estimates, and phases 16-26 trees are
   off-policy for v0 (KL ~0.055 per token), phases 1-4 nearly on-policy.
