@@ -18,8 +18,10 @@ output = "probe_evaluations"
 max_expansions = 16
 # Per statement, only an emergency stop.
 max_wall_seconds = 7200.0
-# THROUGHPUT TEST: a placeholder; the throughput test sets one probe concurrency for every run of the study.
-concurrency = 56
+# One probe concurrency for every run of the study, from the throughput test of 2026-11-14 (61-core quota, v0
+# serving): 84 searches gave 10.0k expansions/h without CPU throttling, 112 gave 11.0k. 84 leaves each REPL more of
+# the pinned cores when later checkpoints spend more time in Lean, so tactic wall-clock limits stay a backstop.
+concurrency = 84
 
 # --value none: the value-free search (DESIGN.md, Q4): best-first by the path's mean step log-probability per block
 # (row 2's experiments/configs/phase2_sft_v2_search.toml), each step's value the sum over its Lean block's tokens
