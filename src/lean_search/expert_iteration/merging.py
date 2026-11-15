@@ -1,5 +1,5 @@
-"""The loop's publisher: adapters merged into full weights (imports torch, unlike serving.py), on the CPU unless the
-training job already merged them on its GPU."""
+"""The loop's publisher: adapters merged into full weights (imports torch, unlike serving.py), on the training CPUs
+unless the training job already merged them on its GPU."""
 
 import functools
 import shutil
@@ -10,7 +10,7 @@ from lean_search.expert_iteration.serving import MergedPublisher
 from lean_search.policy.adapters import (
     PremergedWeights,
     handed_off_weights,
-    merge_adapter,
+    merge_adapter_on_training_cpus,
     premerged_directory,
     read_premerged,
 )
@@ -19,7 +19,7 @@ from lean_search.policy.adapters import (
 def merge(base_model: str, adapter: str, output_directory: Path, handoff_root: Path | None = None) -> None:
     """Takes over the training job's merge of this adapter into this base if there is one: moved from beside the
     adapter (grpo_phase.py --merge-adapters), or copied from the persistent job's handoff in host memory (which stays
-    until the version is recorded, so a crash during the copy finds it again); else merges on the CPU."""
+    until the version is recorded, so a crash during the copy finds it again); else merges on the training CPUs."""
     premerged = premerged_directory(Path(adapter))
     if read_premerged(premerged) == PremergedWeights(base_model, adapter):
         shutil.move(premerged, output_directory)
@@ -28,7 +28,7 @@ def merge(base_model: str, adapter: str, output_directory: Path, handoff_root: P
     if handed_off is not None:
         shutil.copytree(handed_off, output_directory)
         return
-    merge_adapter(base_model, Path(adapter), output_directory)
+    merge_adapter_on_training_cpus(base_model, Path(adapter), output_directory)
 
 
 def merged_publisher(config: LoopConfig, checkpoints: Path) -> MergedPublisher:

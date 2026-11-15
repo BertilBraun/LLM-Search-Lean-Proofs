@@ -108,6 +108,9 @@ class LeanReplConfig:
     max_proof_states: int = 8_000
     max_data_bytes: int | None = 6 << 30
     forbidden_tokens: frozenset[str] = FORBIDDEN_TOKENS
+    # The REPL lowers its own priority (no privilege needed), so that a GPU feeder on its CPUs wins them; its caller
+    # keeps its own (deployment/README.md, "CPU budget").
+    niceness: int = 19
 
 
 @dataclass(frozen=True)
@@ -376,7 +379,7 @@ def read_memory_usage(process_id: int) -> MemoryUsage:
     return MemoryUsage(resident_bytes=fields.get("VmRSS", 0), anonymous_bytes=fields.get("RssAnon", 0))
 
 
-def _child_process_setup(max_data_bytes: int | None) -> Callable[[], None]:
+def repl_process_setup(max_data_bytes: int | None, niceness: int) -> Callable[[], None]:
     # Imported here because `resource` does not exist on Windows, where the package is still imported for tests.
     import ctypes
     import resource
@@ -388,6 +391,8 @@ def _child_process_setup(max_data_bytes: int | None) -> Callable[[], None]:
         if max_data_bytes is not None:
             resource.setrlimit(resource.RLIMIT_DATA, (max_data_bytes, max_data_bytes))
         libc.prctl(_PR_SET_PDEATHSIG, signal.SIGKILL)
+        # Never below the caller's: raising one's own priority needs CAP_SYS_NICE.
+        os.setpriority(os.PRIO_PROCESS, 0, max(niceness, os.getpriority(os.PRIO_PROCESS, 0)))
         if os.getppid() != parent_process_id:
             os._exit(1)
 
@@ -914,7 +919,7 @@ class LeanRepl:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             limit=_STREAM_LIMIT_BYTES,
-            preexec_fn=_child_process_setup(self.config.max_data_bytes),
+            preexec_fn=repl_process_setup(self.config.max_data_bytes, self.config.niceness),
         )
         if self._process is not None:
             self.restart_count += 1

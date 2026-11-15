@@ -1,6 +1,6 @@
 """deployment/serve_model.sh with a stand-in for vLLM: the server runs on SERVER_CPU_LIST (by default every CPU the
-cgroup allows) at niceness 0 whatever its caller's affinity and niceness, <name>.cpus records both, and its pid file
-stays trusted through the taskset and nice it is started under."""
+cgroup allows) whatever its caller's affinity, at its caller's niceness (with a warning when not 0), <name>.cpus records
+both, and its pid file stays trusted through the taskset it is started under."""
 
 import contextlib
 import json
@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 from server_process_fakes import fake_vllm_server_executable
 
-from lean_search.rl.node_pinning import cpu_list_text
+from lean_search.monitoring.cpu_layout import cpu_list_text
 
 REPOSITORY_DIRECTORY = Path(__file__).resolve().parents[2]
 DEPLOYMENT_DIRECTORY = REPOSITORY_DIRECTORY / "deployment"
@@ -35,8 +35,7 @@ def free_port() -> int:
 
 
 def server_environment(directory: Path, settings: dict[str, str]) -> dict[str, str]:
-    inherited = {key: value for key, value in os.environ.items() if key != "SERVER_CPU_LIST"}
-    return inherited | {
+    return os.environ | {
         "LEAN_SEARCH_RUNS": str(directory / "runs"),
         "LEAN_SEARCH_VLLM_EXECUTABLE": str(fake_vllm_server_executable(directory)),
         "SERVER_START_TIMEOUT": "60",
@@ -84,7 +83,7 @@ def test_a_server_start_records_its_cpus_and_niceness(pinned_start: Path) -> Non
     assert record.read_text(encoding="utf-8") == f"{cpu_list_text(SERVER_CPUS)} 0\n"
 
 
-def test_a_server_started_under_taskset_and_nice_keeps_a_trusted_pid_file(pinned_start: Path) -> None:
+def test_a_server_started_under_taskset_keeps_a_trusted_pid_file(pinned_start: Path) -> None:
     pid_file = pinned_start / "runs" / "servers" / f"{NAME}.pid"
     command = f'source "{DEPLOYMENT_DIRECTORY / "server_pid.sh"}"; trusted_server_pid "$1" "$2"'
     result = subprocess.run(  # noqa: S603
@@ -102,14 +101,7 @@ def test_without_server_cpu_list_a_server_runs_on_every_cpu_the_cgroup_allows(tm
         assert os.sched_getaffinity(server_process_id(tmp_path)) == set(SERVER_CPUS)
 
 
-@pytest.mark.skipif(os.geteuid() != 0, reason="resetting a niced caller's niceness needs root")
-def test_a_server_started_by_a_niced_caller_runs_at_niceness_zero(tmp_path: Path) -> None:
+def test_a_niced_callers_server_starts_at_that_niceness_with_a_warning_and_records_it(tmp_path: Path) -> None:
     with started_server(tmp_path, NICED_CALLER, {"SERVER_CPU_LIST": SERVER_CPU_LIST}) as result:
-        assert result.returncode == 0, result.stderr
-        assert os.getpriority(os.PRIO_PROCESS, server_process_id(tmp_path)) == 0
-
-
-@pytest.mark.skipif(os.geteuid() == 0, reason="root can reset the niceness")
-def test_without_root_a_niced_callers_start_is_refused(tmp_path: Path) -> None:
-    with started_server(tmp_path, NICED_CALLER, {"SERVER_CPU_LIST": SERVER_CPU_LIST}) as result:
-        assert "Cannot reset the server's niceness" in result.stderr
+        record = (tmp_path / "runs" / "servers" / f"{NAME}.cpus").read_text(encoding="utf-8")
+        assert (record, "Warning" in result.stderr) == (f"{cpu_list_text(SERVER_CPUS)} 19\n", True)

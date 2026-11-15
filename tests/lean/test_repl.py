@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import dataclasses
+import os
 import shutil
 import sys
 from collections.abc import AsyncIterator
@@ -49,6 +50,10 @@ pytestmark = [
 async def repl() -> AsyncIterator[LeanRepl]:
     async with LeanRepl(SLEEP_ALLOWED) as lean_repl:
         yield lean_repl
+
+
+async def test_the_repl_process_runs_at_its_configured_niceness(repl: LeanRepl) -> None:
+    assert repl.process_id is not None and os.getpriority(os.PRIO_PROCESS, repl.process_id) == repl.config.niceness
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="module")

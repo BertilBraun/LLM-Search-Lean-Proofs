@@ -2,20 +2,20 @@
 # An arm's loop (or step 2's shared sampling) started detached from its overlay (DESIGN.md, "Follow-up study:
 # controlled arms"; experiments/configs/grpo/followup/arms/, followup/shared_sampling.toml).
 #
-#   BACKGROUND_CPU_LIST=144-191 deployment/arm_loop.sh experiments/configs/grpo/followup/arms/A.toml
-#   BACKGROUND_CPUS=52 deployment/arm_loop.sh --kind "shared sampling" experiments/configs/grpo/followup/shared_sampling.toml
+#   deployment/arm_loop.sh experiments/configs/grpo/followup/arms/A.toml
+#   deployment/arm_loop.sh --kind "shared sampling" experiments/configs/grpo/followup/shared_sampling.toml
 #   deployment/arm_loop.sh --status [--kind ...] <overlay>   # running, finished or stopped; which servers are up
 #
-# Refuses without BACKGROUND_CPUS or BACKGROUND_CPU_LIST (the Lean side of every arm runs pinned, below the cgroup
-# quota), while the serving lock is held or a loop runs, and when experiments/followup_arm.py refuses the overlay (a
+# Refuses on a CPU layout node_checks.py pinning refuses (the node environment's: the Lean side of every arm runs
+# pinned), while the serving lock is held or a loop runs, and when experiments/followup_arm.py refuses the overlay (a
 # placeholder left, a setting outside the arm's own, no token budget per phase or no phase count). Writes the arm's
 # configs under $LEAN_SEARCH_RUNS/followup_configs/<name>/ (the same again on a restart), records version 0 once
 # (deployment/grpo_loop.sh init), starts the servers that do not answer (grpo_loop.sh servers; a server that cannot
-# start fails here), records the CPUs and settings the loop runs under (<run>/pinning.jsonl), then starts the loop
-# detached through deployment/grpo_loop.sh loop, which resumes an interrupted one, and fails when the loop has exited
+# start fails here), then starts the loop (which records its own layout in <run>/pinning.jsonl) detached through
+# deployment/grpo_loop.sh loop, which resumes an interrupted one, and fails when the loop has exited
 # ARM_LOOP_START_SECONDS (30) later. Prints where the logs are. A run that ended by itself (finished.json: after
-# max_phases, or a sampling-only run at its token total) is not started again: the loop leaves its servers up,
-# serving the last version, and this says which still run and how to stop them.
+# max_phases, or a sampling-only run at its token total) is not started again: the loop leaves its servers up, serving
+# the last version, and this says which still run and how to stop them.
 
 set -euo pipefail
 
@@ -90,7 +90,6 @@ if [[ ! -f "${run_directory}/models/current.json" ]]; then
 fi
 # Before detaching: a server that cannot start fails here, not in a loop nobody watches.
 LOOP_CONFIG="${loop_config}" "${script_directory}/grpo_loop.sh" servers
-"${script_directory}/background.sh" python experiments/node_checks.py record --directory "${run_directory}"
 LOOP_CONFIG="${loop_config}" "${script_directory}/grpo_loop.sh" loop
 # A loop that refuses its start (a health stop, a held lock, a config error) exits within seconds.
 sleep "${ARM_LOOP_START_SECONDS:-30}"

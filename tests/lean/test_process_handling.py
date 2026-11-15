@@ -1,4 +1,5 @@
 import asyncio
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -25,6 +26,7 @@ from lean_search.lean.repl import (
     parse_axioms,
     parse_command_response,
     parse_tactic_response,
+    repl_process_setup,
 )
 
 UNSTARTABLE = LeanReplConfig(project_directory=Path(__file__).parent / "missing_lean_project")
@@ -139,3 +141,25 @@ def test_only_deterministic_runtime_panics_are_the_tactics_fault(
     stderr_lines: list[str], return_code: int, expected: str | None
 ) -> None:
     assert deterministic_panic(stderr_lines, return_code) == expected
+
+
+NICENESS = "import os; print(os.nice(0))"
+
+
+def test_a_repl_process_lowers_its_own_priority_to_its_niceness() -> None:
+    command = [sys.executable, "-c", NICENESS]
+    result = subprocess.run(
+        command, preexec_fn=repl_process_setup(None, 19), capture_output=True, text=True, check=True
+    )  # noqa: PLW1509, S603
+    assert result.stdout == "19\n"
+
+
+def test_a_repl_process_never_runs_below_its_callers_niceness() -> None:
+    spawn = (
+        "import subprocess, sys; from lean_search.lean.repl import repl_process_setup; "
+        f"subprocess.run([sys.executable, '-c', {NICENESS!r}], preexec_fn=repl_process_setup(None, 0), check=True)"
+    )
+    result = subprocess.run(
+        ["nice", "-n", "5", sys.executable, "-c", spawn], capture_output=True, text=True, check=True
+    )  # noqa: S603
+    assert result.stdout == f"{os.nice(0) + 5}\n"

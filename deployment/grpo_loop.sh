@@ -10,6 +10,7 @@
 #   deployment/grpo_loop.sh gate                 # once, ~1-2 h: the value benchmark of the gate set (no value model)
 #   deployment/grpo_loop.sh dashboard            # system sampler, probe ratings, dashboard on ${DASHBOARD_PORT:-8600}
 #   deployment/grpo_loop.sh loop                 # the loop in the background; rerun after a crash to resume
+#                                                # (--allow-other-pinning: on another CPU layout, recorded)
 #   deployment/grpo_loop.sh status               # progress, versions, trees, the last phase, μ
 #   deployment/grpo_loop.sh value-share 0.15     # μ from the next phase that starts training (0: off; starts at 0)
 #   deployment/grpo_loop.sh stop                 # stops the loop (SIGTERM: saves its state, stops its job), servers
@@ -18,7 +19,7 @@
 # LOOP_CONFIG (default experiments/configs/grpo/loop.toml) picks the loop, e.g. loop_smoke.toml for the smoke cycle or
 # loop_overfit.toml for the overfit test.
 # HOURLY_PRICE (0.80) feeds the dashboard's cost; BACKGROUND_CPUS or BACKGROUND_CPU_LIST, if set, pins the loop (its
-# Lean REPLs) through background.sh.
+# Lean REPLs) through background.sh; its training jobs and merges run on TRAINING_CPU_LIST.
 
 set -euo pipefail
 
@@ -30,7 +31,7 @@ config="${LOOP_CONFIG:-experiments/configs/grpo/loop.toml}"
 name="$(python -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["name"])' "${config}")"
 run_directory="${LEAN_SEARCH_RUNS}/${name}"
 
-[[ $# -ge 1 ]] || { sed -n '2,21p' "$0" >&2; exit 2; }
+[[ $# -ge 1 ]] || { sed -n '2,22p' "$0" >&2; exit 2; }
 
 case "$1" in
     node-check)
@@ -38,16 +39,20 @@ case "$1" in
         df -h "${LEAN_SEARCH_RUNS}" "${LEAN_SEARCH_CHECKPOINTS}" /dev/shm
         nproc
         cgroup=/sys/fs/cgroup
-        grep -sH . "${cgroup}"/{cpu.max,cpu/cpu.cfs_quota_us,cpu/cpu.cfs_period_us} \
-            "${cgroup}"/{cpuset.cpus.effective,cpuset/cpuset.cpus,memory.max,memory/memory.limit_in_bytes} || true
+        grep -sH . "${cgroup}"/{cpu.max,cpu.stat,cpu/cpu.cfs_quota_us,cpu/cpu.cfs_period_us,cpu/cpu.stat} \
+            "${cgroup}"/{cpuacct/cpuacct.usage,cpuset.cpus.effective,cpuset/cpuset.cpus} \
+            "${cgroup}"/{memory.max,memory/memory.limit_in_bytes} || true
         quota_cores="$(cgroup_quota_cores)"
         echo "cgroup CPU quota: ${quota_cores:-none} cores; cpuset CPUs: $(cgroup_allowed_cpus)"
         python -c 'from lean_search.monitoring.cgroup import memory_limit_bytes
 limit = memory_limit_bytes()
 print("cgroup memory limit:", "none" if limit is None else f"{limit / 2**30:.1f} GiB")'
-        echo "BACKGROUND_CPUS=${BACKGROUND_CPUS:-} BACKGROUND_CPU_LIST=${BACKGROUND_CPU_LIST:-}" \
-            "SERVER_CPU_LIST=${SERVER_CPU_LIST} (${LEAN_SEARCH_NODE_ENVIRONMENT})"
         lscpu | grep -i '^NUMA' || true
+        # The node environment, the CPU lists, the quota reserve and shared physical cores (refusals included).
+        python experiments/node_checks.py pinning || true
+        # 0 when a process may raise its priority again (CAP_SYS_NICE); nothing here needs it.
+        echo "Priority raised from 19: $(nice -n 19 nice -n -19 nice 2>&1 | paste -sd' ' -);" \
+            "$(grep CapEff /proc/self/status)"
         nvidia-smi topo -m
         shm_mebibytes=$(( $(df -k --output=size /dev/shm | tail -n 1) / 1024 ))
         # The persistent trainer keeps its parked bases (~14 GiB) and the merges it hands to the servers (~14 GiB) there.
@@ -91,9 +96,11 @@ print("cgroup memory limit:", "none" if limit is None else f"{limit / 2**30:.1f}
         prefix=()
         if [[ -n "${BACKGROUND_CPUS:-}${BACKGROUND_CPU_LIST:-}" ]]; then
             prefix=("${script_directory}/background.sh")
+            # Here, not in the detached loop's output: a pinning background.sh refuses.
+            "${prefix[@]}" true
         fi
         # The bases are cached by init; offline, an unreachable Hub cannot fail a tokenizer load mid-run.
-        HF_HUB_OFFLINE=1 nohup "${prefix[@]}" python experiments/grpo_loop.py --config "${config}" run \
+        HF_HUB_OFFLINE=1 nohup "${prefix[@]}" python experiments/grpo_loop.py --config "${config}" run "${@:2}" \
             >> "${run_directory}/loop.out" 2>&1 &
         echo $! > "${run_directory}/loop.pid"
         echo "Loop ${name} started (pid $(cat "${run_directory}/loop.pid")); log ${run_directory}/loop.log"

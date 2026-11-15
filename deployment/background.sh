@@ -10,9 +10,11 @@
 # feeders included, is throttled for the rest of the period. The job is therefore pinned, to BACKGROUND_CPU_LIST
 # (taskset's CPU list, e.g. 48-95,144-191: one socket of a two-socket node) or to the last BACKGROUND_CPUS logical
 # CPUs (32 when neither is set; both set is a usage error, and an empty one counts as unset), which caps all background
-# jobs together at that many cores and leaves the rest of the quota to the foreground, and niced to 19 so that a
-# foreground thread scheduled onto one of those CPUs still wins it. Give Lean jobs at most that many processes: more
-# would share CPUs and hit wall-clock timeouts that an unpinned run would not.
+# jobs together at that many cores and leaves the rest of the quota to the foreground. Only pinned, not niced: the
+# Lean REPLs the job starts lower their own priority to 19 (lean/repl.py, LeanReplConfig.niceness), so that a
+# foreground thread scheduled onto one of those CPUs still wins it, while what else the job starts (servers,
+# training jobs) keeps the caller's priority, which the container could not raise again. Give Lean jobs at most that
+# many processes: more would share CPUs and hit wall-clock timeouts that an unpinned run would not.
 
 set -euo pipefail
 
@@ -35,4 +37,4 @@ else
     cpu_list="$(( cpu_count - background_cpus ))-$(( cpu_count - 1 ))"
 fi
 
-exec taskset --cpu-list "${cpu_list}" nice -n 19 "$@"
+exec taskset --cpu-list "${cpu_list}" "$@"

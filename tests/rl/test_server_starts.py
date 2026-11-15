@@ -55,7 +55,17 @@ def test_a_failed_starts_log_is_kept(tmp_path: Path) -> None:
 
 
 def test_a_failed_start_is_logged(tmp_path: Path) -> None:
-    assert len(start_flaky(tmp_path, 2)) == 2
+    assert sum(message.startswith("Starting") for message in start_flaky(tmp_path, 2)) == 2
+
+
+def test_a_started_server_logs_the_cpus_it_runs_on(tmp_path: Path) -> None:
+    (tmp_path / "servers").mkdir()
+    name = "policy-gpu0"
+    (tmp_path / "servers" / f"{name}.cpus").write_text("0-47,96-143 0\n", encoding="utf-8")
+    messages: list[str] = []
+    start = ServerStart(ServerEndpoint(name, 0, "http://127.0.0.1:1/v1"), "true")
+    asyncio.run(start_server(start, tmp_path / "servers", messages.append))
+    assert messages == [f"{name} runs on CPUs 0-47,96-143 at niceness 0"]
 
 
 def test_a_start_failing_every_time_raises(tmp_path: Path) -> None:

@@ -20,10 +20,11 @@
 # pattern and the free space there). Dev-mode endpoints (/pause, /collective_rpc,
 # /reset_prefix_cache, ...) are on for in-place weight swaps (experiments/publish_weights.py); the server only listens
 # on 127.0.0.1.
-# The server never inherits its caller's CPUs or niceness (a restart from a job run through background.sh would put
-# it on Lean's CPUs at nice 19): it runs on SERVER_CPU_LIST (environment.sh's default: every CPU the cgroup allows)
-# at niceness 0, which from a niced caller needs root (as on the nodes; otherwise the start is refused), and
-# <name>.cpus records both (`<CPU list> <niceness>`, as the server runs) once it answers.
+# The server never inherits its caller's CPUs (a restart from a job run through background.sh would put it on
+# Lean's): it runs on SERVER_CPU_LIST, by default every CPU the cgroup's cpuset allows. Its niceness is its caller's,
+# which the container cannot lower (no CAP_SYS_NICE); background.sh no longer nices, so it is 0 unless a caller niced
+# itself, and then the start goes on with a warning. <name>.cpus records both (`<CPU list> <niceness>`, as the server
+# runs) once it answers.
 
 set -euo pipefail
 
@@ -41,15 +42,13 @@ shift 4
 if [[ -e "${model}" ]]; then
     model="$(realpath "${model}")"
 fi
-taskset --cpu-list "${SERVER_CPU_LIST}" true || {
-    echo "SERVER_CPU_LIST=${SERVER_CPU_LIST} is not a CPU list this node can run on." >&2
+server_cpu_list="${SERVER_CPU_LIST:-$(cgroup_allowed_cpus)}"
+taskset --cpu-list "${server_cpu_list}" true || {
+    echo "SERVER_CPU_LIST=${server_cpu_list} is not a CPU list this node can run on." >&2
     exit 2
 }
-# nice -n is relative: this takes the server back to 0 from the caller's niceness.
-niceness_change=$(( -$(nice) ))
-if [[ "$(nice -n "${niceness_change}" nice 2>/dev/null)" != 0 ]]; then
-    echo "Cannot reset the server's niceness from $(nice) to 0 (needs root): start it from a process at nice 0." >&2
-    exit 1
+if (( $(nice) != 0 )); then
+    echo "Warning: ${name} starts at its caller's niceness $(nice); lowering it needs CAP_SYS_NICE." >&2
 fi
 
 server_directory="${LEAN_SEARCH_RUNS}/servers"
@@ -119,10 +118,10 @@ fi
 # Persisting Triton autotuning results removes about a minute of warmup from later starts.
 cd "${working_directory}"
 rm -f "${server_directory}/${name}.members" "${server_directory}/${name}.cpus"
-# Each of setsid, nohup, taskset and nice execs the next, so the pid stays the vLLM API process's (server_pid.sh).
+# Each of setsid, nohup and taskset execs the next, so the pid stays the vLLM API process's (server_pid.sh).
 # LEAN_SEARCH_VLLM_EXECUTABLE is for tests' stand-in.
 CUDA_VISIBLE_DEVICES="${gpu}" VLLM_ALLOW_RUNTIME_LORA_UPDATING=True VLLM_SERVER_DEV_MODE=1 TRITON_CACHE_AUTOTUNING=1 \
-    setsid nohup taskset --cpu-list "${SERVER_CPU_LIST}" nice -n "${niceness_change}" \
+    setsid nohup taskset --cpu-list "${server_cpu_list}" \
     "${LEAN_SEARCH_VLLM_EXECUTABLE:-vllm}" "${arguments[@]}" "$@" >> "${log_file}" 2>&1 < /dev/null &
 # Written before the wait below, so that an interrupted start leaves a server stop_model.sh can find.
 echo $! > "${pid_file}"

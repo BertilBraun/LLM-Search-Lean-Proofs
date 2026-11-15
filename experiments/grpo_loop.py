@@ -4,7 +4,7 @@
     python experiments/grpo_loop.py --config ... start-servers       # start the servers not answering, GPUs in parallel
     python experiments/grpo_loop.py --config ... serve-commands      # print every server's start command
     python experiments/grpo_loop.py --config ... check-servers       # one live request per policy server
-    python experiments/grpo_loop.py --config ... run                 # the loop; restart it the same way after a crash
+    python experiments/grpo_loop.py --config ... run [--allow-other-pinning]   # the loop; restart it so after a crash
     python experiments/grpo_loop.py --config ... status
     python experiments/grpo_loop.py --config ... report              # solve rate per phase (the overfit curve)
     python experiments/grpo_loop.py --config ... request-evaluation --target minif2f
@@ -13,18 +13,19 @@
     python experiments/grpo_loop.py --config ... clear-health-stop       # after a health stop: keep the current version
     python experiments/grpo_loop.py --config ... publish-adapter --policy-adapter PATH --trigger "expert iteration 1"
 
-init records version 0 (the [initial] adapters merged into full weights) and refuses an existing loop. run copies the
-config to $LEAN_SEARCH_RUNS/<name>/loop.toml (the evaluation jobs read it), resumes an interrupted phase, and writes
-the dashboard's metrics under $LEAN_SEARCH_RUNS/<name>/metrics/ (experiments/dashboard.py serve). request-evaluation
-asks the running loop to evaluate a fixed target at its next phase pause (the probe: its next slot); without a running
-loop use experiments/grpo_evaluate.py. set-value-share writes μ (value_share in [reward] and [value_targets] of every
-phase) to $LEAN_SEARCH_RUNS/<name>/value_share.json, which the loop reads each time a phase starts training; until it
-is set, μ is 0. After the health check's hard stop (health_stop.json, src/lean_search/rl/README.md, "Health checks")
-the loop refuses to start until rollback or clear-health-stop ran. publish-adapter publishes a policy adapter trained
-outside the loop (an expert-iteration round, src/lean_search/rl/README.md, "Expert iteration") as the next version,
-with the current value model; the loop stopped in its sampling stage, the adapter on the policy base at the current
-adapter's rank and scale. rollback and publish-adapter merge the new policy on the CPU and reuse the current value
-model's merged weights.
+init records version 0 (the [initial] adapters merged into full weights) and refuses an existing loop. run records its
+session's CPUs, layout and cgroup CPU counters in $LEAN_SEARCH_RUNS/<name>/pinning.jsonl and refuses a layout other than
+the run's first session's unless --allow-other-pinning (recorded); it copies the config to
+$LEAN_SEARCH_RUNS/<name>/loop.toml (the evaluation jobs read it), resumes an interrupted phase, and writes the
+dashboard's metrics under $LEAN_SEARCH_RUNS/<name>/metrics/ (experiments/dashboard.py serve). request-evaluation asks
+the running loop to evaluate a fixed target at its next phase pause (the probe: its next slot); without a running loop
+use experiments/grpo_evaluate.py. set-value-share writes μ (value_share in [reward] and [value_targets] of every phase)
+to $LEAN_SEARCH_RUNS/<name>/value_share.json, which the loop reads each time a phase starts training; until it is set, μ
+is 0. After the health check's hard stop (health_stop.json, src/lean_search/rl/README.md, "Health checks") the loop
+refuses to start until rollback or clear-health-stop ran. publish-adapter publishes a policy adapter trained outside the
+loop (an expert-iteration round, src/lean_search/rl/README.md, "Expert iteration") as the next version, with the current
+value model; the loop stopped in its sampling stage, the adapter on the policy base at the current adapter's rank and
+scale. rollback and publish-adapter merge the new policy on the CPU and reuse the current value model's merged weights.
 """
 
 import argparse
@@ -80,6 +81,7 @@ from lean_search.rl.loop_services import (
     serve_commands,
     stopped_loop_refusal,
 )
+from lean_search.rl.node_pinning import record_session_pinning
 from lean_search.rl.renaming import load_renamings
 from lean_search.rl.search_models import served_run_config, training_run_config
 from lean_search.rl.statement_sources import CurriculumStatements, FixedStatements, StatementSource
@@ -104,7 +106,11 @@ def parse_arguments() -> argparse.Namespace:
     commands.add_parser("start-servers")
     commands.add_parser("serve-commands")
     commands.add_parser("check-servers")
-    commands.add_parser("run")
+    commands.add_parser("run").add_argument(
+        "--allow-other-pinning",
+        action="store_true",
+        help="resume although the CPU layout differs from the run's first session's (recorded in pinning.jsonl)",
+    )
     commands.add_parser("status")
     commands.add_parser("report")
     request = commands.add_parser("request-evaluation")
@@ -362,6 +368,9 @@ def main() -> None:
         case "check-servers":
             asyncio.run(check_servers(config))
         case "run":
+            refusals = record_session_pinning(paths.directory, False, arguments.allow_other_pinning)
+            if refusals:
+                raise SystemExit("\n".join(refusals))
             paths.config.write_text(config_text, encoding="utf-8")
             asyncio.run(run(config, paths))
         case "status":

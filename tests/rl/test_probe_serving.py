@@ -17,6 +17,7 @@ from fake_vllm import FakeVllmServer
 from server_process_fakes import age_file, fake_server_process
 
 from lean_search.expert_iteration.loop_config import ServerEndpoint, ServingConfig, SwapMethod
+from lean_search.monitoring.cgroup import CpuCounters
 from lean_search.policy.rotation import RequestFailures
 from lean_search.policy.server_control import release_gpu
 from lean_search.policy.server_processes import mark_swapped, server_process, swapped_marker
@@ -33,6 +34,7 @@ from lean_search.rl.probe_evaluation import (
     SWAP_MARKERS_VLLM,
     DeathRule,
     ProbeCheckpoint,
+    ProbeRunRecord,
     ProbeRunStart,
     ProbeServers,
     ProbeSession,
@@ -56,7 +58,7 @@ from lean_search.rl.probe_evaluation import (
     server_restarts,
 )
 from lean_search.search import load_run_config
-from lean_search.search.records import from_json_object
+from lean_search.search.records import from_json_object, to_json
 
 CHECKPOINT = ProbeCheckpoint("A", 2, "/policy", "p" * 64, "/value", "v" * 64, 0, 2, 1)
 START = ProbeRunStart("identity", False, CHECKPOINT, "search.toml", "c" * 64, 84, 7200.0, 16, "probe.jsonl", "d" * 64)
@@ -342,6 +344,13 @@ def test_a_run_with_a_dropped_statement_is_not_accepted() -> None:
 def test_a_run_record_names_its_dropped_statements() -> None:
     record = run_record(START, ENVIRONMENT, summary(2000, 0), (), 0.01, dropped=("s.t3",))
     assert record.dropped_statements == ("s.t3",)
+
+
+def test_a_run_record_with_the_cgroups_cpu_counters_at_its_end_reads_back() -> None:
+    record = dataclasses.replace(
+        run_record(START, ENVIRONMENT, summary(2000, 0), (), 0.01), cpu_counters=CpuCounters(5.0, 179768, 4)
+    )
+    assert from_json_object(ProbeRunRecord, json.loads(to_json(record))) == record
 
 
 def test_a_run_record_counts_each_retried_statements_failed_searches() -> None:

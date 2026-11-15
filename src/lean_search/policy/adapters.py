@@ -2,6 +2,8 @@ import dataclasses
 import hashlib
 import json
 import shutil
+import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,6 +13,8 @@ import safetensors.torch
 import torch
 import transformers
 from huggingface_hub import snapshot_download
+
+from lean_search.monitoring.cpu_layout import on_training_cpus
 
 LANGUAGE_MODEL_LINEAR_LAYERS = (
     "q_proj",
@@ -73,6 +77,15 @@ def merge_adapter(model: str, adapter_directory: Path, output_directory: Path, d
     merged = peft.PeftModel.from_pretrained(base, adapter_directory, torch_device=device).merge_and_unload()
     merged.save_pretrained(output_directory)
     copy_tokenizer_and_processor_files(model, output_directory)
+
+
+def merge_adapter_on_training_cpus(model: str, adapter_directory: Path, output_directory: Path) -> None:
+    """`merge_adapter` in a process of its own on the training CPUs: in a caller run through deployment/background.sh
+    its torch threads would take Lean's."""
+    script = Path(__file__).resolve().parents[3] / "experiments" / "publish_weights.py"
+    command = [sys.executable, str(script), "merge", "--base-model", model]
+    command += ["--adapter", str(adapter_directory), "--output", str(output_directory)]
+    subprocess.run(on_training_cpus(command), check=True, stdout=subprocess.DEVNULL)
 
 
 def merge_adapter_fp16(model: str, adapter_directory: Path, output_directory: Path) -> None:

@@ -5,9 +5,10 @@
 #   HF_ENDPOINT=https://hf-mirror.com
 #   LEAN_SEARCH_GITHUB_PROXY=https://ghfast.top/                        (setup_lean.sh)
 #   LEAN_SEARCH_PYPI_MIRROR=https://pypi.tuna.tsinghua.edu.cn/simple    (setup_python.sh)
-# What only this node knows (its CPU layout: BACKGROUND_CPU_LIST, SERVER_CPU_LIST; mirrors) goes into
-# $LEAN_SEARCH_WORKSPACE/node_environment.sh, or the file LEAN_SEARCH_NODE_ENVIRONMENT names, sourced below when it
-# exists (deployment/README.md, "Node environment").
+# What only this node knows (its CPU layout: BACKGROUND_CPU_LIST, SERVER_CPU_LIST, TRAINING_CPU_LIST,
+# SERVER_RESERVE_CORES; mirrors) goes into $LEAN_SEARCH_WORKSPACE/node_environment.sh, or the file the absolute path
+# LEAN_SEARCH_NODE_ENVIRONMENT names (exported either way), sourced below when it exists (deployment/README.md, "Node
+# environment"). It may only set variables.
 
 export LEAN_SEARCH_ROOT="${LEAN_SEARCH_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 # /workspace on nodes; machines without it (local WSL) keep the same layout under the home directory.
@@ -19,7 +20,19 @@ if [[ -z "${LEAN_SEARCH_WORKSPACE:-}" ]]; then
     fi
 fi
 export LEAN_SEARCH_WORKSPACE
-if [[ -f "${LEAN_SEARCH_NODE_ENVIRONMENT:=${LEAN_SEARCH_WORKSPACE}/node_environment.sh}" ]]; then
+export LEAN_SEARCH_NODE_ENVIRONMENT="${LEAN_SEARCH_NODE_ENVIRONMENT:-${LEAN_SEARCH_WORKSPACE}/node_environment.sh}"
+if [[ "${LEAN_SEARCH_NODE_ENVIRONMENT}" != /* ]]; then
+    echo "LEAN_SEARCH_NODE_ENVIRONMENT=${LEAN_SEARCH_NODE_ENVIRONMENT} is not an absolute path." >&2
+    return 1
+fi
+if [[ -e "${LEAN_SEARCH_NODE_ENVIRONMENT}" ]]; then
+    # Tried first in a shell of its own under error checking: sourced as it is, a syntax error would half-apply it and a
+    # failing command end the caller without a word.
+    if ! bash -n "${LEAN_SEARCH_NODE_ENVIRONMENT}" ||
+        ! bash -euo pipefail -c 'source "$1"' node_environment "${LEAN_SEARCH_NODE_ENVIRONMENT}"; then
+        echo "The node environment ${LEAN_SEARCH_NODE_ENVIRONMENT} failed (above): fix it first." >&2
+        return 1
+    fi
     source "${LEAN_SEARCH_NODE_ENVIRONMENT}"
 fi
 export LEAN_SEARCH_DATA="${LEAN_SEARCH_DATA:-${LEAN_SEARCH_WORKSPACE}/data}"
@@ -43,8 +56,6 @@ effective_cpu_count() {
     echo "${quota:-$(nproc)}"
 }
 export LEAN_SEARCH_CPU_COUNT="${LEAN_SEARCH_CPU_COUNT:-$(effective_cpu_count)}"
-# serve_model.sh's CPUs (deployment/README.md, "CPU budget"); by default all the cgroup allows, whatever the caller's.
-export SERVER_CPU_LIST="${SERVER_CPU_LIST:-$(cgroup_allowed_cpus)}"
 
 mkdir -p "${LEAN_SEARCH_DATA}" "${LEAN_SEARCH_RUNS}" "${LEAN_SEARCH_CHECKPOINTS}" "${HF_HOME}"
 ulimit -Sn 65536 2>/dev/null || true

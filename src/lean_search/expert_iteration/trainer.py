@@ -28,6 +28,7 @@ import datetime
 import json
 import os
 import random
+import shlex
 import shutil
 import time
 import tomllib
@@ -90,6 +91,7 @@ from lean_search.expert_iteration.serving import (
 from lean_search.expert_iteration.shards import SUMMARY_FILE, now, read_attempts, read_shard_summary
 from lean_search.expert_iteration.thinking import ThinkingItem
 from lean_search.expert_iteration.toml_text import toml_text
+from lean_search.monitoring.cpu_layout import on_training_cpus
 from lean_search.policy.prompts import normalize_tactic_block
 from lean_search.reasoning.dataset import read_examples as read_reasoning_examples
 from lean_search.search.records import from_json_object, to_json
@@ -737,8 +739,8 @@ class PhaseTrainer:
         log_path = self.paths.directory / "training" / f"phase_{phase:04d}_{name}.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         environment = os.environ | {"CUDA_VISIBLE_DEVICES": str(stage.gpu)}
-        # The service runs pinned and niced (deployment/background.sh); training ranks feed a GPU and run unpinned.
-        unpinned = f"taskset --cpu-list 0-{os.cpu_count() - 1} {command}"
+        # The service runs pinned (deployment/background.sh); training ranks feed a GPU and run on the training CPUs.
+        unpinned = f"{shlex.join(on_training_cpus([]))} {command}"
         with log_path.open("a", encoding="utf-8") as log_file:
             process = await asyncio.create_subprocess_exec(
                 "bash", "-c", unpinned, cwd=REPOSITORY_DIRECTORY, env=environment, stdout=log_file, stderr=log_file

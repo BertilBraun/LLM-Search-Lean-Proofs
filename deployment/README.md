@@ -17,7 +17,7 @@ node's checkout.
 | `setup_python.sh` | node | Create the virtual environment from `uv.lock`. |
 | `serve_model.sh` | node | Start a detached vLLM server for one model on one GPU (prefix caching, runtime LoRA). |
 | `stop_model.sh` | node | Stop servers started by `serve_model.sh` (by name or `--all`). |
-| `background.sh` | node | Run a CPU-heavy job pinned to `BACKGROUND_CPU_LIST` or the last `BACKGROUND_CPUS` (32) CPUs at nice 19 (CPU budget). |
+| `background.sh` | node | Run a CPU-heavy job pinned to `BACKGROUND_CPU_LIST` or the last `BACKGROUND_CPUS` (32) CPUs; its Lean REPLs run at nice 19 (CPU budget). |
 | `grpo_loop.sh` | node | The GRPO loop step by step: held-out sets, version 0, servers, checks, value benchmark, dashboard, loop, status, μ. |
 | `setup_lean.sh` | node | Install elan, the pinned Lean toolchain, Mathlib (from cache) and the REPL. |
 
@@ -169,17 +169,26 @@ What throttling costs depends on the GPU feeder:
 
 Rule:
 
-- GPU feeders run at nice 0: training ranks and the search orchestrator unpinned, vLLM servers on `SERVER_CPU_LIST`
-  (default every CPU the cgroup's cpuset allows), which `serve_model.sh` sets with niceness 0 whoever starts it, a
-  job pinned through `background.sh` included ("Node environment" below).
+- GPU feeders run at nice 0 and off Lean's CPUs, whoever starts them: vLLM servers on `SERVER_CPU_LIST`
+  (`serve_model.sh` sets the affinity; default every CPU the cgroup's cpuset allows), training jobs, the persistent
+  trainer's DDP ranks and CPU merges of adapters on `TRAINING_CPU_LIST` (default the servers' list:
+  `loop_services.training_launcher`, `adapters.merge_adapter_on_training_cpus`). Only the affinity is reset: the
+  container cannot raise a priority again (no CAP_SYS_NICE, 2026-11-15 node), so nothing above the Lean REPLs is
+  niced. Under the restart path the training GPUs' servers are stopped while it trains; in place they sleep, and
+  the other GPUs' servers (in a pause they are idle, beside a search with `training.overlap` they serve) share those
+  CPUs with the ranks.
 - Everything CPU-heavy runs through `deployment/background.sh`: tracing, pre-filters, Lean stages of probes, data
   building, and the search processes themselves (their Lean REPLs are the CPU load), e.g.
-  `BACKGROUND_CPUS=40 deployment/background.sh python experiments/run_search.py ...`. The wrapper pins to
+  `deployment/background.sh python experiments/run_search.py ...` (on a node without a node environment
+  `BACKGROUND_CPUS=40` in front). The wrapper pins to
   `BACKGROUND_CPU_LIST` (taskset's CPU list, e.g. `48-95,144-191`) or to the last `BACKGROUND_CPUS` logical CPUs
-  (default 32 when neither is set; both set is a usage error, an empty one counts as unset) and nices to 19; all
-  background jobs share those CPUs, so together they can never exceed that many cores. The study's launchers
-  (`probe_runs.sh`, `arm_loop.sh`) and `held_out_evaluate.py` refuse without an explicit one;
-  `experiments/node_checks.py pinning` checks it against the allowed CPUs and the quota.
+  (default 32 when neither is set; both set is a usage error, an empty one counts as unset); all background jobs share
+  those CPUs, so together they can never exceed that many cores. It does not nice: each Lean REPL lowers its own
+  priority to 19 (`LeanReplConfig.niceness`; no privilege needed), so a foreground thread on those CPUs still wins
+  them, while the rest of the job (the orchestrator, tokenizers, a tracing or pool-verification driver) runs at its
+  caller's niceness, normally 0, on the pinned CPUs. The study's tools (`probe_runs.sh`, `arm_loop.sh`,
+  `probe_evaluate.py`, `held_out_evaluate.py`; `grpo_loop.py run` records only) refuse without an explicit one;
+  `experiments/node_checks.py pinning` checks the layout.
 - Leave at least 6 cores of the quota to the feeders: 4 vLLM processes take about 3, two DDP ranks about 4. With a
   search running, give it 40 CPUs and nothing else; while training next to a search, 36.
 - Give a Lean job at most one process doing work per pinned CPU, or its tactics hit wall-clock limits they
@@ -270,7 +279,9 @@ Pid files are written since the boot or they are stale; a server's processes are
 start and parent) once it answers, and stop_model.sh signals a group whose API process died only if every live member
 is such a recorded vLLM process or the API process's `multiprocessing` resource tracker (`python -c from
 multiprocessing.resource_tracker import main;main(<fd>)`, recorded as its child); otherwise it reports, keeps the pid
-file and signals nothing. The tracker ignores SIGTERM, so such a stop ends in SIGKILL after 60 s.
+file and signals nothing. The tracker ignores SIGTERM but exits on EOF of its pipe once the processes holding it
+(the API process and EngineCore) are gone: a group SIGTERM ends it in about 1 s (measured with real Python
+`multiprocessing`); only an engine that ignores SIGTERM leaves the stop to SIGKILL after 60 s.
 
 Known limits of the restart path, left for later: a loop resumed during publishing starts every server twice (its
 session's start, then the publish), ~400 s; `arm_loop.sh` cold-starts down servers before the loop starts them again;
@@ -652,17 +663,31 @@ Without a writable `/workspace` (local WSL), `environment.sh` uses `~/lean-searc
 ### Node environment
 
 What only one node knows stays on the node: `environment.sh` sources `$LEAN_SEARCH_WORKSPACE/node_environment.sh`
-(`LEAN_SEARCH_NODE_ENVIRONMENT` names another file) when it exists, before its own defaults. Write its settings as
-`${NAME-value}`, so that a command's own value, an empty one included, still wins when a script sources
-`environment.sh` again: `BACKGROUND_CPU_LIST= BACKGROUND_CPUS=52 deployment/probe_runs.sh ...` (`background.sh`
-refuses both set at once). `probe_runs.sh` and `arm_loop.sh` print the effective `BACKGROUND_CPUS`,
-`BACKGROUND_CPU_LIST` and `SERVER_CPU_LIST` at their start (`node_checks.py pinning`, which also refuses a
-`SERVER_CPU_LIST` outside the allowed CPUs) and record them in each run's `pinning.jsonl`; with a
-`BACKGROUND_CPU_LIST` set, `grpo_loop.sh loop` always runs the loop pinned.
+(or the absolute path `LEAN_SEARCH_NODE_ENVIRONMENT` names; exported either way) when it exists, before its own
+defaults. It may only set variables: it is checked with `bash -n` and run once in a shell of its own under `set -euo
+pipefail` first, so a syntax error or a failing command stops the calling script with a message naming the file. Write
+its settings as `${NAME-value}`, so that a command's own value, an empty one included, still wins when a script
+sources `environment.sh` again: `BACKGROUND_CPU_LIST= BACKGROUND_CPUS=52 deployment/probe_runs.sh ...`
+(`background.sh` refuses both set at once). `environment.sh` sets no default CPU list itself: each is computed where
+it is used, so a shell that sourced it before the file existed carries nothing stale.
+
+`node_checks.py pinning` (run by `probe_runs.sh` and `arm_loop.sh` at their start, and by `grpo_loop.sh node-check`)
+prints the file, its settings and sha256, the effective `BACKGROUND_CPUS`, `BACKGROUND_CPU_LIST`, `SERVER_CPU_LIST`
+and `TRAINING_CPU_LIST`, the cpuset and the quota, and refuses: not exactly one background setting, a list outside the
+allowed CPUs, a background set not below the quota, or one sharing a physical core
+(`/sys/devices/system/cpu/cpu<N>/topology/thread_siblings_list`) with the servers' or training jobs' CPUs; only the
+old single-socket default (those lists every allowed CPU, no node file) is a warning. It warns when the background set
+leaves less of the quota than `SERVER_RESERVE_CORES` (8, a placeholder until the throughput test measures the
+servers' and the orchestrator's CPU use) beside it. `probe_evaluate.py`, `held_out_evaluate.py` and `grpo_loop.py run`
+record each session's layout, the node file's path and sha256 and the cgroup's CPU counters (usage, periods,
+throttled periods) in the run's `pinning.jsonl`, and refuse a session whose layout differs from the run's first
+unless `--allow-other-pinning` (recorded; `grpo_loop.sh loop --allow-other-pinning`). run.json (probe runs) and each
+phase's line in `phases.jsonl` hold the counters at the end, so the throttled share of any run or phase reads off two
+records. The loop logs where each server it starts runs (`<name>.cpus`).
 
 The Vast.ai node of 2026-11-15: 2x EPYC 7642, 192 logical CPUs, NUMA node 0 = CPUs 0-47 and 96-143, node 1 = 48-95
 and 144-191 (CPU n and n+96 are the two threads of one core), GPUs 0-2 on node 0 and GPU 3 on node 1, cgroup v1
-quota 105.3 cores.
+quota 105.3 cores, no CAP_SYS_NICE.
 
 ```bash
 # /workspace/node_environment.sh
@@ -672,10 +697,11 @@ export BACKGROUND_CPU_LIST="${BACKGROUND_CPU_LIST-48-95,144-191}"
 ```
 
 Socket 0 is local to GPUs 0-2 and holds every vLLM server (GPU 3's included, remote from its GPU: the price of
-keeping Lean off the servers' cores); Lean takes socket 1. Both sets are whole cores (each CPU with its sibling n+96),
-so no physical core is shared between a server and Lean. `48-95,144-191` gives Lean both threads of its 48 cores
-(96 CPUs, below the quota, which leaves 9 cores of it to the servers); `144-191` gives it one thread per core, slower in
-total but each REPL on a core of its own, which may matter for wall-clock limits.
+keeping Lean off the servers' cores) and, by default, the training jobs; Lean takes socket 1. Both sets are whole
+cores (each CPU with its sibling n+96), so no physical core is shared between a server and Lean. `48-95,144-191` gives
+Lean both threads of its 48 cores (96 CPUs, below the quota, which leaves 9.3 cores of it to the servers, just above
+the 8-core reserve); `144-191` gives it one thread per core, slower in total but each REPL on a core of its own, which
+may matter for wall-clock limits.
 
 ## Second node (returned within the hour, 2026-10-29)
 

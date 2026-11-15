@@ -2,15 +2,16 @@
 cpu.max, cpu.stat, memory.*) or v1 (one mount per controller: cpu/, cpuacct/, memory/). Each reader returns None
 when its controller's files are absent."""
 
+from dataclasses import dataclass
 from pathlib import Path
-from typing import NamedTuple
 
 CGROUP_ROOT = Path("/sys/fs/cgroup")
 # v1 reports no memory limit as PAGE_COUNTER_MAX pages, just under 2**63 bytes.
 V1_UNLIMITED_MEMORY_BYTES = 1 << 62
 
 
-class CpuCounters(NamedTuple):
+@dataclass(frozen=True)
+class CpuCounters:
     usage_seconds: float
     # Enforcement periods of the quota so far, and those in which the cgroup was throttled.
     periods: int

@@ -1,10 +1,11 @@
 """The probe set searched with any checkpoint, outside a loop (src/lean_search/rl/probe_evaluation.py).
 
-    python experiments/probe_evaluate.py --config experiments/configs/grpo/followup/probe_evaluation.toml \
+    deployment/background.sh python experiments/probe_evaluate.py \
+        --config experiments/configs/grpo/followup/probe_evaluation.toml \
         --name v0_value_v0_run1 --arm v0 --phase 0 --anchor \
         --policy-adapter /workspace/checkpoints/data_rewrite_sft_numbered/adapter --value v0 \
         [--search-config experiments/configs/grpo/search/<other>.toml] [--problems 200] [--keep-merge] \
-        [--allow-restarts N]
+        [--allow-restarts N] [--allow-other-pinning]
     --value none             no value model: best-first on the path's mean step log-probability per block (the
                              config's [value_free_priority]: the policy's step log-probability and its calibrated
                              automation constant; refused for a placeholder; other priority settings kept)
@@ -17,21 +18,25 @@
 The budget rule: a run given --search-config searches at that file's own max_expansions (even when it names the
 config's default file), every other run at the config's [probe] max_expansions.
 
+It runs only pinned through deployment/background.sh (the node environment's BACKGROUND_CPU_LIST) and records each
+session's CPUs, layout and cgroup CPU counters in pinning.jsonl (run.json holds the counters at the end); a session on
+another layout than the run's first is refused unless --allow-other-pinning (recorded).
+
 Servers: the loop config's policy servers (and, with a value model, its value servers) must be up, as
 deployment/grpo_loop.sh servers starts them (any version). The command holds the node's serving lock
-($LEAN_SEARCH_CHECKPOINTS/serving.lock: a loop, grpo_evaluate.py and run_search.py refuse to start while it is held)
-and refuses while a loop under $LEAN_SEARCH_RUNS runs (its loop.pid, or a job it started; an empty or unreadable
-loop.pid counts as not running and is reported). Every session merges the adapters on the CPU once per content (their
+($LEAN_SEARCH_CHECKPOINTS/serving.lock: a loop, grpo_evaluate.py and run_search.py refuse to start while it is held) and
+refuses while a loop under $LEAN_SEARCH_RUNS runs (its loop.pid, or a job it started; an empty or unreadable loop.pid
+counts as not running and is reported). Every session merges the adapters (on the training CPUs) once per content (their
 weight and config files; under $LEAN_SEARCH_CHECKPOINTS/<output>/weights/) and puts them on the servers by the loop
 config's serving.swap: swapped in place as the loop does at a publish, or the servers restarted from the merges. A
 server that provably started from byte-identical weights and never slept or swapped since (its trusted pid file, no
 port_<port>.swapped mark, and on vLLM 0.31 its log; probe_evaluation.holds_start_weights) is left as it is. Then each
 server answers check requests, and the fixed prompts near its merge's fingerprint (taken from the first server freshly
 started from the merge, its root checked; a difference above the tolerance is a warning in the session and run.json,
-above 1 nat a failed start; it catches gross mix-ups, not adjacent versions). So a resumed run never searches with
-what the servers held before; the merges are deleted when the run ends, fails or is interrupted (unless --keep-merge
-or a server runs from one), and those a killed run left are deleted at the next start. SIGTERM cancels the run so
-that this clean-up runs (exit status 143). A loop started later serves its own current version again when it starts.
+above 1 nat a failed start; it catches gross mix-ups, not adjacent versions). So a resumed run never searches with what
+the servers held before; the merges are deleted when the run ends, fails or is interrupted (unless --keep-merge or a
+server runs from one), and those a killed run left are deleted at the next start. SIGTERM cancels the run so that this
+clean-up runs (exit status 143). A loop started later serves its own current version again when it starts.
 
 A server failure does not end the run: a statement whose search fails on a server (no answer or a 5xx; any other error
 ends the run with its traceback) is searched again from scratch, at most [server_failure_retries] times over all of
@@ -59,6 +64,7 @@ probe_rating.finished_probe_runs rates accepted runs only.
 
 import argparse
 import asyncio
+import dataclasses
 import datetime
 import functools
 import json
@@ -68,7 +74,8 @@ from pathlib import Path
 
 from lean_search.expert_iteration.curriculum import file_sha256
 from lean_search.lean.repl import PROJECT_DIRECTORY
-from lean_search.policy.adapters import merge_adapter
+from lean_search.monitoring.cgroup import cpu_counters
+from lean_search.policy.adapters import merge_adapter_on_training_cpus
 from lean_search.policy.rotation import RequestFailures
 from lean_search.policy.serving_lock import ServingBusyError, serving_lock, serving_lock_path
 from lean_search.rl.evaluation import (
@@ -82,6 +89,7 @@ from lean_search.rl.evaluation import (
 from lean_search.rl.fixed_targets import first_problems_by_stratum, probe_problems
 from lean_search.rl.loop_config import GrpoLoopConfig, load_loop_config
 from lean_search.rl.loop_services import start_servers
+from lean_search.rl.node_pinning import record_session_pinning
 from lean_search.rl.probe_evaluation import (
     DeathRule,
     ProbeCheckpoint,
@@ -152,6 +160,11 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--problems", type=int, default=0, help="only the first N, strata in turn (a pilot)")
     parser.add_argument("--anchor", action="store_true", help="the rating's anchor (v0 with value v0, standard)")
     parser.add_argument("--keep-merge", action="store_true", help="keep the merged weights after the run")
+    parser.add_argument(
+        "--allow-other-pinning",
+        action="store_true",
+        help="resume although the CPU layout differs from the run's first session's (recorded in pinning.jsonl)",
+    )
     parser.add_argument(
         "--allow-restarts",
         type=int,
@@ -246,6 +259,9 @@ async def evaluate(arguments: argparse.Namespace) -> int:
     directory = run_directory(RUNS_DIRECTORY / config.output, arguments.name)
     paths = EvaluationPaths(directory)
     refuse_another_start(directory / "checkpoint.json", start)
+    refusals = record_session_pinning(directory, True, arguments.allow_other_pinning)
+    if refusals:
+        raise SystemExit("\n".join(refusals))
     problems = probe_problems(DATA_DIRECTORY / config.probe_set)
     problems = first_problems_by_stratum(problems, chosen.problems) if chosen.problems else problems
     weights_root = CHECKPOINTS_DIRECTORY / config.output / "weights"
@@ -262,7 +278,7 @@ async def evaluate(arguments: argparse.Namespace) -> int:
             try:
                 verify = functools.partial(verify_served, run_config, log)
                 served = await serve_checkpoint(
-                    loop.serving, chosen, weights_root, merge_adapter, SERVERS_DIRECTORY, verify, log
+                    loop.serving, chosen, weights_root, merge_adapter_on_training_cpus, SERVERS_DIRECTORY, verify, log
                 )
                 log(f"Weights put on {list(served.swapped)} ({served.swap}); already held by {list(served.skipped)}")
                 directory.mkdir(parents=True, exist_ok=True)
@@ -337,6 +353,7 @@ async def evaluate(arguments: argparse.Namespace) -> int:
         read_failures(directory / FAILURES_FILE),
         dropped_statements(problems, results),
     )
+    record = dataclasses.replace(record, cpu_counters=cpu_counters())
     (directory / "run.json").write_text(to_json(record), encoding="utf-8")
     log(
         f"{summary.solved}/{summary.problems} solved; {summary.wall_clock_stops} searches stopped on the wall clock "

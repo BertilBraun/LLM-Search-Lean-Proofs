@@ -35,6 +35,7 @@ import httpx
 
 from lean_search.expert_iteration.loop_config import ServerEndpoint, ServingConfig, SwapMethod
 from lean_search.expert_iteration.serving import server_port, write_json_atomically
+from lean_search.monitoring.cgroup import CpuCounters
 from lean_search.policy.config import StepLogProbability
 from lean_search.policy.rotation import RequestFailures
 from lean_search.policy.server_control import is_healthy, is_sleeping
@@ -293,6 +294,9 @@ class ProbeRunRecord:
     # Restarts granted beyond the config's by --allow-restarts, over the run's sessions.
     restarts_granted: int = 0
     fingerprint_warnings: tuple[str, ...] = ()
+    # The cgroup's CPU counters at the run's end; against pinning.jsonl's at its sessions' starts, the CPU time it
+    # used and the periods throttled while it ran.
+    cpu_counters: CpuCounters | None = None
 
 
 def adapter_digest(directory: Path) -> str:
