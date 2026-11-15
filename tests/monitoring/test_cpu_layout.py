@@ -13,6 +13,7 @@ from lean_search.monitoring.cpu_layout import (
     parse_cpu_list,
     server_cpu_list,
     shared_cores,
+    thread_on_cpus,
     thread_siblings,
     training_cpu_list,
 )
@@ -98,3 +99,14 @@ def test_two_threads_of_one_core_share_it() -> None:
 def test_cpus_on_other_cores_share_none() -> None:
     siblings = {0: (0, 2), 1: (1, 3), 2: (0, 2), 3: (1, 3)}
     assert shared_cores((0, 2), (1, 3), siblings) == []
+
+
+def test_a_thread_runs_on_the_cpus_it_is_put_on() -> None:
+    with thread_on_cpus(str(ALLOWED_CPUS[-1])):
+        assert os.sched_getaffinity(0) == {ALLOWED_CPUS[-1]}
+
+
+def test_a_thread_gets_its_own_cpus_back_afterwards() -> None:
+    with thread_on_cpus(str(ALLOWED_CPUS[-1])):
+        pass
+    assert tuple(sorted(os.sched_getaffinity(0))) == ALLOWED_CPUS

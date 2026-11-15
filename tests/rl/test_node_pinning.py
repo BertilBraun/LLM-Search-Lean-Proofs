@@ -92,9 +92,22 @@ def test_a_background_set_at_the_quota_is_refused(pinning: PinningRecord) -> Non
     assert checked(pinning).refusals
 
 
-def test_a_background_set_leaving_less_than_the_reserve_beside_it_is_a_warning_only() -> None:
-    check = checked(record(background_cpus=56, server_cpu_list="0-7,64-71"))
-    assert (check.refusals, len(check.warnings)) == ((), 1)
+def test_a_background_set_leaving_less_than_the_reserve_beside_it_is_refused() -> None:
+    assert len(checked(record(background_cpus=56, server_cpu_list="0-7,64-71")).refusals) == 1
+
+
+def test_a_smaller_reserve_set_explicitly_lets_the_background_set_pass() -> None:
+    pinning = record(background_cpus=56, server_cpu_list="0-7,64-71")
+    assert pinning_check(pinning, SIBLINGS, 4.0) == PinningCheck((), ())
+
+
+def test_an_explicit_reserve_is_recorded(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SERVER_RESERVE_CORES", "4")
+    assert current_pinning().server_reserve_cores == 4.0
+
+
+def test_the_default_reserve_is_recorded_as_unset() -> None:
+    assert current_pinning().server_reserve_cores is None
 
 
 @pytest.mark.parametrize(
@@ -126,6 +139,11 @@ def test_a_cpu_list_outside_the_allowed_cpus_is_refused(pinning: PinningRecord) 
 )
 def test_a_cpu_list_sharing_a_physical_core_with_the_background_set_is_refused(pinning: PinningRecord) -> None:
     assert checked(pinning).refusals
+
+
+def test_a_hidden_cpu_topology_is_a_warning_only() -> None:
+    check = pinning_check(record(background_cpus=52), {}, RESERVE_CORES)
+    assert (check.refusals, len(check.warnings)) == ((), 1)
 
 
 def test_every_allowed_cpu_for_the_servers_without_a_node_environment_is_a_warning_only() -> None:
@@ -241,6 +259,40 @@ def test_a_session_allowed_on_another_layout_is_recorded_as_such(tmp_path: Path)
     append_pinning(tmp_path, dataclasses.replace(current_pinning(), affinity=(9999,)))
     record_session_pinning(tmp_path, False, True)
     assert read_pinning(tmp_path)[-1].other_pinning_allowed
+
+
+def quota_of_61_cores(directory: Path) -> Path:
+    (directory / "cgroup").mkdir()
+    (directory / "cgroup" / "cpu.max").write_text("6100000 100000", encoding="utf-8")
+    return directory / "cgroup"
+
+
+def test_a_start_whose_lean_set_leaves_less_than_the_reserve_is_refused_where_it_records(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("BACKGROUND_CPU_LIST", "0-59")
+    refusals = record_session_pinning(tmp_path, False, False, quota_of_61_cores(tmp_path))
+    assert (len(refusals), read_pinning(tmp_path)) == (1, [])
+
+
+def test_a_start_with_a_smaller_explicit_reserve_is_recorded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BACKGROUND_CPU_LIST", "0-59")
+    monkeypatch.setenv("SERVER_RESERVE_CORES", "1")
+    assert record_session_pinning(tmp_path, False, False, quota_of_61_cores(tmp_path)) == []
+
+
+def test_an_unpinned_loop_start_has_no_reserve_to_check(tmp_path: Path) -> None:
+    assert record_session_pinning(tmp_path, False, False, quota_of_61_cores(tmp_path)) == []
+
+
+@pytest.mark.parametrize("setting", ["abc", "-50", "nan", "inf"])
+def test_a_reserve_that_is_no_number_of_cores_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, setting: str
+) -> None:
+    monkeypatch.setenv("SERVER_RESERVE_CORES", setting)
+    assert record_session_pinning(tmp_path, False, False) == [
+        f"SERVER_RESERVE_CORES={setting} is not a number of cores >= 0"
+    ]
 
 
 AFFINITY_AND_NICENESS = "import os; print(sorted(os.sched_getaffinity(0)), os.nice(0))"

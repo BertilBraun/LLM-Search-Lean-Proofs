@@ -36,11 +36,13 @@ import httpx
 from lean_search.expert_iteration.loop_config import ServerEndpoint, ServingConfig, SwapMethod
 from lean_search.expert_iteration.serving import server_port, write_json_atomically
 from lean_search.monitoring.cgroup import CpuCounters
+from lean_search.monitoring.gpu_power import GpuPowerState
 from lean_search.policy.config import StepLogProbability
 from lean_search.policy.rotation import RequestFailures
 from lean_search.policy.server_control import is_healthy, is_sleeping
 from lean_search.policy.server_processes import server_process, swapped_marker
 from lean_search.rl.evaluation import EvaluationProblem, EvaluationSummary, SearchFailure, ServerRecoveryError
+from lean_search.rl.lean_load import LeanLoad
 from lean_search.rl.loop_config import EvaluationTarget
 from lean_search.rl.loop_services import (
     CHECK_GOALS,
@@ -239,6 +241,9 @@ class ProbeSession:
     spoiled: bool = False
     serving: SessionServing = field(default_factory=SessionServing)
     started_at: str = ""
+    # Each GPU's enforced and default power limit at its start; None where nvidia-smi failed, and for a restart's
+    # session.
+    gpus: tuple[GpuPowerState, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -297,6 +302,11 @@ class ProbeRunRecord:
     # The cgroup's CPU counters at the run's end; against pinning.jsonl's at its sessions' starts, the CPU time it
     # used and the periods throttled while it ran.
     cpu_counters: CpuCounters | None = None
+    # Each GPU's enforced and default power limit at the run's end (at each session's start: `sessions`); None where
+    # nvidia-smi failed.
+    gpus_at_end: tuple[GpuPowerState, ...] | None = None
+    # Lean's load on its searches, the total first, then per stratum (`lean_load.lean_loads`).
+    lean_load: tuple[LeanLoad, ...] = ()
 
 
 def adapter_digest(directory: Path) -> str:
@@ -905,7 +915,13 @@ def append_session(directory: Path, session: ProbeSession) -> None:
         handle.write(to_json(session) + "\n")
 
 
-def start_session(directory: Path, checkpoint: ProbeCheckpoint, results: Path, serving: SessionServing) -> ProbeSession:
+def start_session(
+    directory: Path,
+    checkpoint: ProbeCheckpoint,
+    results: Path,
+    serving: SessionServing,
+    gpus: tuple[GpuPowerState, ...] | None = None,
+) -> ProbeSession:
     count = len(results.read_text(encoding="utf-8").splitlines()) if results.exists() else 0
     started = datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds")
     session = ProbeSession(
@@ -915,6 +931,7 @@ def start_session(directory: Path, checkpoint: ProbeCheckpoint, results: Path, s
         checkpoint.value_digest,
         serving=serving,
         started_at=started,
+        gpus=gpus,
     )
     append_session(directory, session)
     return session

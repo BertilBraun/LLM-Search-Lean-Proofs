@@ -2,7 +2,7 @@
 # The follow-up's probe evaluations, one after another on the node (experiments/probe_evaluate.py; run lists such as
 # experiments/configs/grpo/followup/step1/runs_*.toml, src/lean_search/rl/probe_run_list.py).
 #
-#   PROBE_CONCURRENCY=112 deployment/probe_runs.sh [--foreground] <run list.toml> [<run list.toml> ...]
+#   PROBE_CONCURRENCY=112 deployment/probe_runs.sh [--foreground] [--allow-other-pinning] <run list.toml> [...]
 #
 # By default the lists run detached (nohup), so an SSH drop cannot stop them: the output goes to
 # $LEAN_SEARCH_RUNS/probe_runs/<lists>.log, the process id to <lists>.pid, and the command prints both and the ledgers
@@ -18,7 +18,8 @@
 # its record matches the list, so rerun the same command after an interruption; a rejected run (exit status 3: too many
 # wall-clock stops) or one whose servers kept dying (exit status 4) stops the lists. Runs that put other weights on the
 # servers than they started from need the swap skip, the restart path and the failure tolerance of probe_evaluate.py
-# (serving resilience, 2026-11-14): never start one from an older checkout.
+# (serving resilience, 2026-11-14): never start one from an older checkout. --allow-other-pinning is passed on to every
+# run it starts: an interrupted run resumes on another CPU layout than its first session's (recorded in pinning.jsonl).
 
 set -euo pipefail
 
@@ -27,11 +28,16 @@ source "${script_directory}/environment.sh"
 cd "${script_directory}/.."
 
 foreground=0
-if [[ "${1:-}" == --foreground ]]; then
-    foreground=1
+passed_on=()
+while [[ "${1:-}" == --* ]]; do
+    case "$1" in
+        --foreground) foreground=1 ;;
+        --allow-other-pinning) passed_on+=("$1") ;;
+        *) echo "Unknown option $1" >&2; exit 2 ;;
+    esac
     shift
-fi
-[[ $# -ge 1 ]] || { sed -n '2,21p' "$0" >&2; exit 2; }
+done
+[[ $# -ge 1 ]] || { sed -n '2,23p' "$0" >&2; exit 2; }
 [[ -n "${BACKGROUND_CPUS:-}${BACKGROUND_CPU_LIST:-}" ]] || {
     echo "Set BACKGROUND_CPUS or BACKGROUND_CPU_LIST: every evaluation runs pinned (DESIGN.md, Load)." >&2
     exit 2
@@ -53,7 +59,7 @@ if (( ! foreground )); then
         echo "These lists already run (pid $(cat "${pid_file}")); log ${log_file}" >&2
         exit 1
     fi
-    nohup "$0" --foreground "$@" >> "${log_file}" 2>&1 &
+    nohup "$0" --foreground "${passed_on[@]}" "$@" >> "${log_file}" 2>&1 &
     echo $! > "${pid_file}"
     echo "Started (pid $!). Log: ${log_file}; pid file: ${pid_file}; ledgers:"
     python experiments/probe_runs.py ledgers "$@"
@@ -83,6 +89,7 @@ while true; do
     mapfile -d '' -t fields < "${next_file}"
     run_directory="${fields[0]}"
     arguments=("${fields[@]:1}")
+    arguments+=("${passed_on[@]}")
     echo "$(date -Is) probe_evaluate.py ${arguments[*]}"
     status=0
     HF_HUB_OFFLINE=1 "${script_directory}/background.sh" python experiments/probe_evaluate.py "${arguments[@]}" || status=$?

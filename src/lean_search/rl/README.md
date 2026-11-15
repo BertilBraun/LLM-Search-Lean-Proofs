@@ -571,7 +571,8 @@ Expected fixed part per non-value phase on 4x RTX 3090 (estimates; measure on th
 add the window's last trees (labelled during sampling), the value unpark and the value merge after the policy's on the
 main rank (~10 s). Once per job: the start and model building (~1-2 minutes, overlapping sampling when it starts at a
 `prepare`) and the first `compile` (1-2 minutes). After the pause, `durable_write` copies ~9.4 GB (14 GB in a value
-phase) to disk in the background (~0.5-1.5 minutes).
+phase) to disk in the background (~0.5-1.5 minutes), in a thread put on `TRAINING_CPU_LIST` like the trainer and the
+CPU merges (the searches and the held-out states hold Lean's CPUs meanwhile); `loop.log` names its CPUs.
 
 If the pause still costs too much: longer sampling phases (`min_sampling_minutes`, `min_trainable_groups`), whose fixed
 part is paid per phase, at the price of fewer and staler updates per hour.
@@ -817,6 +818,17 @@ dashboard warns below `min_free_disk_gib` (50) free.
   `[probe] max_expansions`. Accepted only under 1% wall-clock stops (run.json, per stratum too); `probe_rating` rates
   accepted runs only, pooled by an identity of checkpoint and search settings, against the run marked `--anchor` (the
   loop config's starting policy and value adapters, checked by content).
+  Known limits: the searches start in the probe set's file order, and a run's last searches leave the GPUs partly
+  idle, about 40 minutes of a 3.4-hour run (review AP's 112-slot simulation of a complete recorded run: 3.35 h in file
+  order, 2.67 h for an oracle that starts the longest searches first). Starting the longest known proofs first does
+  not help: it took 4.24 h, because proof length hardly predicts a search's length (rank correlation 0.41) and the
+  longest searches are low- and middle-band statements that hit repeated 60 s tactic timeouts, which it starts last.
+  Any reordering also changes which searches run beside which, so the load pattern the anchors ran under, and load
+  changes outcomes (one wall-clock timeout drops an automation tactic for the rest of that search): every study run
+  keeps file order. So that a load difference between two runs shows, run.json holds Lean's load on the searches in
+  total and per stratum (`lean_load.py`: per-tactic wall-clock timeouts and the statements with one, REPL failures,
+  Lean seconds per policy attempt), and `probe_compare.py pair` and `against` print it for every run beside the
+  verdict; `probe_compare.py load <runs>` reads it from any run's results.jsonl, a run in progress included.
 - `probe`: 16 expansions, no harvesting, no ε, with `evaluation.value_model` (the published value model in
   `loop.toml`), in slots: slot k searches
   part k % `probe_parts` (3) of the set (`fixed_targets.probe_part`: every third problem of each stratum, so each part

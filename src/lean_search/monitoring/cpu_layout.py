@@ -2,9 +2,11 @@
 lists in taskset's syntax, the CPUs the cgroup's cpuset allows, where servers and training jobs run, and which logical
 CPUs share a physical core."""
 
+import contextlib
 import os
 import re
-from collections.abc import Collection, Iterable, Mapping, Sequence
+import threading
+from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
 
 from lean_search.monitoring.cgroup import CGROUP_ROOT
@@ -71,6 +73,19 @@ def training_cpu_list(root: Path = CGROUP_ROOT) -> str:
 def on_training_cpus(arguments: Sequence[str], root: Path = CGROUP_ROOT) -> list[str]:
     """The command with its affinity reset to the training CPUs: a caller pinned to Lean's CPUs passes them on."""
     return ["taskset", "--cpu-list", training_cpu_list(root), *arguments]
+
+
+@contextlib.contextmanager
+def thread_on_cpus(cpu_list: str) -> Iterator[None]:
+    """The calling thread on the CPUs meanwhile, its own affinity back after: work a pinned process does in a thread
+    (taskset reaches only a new process)."""
+    thread = threading.get_native_id()
+    before = os.sched_getaffinity(thread)
+    os.sched_setaffinity(thread, parse_cpu_list(cpu_list))
+    try:
+        yield
+    finally:
+        os.sched_setaffinity(thread, before)
 
 
 def thread_siblings(root: Path = CPU_DEVICES_ROOT) -> dict[int, tuple[int, ...]]:

@@ -9,7 +9,8 @@ src/lean_search/rl/node_pinning.py).
 pinning prints the node environment file and its settings, BACKGROUND_CPUS, BACKGROUND_CPU_LIST, SERVER_CPU_LIST and
 TRAINING_CPU_LIST as they take effect, the cpuset and the quota, and checks the layout (`node_pinning.pinning_check`):
 exactly one background setting, every set within the CPUs this process may use, the background set below the quota
-(a warning when it leaves less than SERVER_RESERVE_CORES beside it) and on physical cores of its own. record appends
+with SERVER_RESERVE_CORES (8 by default; set it to override, recorded in each run's pinning.jsonl) beside it, and on
+physical cores of its own. record appends
 the pinning of the (pinned) process to <run directory>/pinning.jsonl.
 """
 
@@ -103,9 +104,9 @@ def main() -> None:
     arguments = parse_arguments()
     match arguments.command:
         case "pinning":
-            record = current_pinning()
-            print("\n".join([*node_environment_lines(record), pinning_summary(record)]))
             try:
+                record = current_pinning()
+                print("\n".join([*node_environment_lines(record), pinning_summary(record)]))
                 check = pinning_check(record, thread_siblings(), server_reserve_cores())
             except ValueError as error:
                 raise SystemExit(str(error)) from error
