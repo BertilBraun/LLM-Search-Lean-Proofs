@@ -16,8 +16,9 @@ import dataclasses
 import datetime
 import hashlib
 import json
+import math
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -82,7 +83,6 @@ def node_environment_file() -> Path | None:
 
 def current_pinning(cgroup: Path = CGROUP_ROOT) -> PinningRecord:
     background = environment_setting("BACKGROUND_CPUS")
-    reserve = environment_setting("SERVER_RESERVE_CORES")
     node_environment = node_environment_file()
     return PinningRecord(
         recorded_at=datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds"),
@@ -99,7 +99,7 @@ def current_pinning(cgroup: Path = CGROUP_ROOT) -> PinningRecord:
         if node_environment is None
         else hashlib.sha256(node_environment.read_bytes()).hexdigest(),
         cpu_counters=cpu_counters(cgroup),
-        server_reserve_cores=None if reserve is None else float(reserve),
+        server_reserve_cores=explicit_server_reserve_cores(),
     )
 
 
@@ -131,9 +131,38 @@ def background_set(background_cpus: int | None, background_cpu_list: str | None,
             return tuple(range(max(0, cpu_count - last), cpu_count))
 
 
+def explicit_server_reserve_cores() -> float | None:
+    """SERVER_RESERVE_CORES; None when unset. ValueError unless a finite number of cores >= 0."""
+    setting = environment_setting("SERVER_RESERVE_CORES")
+    if setting is None:
+        return None
+    try:
+        reserve = float(setting)
+    except ValueError:
+        reserve = math.nan
+    if not (math.isfinite(reserve) and reserve >= 0):
+        raise ValueError(f"SERVER_RESERVE_CORES={setting} is not a number of cores >= 0")
+    return reserve
+
+
 def server_reserve_cores() -> float:
-    reserve = environment_setting("SERVER_RESERVE_CORES")
-    return DEFAULT_SERVER_RESERVE_CORES if reserve is None else float(reserve)
+    reserve = explicit_server_reserve_cores()
+    return DEFAULT_SERVER_RESERVE_CORES if reserve is None else reserve
+
+
+def quota_refusals(pinned: Sequence[int], quota: float | None, reserve_cores: float) -> list[str]:
+    """A background set not below the cgroup quota, or leaving less than `reserve_cores` of it beside it."""
+    if quota is not None and len(pinned) >= quota:
+        return [f"background.sh would pin {len(pinned)} CPUs, not below the cgroup quota of {quota:g} cores"]
+    if quota is not None and len(pinned) + reserve_cores > quota:
+        return [
+            f"background.sh's {len(pinned)} CPUs leave {quota - len(pinned):.1f} cores of the {quota:g}-core quota "
+            f"beside them, less than the {reserve_cores:g} reserved for the servers and the orchestrator: once Lean "
+            "fills its CPUs the cgroup throttles the GPU feeders with it. Pin fewer CPUs (BACKGROUND_CPU_LIST), or set "
+            "SERVER_RESERVE_CORES to the cores the servers and the orchestrator were measured to use (recorded in "
+            "each run's pinning.jsonl)"
+        ]
+    return []
 
 
 def pinning_check(record: PinningRecord, siblings: Mapping[int, tuple[int, ...]], reserve_cores: float) -> PinningCheck:
@@ -157,17 +186,7 @@ def pinning_check(record: PinningRecord, siblings: Mapping[int, tuple[int, ...]]
     outside = sorted(set(pinned) - set(record.affinity))
     if outside:
         refusals.append(f"background.sh would pin CPUs this process may not use: {cpu_list_text(outside)}")
-    quota = record.quota_cores
-    if quota is not None and len(pinned) >= quota:
-        refusals.append(f"background.sh would pin {len(pinned)} CPUs, not below the cgroup quota of {quota:g} cores")
-    elif quota is not None and len(pinned) + reserve_cores > quota:
-        refusals.append(
-            f"background.sh's {len(pinned)} CPUs leave {quota - len(pinned):.1f} cores of the {quota:g}-core quota "
-            f"beside them, less than the {reserve_cores:g} reserved for the servers and the orchestrator: once Lean "
-            "fills its CPUs the cgroup throttles the GPU feeders with it. Pin fewer CPUs (BACKGROUND_CPU_LIST), or set "
-            "SERVER_RESERVE_CORES to the cores the servers and the orchestrator were measured to use (recorded in "
-            "each run's pinning.jsonl)"
-        )
+    refusals += quota_refusals(pinned, record.quota_cores, reserve_cores)
     if not siblings:
         warnings.append(
             "The kernel shows no CPU topology here (no /sys/devices/system/cpu/cpu<N>/topology/thread_siblings_list, "
@@ -238,10 +257,19 @@ def session_refusals(directory: Path, record: PinningRecord, require_background:
     return refusals
 
 
-def record_session_pinning(directory: Path, require_background: bool, allow_other_pinning: bool) -> list[str]:
-    """Appends this session's pinning to the run's pinning.jsonl unless refused (`session_refusals`); the refusals."""
-    record = dataclasses.replace(current_pinning(), other_pinning_allowed=allow_other_pinning)
+def record_session_pinning(
+    directory: Path, require_background: bool, allow_other_pinning: bool, cgroup: Path = CGROUP_ROOT
+) -> list[str]:
+    """Appends this session's pinning to the run's pinning.jsonl unless refused (`session_refusals`, and, with one
+    background setting, `quota_refusals`: the launchers' quota check holds on every start); the refusals."""
+    try:
+        record = dataclasses.replace(current_pinning(cgroup), other_pinning_allowed=allow_other_pinning)
+    except ValueError as error:
+        return [str(error)]
     refusals = session_refusals(directory, record, require_background)
+    if (record.background_cpus is None) != (record.background_cpu_list is None):
+        pinned = background_set(record.background_cpus, record.background_cpu_list, record.cpu_count)
+        refusals += quota_refusals(pinned, record.quota_cores, server_reserve_cores())
     if not refusals:
         append_pinning(directory, record)
     return refusals

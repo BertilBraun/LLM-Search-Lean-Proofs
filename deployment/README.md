@@ -681,22 +681,25 @@ sources `environment.sh` again: `BACKGROUND_CPU_LIST= BACKGROUND_CPUS=52 deploym
 it is used, so a shell that sourced it before the file existed carries nothing stale.
 
 `node_checks.py pinning` (run by `probe_runs.sh` and `arm_loop.sh` at their start, and by `grpo_loop.sh node-check`)
-prints the file, its settings and sha256, the effective `BACKGROUND_CPUS`, `BACKGROUND_CPU_LIST`, `SERVER_CPU_LIST`
-and `TRAINING_CPU_LIST`, the cpuset and the quota, and refuses: not exactly one background setting, a list outside the
+prints the file, its settings and sha256, the effective `BACKGROUND_CPUS`, `BACKGROUND_CPU_LIST`, `SERVER_CPU_LIST` and
+`TRAINING_CPU_LIST`, the cpuset and the quota, and refuses: not exactly one background setting, a list outside the
 allowed CPUs, a background set not below the quota, or one sharing a physical core
-(`/sys/devices/system/cpu/cpu<N>/topology/thread_siblings_list`) with the servers' or training jobs' CPUs; only the
-old single-socket default (those lists every allowed CPU, no node file) is a warning, and so is a container that hides
-the topology (no such file: every CPU then counts as a core of its own, so check the lists against the host's). It
-also refuses a background set that leaves less of the quota than `SERVER_RESERVE_CORES` beside it (8 by default; the
-2026-11-15 node's 8 servers used under 4 cores beside Lean's 96 of its 105.3): once Lean fills its CPUs the cgroup
-would throttle the servers with it. The override is setting `SERVER_RESERVE_CORES` to the measured use (in the node
-environment or the command); each session records it (`server_reserve_cores` in `pinning.jsonl`, null for the
-default). `probe_evaluate.py`, `held_out_evaluate.py` and `grpo_loop.py run` record each session's layout, the node
-file's path and sha256 and the cgroup's CPU counters (usage, periods, throttled periods) in the run's
-`pinning.jsonl`, and refuse a session whose layout differs from the run's first unless `--allow-other-pinning`
-(recorded; `grpo_loop.sh loop --allow-other-pinning`, `probe_runs.sh --allow-other-pinning` for every run it starts).
-run.json (probe runs) and each phase's line in `phases.jsonl` hold the counters at the end, so the throttled share of
-any run or phase reads off two records. The loop logs where each server it starts runs (`<name>.cpus`).
+(`/sys/devices/system/cpu/cpu<N>/topology/thread_siblings_list`) with the servers' or training jobs' CPUs; only the old
+single-socket default (those lists every allowed CPU, no node file) is a warning, and so is a container that hides the
+topology (no such file: every CPU then counts as a core of its own, so check the lists against the host's). It also
+refuses a background set that leaves less of the quota than `SERVER_RESERVE_CORES` beside it (8 by default; the
+2026-11-15 node's 8 servers used under 4 cores beside Lean's 96 of its 105.3): once Lean fills its CPUs the cgroup would
+throttle the servers with it. The override is setting `SERVER_RESERVE_CORES` to the measured use (in the node
+environment or the command; a value that is not a number of cores >= 0 is refused); each session records it
+(`server_reserve_cores` in `pinning.jsonl`, null for the default). The quota and reserve refusal also holds where each
+session records its pinning, so a direct `probe_evaluate.py` or `held_out_evaluate.py` start and `grpo_loop.py run`
+(`grpo_loop.sh loop`) refuse it too, a pinned loop alike (an unpinned loop has no Lean set to check).
+`probe_evaluate.py`, `held_out_evaluate.py` and `grpo_loop.py run` record each session's layout, the node file's path
+and sha256 and the cgroup's CPU counters (usage, periods, throttled periods) in the run's `pinning.jsonl`, and refuse a
+session whose layout differs from the run's first unless `--allow-other-pinning` (recorded; `grpo_loop.sh loop
+--allow-other-pinning`, `probe_runs.sh --allow-other-pinning` for every run it starts). run.json (probe runs) and each
+phase's line in `phases.jsonl` hold the counters at the end, so the throttled share of any run or phase reads off two
+records. The loop logs where each server it starts runs (`<name>.cpus`).
 
 The host caps the GPUs' power below nominal and the caps drift (306 / 350 / 279 / 330 W of 350 on one node), so every
 probe run and phase records, per GPU, the enforced and the default power limit (`monitoring/gpu_power.py`,

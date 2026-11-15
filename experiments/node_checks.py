@@ -104,9 +104,9 @@ def main() -> None:
     arguments = parse_arguments()
     match arguments.command:
         case "pinning":
-            record = current_pinning()
-            print("\n".join([*node_environment_lines(record), pinning_summary(record)]))
             try:
+                record = current_pinning()
+                print("\n".join([*node_environment_lines(record), pinning_summary(record)]))
                 check = pinning_check(record, thread_siblings(), server_reserve_cores())
             except ValueError as error:
                 raise SystemExit(str(error)) from error
