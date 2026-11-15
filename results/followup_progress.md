@@ -2,7 +2,7 @@
 
 Kept current by the orchestrator. Details live in the linked files.
 
-**Last update:** 2026-11-15, 10:15 UTC.
+**Last update:** 2026-11-15, 12:45 UTC.
 
 ## Where we are
 
@@ -13,10 +13,12 @@ two independent reviews and a re-review (`results/reviews/2026-11-14_review_aa_*
 |---|---|---|
 | Node: 4x RTX 3090, 105-core CPU quota, $0.83/h, rented 2026-11-15 about 08:30 UTC | set up in 45 minutes; 8 servers healthy | `ssh -p 21232 root@50.173.30.254` |
 | v0 reproduction on the held-out states | done: 34.0% success, 58.7% valid Lean (published 32.2% / 57.2%; first node 33.6% / 59.3%) | |
-| Throughput test for this node's fixed concurrency and CPU layout | running until about 11:50 UTC | |
-| Code: CPU quota on this node's cgroup layout, an explicit CPU layout for Lean and the servers, a server-stop rule that knows vLLM's helper process | implemented; two code reviews running | branch `cgroup-v1-quota`; reviews `2026-11-15_review_am_*`, `_an_*` |
-| Step 1, anchor runs 1 and 2 (v0 with value v0, 2,000 statements) | after the throughput test and the merge of the branch above | |
-| Step 1, rest: calibration run, three value-free pilots, reasoning at equal tokens, old final value model | after the anchors | |
+| Throughput test (10 runs, two CPU layouts, four concurrencies, hard statements) | done: this node does 14.6k expansions/h at 112 searches, about 35-40% more than the first node; GPUs are the bottleneck, no CPU throttling | `node_backup/2026-11-15/live/runs/throughput/` |
+| Fixed settings for this node | 112 concurrent searches for probe runs and sampling, 56 for held-out states; Lean on socket 1 (96 CPUs), servers and training on socket 0 | `experiments/configs/grpo/followup/`, `/workspace/node_environment.sh` on the node |
+| Code: CPU quota on this node's cgroup layout, explicit CPU layout without raising priority, each run's layout recorded and checked | merged (reviews AM and AN, re-reviewed), master 40b2409 | `results/reviews/2026-11-15_review_am_*`, `_an_*` |
+| Step 1, anchor runs 1 and 2 (v0 with value v0, 2,000 statements) | being deployed and started, about 12:45 UTC; about 2.5-3 hours each | |
+| Step 1, rest: token budget, calibration run, three value-free pilots, reasoning at equal tokens | follows the anchors by itself (a chain on the node that survives a restart) | |
+| Step 1, last: old final value model with v0's policy; the full value-free run | after a check-in on the pilots | |
 | Before any arm: time server stops and starts, one short phase on the restart-based serving path | during step 1 | |
 | Step 2: one training round per signal from shared v0 trees | after step 1 | |
 | Not built: expert iteration inside the loop | only if that arm goes on after step 2 | |
@@ -39,6 +41,9 @@ two independent reviews and a re-review (`results/reviews/2026-11-14_review_aa_*
 - Measured on the new node: stopping a server takes about 1 second; a full start of the 8 servers 147 seconds with
   warm caches (8 minutes the very first time). The weight fingerprint differs by up to 0.25 nats between servers
   holding the same weights, so its warning tolerance goes from 0.05 to 0.3 nats; a gross mismatch (1 nat) still fails.
+
+- The host caps three of the four GPUs below their nominal power (295 W, 350 W, about 262 W, about 330 W) and the
+  caps drift a little; they are recorded every minute beside the runs.
 
 ## History in one paragraph
 
