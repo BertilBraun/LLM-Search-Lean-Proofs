@@ -48,6 +48,7 @@ from lean_search.expert_iteration.serving import (
     read_versions,
     record_published,
 )
+from lean_search.monitoring.gpu_power import gpu_power_states
 from lean_search.monitoring.store import MetricsWriter
 from lean_search.policy.expander import load_tokenizer
 from lean_search.rl.evaluation import EvaluationKind
@@ -268,6 +269,7 @@ async def run(config: GrpoLoopConfig, paths: GrpoLoopPaths) -> None:
             value_benchmark=value_benchmark_scoring(config),
             gpu_memory=functools.partial(gpu_memory_text, config),
             decoder=load_tokenizer(search_run_config(config).policy.tokenizer),
+            gpu_power=gpu_power_states,
         )
         await loop.run(stop)
 

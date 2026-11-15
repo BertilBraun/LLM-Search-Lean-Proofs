@@ -685,6 +685,13 @@ unless `--allow-other-pinning` (recorded; `grpo_loop.sh loop --allow-other-pinni
 phase's line in `phases.jsonl` hold the counters at the end, so the throttled share of any run or phase reads off two
 records. The loop logs where each server it starts runs (`<name>.cpus`).
 
+The host caps the GPUs' power below nominal and the caps drift (306 / 350 / 279 / 330 W of 350 on one node), so every
+probe run and phase records, per GPU, the enforced and the default power limit and the current SM and memory clocks
+(`monitoring/gpu_power.py`, `nvidia-smi --query-gpu=index,enforced.power.limit,power.default_limit,clocks.sm,clocks.mem`
+with a 10 s timeout; null where the query fails): a probe run at each session's start (`sessions.jsonl`, run.json's
+`sessions`) and at its end (run.json `gpus_at_end`), a phase when it began and when it was recorded (`gpus_at_start`,
+`gpus_at_end` in `phases.jsonl`).
+
 The Vast.ai node of 2026-11-15: 2x EPYC 7642, 192 logical CPUs, NUMA node 0 = CPUs 0-47 and 96-143, node 1 = 48-95
 and 144-191 (CPU n and n+96 are the two threads of one core), GPUs 0-2 on node 0 and GPU 3 on node 1, cgroup v1
 quota 105.3 cores, no CAP_SYS_NICE.

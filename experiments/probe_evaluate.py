@@ -60,12 +60,13 @@ config.toml as a loop's probe run; checkpoint.json (the checkpoint, the run conf
 budget, their identity for the rating, the anchor mark; a rerun resumes, another checkpoint or setting under the name
 is refused); sessions.jsonl (each session's starting point and served weights; a session during which a loop came up
 is marked spoiled and its results are discarded on resume; how its weights reached the servers, and the servers it
-restarted); and run.json: wall-clock stops in total and per stratum against the maximum, the sessions, the server
-restarts, the statements searched again and those left without a result, accepted or not, and the node, Lean
-toolchain, vLLM and torch. A run with max_wall_clock_stop_share or more stopped on the wall clock is rejected (exit
-status 3; repeat it with the cap doubled under another name), and so is one with a statement left without a result
-(rerun it under the same name once the servers are sound: only that statement is searched);
-probe_rating.finished_probe_runs rates accepted runs only.
+restarted; each GPU's enforced and default power limit and its clocks at the session's start, from nvidia-smi, null
+where the query failed); and run.json: wall-clock stops in total and per stratum against the maximum, the sessions, the
+server restarts, the statements searched again and those left without a result, accepted or not, the GPUs' power
+limits and clocks at the end, and the node, Lean toolchain, vLLM and torch. A run with max_wall_clock_stop_share or
+more stopped on the wall clock is rejected (exit status 3; repeat it with the cap doubled under another name), and so
+is one with a statement left without a result (rerun it under the same name once the servers are sound: only that
+statement is searched); probe_rating.finished_probe_runs rates accepted runs only.
 """
 
 import argparse
@@ -81,6 +82,7 @@ from pathlib import Path
 from lean_search.expert_iteration.curriculum import file_sha256
 from lean_search.lean.repl import PROJECT_DIRECTORY
 from lean_search.monitoring.cgroup import cpu_counters
+from lean_search.monitoring.gpu_power import gpu_power_states
 from lean_search.policy.adapters import merge_adapter_on_training_cpus
 from lean_search.policy.rotation import RequestFailures
 from lean_search.policy.serving_lock import ServingBusyError, serving_lock, serving_lock_path
@@ -297,7 +299,9 @@ async def evaluate(arguments: argparse.Namespace) -> int:
                     restarts_granted=arguments.allow_restarts,
                     fingerprint_warnings=served.fingerprint_warnings,
                 )
-                session = start_session(directory, chosen, paths.results, serving, config.submission_order)
+                session = start_session(
+                    directory, chosen, paths.results, serving, config.submission_order, gpu_power_states()
+                )
                 request_failures = RequestFailures()
                 servers = ProbeServers(
                     loop.serving,
@@ -364,7 +368,7 @@ async def evaluate(arguments: argparse.Namespace) -> int:
         read_failures(directory / FAILURES_FILE),
         dropped_statements(problems, results),
     )
-    record = dataclasses.replace(record, cpu_counters=cpu_counters())
+    record = dataclasses.replace(record, cpu_counters=cpu_counters(), gpus_at_end=gpu_power_states())
     (directory / "run.json").write_text(to_json(record), encoding="utf-8")
     log(
         f"{summary.solved}/{summary.problems} solved; {summary.wall_clock_stops} searches stopped on the wall clock "

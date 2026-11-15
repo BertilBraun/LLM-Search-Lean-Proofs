@@ -36,6 +36,7 @@ import httpx
 from lean_search.expert_iteration.loop_config import ServerEndpoint, ServingConfig, SwapMethod
 from lean_search.expert_iteration.serving import server_port, write_json_atomically
 from lean_search.monitoring.cgroup import CpuCounters
+from lean_search.monitoring.gpu_power import GpuPowerState
 from lean_search.policy.config import StepLogProbability
 from lean_search.policy.rotation import RequestFailures
 from lean_search.policy.server_control import is_healthy, is_sleeping
@@ -249,6 +250,8 @@ class ProbeSession:
     started_at: str = ""
     # The order its searches started in (sessions from before the setting started in the set's).
     submission_order: SubmissionOrder = SubmissionOrder.FILE
+    # Each GPU's power limits and clocks at its start; None where nvidia-smi failed, and for a restart's session.
+    gpus: tuple[GpuPowerState, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -307,6 +310,9 @@ class ProbeRunRecord:
     # The cgroup's CPU counters at the run's end; against pinning.jsonl's at its sessions' starts, the CPU time it
     # used and the periods throttled while it ran.
     cpu_counters: CpuCounters | None = None
+    # Each GPU's power limits and clocks at the run's end (at each session's start: `sessions`); None where nvidia-smi
+    # failed.
+    gpus_at_end: tuple[GpuPowerState, ...] | None = None
 
 
 def adapter_digest(directory: Path) -> str:
@@ -924,6 +930,7 @@ def start_session(
     results: Path,
     serving: SessionServing,
     submission_order: SubmissionOrder = SubmissionOrder.FILE,
+    gpus: tuple[GpuPowerState, ...] | None = None,
 ) -> ProbeSession:
     count = len(results.read_text(encoding="utf-8").splitlines()) if results.exists() else 0
     started = datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds")
@@ -935,6 +942,7 @@ def start_session(
         serving=serving,
         started_at=started,
         submission_order=submission_order,
+        gpus=gpus,
     )
     append_session(directory, session)
     return session

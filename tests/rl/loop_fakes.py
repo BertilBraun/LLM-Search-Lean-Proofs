@@ -26,6 +26,7 @@ from lean_search.expert_iteration.serving import (
 )
 from lean_search.lean import ProofState
 from lean_search.monitoring.families import ValueArmResult
+from lean_search.monitoring.gpu_power import GpuPowerState
 from lean_search.monitoring.store import MetricsWriter
 from lean_search.policy.adapters import PREMERGED_MARKER, PremergedWeights, handed_off_weights, handoff_directory
 from lean_search.policy.server_control import PhaseSeconds
@@ -562,6 +563,17 @@ def taking_over_handoff(handoff: Path, events: list[str]) -> Callable[[str, str,
     return merge
 
 
+@dataclass
+class CountingGpuStates:
+    """One GPU whose enforced power limit is 300 W plus the number of queries so far, this one included."""
+
+    queries: int = 0
+
+    def __call__(self) -> tuple[GpuPowerState, ...]:
+        self.queries += 1
+        return (GpuPowerState(0, 300.0 + self.queries, 350.0, 1695.0, 9751.0),)
+
+
 class SteppingClock:
     """Every reading is a minute later, so sampling triggers a phase within a few checks."""
 
@@ -582,6 +594,7 @@ class LoopWorld:
     evaluations: FakeEvaluations
     merge: Callable[[str, str, Path], None] = merge_by_writing
     scorer: FakeValueScorer | None = None
+    gpu_power: CountingGpuStates = field(default_factory=CountingGpuStates)
 
     def loop(self, statement_count: int = 6) -> GrpoLoop:
         return GrpoLoop(
@@ -598,6 +611,7 @@ class LoopWorld:
             PHASE_TEMPLATE,
             SteppingClock(),
             value_benchmark=None if self.scorer is None else ValueBenchmarkScoring(scored_benchmark(), self.scorer),
+            gpu_power=self.gpu_power,
         )
 
     def phases_done(self) -> int:

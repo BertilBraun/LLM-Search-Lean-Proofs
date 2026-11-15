@@ -814,6 +814,24 @@ async def test_a_phase_record_holds_the_cgroups_cpu_counters_when_it_has_them(tm
     assert (record["cpu_counters"] is None) == (cpu_counters() is None)
 
 
+async def test_a_phase_record_holds_the_gpus_power_limits_when_it_began_and_when_it_was_recorded(
+    tmp_path: Path,
+) -> None:
+    world = beside_world(tmp_path)
+    await run_until(world, world.loop(), phases=1)
+    record = json.loads(world.paths.phases.read_text(encoding="utf-8").splitlines()[0])
+    limits = [record[moment][0]["enforced_power_limit_watts"] for moment in ("gpus_at_start", "gpus_at_end")]
+    assert limits == [301.0, 302.0]
+
+
+async def test_a_phase_begins_with_the_gpus_as_the_phase_before_it_ended(tmp_path: Path) -> None:
+    world = beside_world(tmp_path)
+    await run_until(world, world.loop(), phases=2)
+    lines = world.paths.phases.read_text(encoding="utf-8").splitlines()
+    first, second = (from_json_object(PhaseRecord, json.loads(line)) for line in lines[:2])
+    assert second.gpus_at_start == first.gpus_at_end
+
+
 def test_a_phase_record_without_cpu_counters_reads() -> None:
     fields = json.loads(to_json(zero(PhaseRecord)))
     del fields["cpu_counters"]
