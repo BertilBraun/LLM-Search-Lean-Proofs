@@ -2,7 +2,7 @@
 
 Kept current by the orchestrator. Details live in the linked files.
 
-**Last update:** 2026-11-15, 00:50 UTC.
+**Last update:** 2026-11-15, 08:45 UTC.
 
 ## Where we are
 
@@ -20,20 +20,26 @@ re-review.
 | Not built: expert iteration inside the loop | only after step 2, if that arm goes on | |
 | Watchdog | every 30 minutes while this session is open; a supervisor on the node restarts servers and resumes runs by itself | |
 
-## Node unreachable (2026-11-15, 00:50 UTC) — owner action needed
+## New node (2026-11-15, 08:35 UTC)
 
-The node has not answered SSH since about 23:35 UTC. From here it is not possible to tell whether the host is down or
-only its network. The Vast console shows the instance's real status.
+The owner rented a replacement: `ssh -p 21232 root@50.173.30.254`, $0.83/h. Setup started at 08:40 UTC.
 
-- **Safe on the PC:** anchor run 1 complete (722 of 2,000); anchor run 2 up to 892 of 2,000 (`node_backup/2026-11-14/live/`);
-  the probe set, its twins and the selection report.
-- **If the node comes back:** the on-node supervisor and the overnight chain restart by themselves and resume run 2.
-  A background check on the PC tries the node every two minutes and wakes the orchestrator when it answers. The
-  30-minute watchdog is paused meanwhile, to save usage.
-- **If it does not come back:** nothing of value is lost. A new node needs about an hour of setup on a decent
-  network; the anchors are then run there (about 9 hours for both), and the rest of step 1 follows as planned.
-- **Recommendation:** rent a different node for the rest of the study. This host had three reboots, four server
-  segfaults and now an outage of over an hour within thirteen hours.
+| | Old node (abandoned) | New node |
+|---|---|---|
+| GPUs | 4x RTX 3090 | 4x RTX 3090 |
+| CPU quota | 61 cores (EPYC 7452) | 105 cores (EPYC 7642, 192 threads) |
+| Memory limit | 171 GiB | 183 GiB |
+| Hugging Face download | 2-7 MB/s, stalling | 32 MB/s |
+| Price | $0.89/h | $0.83/h |
+
+- **Old node:** unreachable from about 23:35 UTC on 2026-11-14 and still so at 08:31 UTC. To be destroyed by the
+  owner. Safe on the PC: anchor run 1 complete (722 of 2,000), anchor run 2 up to 892 of 2,000, the probe set.
+  The overnight plan did not run past the outage.
+- **Plan on the new node:** setup (about 35-45 minutes), v0 reproduction on the held-out states, a short throughput
+  test to fix this node's concurrency, then both anchor runs here (every arm is compared against a baseline from the
+  same machine; the old node's run 1 stays as a cross-check), then the rest of step 1.
+- **To check:** the new node uses the older cgroup layout, so the scripts that read the CPU quota may mis-detect it;
+  the setup reports which, and a fix goes through review.
 
 ## Step 1 results so far
 
