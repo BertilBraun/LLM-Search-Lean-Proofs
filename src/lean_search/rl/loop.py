@@ -77,6 +77,7 @@ from lean_search.expert_iteration.serving import (
     write_json_atomically,
 )
 from lean_search.expert_iteration.toml_text import toml_text
+from lean_search.monitoring.cgroup import CpuCounters, cpu_counters
 from lean_search.monitoring.families import (
     HealthCheck,
     LoopState,
@@ -256,6 +257,8 @@ class PhaseRecord:
     paused_search_tokens: int = 0
     # Trees whose block habits could not be measured (`TreeSummary.habits_error`); they trained.
     trees_without_habits: int = 0
+    # The cgroup's CPU counters when the phase was recorded: between two phases the CPU time and the throttled periods.
+    cpu_counters: CpuCounters | None = None
 
 
 @dataclass(frozen=True)
@@ -2271,6 +2274,7 @@ class GrpoLoop:
             lost_generated_tokens=lost_tokens,
             paused_search_tokens=progress.paused_search_tokens,
             trees_without_habits=unmeasured,
+            cpu_counters=cpu_counters(),
         )
         self.beside_sampling = BesideSampling()
         with self.paths.phases.open("a", encoding="utf-8") as handle:

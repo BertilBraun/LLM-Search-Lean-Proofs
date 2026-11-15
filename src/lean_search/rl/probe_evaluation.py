@@ -35,6 +35,7 @@ import httpx
 
 from lean_search.expert_iteration.loop_config import ServerEndpoint, ServingConfig, SwapMethod
 from lean_search.expert_iteration.serving import server_port, write_json_atomically
+from lean_search.monitoring.cgroup import CpuCounters
 from lean_search.policy.config import StepLogProbability
 from lean_search.policy.rotation import RequestFailures
 from lean_search.policy.server_control import is_healthy, is_sleeping
@@ -293,6 +294,9 @@ class ProbeRunRecord:
     # Restarts granted beyond the config's by --allow-restarts, over the run's sessions.
     restarts_granted: int = 0
     fingerprint_warnings: tuple[str, ...] = ()
+    # The cgroup's CPU counters at the run's end; against pinning.jsonl's at its sessions' starts, the CPU time it
+    # used and the periods throttled while it ran.
+    cpu_counters: CpuCounters | None = None
 
 
 def adapter_digest(directory: Path) -> str:
@@ -594,9 +598,9 @@ FINGERPRINT_PROMPTS = (
 # The reference keeps the top tokens; a server is asked for more, so that it lists every reference token.
 FINGERPRINT_TOKENS = 5
 FINGERPRINT_ASKED_TOKENS = 20
-# Above this a difference is a warning (recorded, the start stands), above GROSS a failed start. The tolerance is NOT
-# YET MEASURED: two cold starts of one merge on the node set the noise floor (the report's node commands).
-FINGERPRINT_TOLERANCE = 0.05
+# Above this a difference is a warning (recorded, the start stands), above GROSS a failed start. Servers of identical
+# weights differed by up to 0.25 nats on the 2026-11-15 node (one to two steps of bf16 logit resolution).
+FINGERPRINT_TOLERANCE = 0.3
 FINGERPRINT_GROSS = 1.0
 
 
@@ -688,7 +692,7 @@ async def check_fingerprints(
             if distance > FINGERPRINT_TOLERANCE:
                 warning = (
                     f"{name} answers the fixed prompts {distance:.3f} nats off {reference.server}, the reference of "
-                    f"{weights} (tolerance {FINGERPRINT_TOLERANCE}, unmeasured)"
+                    f"{weights} (tolerance {FINGERPRINT_TOLERANCE})"
                 )
                 log(f"Warning: {warning}")
                 warnings.append(warning)

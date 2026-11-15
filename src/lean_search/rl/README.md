@@ -528,8 +528,8 @@ number once `phase.json` is written). Between commands no collective waits, so t
   session start and after each phase). Every rank builds the models the phase needs (so the first job's model building
   runs next to the searches); the main rank starts a thread that reads and labels the phase's trees as they arrive,
   every 30 s, one tree at a time into its policy sequences (`training_phase.prepare_policy_tree`; the record itself is
-  not kept). The thread runs on the last `BACKGROUND_CPUS` (32) logical CPUs at nice 19, as `deployment/background.sh`
-  pins CPU-heavy work, so with the Lean REPLs it never takes more than one of their cores. At the pause `train` finishes
+  not kept). The thread runs on `BACKGROUND_CPU_LIST` or the last `BACKGROUND_CPUS` (32) logical CPUs at nice 19, as
+  `deployment/background.sh` pins CPU-heavy work, so with the Lean REPLs it never takes more than one of their cores. At the pause `train` finishes
   what is left and sends the sequences to the other ranks (`broadcast_from_main`); they no longer read the trees. In a
   value phase a second thread labels the value model's window the same way (`WindowPreparation`: the finished phases'
   trees at once, the collecting phase's as they arrive, read without texts, `label_value_trees`), so the pause only
@@ -1014,7 +1014,7 @@ h, each published variant 1.5-1.8 h (publish, servers, held-out states, whole pr
 less when a variant's held-out states fail and its probe is skipped. The watchdog covers the whole window.
 
 1. While the loop samples: `python experiments/grpo_expert_iteration.py --config
-   experiments/configs/grpo/expert_iteration_1.toml count`, then `HF_HUB_OFFLINE=1 BACKGROUND_CPUS=16
+   experiments/configs/grpo/expert_iteration_1.toml count`, then `HF_HUB_OFFLINE=1
    deployment/background.sh python experiments/grpo_expert_iteration.py --config ... build --processes 16` (once: B
    and C read A's data; read its README.md: held out 0, the easy share, the below-band share, block lengths and
    explanations like the phases'), and `HF_HUB_OFFLINE=1 python experiments/grpo_expert_iteration.py --config ... train

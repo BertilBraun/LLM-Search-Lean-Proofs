@@ -18,8 +18,8 @@ from pathlib import Path
 import httpx
 import pynvml
 
-CPU_STAT = Path("/sys/fs/cgroup/cpu.stat")
-MEMORY_STAT = Path("/sys/fs/cgroup/memory.stat")
+from lean_search.monitoring.cgroup import anonymous_memory_bytes, cpu_counters
+
 METRIC_LINE = re.compile(r"^(vllm:[a-z_]+)(\{[^}]*\})? ([0-9.e+-]+)$")
 SUMMED_METRICS = (
     "vllm:generation_tokens_total",
@@ -93,14 +93,6 @@ def parse_arguments() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def read_cpu_stat() -> dict[str, int]:
-    return {key: int(value) for key, value in (line.split() for line in CPU_STAT.read_text().splitlines())}
-
-
-def anonymous_memory_bytes() -> int:
-    return next(int(line.split()[1]) for line in MEMORY_STAT.read_text().splitlines() if line.startswith("anon "))
-
-
 def server_counters(http: httpx.Client, server_url: str) -> ServerCounters:
     totals = dict.fromkeys(SUMMED_METRICS, 0.0)
     for line in http.get(f"{server_url.rstrip('/')}/metrics").text.splitlines():
@@ -124,17 +116,19 @@ def record(arguments: argparse.Namespace) -> None:
     started = time.monotonic()
     with httpx.Client(timeout=5.0) as http, arguments.output.open("a", encoding="utf-8") as output:
         while True:
-            cpu_stat = read_cpu_stat()
+            counters = cpu_counters()
+            anonymous = anonymous_memory_bytes()
+            assert counters is not None and anonymous is not None, "the node's cgroup has no cpu or memory controller"
             sample = Sample(
                 seconds=time.monotonic() - started,
                 unix_time=time.time(),
                 gpu_utilization=tuple(pynvml.nvmlDeviceGetUtilizationRates(handle).gpu for handle in handles),
                 gpu_power_watts=tuple(pynvml.nvmlDeviceGetPowerUsage(handle) / 1000 for handle in handles),
-                cpu_usage_seconds=cpu_stat["usage_usec"] / 1e6,
-                periods=cpu_stat["nr_periods"],
-                throttled_periods=cpu_stat["nr_throttled"],
+                cpu_usage_seconds=counters.usage_seconds,
+                periods=counters.periods,
+                throttled_periods=counters.throttled_periods,
                 load_average=float(Path("/proc/loadavg").read_text().split()[0]),
-                anonymous_memory_gib=anonymous_memory_bytes() / 2**30,
+                anonymous_memory_gib=anonymous / 2**30,
                 servers=tuple(server_counters(http, url) for url in arguments.server_url),
                 finished_searches=count_lines(arguments.results),
             )

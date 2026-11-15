@@ -11,10 +11,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple
 
+from lean_search.monitoring.cgroup import (
+    CGROUP_ROOT,
+    CpuCounters,
+    anonymous_memory_bytes,
+    cpu_counters,
+    cpu_quota_cores,
+    memory_limit_bytes,
+)
 from lean_search.monitoring.families import SystemUsage
 from lean_search.monitoring.store import MetricsWriter, RunReader
 
-CGROUP = Path("/sys/fs/cgroup")
+CGROUP = CGROUP_ROOT
 PROC = Path("/proc")
 LEAN_PROCESS_NAMES = ("repl", "lean")
 # vLLM's API servers run as python with vllm on the command line; its engine processes are named VLLM::<role>.
@@ -78,20 +86,13 @@ def process_seconds(proc: Path, names: Collection[str]) -> dict[int, float]:
     return seconds
 
 
-def cgroup_cpu(cgroup: Path) -> dict[str, int]:
-    path = cgroup / "cpu.stat"
-    if not path.exists():
-        return {}
-    return {key: int(value) for key, value in (line.split() for line in path.read_text().splitlines())}
-
-
 def cpu_snapshot(cgroup: Path, proc: Path, names: Collection[str]) -> CpuSnapshot:
-    stat = cgroup_cpu(cgroup)
+    counters = cpu_counters(cgroup) or CpuCounters(proc_total_seconds(proc), 0, 0)
     return CpuSnapshot(
         monotonic=time.monotonic(),
-        usage_seconds=stat["usage_usec"] / 1e6 if "usage_usec" in stat else proc_total_seconds(proc),
-        periods=stat.get("nr_periods", 0),
-        throttled_periods=stat.get("nr_throttled", 0),
+        usage_seconds=counters.usage_seconds,
+        periods=counters.periods,
+        throttled_periods=counters.throttled_periods,
         process_seconds=process_seconds(proc, names),
     )
 
@@ -119,28 +120,21 @@ def cpu_usage(first: CpuSnapshot, second: CpuSnapshot) -> CpuUsage:
 
 
 def available_cores(cgroup: Path) -> float:
-    path = cgroup / "cpu.max"
-    if path.exists():
-        quota, period = path.read_text().split()
-        if quota != "max":
-            return int(quota) / int(period)
-    return float(os.cpu_count() or 1)
+    quota = cpu_quota_cores(cgroup)
+    return quota if quota is not None else float(os.cpu_count() or 1)
 
 
 def memory_used_gib(cgroup: Path, proc: Path) -> float:
-    stat = cgroup / "memory.stat"
-    if stat.exists():
-        anonymous = next(int(line.split()[1]) for line in stat.read_text().splitlines() if line.startswith("anon "))
+    anonymous = anonymous_memory_bytes(cgroup)
+    if anonymous is not None:
         return anonymous / 2**30
     info = {line.split(":")[0]: int(line.split()[1]) for line in (proc / "meminfo").read_text().splitlines()}
     return (info["MemTotal"] - info["MemAvailable"]) / 2**20
 
 
-def memory_limit_bytes(cgroup: Path, host_total: int) -> int:
-    path = cgroup / "memory.max"
-    if path.exists() and (limit := path.read_text().strip()) != "max":
-        return min(int(limit), host_total)
-    return host_total
+def memory_total_bytes(cgroup: Path, host_total: int) -> int:
+    limit = memory_limit_bytes(cgroup)
+    return host_total if limit is None else min(limit, host_total)
 
 
 class PrivateMemory(NamedTuple):
@@ -170,7 +164,7 @@ def private_memory(proc: Path, lean_names: Collection[str]) -> PrivateMemory:
 def host_memory(cgroup: Path, proc: Path, lean_names: Collection[str]) -> HostMemory:
     lines = (proc / "meminfo").read_text().splitlines()
     info = {line.split(":")[0]: int(line.split()[1]) * 1024 for line in lines}
-    total = memory_limit_bytes(cgroup, info["MemTotal"])
+    total = memory_total_bytes(cgroup, info["MemTotal"])
     available = min(info["MemAvailable"], total - round(memory_used_gib(cgroup, proc) * 2**30))
     processes = private_memory(proc, lean_names)
     return HostMemory(total, available, processes.lean_bytes, processes.vllm_bytes)

@@ -4,7 +4,7 @@
 # "Expert iteration"): the loop's verified proof-graph blocks of the phases since the reward fix, as sampled, fine-tune
 # the current version's policy adapter on raw Qwen3.5-4B with replay; then grpo_loop.py publish-adapter.
 #   python experiments/grpo_expert_iteration.py --config experiments/configs/grpo/expert_iteration_1_b.toml count
-#   HF_HUB_OFFLINE=1 BACKGROUND_CPUS=16 deployment/background.sh python experiments/grpo_expert_iteration.py \
+#   HF_HUB_OFFLINE=1 deployment/background.sh python experiments/grpo_expert_iteration.py \
 #       --config experiments/configs/grpo/expert_iteration_1_b.toml build --processes 16
 #   HF_HUB_OFFLINE=1 torchrun --standalone --nproc-per-node 4 experiments/grpo_expert_iteration.py \
 #       --config experiments/configs/grpo/expert_iteration_1_b.toml train

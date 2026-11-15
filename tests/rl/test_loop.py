@@ -24,6 +24,7 @@ from loop_fakes import (
 
 from lean_search.expert_iteration.pool import problem_name
 from lean_search.expert_iteration.serving import ModelVersion, read_current, read_versions, write_json_atomically
+from lean_search.monitoring.cgroup import cpu_counters
 from lean_search.monitoring.families import PauseSegments, ValueArmResult
 from lean_search.monitoring.store import RunReader
 from lean_search.policy.serving_lock import ServingBusyError, serving_lock, serving_lock_path
@@ -806,6 +807,19 @@ async def test_a_finished_evaluation_beside_sampling_is_recorded_with_the_phase(
     assert record["beside_sampling"]["finished"] == ["minif2f"]
 
 
+async def test_a_phase_record_holds_the_cgroups_cpu_counters_when_it_has_them(tmp_path: Path) -> None:
+    world = beside_world(tmp_path)
+    await run_until(world, world.loop(), phases=1)
+    record = json.loads(world.paths.phases.read_text(encoding="utf-8").splitlines()[0])
+    assert (record["cpu_counters"] is None) == (cpu_counters() is None)
+
+
+def test_a_phase_record_without_cpu_counters_reads() -> None:
+    fields = json.loads(to_json(zero(PhaseRecord)))
+    del fields["cpu_counters"]
+    assert from_json_object(PhaseRecord, fields).cpu_counters is None
+
+
 def test_a_phase_record_without_evaluations_beside_sampling_reads() -> None:
     fields = json.loads(to_json(zero(PhaseRecord)))
     del fields["beside_sampling"]
@@ -1278,7 +1292,8 @@ def training_arguments(root: Path, toml: str) -> list[str]:
 
 def test_several_training_gpus_start_a_torchrun_rank_each(tmp_path: Path) -> None:
     arguments = training_arguments(tmp_path, LOOP_TOML)
-    assert arguments[1:6] == [
+    # After the training CPUs' taskset and the interpreter.
+    assert arguments[4:9] == [
         "-m",
         "torch.distributed.run",
         "--standalone",
@@ -1289,7 +1304,7 @@ def test_several_training_gpus_start_a_torchrun_rank_each(tmp_path: Path) -> Non
 
 def test_one_training_gpu_starts_a_single_process(tmp_path: Path) -> None:
     assert (
-        training_arguments(tmp_path, LOOP_TOML.replace("gpus = [0, 1]", "gpus = [0]"))[1] == "experiments/grpo_phase.py"
+        training_arguments(tmp_path, LOOP_TOML.replace("gpus = [0, 1]", "gpus = [0]"))[4] == "experiments/grpo_phase.py"
     )
 
 

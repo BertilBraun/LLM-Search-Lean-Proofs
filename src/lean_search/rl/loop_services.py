@@ -29,6 +29,7 @@ from lean_search.expert_iteration.serving import (
     write_json_atomically,
 )
 from lean_search.lean import FORBIDDEN_TOKENS, LeanReplConfig, LeanReplPool
+from lean_search.monitoring.cpu_layout import on_training_cpus, training_cpu_list
 from lean_search.monitoring.system_sampler import (
     CGROUP,
     LEAN_PROCESS_NAMES,
@@ -343,11 +344,12 @@ async def run_logged(arguments: Sequence[str], log_path: Path, environment: dict
 
 
 def training_launcher(config: LoopTrainingConfig) -> list[str]:
-    """The command prefix, then one process, or torchrun with a rank per training GPU."""
+    """The command prefix, then one process, or torchrun with a rank per training GPU, on the training CPUs: the loop
+    runs on Lean's (deployment/background.sh), and its ranks feed GPUs."""
     launcher = [sys.executable]
     if len(config.gpus) > 1:
         launcher += ["-m", "torch.distributed.run", "--standalone", f"--nproc-per-node={len(config.gpus)}"]
-    return [*shlex.split(config.command_prefix), *launcher]
+    return on_training_cpus([*shlex.split(config.command_prefix), *launcher])
 
 
 def replay_arguments(paths: GrpoLoopPaths, config: LoopTrainingConfig) -> list[str]:
@@ -480,7 +482,7 @@ class PersistentTrainer:
         log_path = self.paths.training / "trainer.log"
         self.job = asyncio.create_task(run_logged(self.arguments, log_path, self.environment, self.record_path))
         self.job.add_done_callback(self.job_ended)
-        self.log(f"Persistent trainer started (start {self.starts}; log {log_path})")
+        self.log(f"Persistent trainer started (start {self.starts}; CPUs {training_cpu_list()}; log {log_path})")
 
     def job_ended(self, job: asyncio.Task[None]) -> None:
         if job.cancelled():
@@ -664,14 +666,26 @@ async def run_command(command: str) -> int:
             await process.wait()
 
 
+def server_cpus_text(servers_directory: Path, name: str) -> str:
+    """Where serve_model.sh recorded the server runs (<name>.cpus, gone at its next stop): its CPUs and niceness."""
+    path = servers_directory / f"{name}.cpus"
+    match path.read_text(encoding="utf-8").split() if path.exists() else []:
+        case [cpus, niceness]:
+            return f"{name} runs on CPUs {cpus} at niceness {niceness}"
+        case _:
+            return f"{name} recorded no CPUs ({path})"
+
+
 async def start_server(start: ServerStart, servers_directory: Path, log: Callable[[str], None]) -> None:
-    """Stops what is left of the server, then starts it (serve_model.sh returns once it answers). A failed start is
-    tried again up to START_RETRIES times, its log kept as <name>.failed-<attempt>.<UTC time>.log."""
+    """Stops what is left of the server, then starts it (serve_model.sh returns once it answers) and logs where it
+    runs. A failed start is tried again up to START_RETRIES times, its log kept as
+    <name>.failed-<attempt>.<UTC time>.log."""
     name = start.server.name
     for attempt in range(1, START_RETRIES + 2):
         if await run_command(f"deployment/stop_model.sh {name}"):
             raise RuntimeError(f"Stopping {name} failed")
         if not await run_command(start.command):
+            log(server_cpus_text(servers_directory, name))
             return
         stamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%S.%fZ")
         kept = servers_directory / f"{name}.failed-{attempt}.{stamp}.log"

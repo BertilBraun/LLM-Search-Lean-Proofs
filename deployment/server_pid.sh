@@ -48,31 +48,64 @@ live_group_members() {
     ps -eo pid=,pgid=,stat= 2>/dev/null | awk -v group="$1" '$2 == group && $3 !~ /^Z/ {print $1}'
 }
 
-# serve_model.sh records the server's processes (pid and start, one a line) in <name>.members once it answers.
+parent_pid() {
+    sed 's/.*) //' "/proc/$1/stat" | awk '{print $2}'
+}
+
+# serve_model.sh records the server's processes (pid, start and parent, one a line) in <name>.members once it
+# answers; files from before the parent was recorded have pid and start only.
 record_server_members() {
     local group="$1" members_file="$2" member
     for member in $(live_group_members "${group}"); do
-        echo "${member} $(process_start_seconds "${member}")"
+        echo "${member} $(process_start_seconds "${member}") $(parent_pid "${member}")"
     done > "${members_file}"
 }
 
-# Whether <pid> is a vLLM process of the server: its command line vLLM's (the CLI, or a title such as
-# VLLM::EngineCore, which also overwrites its environment), recorded in <members file> with its start, and started
-# between the pid file's write and the end of the start's wait.
+# What the server runs on, whoever started it: `<CPU list> <niceness>` of its API process in <name>.cpus.
+record_server_cpus() {
+    local pid="$1" cpus_file="$2" cpus niceness
+    cpus="$(taskset --cpu-list --pid "${pid}" | awk '{print $NF}')"
+    niceness="$(ps -o ni= -p "${pid}" | tr -d ' ')"
+    echo "${cpus} ${niceness}" > "${cpus_file}"
+}
+
+# vLLM's CLI (argument 1 or 2 ends in vllm) or a process title such as VLLM::EngineCore, which also overwrites its
+# environment.
+vllm_command() {
+    local argument
+    for argument in "${@:1:2}"; do
+        [[ "${argument}" == vllm || "${argument}" == */vllm || "${argument}" == VLLM::* ]] && return 0
+    done
+    return 1
+}
+
+# The resource tracker Python's multiprocessing starts beside the API process: `python [flags] -c <its code>`.
+resource_tracker_command() {
+    local interpreter='(^|/)python[0-9.]*$' code='^from multiprocessing\.resource_tracker import main;main\([0-9]+\)$'
+    (( $# >= 3 )) && [[ "$1" =~ ${interpreter} && "${*: -2:1}" == -c && "${*: -1}" =~ ${code} ]]
+}
+
+# Whether <pid> is a process of the server whose group is <group>: recorded in <members file> with its start, started
+# between the pid file's write and the end of the start's wait, and either a vLLM process or the resource tracker of
+# the group's API process (its parent now, or when the members were recorded: once the API process died it is init).
 server_member() {
-    local member="$1" members_file="$2" written="$3" arguments started
-    arguments="$(tr '\0' '\n' 2>/dev/null < "/proc/${member}/cmdline")" || return 1
-    head -n 2 <<< "${arguments}" | grep -q '\(^\|/\)vllm$\|^VLLM::' || return 1
+    local member="$1" members_file="$2" written="$3" group="$4" arguments=() started recorded_parent
+    mapfile -d '' -t arguments 2>/dev/null < "/proc/${member}/cmdline" || return 1
     started="$(process_start_seconds "${member}")" || return 1
-    [[ -f "${members_file}" ]] && grep -qxF -- "${member} ${started}" "${members_file}" || return 1
+    [[ -f "${members_file}" ]] || return 1
+    recorded_parent="$(awk -v member="${member}" -v started="${started}" \
+        '$1 == member && $2 == started {print $3; found = 1} END {exit !found}' "${members_file}")" || return 1
     (( started >= written - pid_start_slack_seconds && started <= written + server_start_seconds )) || return 1
+    vllm_command "${arguments[@]}" && return 0
+    resource_tracker_command "${arguments[@]}" || return 1
+    [[ "${recorded_parent}" == "${group}" || "$(parent_pid "${member}")" == "${group}" ]]
 }
 
 # What is left of a server whose API process (the group's leader) died, a zombie or gone, while other processes of
-# its group live on. Prints the group and returns 0 when every live member is a vLLM process of the server
-# (`server_member`, against <name>.members beside the pid file); returns 1 when the pid file is stale (from before
-# the boot, its leader alive as another process, or nothing of its group left); returns 2, naming the members, when a
-# live member is not the server's (or its start never recorded them): then nothing may be signalled.
+# its group live on. Prints the group and returns 0 when every live member is a process of the server (`server_member`,
+# against <name>.members beside the pid file); returns 1 when the pid file is stale (from before the boot, its leader
+# alive as another process, or nothing of its group left); returns 2, naming the members, when a live member is not
+# the server's (or its start never recorded them): then nothing may be signalled.
 orphaned_server_group() {
     local pid_file="$1" name="$2" group written state member members foreign=()
     local members_file="${pid_file%.pid}.members"
@@ -87,7 +120,7 @@ orphaned_server_group() {
     members="$(live_group_members "${group}")"
     [[ -n "${members}" ]] || return 1
     for member in ${members}; do
-        server_member "${member}" "${members_file}" "${written}" || foreign+=("${member}")
+        server_member "${member}" "${members_file}" "${written}" "${group}" || foreign+=("${member}")
     done
     if (( ${#foreign[@]} )); then
         echo "${foreign[*]}"

@@ -1,23 +1,24 @@
 """The 512 held-out states sampled with any policy adapter, outside a loop: step 2's ranking of learning rates
 (experiments/rank_learning_rates.py; DESIGN.md, "Follow-up study: controlled arms", "Step 2").
 
-    BACKGROUND_CPUS=52 deployment/background.sh python experiments/held_out_evaluate.py --name v0 --arm v0 --phase 0 \
+    deployment/background.sh python experiments/held_out_evaluate.py --name v0 --arm v0 --phase 0 \
         --policy-adapter /workspace/checkpoints/data_rewrite_sft_numbered/adapter
-    BACKGROUND_CPUS=52 deployment/background.sh python experiments/held_out_evaluate.py --name step2_A_5e-5 \
+    deployment/background.sh python experiments/held_out_evaluate.py --name step2_A_5e-5 \
         --arm step2_A_5e-5 --phase 1 --policy-adapter $LEAN_SEARCH_CHECKPOINTS/step2_A_5e-5/policy/adapter
 
 One request per state, no value model, as a loop's held-out evaluation at its pause: the loop config's (default the
 follow-up base) [evaluation] held_out_states target (its one held-out concurrency, 56), held_out_states_file and
 sampling search config, on its policy servers, which must be up (deployment/grpo_loop.sh servers). It runs only pinned
-through deployment/background.sh (the study's Load rule) and records the CPUs per session in pinning.jsonl. Step 2
-compares every variant with this tool's own v0 run on this node, never with the old node's held-out numbers (another
-node, quota and pinning).
+through deployment/background.sh (the study's Load rule: the node environment's BACKGROUND_CPU_LIST) and records the
+CPUs per session in pinning.jsonl; a session on another layout than the run's first is refused unless
+--allow-other-pinning (recorded). Step 2 compares every variant with this tool's own v0 run on this node, never with the
+old node's held-out numbers (another node, quota and pinning).
 
-The run holds the node's serving lock and refuses while a loop runs, merges the adapter on the CPU (probe_evaluate.py's
-merges, deleted afterwards unless a server runs from one) and puts it on the policy servers as probe_evaluate.py does
-(the loop config's serving.swap, the skip where a server provably holds it, the check requests and the fingerprint),
-with its tolerance of server failures (failures.jsonl, sessions.jsonl; a state left without a tree is named in
-summary.json's `dropped`, exit status 4 after the restarts are used up). Results in
+The run holds the node's serving lock and refuses while a loop runs, merges the adapter on the training CPUs
+(probe_evaluate.py's merges, deleted afterwards unless a server runs from one) and puts it on the policy servers as
+probe_evaluate.py does (the loop config's serving.swap, the skip where a server provably holds it, the check requests
+and the fingerprint), with its tolerance of server failures (failures.jsonl, sessions.jsonl; a state left without a tree
+is named in summary.json's `dropped`, exit status 4 after the restarts are used up). Results in
 $LEAN_SEARCH_RUNS/held_out_evaluations/held_out_<name>/: summary.json (once every state is sampled), trees/ (one per
 state), pinning.jsonl and checkpoint.json (the adapter, the states file's sha256 and the concurrency); a rerun resumes
 the states without a tree, and another adapter, states file or concurrency under the name is refused.
@@ -32,14 +33,14 @@ import os
 from pathlib import Path
 
 from lean_search.expert_iteration.curriculum import file_sha256
-from lean_search.policy.adapters import merge_adapter
+from lean_search.policy.adapters import merge_adapter_on_training_cpus
 from lean_search.policy.rotation import RequestFailures
 from lean_search.policy.serving_lock import ServingBusyError, serving_lock, serving_lock_path
 from lean_search.rl.evaluation import FailureTolerance, ServerRecoveryError
 from lean_search.rl.fixed_targets import evaluate_held_out_states
 from lean_search.rl.loop_config import load_loop_config
 from lean_search.rl.loop_services import start_servers
-from lean_search.rl.node_pinning import append_pinning, current_pinning, pinned_as_background
+from lean_search.rl.node_pinning import record_session_pinning
 from lean_search.rl.probe_evaluation import (
     NO_VALUE_VERSION,
     DeathRule,
@@ -92,6 +93,11 @@ def parse_arguments() -> argparse.Namespace:
         default=0,
         help="server restarts granted beyond the config's (after exit status 4, once the servers were looked at)",
     )
+    parser.add_argument(
+        "--allow-other-pinning",
+        action="store_true",
+        help="resume although the CPU layout differs from the run's first session's (recorded in pinning.jsonl)",
+    )
     return parser.parse_args()
 
 
@@ -100,8 +106,6 @@ def log(message: str) -> None:
 
 
 async def evaluate(arguments: argparse.Namespace) -> None:
-    if not pinned_as_background(current_pinning()):
-        raise SystemExit("Run it pinned: BACKGROUND_CPUS=<n> deployment/background.sh python experiments/...")
     loop = load_loop_config(REPOSITORY_DIRECTORY / arguments.loop_config)
     if not arguments.policy_adapter.is_dir():
         raise SystemExit(f"No adapter directory at {arguments.policy_adapter}.")
@@ -123,6 +127,9 @@ async def evaluate(arguments: argparse.Namespace) -> None:
     record = directory / "checkpoint.json"
     if record.exists() and from_json_object(HeldOutRunStart, json.loads(record.read_text(encoding="utf-8"))) != start:
         raise SystemExit(f"{record} holds another checkpoint, states file or concurrency; choose another --name.")
+    refusals = record_session_pinning(directory, True, arguments.allow_other_pinning)
+    if refusals:
+        raise SystemExit("\n".join(refusals))
     template = served_run_config(
         without_search_options(load_run_config(REPOSITORY_DIRECTORY / loop.sampling.search_config)), loop.serving
     )
@@ -136,12 +143,11 @@ async def evaluate(arguments: argparse.Namespace) -> None:
             try:
                 verify = functools.partial(verify_served, template, log)
                 served = await serve_checkpoint(
-                    loop.serving, chosen, weights_root, merge_adapter, SERVERS_DIRECTORY, verify, log
+                    loop.serving, chosen, weights_root, merge_adapter_on_training_cpus, SERVERS_DIRECTORY, verify, log
                 )
                 log(f"Weights put on {list(served.swapped)} ({served.swap}); already held by {list(served.skipped)}")
                 directory.mkdir(parents=True, exist_ok=True)
                 record.write_text(to_json(start), encoding="utf-8")
-                append_pinning(directory)
                 results = directory / "results.jsonl"
                 serving = SessionServing(
                     served.swap,

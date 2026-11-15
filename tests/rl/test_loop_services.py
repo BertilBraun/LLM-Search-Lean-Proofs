@@ -24,6 +24,7 @@ from lean_search.rl.loop_services import (
     live_children,
     run_logged,
     running_start_ticks,
+    training_launcher,
 )
 from lean_search.search.records import from_json_object
 
@@ -162,6 +163,12 @@ def test_an_evaluation_job_left_by_an_earlier_loop_is_reported(tmp_path: Path) -
     record = paths.children / "evaluations" / "probe_slot0000_v0000" / "evaluation.pid"
     write_json_atomically(record, ChildProcess(os.getpid(), own_start_ticks(), "earlier"))
     assert SubprocessTrainer(paths, LoopTrainingConfig("unused.toml")).earlier_jobs() is not None
+
+
+def test_a_training_job_starts_on_the_training_cpus(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TRAINING_CPU_LIST", "0-23,96-119")
+    launcher = training_launcher(LoopTrainingConfig("unused.toml", gpus=(0, 1), command_prefix="nice -n 5"))
+    assert launcher[:6] == ["taskset", "--cpu-list", "0-23,96-119", "nice", "-n", "5"]
 
 
 async def test_concurrent_evaluation_jobs_do_not_refuse_each_other(tmp_path: Path) -> None:

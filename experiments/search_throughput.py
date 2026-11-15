@@ -6,7 +6,8 @@
 
 Each process searches miniF2F-valid under $LEAN_SEARCH_RUNS/search_throughput/<name>/<index>/; after `--duration`
 seconds they are stopped and the monitor (experiments/node_monitor.py) is summarized from `--warmup` on.
-`--background-cpus N` runs the searches (and so their Lean processes) through deployment/background.sh on N CPUs.
+`--background-cpus N` (the last N CPUs) or `--background-cpu-list 144-191` runs the searches (and so their Lean
+processes) through deployment/background.sh on those CPUs, whatever the environment sets.
 """
 
 import argparse
@@ -35,7 +36,9 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--duration", type=float, default=420.0)
     parser.add_argument("--warmup", type=float, default=120.0)
     parser.add_argument("--server-url", action="append", default=[], help="vLLM server root for the monitor")
-    parser.add_argument("--background-cpus", type=int)
+    pinning = parser.add_mutually_exclusive_group()
+    pinning.add_argument("--background-cpus", type=int)
+    pinning.add_argument("--background-cpu-list")
     return parser.parse_args()
 
 
@@ -69,8 +72,12 @@ def main() -> None:
     config_path = directory / "config.toml"
     config_path.write_text(text, encoding="utf-8")
     concurrency = tomllib.loads(text)["lean"]["concurrency"]
-    pinning = [str(REPOSITORY_DIRECTORY / "deployment" / "background.sh")] if arguments.background_cpus else []
-    environment = os.environ | {"BACKGROUND_CPUS": str(arguments.background_cpus or 0)}
+    pinned = bool(arguments.background_cpus or arguments.background_cpu_list)
+    pinning = [str(REPOSITORY_DIRECTORY / "deployment" / "background.sh")] if pinned else []
+    environment = os.environ | {
+        "BACKGROUND_CPUS": str(arguments.background_cpus or ""),
+        "BACKGROUND_CPU_LIST": arguments.background_cpu_list or "",
+    }
     monitor = subprocess.Popen(
         [sys.executable, str(Path(__file__).parent / "node_monitor.py"), "record"]
         + ["--output", str(directory / "monitor.jsonl")]
@@ -107,6 +114,7 @@ def main() -> None:
         "processes": arguments.processes,
         "concurrency_per_process": concurrency,
         "background_cpus": arguments.background_cpus,
+        "background_cpu_list": arguments.background_cpu_list,
         "orchestrator_cpu_cores": [seconds / arguments.duration for seconds in orchestrator_cpu_seconds],
     }
     report |= dataclasses.asdict(summary)

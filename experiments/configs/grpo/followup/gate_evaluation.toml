@@ -3,7 +3,7 @@
 # experiments/rank_learning_rates.py). probe_evaluation.toml on the gate set, into its own output so the probe rating
 # never pools a gate run. Optional: about a fifth of a probe run each (~1 h), so the 13 step-2 variants and v0 cost
 # ~11-17 node hours (~$10-15); without them the lowest tied rate is chosen.
-#   BACKGROUND_CPUS=52 deployment/background.sh python experiments/probe_evaluate.py \
+#   deployment/background.sh python experiments/probe_evaluate.py \
 #       --config experiments/configs/grpo/followup/gate_evaluation.toml \
 #       --name step2_A_5e-5 --arm step2_A_5e-5 --phase 1 --policy-adapter <adapter> --value v0
 # (or a run list through deployment/probe_runs.sh).

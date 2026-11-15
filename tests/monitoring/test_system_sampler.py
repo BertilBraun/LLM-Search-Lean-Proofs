@@ -2,14 +2,16 @@ import os
 from pathlib import Path
 
 import pytest
+from cgroup_trees import V1_TREE, V2_TREE, cgroup_tree
 
 from lean_search.monitoring.system_sampler import (
     CpuSnapshot,
     available_cores,
+    cpu_snapshot,
     cpu_usage,
     fullest_disk,
     host_memory,
-    memory_limit_bytes,
+    memory_total_bytes,
     percentile_90,
     private_memory,
     process_seconds,
@@ -61,15 +63,27 @@ def test_process_names_may_contain_spaces_and_parentheses(tmp_path: Path) -> Non
     assert process_seconds(tmp_path, {"lean (x) y"}) == {9: 1.0}
 
 
-@pytest.mark.parametrize(("cpu_max", "cores"), [("4600000 100000", 46.0), ("150000 100000", 1.5)])
-def test_available_cores_follow_the_cgroup_quota(tmp_path: Path, cpu_max: str, cores: float) -> None:
-    (tmp_path / "cpu.max").write_text(cpu_max)
-    assert available_cores(tmp_path) == cores
+@pytest.mark.parametrize(
+    ("files", "cores"),
+    [({"cpu.max": "4600000 100000"}, 46.0), ({"cpu.max": "150000 100000"}, 1.5), (V1_TREE, 105.32571)],
+    ids=["v2", "v2 fractional", "v1"],
+)
+def test_available_cores_follow_the_cgroup_quota(tmp_path: Path, files: dict[str, str], cores: float) -> None:
+    assert available_cores(cgroup_tree(tmp_path, files)) == pytest.approx(cores)
 
 
-def test_unlimited_cgroup_has_every_cpu(tmp_path: Path) -> None:
-    (tmp_path / "cpu.max").write_text("max 100000")
-    assert available_cores(tmp_path) == float(os.cpu_count() or 1)
+@pytest.mark.parametrize(
+    "files", [{"cpu.max": "max 100000"}, V1_TREE | {"cpu/cpu.cfs_quota_us": "-1"}], ids=["v2", "v1"]
+)
+def test_unlimited_cgroup_has_every_cpu(tmp_path: Path, files: dict[str, str]) -> None:
+    assert available_cores(cgroup_tree(tmp_path, files)) == float(os.cpu_count() or 1)
+
+
+@pytest.mark.parametrize("files", [V2_TREE, V1_TREE], ids=["v2", "v1"])
+def test_a_cpu_snapshot_reads_the_cgroups_usage(tmp_path: Path, files: dict[str, str]) -> None:
+    cgroup, proc = cgroup_tree(tmp_path / "cgroup", files), tmp_path / "proc"
+    proc.mkdir()
+    assert cpu_snapshot(cgroup, proc, {"repl"}).usage_seconds == 5.0
 
 
 def write_status(proc: Path, pid: int, name: str, private_kib: int, command_line: bytes = b"") -> None:
@@ -95,18 +109,31 @@ def test_vllm_processes_count_by_name_or_command_line(tmp_path: Path, name: str,
     assert private_memory(tmp_path, {"repl"}).vllm_bytes == 1 << 20
 
 
-@pytest.mark.parametrize(("memory_max", "limit"), [("1073741824", 1 << 30), ("max", 4 << 30)])
-def test_the_memory_limit_follows_the_cgroup(tmp_path: Path, memory_max: str, limit: int) -> None:
-    (tmp_path / "memory.max").write_text(memory_max + "\n")
-    assert memory_limit_bytes(tmp_path, 4 << 30) == limit
+@pytest.mark.parametrize(
+    ("files", "total"),
+    [
+        ({"memory.max": "1073741824"}, 1 << 30),
+        ({"memory.max": "max"}, 4 << 30),
+        ({"memory/memory.limit_in_bytes": "1073741824"}, 1 << 30),
+        ({"memory/memory.limit_in_bytes": "9223372036854771712"}, 4 << 30),
+    ],
+    ids=["v2", "v2 unlimited", "v1", "v1 unlimited"],
+)
+def test_the_memory_total_follows_the_cgroup(tmp_path: Path, files: dict[str, str], total: int) -> None:
+    assert memory_total_bytes(cgroup_tree(tmp_path, files), 4 << 30) == total
 
 
-def test_available_memory_is_the_limit_less_the_cgroups_anonymous_memory(tmp_path: Path) -> None:
-    cgroup, proc = tmp_path / "cgroup", tmp_path / "proc"
-    cgroup.mkdir()
+@pytest.mark.parametrize(
+    "files",
+    [
+        {"memory.max": f"{8 << 30}", "memory.stat": f"anon {3 << 30}\nfile {1 << 30}"},
+        {"memory/memory.limit_in_bytes": f"{8 << 30}", "memory/memory.stat": f"rss {3 << 30}\ntotal_rss {3 << 30}"},
+    ],
+    ids=["v2", "v1"],
+)
+def test_available_memory_is_the_limit_less_the_cgroups_anonymous_memory(tmp_path: Path, files: dict[str, str]) -> None:
+    cgroup, proc = cgroup_tree(tmp_path / "cgroup", files), tmp_path / "proc"
     proc.mkdir()
-    (cgroup / "memory.max").write_text(f"{8 << 30}\n")
-    (cgroup / "memory.stat").write_text(f"anon {3 << 30}\nfile {1 << 30}\n")
     (proc / "meminfo").write_text(f"MemTotal: {64 << 20} kB\nMemAvailable: {60 << 20} kB\n")
     assert host_memory(cgroup, proc, {"repl"}).available_bytes == 5 << 30
 

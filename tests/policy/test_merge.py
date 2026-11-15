@@ -17,6 +17,7 @@ from lean_search.policy.adapters import (  # noqa: E402
     load_base_model,
     merge_adapter,
     merge_adapter_fp16,
+    merge_adapter_on_training_cpus,
 )
 
 PUBLISH_SCRIPT = Path(__file__).resolve().parents[2] / "experiments" / "publish_weights.py"
@@ -90,6 +91,16 @@ def test_bf16_merge_adds_the_adapter_update(tiny_base: Path, tiny_adapter: Path,
     merge_adapter(str(tiny_base), tiny_adapter, tmp_path / "merged")
     expected = (base_weight(tiny_base) + adapter_update(tiny_adapter)).to(torch.bfloat16)
     torch.testing.assert_close(merged_weight(tmp_path / "merged"), expected, atol=0, rtol=2**-7)
+
+
+def test_a_merge_on_the_training_cpus_writes_the_in_process_merges_weights(
+    tiny_base: Path, tiny_adapter: Path, tmp_path: Path
+) -> None:
+    merge_adapter(str(tiny_base), tiny_adapter, tmp_path / "in_process")
+    merge_adapter_on_training_cpus(str(tiny_base), tiny_adapter, tmp_path / "on_training_cpus")
+    torch.testing.assert_close(
+        merged_weight(tmp_path / "on_training_cpus"), merged_weight(tmp_path / "in_process"), atol=0, rtol=0
+    )
 
 
 def test_fp16_merge_is_the_fp32_merge_rounded_once(tiny_base: Path, tiny_adapter: Path, tmp_path: Path) -> None:
