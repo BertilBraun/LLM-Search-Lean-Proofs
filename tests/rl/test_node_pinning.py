@@ -141,6 +141,11 @@ def test_a_cpu_list_sharing_a_physical_core_with_the_background_set_is_refused(p
     assert checked(pinning).refusals
 
 
+def test_a_hidden_cpu_topology_is_a_warning_only() -> None:
+    check = pinning_check(record(background_cpus=52), {}, RESERVE_CORES)
+    assert (check.refusals, len(check.warnings)) == ((), 1)
+
+
 def test_every_allowed_cpu_for_the_servers_without_a_node_environment_is_a_warning_only() -> None:
     check = checked(record(background_cpus=52, server_cpu_list="0-127", node_environment=None))
     assert (check.refusals, len(check.warnings)) == ((), 2)

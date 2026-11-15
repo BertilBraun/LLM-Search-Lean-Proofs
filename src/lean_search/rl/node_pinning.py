@@ -141,7 +141,8 @@ def pinning_check(record: PinningRecord, siblings: Mapping[int, tuple[int, ...]]
     BACKGROUND_CPU_LIST, a set outside the CPUs this process may use, a background set not below the quota, or one
     sharing a physical core with the servers' or training jobs' CPUs (a warning instead for those that are every CPU
     the cgroup allows on a node without a node environment, the old single-socket layout), or a background set that
-    leaves less of the quota than `reserve_cores` beside it. ValueError for a malformed CPU list."""
+    leaves less of the quota than `reserve_cores` beside it. A warning: no topology (`siblings` empty), so every CPU
+    counts as a core of its own. ValueError for a malformed CPU list."""
     if (record.background_cpus is None) == (record.background_cpu_list is None):
         both = record.background_cpus is not None
         hint = " (both set: BACKGROUND_CPU_LIST= or BACKGROUND_CPUS= unsets the node environment's)" if both else ""
@@ -166,6 +167,12 @@ def pinning_check(record: PinningRecord, siblings: Mapping[int, tuple[int, ...]]
             "fills its CPUs the cgroup throttles the GPU feeders with it. Pin fewer CPUs (BACKGROUND_CPU_LIST), or set "
             "SERVER_RESERVE_CORES to the cores the servers and the orchestrator were measured to use (recorded in "
             "each run's pinning.jsonl)"
+        )
+    if not siblings:
+        warnings.append(
+            "The kernel shows no CPU topology here (no /sys/devices/system/cpu/cpu<N>/topology/thread_siblings_list, "
+            "as some containers hide it): every CPU counts as a physical core of its own, so a Lean CPU sharing a core "
+            "with a server's or training job's goes unnoticed; check the lists against the host's topology"
         )
     old_default = record.node_environment is None
     allowed = set(parse_cpu_list(record.allowed_cpu_list))
