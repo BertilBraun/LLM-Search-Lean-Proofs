@@ -2,7 +2,7 @@
 
 Kept current by the orchestrator. Details live in the linked files.
 
-**Last update:** 2026-11-15, 09:00 UTC.
+**Last update:** 2026-11-15, 10:15 UTC.
 
 ## Where we are
 
@@ -11,9 +11,11 @@ two independent reviews and a re-review (`results/reviews/2026-11-14_review_aa_*
 
 | Item | State | Result or file |
 |---|---|---|
-| Node: 4x RTX 3090, 105-core CPU quota, $0.83/h, rented 2026-11-15 about 08:30 UTC | being set up (about 35-45 minutes) | `ssh -p 21232 root@50.173.30.254` |
-| v0 reproduction on the held-out states; throughput test for this node's fixed concurrency | after setup | |
-| Step 1, anchor runs 1 and 2 (v0 with value v0, 2,000 statements) | after the throughput test | |
+| Node: 4x RTX 3090, 105-core CPU quota, $0.83/h, rented 2026-11-15 about 08:30 UTC | set up in 45 minutes; 8 servers healthy | `ssh -p 21232 root@50.173.30.254` |
+| v0 reproduction on the held-out states | done: 34.0% success, 58.7% valid Lean (published 32.2% / 57.2%; first node 33.6% / 59.3%) | |
+| Throughput test for this node's fixed concurrency and CPU layout | running until about 11:50 UTC | |
+| Code: CPU quota on this node's cgroup layout, an explicit CPU layout for Lean and the servers, a server-stop rule that knows vLLM's helper process | implemented; two code reviews running | branch `cgroup-v1-quota`; reviews `2026-11-15_review_am_*`, `_an_*` |
+| Step 1, anchor runs 1 and 2 (v0 with value v0, 2,000 statements) | after the throughput test and the merge of the branch above | |
 | Step 1, rest: calibration run, three value-free pilots, reasoning at equal tokens, old final value model | after the anchors | |
 | Before any arm: time server stops and starts, one short phase on the restart-based serving path | during step 1 | |
 | Step 2: one training round per signal from shared v0 trees | after step 1 | |
@@ -33,6 +35,10 @@ two independent reviews and a re-review (`results/reviews/2026-11-14_review_aa_*
   (`node_backup/2026-11-14/probe_v2/`).
 - A run's last few long searches leave the GPUs mostly idle (about 25 minutes on a 2,000-statement run). Planned fix,
   with review: submit the longest statements first, and let the next run with the same weights fill free slots.
+
+- Measured on the new node: stopping a server takes about 1 second; a full start of the 8 servers 147 seconds with
+  warm caches (8 minutes the very first time). The weight fingerprint differs by up to 0.25 nats between servers
+  holding the same weights, so its warning tolerance goes from 0.05 to 0.3 nats; a gross mismatch (1 nat) still fails.
 
 ## History in one paragraph
 
