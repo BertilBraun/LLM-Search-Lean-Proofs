@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The search-tree GRPO loop on a 4x RTX 3090 node, one step at a time (deployment/README.md, "GRPO loop").
 #
-#   deployment/grpo_loop.sh node-check           # first: disk, /dev/shm, CPUs, GPU topology, a 4-rank NCCL all-reduce
+#   deployment/grpo_loop.sh node-check           # first: disk, /dev/shm, CPUs, memory, GPU topology, NCCL all-reduce
 #   deployment/grpo_loop.sh sets                 # once: probe, value benchmark (gate) and overfit sets (CPU)
 #   deployment/grpo_loop.sh init                 # once: version 0 (merges the policy and value [initial] adapters)
 #   deployment/grpo_loop.sh servers              # start the vLLM servers not answering on the current version
@@ -37,9 +37,17 @@ case "$1" in
         mkdir -p "${LEAN_SEARCH_RUNS}" "${LEAN_SEARCH_CHECKPOINTS}"
         df -h "${LEAN_SEARCH_RUNS}" "${LEAN_SEARCH_CHECKPOINTS}" /dev/shm
         nproc
-        grep -sH . /sys/fs/cgroup/cpu.max /sys/fs/cgroup/cpu/cpu.cfs_quota_us /sys/fs/cgroup/cpu/cpu.cfs_period_us || true
+        cgroup=/sys/fs/cgroup
+        grep -sH . "${cgroup}"/{cpu.max,cpu/cpu.cfs_quota_us,cpu/cpu.cfs_period_us} \
+            "${cgroup}"/{cpuset.cpus.effective,cpuset/cpuset.cpus,memory.max,memory/memory.limit_in_bytes} || true
         quota_cores="$(cgroup_quota_cores)"
-        echo "cgroup CPU quota: ${quota_cores:-none} cores"
+        echo "cgroup CPU quota: ${quota_cores:-none} cores; cpuset CPUs: $(cgroup_allowed_cpus)"
+        python -c 'from lean_search.monitoring.cgroup import memory_limit_bytes
+limit = memory_limit_bytes()
+print("cgroup memory limit:", "none" if limit is None else f"{limit / 2**30:.1f} GiB")'
+        echo "BACKGROUND_CPUS=${BACKGROUND_CPUS:-} BACKGROUND_CPU_LIST=${BACKGROUND_CPU_LIST:-}" \
+            "SERVER_CPU_LIST=${SERVER_CPU_LIST} (${LEAN_SEARCH_NODE_ENVIRONMENT})"
+        lscpu | grep -i '^NUMA' || true
         nvidia-smi topo -m
         shm_mebibytes=$(( $(df -k --output=size /dev/shm | tail -n 1) / 1024 ))
         # The persistent trainer keeps its parked bases (~14 GiB) and the merges it hands to the servers (~14 GiB) there.
