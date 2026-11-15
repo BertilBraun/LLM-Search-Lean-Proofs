@@ -4,7 +4,7 @@
 #   deployment/background.sh <command> [argument ...]
 #   BACKGROUND_CPUS=24 deployment/background.sh python experiments/phase2_trace_proofs.py --processes 24 ...
 #
-# The container sees all 192 host CPUs but is throttled to a 46-core quota (cpu.max) as a whole. Busy processes
+# The container sees all the host's CPUs but is throttled to a cgroup CPU quota as a whole. Busy processes
 # each get a CPU of their own, so nice changes nothing until the quota runs out, and then the whole cgroup, GPU
 # feeders included, is throttled for the rest of the period. The job is therefore pinned to the last
 # BACKGROUND_CPUS logical CPUs (default 32), which caps all background jobs together at that many cores and leaves

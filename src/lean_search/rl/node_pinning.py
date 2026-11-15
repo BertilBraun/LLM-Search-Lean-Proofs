@@ -13,9 +13,9 @@ from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import Path
 
+from lean_search.monitoring.cgroup import cpu_quota_cores
 from lean_search.search.records import from_json_object, to_json
 
-CPU_MAX = Path("/sys/fs/cgroup/cpu.max")
 PINNING_FILE = "pinning.jsonl"
 
 
@@ -31,19 +31,13 @@ class PinningRecord:
     background_cpus: int | None
 
 
-def quota_cores(cpu_max_text: str) -> float | None:
-    """cgroup v2's cpu.max ("<quota> <period>" or "max <period>") in cores."""
-    quota, period = cpu_max_text.split()
-    return None if quota == "max" else int(quota) / int(period)
-
-
 def current_pinning() -> PinningRecord:
     background = os.environ.get("BACKGROUND_CPUS")
     return PinningRecord(
         recorded_at=datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds"),
         affinity=tuple(sorted(os.sched_getaffinity(0))),
         cpu_count=os.cpu_count() or 0,
-        quota_cores=quota_cores(CPU_MAX.read_text(encoding="utf-8")) if CPU_MAX.exists() else None,
+        quota_cores=cpu_quota_cores(),
         background_cpus=int(background) if background else None,
     )
 

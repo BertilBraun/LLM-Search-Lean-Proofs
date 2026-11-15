@@ -13,6 +13,7 @@ node's checkout.
 | `fetch_results.sh` | local | Copy `$LEAN_SEARCH_RUNS/<run>/summary/` from the node into `results/<run>/`. |
 | `setup_remote.sh` | node | Provision a node: clone the repo, then `setup_python.sh` and `setup_lean.sh`. |
 | `environment.sh` | node | Paths, opt-in mirrors and `PATH`; sourced by everything else. |
+| `cgroup.sh` | node | The cgroup's CPU quota in cores (v2 `cpu.max` or v1 `cpu.cfs_quota_us`); sourced by `environment.sh`. |
 | `setup_python.sh` | node | Create the virtual environment from `uv.lock`. |
 | `serve_model.sh` | node | Start a detached vLLM server for one model on one GPU (prefix caching, runtime LoRA). |
 | `stop_model.sh` | node | Stop servers started by `serve_model.sh` (by name or `--all`). |
@@ -151,10 +152,12 @@ vLLM facts for these models:
 
 ## CPU budget
 
-The container sees all 192 host CPUs but its cgroup is capped at 46 cores (`cpu.max`). Busy processes each get a CPU of
-their own, so `nice` changes nothing until the quota is used up; then the kernel stops the whole cgroup, GPU feeders
-included, for the rest of each 100 ms period. Measured (`results/gpu_utilization/`): 60 busy processes throttle the
-cgroup in 100% of periods whether they run at nice 0 or nice 19; pinned to 32 CPUs they throttle it in 0.3%.
+The container sees all 192 host CPUs but its cgroup is capped at 46 cores (cgroup v2's `cpu.max`; on v1 nodes
+`cpu/cpu.cfs_quota_us` over `cpu/cpu.cfs_period_us`, both read by `deployment/cgroup.sh` and
+`src/lean_search/monitoring/cgroup.py`). Busy processes each get a CPU of their own, so `nice` changes nothing until
+the quota is used up; then the kernel stops the whole cgroup, GPU feeders included, for the rest of each 100 ms
+period. Measured (`results/gpu_utilization/`): 60 busy processes throttle the cgroup in 100% of periods whether they
+run at nice 0 or nice 19; pinned to 32 CPUs they throttle it in 0.3%.
 
 What throttling costs depends on the GPU feeder:
 
@@ -417,9 +420,10 @@ Order on a fresh node (each step catches what would otherwise surface hours late
 1. **Node checks** (`deployment/grpo_loop.sh node-check`, minutes): `df` of the runs, the checkpoints and `/dev/shm`
    (fails below 30 GiB of `/dev/shm`: the persistent trainer keeps ~28 GiB there, its parked bases and the merges it
    hands to the servers, and Docker's 64 MB default also breaks NCCL's shared-memory transport; rent with
-   `--shm-size 32g` or more), `nproc` and the cgroup's `cpu.max`, `nvidia-smi topo -m`, and a 4-rank NCCL all-reduce of
-   256 MiB (`experiments/nccl_check.py`, as the trainer sums its gradients; a hang means no peer-to-peer access over
-   PCIe: `NCCL_P2P_DISABLE=1` in the loop's environment). HF and GitHub reachability.
+   `--shm-size 32g` or more), `nproc` and the cgroup's CPU quota (v2 `cpu.max` or v1 `cpu.cfs_quota_us` and
+   `cpu.cfs_period_us`, then in cores), `nvidia-smi topo -m`, and a 4-rank NCCL all-reduce of 256 MiB
+   (`experiments/nccl_check.py`, as the trainer sums its gradients; a hang means no peer-to-peer access over PCIe:
+   `NCCL_P2P_DISABLE=1` in the loop's environment). HF and GitHub reachability.
 2. **Rebuild**, then the heartbeat replay (`python experiments/heartbeat_replay.py ...`, DESIGN.md "Lean execution and
    harness"), which fixes the caps every later search uses.
 3. **Smoke cycle** (`experiments/configs/grpo/loop_smoke.toml`, an hour or a little more): the whole loop on the

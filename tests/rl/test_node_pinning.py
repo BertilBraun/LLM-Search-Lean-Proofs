@@ -5,15 +5,9 @@ from lean_search.rl.node_pinning import (
     background_set,
     pinned_as_background,
     pinning_refusals,
-    quota_cores,
 )
 
 ALL_CPUS = range(128)
-
-
-@pytest.mark.parametrize(("text", "cores"), [("6100000 100000", 61.0), ("max 100000", None)])
-def test_the_cgroup_quota_reads_in_cores(text: str, cores: float | None) -> None:
-    assert quota_cores(text) == cores
 
 
 def test_background_sh_pins_the_last_cpus_of_the_host() -> None:

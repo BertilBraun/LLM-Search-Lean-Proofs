@@ -37,7 +37,9 @@ case "$1" in
         mkdir -p "${LEAN_SEARCH_RUNS}" "${LEAN_SEARCH_CHECKPOINTS}"
         df -h "${LEAN_SEARCH_RUNS}" "${LEAN_SEARCH_CHECKPOINTS}" /dev/shm
         nproc
-        cat /sys/fs/cgroup/cpu.max 2>/dev/null || true
+        grep -sH . /sys/fs/cgroup/cpu.max /sys/fs/cgroup/cpu/cpu.cfs_quota_us /sys/fs/cgroup/cpu/cpu.cfs_period_us || true
+        quota_cores="$(cgroup_quota_cores)"
+        echo "cgroup CPU quota: ${quota_cores:-none} cores"
         nvidia-smi topo -m
         shm_mebibytes=$(( $(df -k --output=size /dev/shm | tail -n 1) / 1024 ))
         # The persistent trainer keeps its parked bases (~14 GiB) and the merges it hands to the servers (~14 GiB) there.

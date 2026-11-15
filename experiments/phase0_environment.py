@@ -15,11 +15,11 @@ from pathlib import Path
 from lean_search.data import Problem, Split, load_minif2f
 from lean_search.lean import LeanError, LeanRepl, LeanReplConfig, LeanReplPool, LeanTimeout, ProofState, normalize_goal
 from lean_search.lean.repl import PROJECT_DIRECTORY
+from lean_search.monitoring.cgroup import anonymous_memory_bytes, memory_limit_bytes, memory_used_bytes
 
 RUN_DIRECTORY = Path(os.environ["LEAN_SEARCH_RUNS"]) / "phase0_environment"
 PARTS_DIRECTORY = RUN_DIRECTORY / "parts"
 SUMMARY_DIRECTORY = RUN_DIRECTORY / "summary"
-CGROUP_DIRECTORY = Path("/sys/fs/cgroup")
 GIBIBYTE = 1 << 30
 MEBIBYTE = 1 << 20
 
@@ -141,19 +141,21 @@ class MemorySampler:
 
 
 def cgroup_memory_current() -> int:
-    return int((CGROUP_DIRECTORY / "memory.current").read_text())
+    current = memory_used_bytes()
+    assert current is not None, "the node's cgroup has no memory controller"
+    return current
 
 
 def cgroup_memory_limit() -> int:
-    return int((CGROUP_DIRECTORY / "memory.max").read_text())
+    limit = memory_limit_bytes()
+    assert limit is not None, "the node's cgroup has no memory limit"
+    return limit
 
 
 def cgroup_anonymous_memory() -> int:
-    for line in (CGROUP_DIRECTORY / "memory.stat").read_text().splitlines():
-        key, value = line.split()
-        if key == "anon":
-            return int(value)
-    raise AssertionError("memory.stat has no anon field")
+    anonymous = anonymous_memory_bytes()
+    assert anonymous is not None, "the node's cgroup has no memory controller"
+    return anonymous
 
 
 def percentile(values: Sequence[float], fraction: float) -> float:

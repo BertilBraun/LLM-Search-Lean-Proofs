@@ -29,17 +29,12 @@ fi
 
 export PATH="${HOME}/.elan/bin:${LEAN_SEARCH_ROOT}/.venv/bin:${PATH}"
 
+source "$(dirname "${BASH_SOURCE[0]}")/cgroup.sh"
 # Vast.ai containers report the host's nproc but are throttled to a cgroup quota.
 effective_cpu_count() {
-    local quota period
-    if [[ -r /sys/fs/cgroup/cpu.max ]]; then
-        read -r quota period < /sys/fs/cgroup/cpu.max
-        if [[ "${quota}" != max ]]; then
-            echo $(( quota / period > 0 ? quota / period : 1 ))
-            return
-        fi
-    fi
-    nproc
+    local quota
+    quota="$(cgroup_quota_cores)"
+    echo "${quota:-$(nproc)}"
 }
 export LEAN_SEARCH_CPU_COUNT="${LEAN_SEARCH_CPU_COUNT:-$(effective_cpu_count)}"
 
