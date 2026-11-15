@@ -571,7 +571,8 @@ Expected fixed part per non-value phase on 4x RTX 3090 (estimates; measure on th
 add the window's last trees (labelled during sampling), the value unpark and the value merge after the policy's on the
 main rank (~10 s). Once per job: the start and model building (~1-2 minutes, overlapping sampling when it starts at a
 `prepare`) and the first `compile` (1-2 minutes). After the pause, `durable_write` copies ~9.4 GB (14 GB in a value
-phase) to disk in the background (~0.5-1.5 minutes).
+phase) to disk in the background (~0.5-1.5 minutes), in a thread put on `TRAINING_CPU_LIST` like the trainer and the
+CPU merges (the searches and the held-out states hold Lean's CPUs meanwhile); `loop.log` names its CPUs.
 
 If the pause still costs too much: longer sampling phases (`min_sampling_minutes`, `min_trainable_groups`), whose fixed
 part is paid per phase, at the price of fewer and staler updates per hour.

@@ -78,6 +78,7 @@ from lean_search.expert_iteration.serving import (
 )
 from lean_search.expert_iteration.toml_text import toml_text
 from lean_search.monitoring.cgroup import CpuCounters, cpu_counters
+from lean_search.monitoring.cpu_layout import thread_on_cpus, training_cpu_list
 from lean_search.monitoring.families import (
     HealthCheck,
     LoopState,
@@ -1830,15 +1831,20 @@ class GrpoLoop:
         """The handed-off merges copied to disk (a temporary directory renamed once complete), then the version
         recorded and older weights and adapters pruned, then host memory cleared."""
         started = self.clock()
-        current = await asyncio.to_thread(
-            publish_phase, self.paths.models, self.publisher, outcome, phase_trigger(phase)
-        )
+        cpus = training_cpu_list()
+        current = await asyncio.to_thread(self.publish_on_cpus, phase, outcome, cpus)
         await self.log_host_memory("after the durable write, before clearing the handoff")
         await asyncio.to_thread(self.recorded)
         self.served_value_weights = current.value_weights
         seconds = self.clock() - started
         self.save_progress(pause=dataclasses.replace(self.progress.pause, durable_write_seconds=seconds))
-        self.log(f"Version {current.version} written to disk and recorded in {seconds:.0f} s")
+        self.log(f"Version {current.version} written to disk on CPUs {cpus} and recorded in {seconds:.0f} s")
+
+    def publish_on_cpus(self, phase: int, outcome: PhaseOutcome, cpus: str) -> ModelVersion:
+        """On the training CPUs like the trainer and the CPU merges: the ~13 GB copy runs beside the held-out
+        evaluation and sampling, which hold Lean's."""
+        with thread_on_cpus(cpus):
+            return publish_phase(self.paths.models, self.publisher, outcome, phase_trigger(phase))
 
     def recorded(self) -> None:
         """After a version's record: older adapters pruned, the merges handed off in host memory cleared."""

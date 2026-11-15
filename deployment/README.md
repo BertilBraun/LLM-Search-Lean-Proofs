@@ -549,7 +549,7 @@ First-hour checks:
   quarter of the one-GPU 4-8 minutes; `value_training` (~2-3 minutes) in value phases;
   `merge` and `handoff` well under a minute; `publish` ~0 (`Published version <k> from host memory` in `loop.log`; a
   `publish` of a minute or more means the CPU merge ran); `wake` a few seconds per server; then `durable_write` about
-  a minute in the background (`Version <k> written to disk and recorded`). Together about 1 minute outside value
+  a minute in the background (`Version <k> written to disk on CPUs <training CPUs> and recorded`). Together about 1 minute outside value
   phases; if the fixed segments still dominate, compare one phase with `gpus = [0]` before deciding.
 - The parked job's GPU memory between phases: `nvidia-smi --query-compute-apps=pid,gpu_uuid,used_memory --format=csv`
   after the first park should show each rank on its own GPU only, at no more than about 1 GiB, beside each GPU's two

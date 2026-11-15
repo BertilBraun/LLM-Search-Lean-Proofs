@@ -1,9 +1,11 @@
 """The loop's publish from merges the persistent training job hands off in host memory (rl/README.md, "Persistent
 trainer"): the servers load them at once, the searches resume, and the version is recorded once on disk."""
 
+import os
 import shutil
 from pathlib import Path
 
+import pytest
 from loop_fakes import (
     LOOP_TOML,
     FakeTrainer,
@@ -180,3 +182,19 @@ async def test_the_benchmark_scoring_finishes_before_the_next_pause_after_an_ear
     events = world.searcher.events
     second_pause = [index for index, event in enumerate(events) if event == "pause"][1]
     assert events[:second_pause].count("scored") == 2
+
+
+async def test_the_copy_to_disk_runs_on_the_training_cpus(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    training_cpu = max(os.sched_getaffinity(0))
+    monkeypatch.setenv("TRAINING_CPU_LIST", str(training_cpu))
+    world = handoff_world(tmp_path)
+    take_over = world.merge
+    copied_on: list[frozenset[int]] = []
+
+    def merge(base_model: str, adapter: str, output: Path) -> None:
+        copied_on.append(frozenset(os.sched_getaffinity(0)))
+        take_over(base_model, adapter, output)
+
+    world.merge = merge
+    await run_until(world, world.loop(), phases=1)
+    assert set(copied_on) == {frozenset({training_cpu})}
