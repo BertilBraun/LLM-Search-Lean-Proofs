@@ -825,7 +825,10 @@ dashboard warns below `min_free_disk_gib` (50) free.
   longest searches are low- and middle-band statements that hit repeated 60 s tactic timeouts, which it starts last.
   Any reordering also changes which searches run beside which, so the load pattern the anchors ran under, and load
   changes outcomes (one wall-clock timeout drops an automation tactic for the rest of that search): every study run
-  keeps file order.
+  keeps file order. So that a load difference between two runs shows, run.json holds Lean's load on the searches in
+  total and per stratum (`lean_load.py`: per-tactic wall-clock timeouts and the statements with one, REPL failures,
+  Lean seconds per policy attempt), and `probe_compare.py pair` and `against` print it for every run beside the
+  verdict; `probe_compare.py load <runs>` reads it from any run's results.jsonl, a run in progress included.
 - `probe`: 16 expansions, no harvesting, no ε, with `evaluation.value_model` (the published value model in
   `loop.toml`), in slots: slot k searches
   part k % `probe_parts` (3) of the set (`fixed_targets.probe_part`: every third problem of each stratum, so each part

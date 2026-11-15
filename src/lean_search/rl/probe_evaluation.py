@@ -42,6 +42,7 @@ from lean_search.policy.rotation import RequestFailures
 from lean_search.policy.server_control import is_healthy, is_sleeping
 from lean_search.policy.server_processes import server_process, swapped_marker
 from lean_search.rl.evaluation import EvaluationProblem, EvaluationSummary, SearchFailure, ServerRecoveryError
+from lean_search.rl.lean_load import LeanLoad
 from lean_search.rl.loop_config import EvaluationTarget
 from lean_search.rl.loop_services import (
     CHECK_GOALS,
@@ -304,6 +305,8 @@ class ProbeRunRecord:
     # Each GPU's enforced and default power limit at the run's end (at each session's start: `sessions`); None where
     # nvidia-smi failed.
     gpus_at_end: tuple[GpuPowerState, ...] | None = None
+    # Lean's load on its searches, the total first, then per stratum (`lean_load.lean_loads`).
+    lean_load: tuple[LeanLoad, ...] = ()
 
 
 def adapter_digest(directory: Path) -> str:

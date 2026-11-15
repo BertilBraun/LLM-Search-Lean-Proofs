@@ -51,16 +51,17 @@ left without a result, counted as dropped (never as unsolved), and the run is no
 
 The run goes to $LEAN_SEARCH_RUNS/<output>/probe_<name>/: results.jsonl (one per statement), summary.json, trees and
 config.toml as a loop's probe run; checkpoint.json (the checkpoint, the run config's digest, concurrency, wall cap and
-budget, their identity for the rating, the anchor mark; a rerun resumes, another checkpoint or setting under the name
-is refused); sessions.jsonl (each session's starting point and served weights; a session during which a loop came up
-is marked spoiled and its results are discarded on resume; how its weights reached the servers, and the servers it
+budget, their identity for the rating, the anchor mark; a rerun resumes, another checkpoint or setting under the name is
+refused); sessions.jsonl (each session's starting point and served weights; a session during which a loop came up is
+marked spoiled and its results are discarded on resume; how its weights reached the servers, and the servers it
 restarted; each GPU's enforced and default power limit at the session's start, from nvidia-smi, null where the query
-failed); and run.json: wall-clock stops in total and per stratum against the maximum, the sessions, the server
-restarts, the statements searched again and those left without a result, accepted or not, the GPUs' power limits at
-the end, and the node, Lean toolchain, vLLM and torch. A run with max_wall_clock_stop_share or more stopped on the
-wall clock is rejected (exit status 3; repeat it with the cap doubled under another name), and so is one with a
-statement left without a result (rerun it under the same name once the servers are sound: only that statement is
-searched); probe_rating.finished_probe_runs rates accepted runs only.
+failed); and run.json: wall-clock stops in total and per stratum against the maximum, the sessions, the server restarts,
+the statements searched again and those left without a result, accepted or not, the GPUs' power limits at the end,
+Lean's load on the searches in total and per stratum (per-tactic wall-clock timeouts and the statements with one, REPL
+failures, Lean seconds per policy attempt: rl/lean_load.py), and the node, Lean toolchain, vLLM and torch. A run with
+max_wall_clock_stop_share or more stopped on the wall clock is rejected (exit status 3; repeat it with the cap doubled
+under another name), and so is one with a statement left without a result (rerun it under the same name once the servers
+are sound: only that statement is searched); probe_rating.finished_probe_runs rates accepted runs only.
 """
 
 import argparse
@@ -89,6 +90,7 @@ from lean_search.rl.evaluation import (
     run_problem_set_evaluation,
 )
 from lean_search.rl.fixed_targets import first_problems_by_stratum, probe_problems
+from lean_search.rl.lean_load import lean_loads
 from lean_search.rl.loop_config import GrpoLoopConfig, load_loop_config
 from lean_search.rl.loop_services import start_servers
 from lean_search.rl.node_pinning import record_session_pinning
@@ -355,14 +357,19 @@ async def evaluate(arguments: argparse.Namespace) -> int:
         read_failures(directory / FAILURES_FILE),
         dropped_statements(problems, results),
     )
-    record = dataclasses.replace(record, cpu_counters=cpu_counters(), gpus_at_end=gpu_power_states())
+    strata = {problem.problem.name: problem.stratum for problem in problems}
+    record = dataclasses.replace(
+        record, cpu_counters=cpu_counters(), gpus_at_end=gpu_power_states(), lean_load=lean_loads(results, strata)
+    )
     (directory / "run.json").write_text(to_json(record), encoding="utf-8")
     log(
         f"{summary.solved}/{summary.problems} solved; {summary.wall_clock_stops} searches stopped on the wall clock "
         f"({record.wall_clock_stop_share:.2%}, accepted below {config.max_wall_clock_stop_share:.2%}; by stratum "
         f"{[(stratum.stratum, stratum.wall_clock_stops) for stratum in by_stratum]}); "
         f"{len(record.retried_statements)} statements searched again after a server failure, "
-        f"{len(record.server_restarts)} server restarts, left without a result: {list(record.dropped_statements)}: "
+        f"{len(record.server_restarts)} server restarts, left without a result: {list(record.dropped_statements)}; "
+        f"Lean's load: {record.lean_load[0].wall_clock_timeouts} tactic wall-clock timeouts, "
+        f"{record.lean_load[0].repl_failures} REPL failures: "
         f"{'accepted' if record.accepted else 'rejected'}"
     )
     return 0 if record.accepted else REJECTED_EXIT_STATUS
