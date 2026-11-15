@@ -2,7 +2,7 @@
 
 Kept current by the orchestrator. Details live in the linked files.
 
-**Last update:** 2026-11-15, 19:05 UTC.
+**Last update:** 2026-11-15, 21:05 UTC.
 
 ## Where we are
 
@@ -17,33 +17,33 @@ two independent reviews and a re-review (`results/reviews/2026-11-14_review_aa_*
 | Fixed settings for this node | 112 concurrent searches for probe runs and sampling, 56 for held-out states; Lean on socket 1 (96 CPUs), servers and training on socket 0 | `experiments/configs/grpo/followup/`, `/workspace/node_environment.sh` on the node |
 | Code: CPU quota on this node's cgroup layout, explicit CPU layout without raising priority, each run's layout recorded and checked | merged (reviews AM and AN, re-reviewed), master 40b2409 | `results/reviews/2026-11-15_review_am_*`, `_an_*` |
 | Step 1, anchor runs 1 and 2 (v0 with value v0, 2,000 statements) | done: 713 and 716 of 2,000 | `node_backup/2026-11-15/live/runs/step1_chain/` |
-| Step 1: token budget, calibration run | running since 18:57 UTC | |
-| Step 1: three value-free pilots, reasoning at equal tokens | held until the timeout question below is decided | |
-| Code: GPU power limits and Lean load (tactic timeouts, REPL failures) in every run record; quota reserve enforced on every start path | merged (reviews AO and AP, re-reviewed), master 3309652; deployed after the anchors | |
+| Step 1: token budget, calibration run | done: T = 26,804 generated tokens per statement; calibration run 65 of 200; constants -56.4 (completion), -5.35 (block sum), -0.142 (block mean) | |
+| Step 1: three value-free pilots (200 statements each), then reasoning at equal tokens (pilot, visible run, no-reasoning run) | running through the night from about 21:15 UTC | |
+| Code: GPU power limits and Lean load (tactic timeouts, REPL failures) in every run record; quota reserve enforced on every start path | merged (reviews AO and AP, re-reviewed) and deployed, master 3309652 | |
 | Step 1, last: old final value model with v0's policy; the full value-free run | after a check-in on the pilots | |
 | Before any arm: time server stops and starts, one short phase on the restart-based serving path | during step 1 | |
 | Step 2: one training round per signal from shared v0 trees | after step 1 | |
 | Not built: expert iteration inside the loop | only if that arm goes on after step 2 | |
 | Results safety | small result files pulled to the PC every 10 minutes | `node_backup/2026-11-15/live/` |
 
-## Open question: tactic timeouts and load (2026-11-15)
+## Settled: tactic timeouts and load (2026-11-15)
 
-The 60-second wall-clock limit on a tactic step is not a rare emergency stop. In the first node's complete anchor it
-fired 3,001 times, in 379 of 2,000 statements (19%), almost all on the policy's own steps. On the 1,382 statements both
-nodes had finished at the time, it fired 554 times on the new node against 860 on the old one.
+The 60-second wall-clock limit on a tactic step fires about 3,000 times per run, in about 370 of 2,000 statements. The
+question was whether CPU contention causes this, which would make results depend on load.
 
-- **Why it matters.** A timed-out step counts as failed and disables an automation tactic for the rest of that search.
-  If the limit fires because Lean is short of CPU, results depend on load, and a checkpoint that makes Lean work harder
-  is penalised for it. That would bias comparisons between checkpoints.
-- **What is being measured.** After the anchors, about 300 timed-out steps are replayed alone on the idle node, with
-  their own CPU time recorded: do they need more than 60 seconds of CPU by themselves, or did contention cause the
-  timeout?
-- **What follows.** If contention causes a relevant share, the limit becomes CPU time of the Lean process (independent
-  of load) and the anchors are rerun under it (about 6 hours, $5). Otherwise the protocol stays. The chain holds before
-  the value-free pilots until this is decided.
+- **Measurement.** 300 timed-out steps of anchor run 1 were replayed alone on the idle node with a 300-second cap and
+  their own CPU time recorded, plus 200 control steps.
+- **Result.** None of the 300 succeeds even alone. Of the 236 that finish, 235 reach exactly the prefix the anchor
+  recorded. 31% needed under 60 seconds of CPU alone (contention pushed them over the limit); 64% are slow by
+  themselves; 5% crash the Lean process. Steps ran about 1.5-1.7 times longer under the anchor's load than alone,
+  because 112 searches share 96 logical CPUs that are hyperthread pairs.
+- **Decision.** The limit stays wall-clock and the anchors stand: load changes the label and the seconds of these
+  steps, not where a search goes.
+- **Why steps pass 60 seconds at all.** `nlinarith`, `linarith` and `ring_nf` spend most of their time where Lean
+  hardly counts heartbeats, so the heartbeat limit bounds only a minority of them.
 - **Dropped.** Starting the longest proofs first to shorten a run's idle tail: a simulation on recorded durations
   showed it makes runs longer (4.24 against 3.35 hours), and any reordering changes the load the anchors ran under. The
-  study keeps file order; the tail (about 40 minutes of GPU time per run in the simulation) stays.
+  study keeps file order; the tail (25-35 minutes per run) stays.
 
 ## Results so far
 
