@@ -2,14 +2,14 @@
 # An arm's loop (or step 2's shared sampling) started detached from its overlay (DESIGN.md, "Follow-up study:
 # controlled arms"; experiments/configs/grpo/followup/arms/, followup/shared_sampling.toml).
 #
-#   BACKGROUND_CPUS=52 deployment/arm_loop.sh experiments/configs/grpo/followup/arms/A.toml
+#   BACKGROUND_CPU_LIST=144-191 deployment/arm_loop.sh experiments/configs/grpo/followup/arms/A.toml
 #   BACKGROUND_CPUS=52 deployment/arm_loop.sh --kind "shared sampling" experiments/configs/grpo/followup/shared_sampling.toml
 #   deployment/arm_loop.sh --status [--kind ...] <overlay>   # running, finished or stopped; which servers are up
 #
-# Refuses without BACKGROUND_CPUS (the Lean side of every arm runs pinned, below the cgroup quota), while the serving
-# lock is held or a loop runs, and when experiments/followup_arm.py refuses the overlay (a placeholder left, a setting
-# outside the arm's own, no token budget per phase or no phase count). Writes the arm's configs under
-# $LEAN_SEARCH_RUNS/followup_configs/<name>/ (the same again on a restart), records version 0 once
+# Refuses without BACKGROUND_CPUS or BACKGROUND_CPU_LIST (the Lean side of every arm runs pinned, below the cgroup
+# quota), while the serving lock is held or a loop runs, and when experiments/followup_arm.py refuses the overlay (a
+# placeholder left, a setting outside the arm's own, no token budget per phase or no phase count). Writes the arm's
+# configs under $LEAN_SEARCH_RUNS/followup_configs/<name>/ (the same again on a restart), records version 0 once
 # (deployment/grpo_loop.sh init), starts the servers that do not answer (grpo_loop.sh servers; a server that cannot
 # start fails here), then starts the loop detached through deployment/grpo_loop.sh loop, which resumes an interrupted
 # one, and fails when the loop has exited ARM_LOOP_START_SECONDS (30) later. Prints where the logs are. A run that ended by itself (finished.json: after max_phases, or a
@@ -77,8 +77,11 @@ if [[ -f "${run_directory}/finished.json" ]]; then
     exit 0
 fi
 
-[[ -n "${BACKGROUND_CPUS:-}" ]] || { echo "Set BACKGROUND_CPUS: every arm runs pinned (DESIGN.md, Load)." >&2; exit 2; }
-python experiments/node_checks.py pinning --background-cpus "${BACKGROUND_CPUS}"
+[[ -n "${BACKGROUND_CPUS:-}${BACKGROUND_CPU_LIST:-}" ]] || {
+    echo "Set BACKGROUND_CPUS or BACKGROUND_CPU_LIST: every arm runs pinned (DESIGN.md, Load)." >&2
+    exit 2
+}
+python experiments/node_checks.py pinning
 python experiments/node_checks.py servers-free
 
 if [[ ! -f "${run_directory}/models/current.json" ]]; then

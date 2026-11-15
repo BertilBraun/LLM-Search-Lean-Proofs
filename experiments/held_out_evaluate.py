@@ -101,7 +101,9 @@ def log(message: str) -> None:
 
 async def evaluate(arguments: argparse.Namespace) -> None:
     if not pinned_as_background(current_pinning()):
-        raise SystemExit("Run it pinned: BACKGROUND_CPUS=<n> deployment/background.sh python experiments/...")
+        raise SystemExit(
+            "Run it pinned: BACKGROUND_CPUS=<n> or BACKGROUND_CPU_LIST=<list> deployment/background.sh python ..."
+        )
     loop = load_loop_config(REPOSITORY_DIRECTORY / arguments.loop_config)
     if not arguments.policy_adapter.is_dir():
         raise SystemExit(f"No adapter directory at {arguments.policy_adapter}.")

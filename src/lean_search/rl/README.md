@@ -528,8 +528,8 @@ number once `phase.json` is written). Between commands no collective waits, so t
   session start and after each phase). Every rank builds the models the phase needs (so the first job's model building
   runs next to the searches); the main rank starts a thread that reads and labels the phase's trees as they arrive,
   every 30 s, one tree at a time into its policy sequences (`training_phase.prepare_policy_tree`; the record itself is
-  not kept). The thread runs on the last `BACKGROUND_CPUS` (32) logical CPUs at nice 19, as `deployment/background.sh`
-  pins CPU-heavy work, so with the Lean REPLs it never takes more than one of their cores. At the pause `train` finishes
+  not kept). The thread runs on `BACKGROUND_CPU_LIST` or the last `BACKGROUND_CPUS` (32) logical CPUs at nice 19, as
+  `deployment/background.sh` pins CPU-heavy work, so with the Lean REPLs it never takes more than one of their cores. At the pause `train` finishes
   what is left and sends the sequences to the other ranks (`broadcast_from_main`); they no longer read the trees. In a
   value phase a second thread labels the value model's window the same way (`WindowPreparation`: the finished phases'
   trees at once, the collecting phase's as they arrive, read without texts, `label_value_trees`), so the pause only

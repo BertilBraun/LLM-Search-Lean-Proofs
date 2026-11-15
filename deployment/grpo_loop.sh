@@ -17,8 +17,8 @@
 #
 # LOOP_CONFIG (default experiments/configs/grpo/loop.toml) picks the loop, e.g. loop_smoke.toml for the smoke cycle or
 # loop_overfit.toml for the overfit test.
-# HOURLY_PRICE (0.80) feeds the dashboard's cost; BACKGROUND_CPUS, if set, pins the loop (its Lean REPLs) through
-# background.sh.
+# HOURLY_PRICE (0.80) feeds the dashboard's cost; BACKGROUND_CPUS or BACKGROUND_CPU_LIST, if set, pins the loop (its
+# Lean REPLs) through background.sh.
 
 set -euo pipefail
 
@@ -81,7 +81,7 @@ case "$1" in
     loop)
         mkdir -p "${run_directory}"
         prefix=()
-        if [[ -n "${BACKGROUND_CPUS:-}" ]]; then
+        if [[ -n "${BACKGROUND_CPUS:-}${BACKGROUND_CPU_LIST:-}" ]]; then
             prefix=("${script_directory}/background.sh")
         fi
         # The bases are cached by init; offline, an unreachable Hub cannot fail a tokenizer load mid-run.

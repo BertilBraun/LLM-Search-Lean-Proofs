@@ -27,6 +27,7 @@ import transformers
 from lean_search.policy.adapters import MergeSeconds, PremergedWeights, handoff_directory
 from lean_search.reasoning.dataset import ReasoningExample
 from lean_search.rl.loop_services import running_start_ticks
+from lean_search.rl.node_pinning import background_set, current_pinning
 from lean_search.rl.policy_data import PolicyDataParts, PolicyTokenizer, combined_policy_data
 from lean_search.rl.trainer_channel import TrainerChannel, TrainerCommand, TrainerCommandKind, TrainerReply
 from lean_search.rl.training_phase import (
@@ -56,8 +57,6 @@ from lean_search.value.labels import ValueExample
 POLL_SECONDS = 0.5
 PREPARATION_POLL_SECONDS = 30.0
 TREE_PATTERN = "*.json.gz"
-# deployment/background.sh's default: CPU-heavy work shares the last this many logical CPUs with the Lean REPLs.
-DEFAULT_BACKGROUND_CPUS = 32
 BACKGROUND_NICENESS = 19
 
 
@@ -98,17 +97,13 @@ def parse_phase_config(text: str) -> TrainingPhaseConfig:
     return from_json_object(TrainingPhaseConfig, tomllib.loads(text))
 
 
-def background_cpus() -> set[int]:
-    """The last BACKGROUND_CPUS logical CPUs, where deployment/background.sh pins CPU-heavy work (CPU budget)."""
-    count = os.cpu_count() or 1
-    background = int(os.environ.get("BACKGROUND_CPUS", str(DEFAULT_BACKGROUND_CPUS)))
-    return set(range(max(0, count - background), count))
-
-
 def run_in_background() -> None:
-    """The calling thread on the background CPUs at nice 19, as the Lean REPLs it shares them with."""
+    """The calling thread on deployment/background.sh's CPUs at nice 19, as the Lean REPLs it shares them with."""
     thread = threading.get_native_id()
-    os.sched_setaffinity(thread, background_cpus())
+    pinning = current_pinning()
+    os.sched_setaffinity(
+        thread, background_set(pinning.background_cpus, pinning.background_cpu_list, pinning.cpu_count)
+    )
     os.setpriority(os.PRIO_PROCESS, thread, BACKGROUND_NICENESS)
 
 

@@ -17,7 +17,7 @@ node's checkout.
 | `setup_python.sh` | node | Create the virtual environment from `uv.lock`. |
 | `serve_model.sh` | node | Start a detached vLLM server for one model on one GPU (prefix caching, runtime LoRA). |
 | `stop_model.sh` | node | Stop servers started by `serve_model.sh` (by name or `--all`). |
-| `background.sh` | node | Run a CPU-heavy job pinned to the last `BACKGROUND_CPUS` (32) CPUs at nice 19 (CPU budget). |
+| `background.sh` | node | Run a CPU-heavy job pinned to `BACKGROUND_CPU_LIST` or the last `BACKGROUND_CPUS` (32) CPUs at nice 19 (CPU budget). |
 | `grpo_loop.sh` | node | The GRPO loop step by step: held-out sets, version 0, servers, checks, value benchmark, dashboard, loop, status, μ. |
 | `setup_lean.sh` | node | Install elan, the pinned Lean toolchain, Mathlib (from cache) and the REPL. |
 
@@ -172,12 +172,15 @@ Rule:
 - GPU feeders (vLLM servers, training ranks, the search orchestrator) run unpinned at nice 0.
 - Everything CPU-heavy runs through `deployment/background.sh`: tracing, pre-filters, Lean stages of probes, data
   building, and the search processes themselves (their Lean REPLs are the CPU load), e.g.
-  `BACKGROUND_CPUS=40 deployment/background.sh python experiments/run_search.py ...`. The wrapper pins to the last
-  `BACKGROUND_CPUS` logical CPUs (default 32) and nices to 19; all background jobs share those CPUs, so together they
-  can never exceed that many cores.
+  `BACKGROUND_CPUS=40 deployment/background.sh python experiments/run_search.py ...`. The wrapper pins to
+  `BACKGROUND_CPU_LIST` (taskset's CPU list, e.g. `48-95,144-191`) or to the last `BACKGROUND_CPUS` logical CPUs
+  (default 32 when neither is set; both set is a usage error, an empty one counts as unset) and nices to 19; all
+  background jobs share those CPUs, so together they can never exceed that many cores. The study's launchers
+  (`probe_runs.sh`, `arm_loop.sh`) and `held_out_evaluate.py` refuse without an explicit one;
+  `experiments/node_checks.py pinning` checks it against the allowed CPUs and the quota.
 - Leave at least 6 cores of the quota to the feeders: 4 vLLM processes take about 3, two DDP ranks about 4. With a
   search running, give it 40 CPUs and nothing else; while training next to a search, 36.
-- Give a Lean job at most `BACKGROUND_CPUS` processes doing work at once, or its tactics hit wall-clock limits they
+- Give a Lean job at most one process doing work per pinned CPU, or its tactics hit wall-clock limits they
   would not hit unpinned. Searches are an exception: most of their REPLs wait on the GPU at any moment.
 
 ## Serving the search and publishing new weights
