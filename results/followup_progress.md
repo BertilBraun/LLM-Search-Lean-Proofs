@@ -2,7 +2,7 @@
 
 Kept current by the orchestrator. Details live in the linked files.
 
-**Last update:** 2026-11-15, 13:50 UTC.
+**Last update:** 2026-11-15, 15:25 UTC.
 
 ## Where we are
 
@@ -16,7 +16,7 @@ two independent reviews and a re-review (`results/reviews/2026-11-14_review_aa_*
 | Throughput test (10 runs, two CPU layouts, four concurrencies, hard statements) | done: this node does 14.6k expansions/h at 112 searches, about 35-40% more than the first node; GPUs are the bottleneck, no CPU throttling | `node_backup/2026-11-15/live/runs/throughput/` |
 | Fixed settings for this node | 112 concurrent searches for probe runs and sampling, 56 for held-out states; Lean on socket 1 (96 CPUs), servers and training on socket 0 | `experiments/configs/grpo/followup/`, `/workspace/node_environment.sh` on the node |
 | Code: CPU quota on this node's cgroup layout, explicit CPU layout without raising priority, each run's layout recorded and checked | merged (reviews AM and AN, re-reviewed), master 40b2409 | `results/reviews/2026-11-15_review_am_*`, `_an_*` |
-| Step 1, anchor runs 1 and 2 (v0 with value v0, 2,000 statements) | run 1 started 12:09 UTC (1,290 of 2,000 at 13:15); run 2 follows | |
+| Step 1, anchor runs 1 and 2 (v0 with value v0, 2,000 statements) | run 1 accepted (713 of 2,000); run 2 running since 15:19 UTC | `node_backup/2026-11-15/live/` |
 | Step 1: token budget, calibration run | follows the anchors by itself (a chain on the node that survives a restart) | |
 | Step 1: three value-free pilots, reasoning at equal tokens | held until the timeout question below is decided | |
 | Code: GPU power limits and Lean load (tactic timeouts, REPL failures) in every run record; quota reserve enforced on every start path | merged (reviews AO and AP, re-reviewed), master 3309652; deployed after the anchors | |
@@ -47,12 +47,17 @@ nodes had finished at the time, it fired 554 times on the new node against 860 o
 
 ## Results so far
 
-**v0 on probe v2, first node** (2026-11-14, one run; kept as a cross-check between nodes): 722 of 2,000 solved
-(36.1%), no wall-clock stops, 39.9M generated tokens, 1,677 tokens per expansion, about 4.5 hours.
+**v0 with value v0 on probe v2** (2,000 statements, 16 expansions):
 
-| Proof characters | 0-499 | 500-999 | 1,000-1,499 | 1,500-1,999 | 2,000-2,999 | 3,000-4,499 | 4,500+ |
-|---|---|---|---|---|---|---|---|
-| Solved | 120/150 (80%) | 159/250 (64%) | 156/350 (45%) | 134/350 (38%) | 101/400 (25%) | 39/300 (13%) | 13/200 (6.5%) |
+| Proof characters | 0-499 | 500-999 | 1,000-1,499 | 1,500-1,999 | 2,000-2,999 | 3,000-4,499 | 4,500+ | All |
+|---|---|---|---|---|---|---|---|---|
+| Anchor run 1, this node (2026-11-15) | 129/150 | 155/250 | 143/350 | 129/350 | 89/400 | 51/300 | 17/200 | **713 (35.65%)** |
+| First node, one run (2026-11-14), cross-check only | 120/150 | 159/250 | 156/350 | 134/350 | 101/400 | 39/300 | 13/200 | 722 (36.1%) |
+
+- Anchor run 1 here: accepted, 1 wall-clock stop (0.05%), 39.6M generated tokens, 1,672 tokens per expansion, 3.17
+  hours (the last 35 minutes a tail with the GPUs mostly idle), no CPU throttling (about 68 cores used on average), no
+  server restart.
+- Anchor run 2 started at 15:19 UTC on the same code; expected around 18:30 UTC.
 
 - Probe v2 is drawn and fixed: 2,000 statements, 33 near-identical pool statements held out of the curriculum
   (`node_backup/2026-11-14/probe_v2/`).
