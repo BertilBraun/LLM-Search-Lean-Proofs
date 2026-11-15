@@ -2,7 +2,7 @@
 
 Kept current by the orchestrator. Details live in the linked files.
 
-**Last update:** 2026-11-15, 00:05 UTC.
+**Last update:** 2026-11-15, 00:50 UTC.
 
 ## Where we are
 
@@ -19,6 +19,21 @@ re-review.
 | Merged packages | probe v2 and evaluation tool; signal packages; token-budget phases and health; study tooling; serving resilience | reviews `_ac_` to `_al_` in `results/reviews/` |
 | Not built: expert iteration inside the loop | only after step 2, if that arm goes on | |
 | Watchdog | every 30 minutes while this session is open; a supervisor on the node restarts servers and resumes runs by itself | |
+
+## Node unreachable (2026-11-15, 00:50 UTC) — owner action needed
+
+The node has not answered SSH since about 23:35 UTC. From here it is not possible to tell whether the host is down or
+only its network. The Vast console shows the instance's real status.
+
+- **Safe on the PC:** anchor run 1 complete (722 of 2,000); anchor run 2 up to 892 of 2,000 (`node_backup/2026-11-14/live/`);
+  the probe set, its twins and the selection report.
+- **If the node comes back:** the on-node supervisor and the overnight chain restart by themselves and resume run 2.
+  A background check on the PC tries the node every two minutes and wakes the orchestrator when it answers. The
+  30-minute watchdog is paused meanwhile, to save usage.
+- **If it does not come back:** nothing of value is lost. A new node needs about an hour of setup on a decent
+  network; the anchors are then run there (about 9 hours for both), and the rest of step 1 follows as planned.
+- **Recommendation:** rent a different node for the rest of the study. This host had three reboots, four server
+  segfaults and now an outage of over an hour within thirteen hours.
 
 ## Step 1 results so far
 
@@ -66,7 +81,7 @@ this one for the arms or move); the open points listed at the end of this docume
 | 15:29 | the host machine reboots again |
 | 22:43 | the host machine reboots a third time, during anchor run 2 (422 of 2,000 done); the on-node supervisor restarts the servers and resumes the run |
 | 22:44-22:47 | a value server segfaults at a fresh start during that recovery |
-| about 23:35 | the node stops answering SSH (connections open, then close); still unreachable at 00:04 UTC; the last results copy on the PC is from 23:25 with run 2 at 892 of 2,000 |
+| about 23:35 | the node stops answering SSH (connections open, then close or time out); still unreachable at 00:50 UTC, 75 minutes later; the last results copy on the PC is from 23:25 with run 2 at 892 of 2,000 |
 
 - **Diagnosis** (crash logs, the server library's source, the old run's logs): the host is the leading suspect, the swap
   second. The old run did 31 swaps in 80 hours with the same versions and no server died. No file-lifetime defect.
