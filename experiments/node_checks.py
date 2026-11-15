@@ -6,11 +6,12 @@ src/lean_search/rl/node_pinning.py).
                                                       # (or a process of RESPECTED_PID_FILES lives)
     deployment/background.sh python experiments/node_checks.py record --directory <run directory>
 
-pinning prints the environment's BACKGROUND_CPUS and BACKGROUND_CPU_LIST and checks deployment/background.sh's set
-(the list, or the last N of all the host's CPUs; exactly one of the two must be set) against the CPUs this process may
-use and the cgroup quota (its size must stay below it). record appends the CPUs the (pinned) process may use, the
-host's CPU count, the quota and both settings to <run directory>/pinning.jsonl: run it through background.sh right
-before the job, as the job itself runs.
+pinning prints the environment's BACKGROUND_CPUS, BACKGROUND_CPU_LIST and SERVER_CPU_LIST and checks
+deployment/background.sh's set (the list, or the last N of all the host's CPUs; exactly one of the two must be set)
+against the CPUs this process may use and the cgroup quota (its size must stay below it), and the servers' list
+against those CPUs. record appends the CPUs the (pinned) process may use, the host's CPU count, the quota and the
+three settings to <run directory>/pinning.jsonl: run it through background.sh right before the job, as the job
+itself runs.
 """
 
 import argparse
@@ -78,7 +79,8 @@ def pinning_summary(record: PinningRecord) -> str:
     quota = "none" if record.quota_cores is None else f"{record.quota_cores:g} cores"
     return (
         f"BACKGROUND_CPUS={setting_text(record.background_cpus)} "
-        f"BACKGROUND_CPU_LIST={setting_text(record.background_cpu_list)}; this process may use CPUs "
+        f"BACKGROUND_CPU_LIST={setting_text(record.background_cpu_list)} "
+        f"SERVER_CPU_LIST={setting_text(record.server_cpu_list)}; this process may use CPUs "
         f"{cpu_list_text(record.affinity)} ({len(record.affinity)} of {record.cpu_count}); cgroup quota {quota}"
     )
 

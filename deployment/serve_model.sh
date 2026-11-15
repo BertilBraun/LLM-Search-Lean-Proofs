@@ -48,7 +48,7 @@ taskset --cpu-list "${SERVER_CPU_LIST}" true || {
 # nice -n is relative: this takes the server back to 0 from the caller's niceness.
 niceness_change=$(( -$(nice) ))
 if [[ "$(nice -n "${niceness_change}" nice 2>/dev/null)" != 0 ]]; then
-    echo "Cannot reset the server's niceness from $(nice) to 0 (that needs root): start it from a process at nice 0." >&2
+    echo "Cannot reset the server's niceness from $(nice) to 0 (needs root): start it from a process at nice 0." >&2
     exit 1
 fi
 

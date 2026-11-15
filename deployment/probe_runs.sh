@@ -14,11 +14,11 @@
 # serving lock is held, a loop runs or a process of RESPECTED_PID_FILES (a colon-separated list of pid files, e.g. a
 # node-local supervisor's) lives, and while the same lists already run. Starts the servers that do not answer
 # (deployment/grpo_loop.sh servers with the runs' loop config, initialized once with grpo_loop.sh init). Each run
-# records its CPUs and the quota in its pinning.jsonl. A finished run is skipped and an interrupted one resumed, both
-# only when its record matches the list, so rerun the same command after an interruption; a rejected run (exit
-# status 3: too many wall-clock stops) or one whose servers kept dying (exit status 4) stops the lists. Runs that put
-# other weights on the servers than they started from need the swap skip, the restart path and the failure tolerance
-# of probe_evaluate.py (serving resilience, 2026-11-14): never start one from an older checkout.
+# records its CPUs, the quota and the CPU settings in its pinning.jsonl. A finished run is skipped and an interrupted
+# one resumed, both only when its record matches the list, so rerun the same command after an interruption; a
+# rejected run (exit status 3: too many wall-clock stops) or one whose servers kept dying (exit status 4) stops the
+# lists. Runs that put other weights on the servers than they started from need the swap skip, the restart path and
+# the failure tolerance of probe_evaluate.py (serving resilience, 2026-11-14): never start one from an older checkout.
 
 set -euo pipefail
 

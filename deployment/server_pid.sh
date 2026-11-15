@@ -63,8 +63,10 @@ record_server_members() {
 
 # What the server runs on, whoever started it: `<CPU list> <niceness>` of its API process in <name>.cpus.
 record_server_cpus() {
-    local pid="$1" cpus_file="$2"
-    echo "$(taskset --cpu-list --pid "${pid}" | awk '{print $NF}') $(ps -o ni= -p "${pid}" | tr -d ' ')" > "${cpus_file}"
+    local pid="$1" cpus_file="$2" cpus niceness
+    cpus="$(taskset --cpu-list --pid "${pid}" | awk '{print $NF}')"
+    niceness="$(ps -o ni= -p "${pid}" | tr -d ' ')"
+    echo "${cpus} ${niceness}" > "${cpus_file}"
 }
 
 # vLLM's CLI (argument 1 or 2 ends in vllm) or a process title such as VLLM::EngineCore, which also overwrites its

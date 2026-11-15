@@ -12,8 +12,8 @@ node's checkout.
 | `deploy.sh` | local | Push the current branch and fast-forward the node to it. |
 | `fetch_results.sh` | local | Copy `$LEAN_SEARCH_RUNS/<run>/summary/` from the node into `results/<run>/`. |
 | `setup_remote.sh` | node | Provision a node: clone the repo, then `setup_python.sh` and `setup_lean.sh`. |
-| `environment.sh` | node | Paths, opt-in mirrors and `PATH`; sourced by everything else. |
-| `cgroup.sh` | node | The cgroup's CPU quota in cores (v2 `cpu.max` or v1 `cpu.cfs_quota_us`); sourced by `environment.sh`. |
+| `environment.sh` | node | Paths, opt-in mirrors, `PATH` and the node's own settings (`node_environment.sh`); sourced by everything else. |
+| `cgroup.sh` | node | The cgroup's CPU quota in cores (v2 `cpu.max` or v1 `cpu.cfs_quota_us`) and its cpuset's CPUs; sourced by `environment.sh`. |
 | `setup_python.sh` | node | Create the virtual environment from `uv.lock`. |
 | `serve_model.sh` | node | Start a detached vLLM server for one model on one GPU (prefix caching, runtime LoRA). |
 | `stop_model.sh` | node | Stop servers started by `serve_model.sh` (by name or `--all`). |
@@ -169,7 +169,9 @@ What throttling costs depends on the GPU feeder:
 
 Rule:
 
-- GPU feeders (vLLM servers, training ranks, the search orchestrator) run unpinned at nice 0.
+- GPU feeders run at nice 0: training ranks and the search orchestrator unpinned, vLLM servers on `SERVER_CPU_LIST`
+  (default every CPU the cgroup's cpuset allows), which `serve_model.sh` sets with niceness 0 whoever starts it, a
+  job pinned through `background.sh` included ("Node environment" below).
 - Everything CPU-heavy runs through `deployment/background.sh`: tracing, pre-filters, Lean stages of probes, data
   building, and the search processes themselves (their Lean REPLs are the CPU load), e.g.
   `BACKGROUND_CPUS=40 deployment/background.sh python experiments/run_search.py ...`. The wrapper pins to
@@ -635,12 +637,41 @@ The single-step test and the naming A/B swap weights into the policy servers; re
 | `/workspace/runs` | search logs and per-theorem results | no |
 | `/workspace/checkpoints` | LoRA adapters and value models | no |
 | `/workspace/.hf_home` | Hugging Face cache | no |
+| `/workspace/node_environment.sh` | this node's settings, sourced by `environment.sh` (below) | no |
 
 `/workspace` was not a volume on the first node, so anything that must survive the rental is either committed
 (summaries under `results/`) or copied back to the local machine (adapters under the untracked `artifacts/`).
 
 Without a writable `/workspace` (local WSL), `environment.sh` uses `~/lean-search-workspace` instead
 (`LEAN_SEARCH_WORKSPACE` overrides both).
+
+### Node environment
+
+What only one node knows stays on the node: `environment.sh` sources `$LEAN_SEARCH_WORKSPACE/node_environment.sh`
+(`LEAN_SEARCH_NODE_ENVIRONMENT` names another file) when it exists, before its own defaults. Write its settings as
+`${NAME-value}`, so that a command's own value, an empty one included, still wins when a script sources
+`environment.sh` again: `BACKGROUND_CPU_LIST= BACKGROUND_CPUS=52 deployment/probe_runs.sh ...` (`background.sh`
+refuses both set at once). `probe_runs.sh` and `arm_loop.sh` print the effective `BACKGROUND_CPUS`,
+`BACKGROUND_CPU_LIST` and `SERVER_CPU_LIST` at their start (`node_checks.py pinning`, which also refuses a
+`SERVER_CPU_LIST` outside the allowed CPUs) and record them in each run's `pinning.jsonl`; with a
+`BACKGROUND_CPU_LIST` set, `grpo_loop.sh loop` always runs the loop pinned.
+
+The Vast.ai node of 2026-11-15: 2x EPYC 7642, 192 logical CPUs, NUMA node 0 = CPUs 0-47 and 96-143, node 1 = 48-95
+and 144-191 (CPU n and n+96 are the two threads of one core), GPUs 0-2 on node 0 and GPU 3 on node 1, cgroup v1
+quota 105.3 cores.
+
+```bash
+# /workspace/node_environment.sh
+export SERVER_CPU_LIST="${SERVER_CPU_LIST-0-47,96-143}"
+# 144-191 or 48-95,144-191, whichever the throughput test finds faster.
+export BACKGROUND_CPU_LIST="${BACKGROUND_CPU_LIST-48-95,144-191}"
+```
+
+Socket 0 is local to GPUs 0-2 and holds every vLLM server (GPU 3's included, remote from its GPU: the price of
+keeping Lean off the servers' cores); Lean takes socket 1. Both sets are whole cores (each CPU with its sibling n+96),
+so no physical core is shared between a server and Lean. `48-95,144-191` gives Lean both threads of its 48 cores
+(96 CPUs, below the quota, which leaves 9 cores of it to the servers); `144-191` gives it one thread per core, slower in
+total but each REPL on a core of its own, which may matter for wall-clock limits.
 
 ## Second node (returned within the hour, 2026-10-29)
 

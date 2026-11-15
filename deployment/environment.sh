@@ -5,6 +5,9 @@
 #   HF_ENDPOINT=https://hf-mirror.com
 #   LEAN_SEARCH_GITHUB_PROXY=https://ghfast.top/                        (setup_lean.sh)
 #   LEAN_SEARCH_PYPI_MIRROR=https://pypi.tuna.tsinghua.edu.cn/simple    (setup_python.sh)
+# What only this node knows (its CPU layout: BACKGROUND_CPU_LIST, SERVER_CPU_LIST; mirrors) goes into
+# $LEAN_SEARCH_WORKSPACE/node_environment.sh, or the file LEAN_SEARCH_NODE_ENVIRONMENT names, sourced below when it
+# exists (deployment/README.md, "Node environment").
 
 export LEAN_SEARCH_ROOT="${LEAN_SEARCH_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 # /workspace on nodes; machines without it (local WSL) keep the same layout under the home directory.
@@ -16,6 +19,9 @@ if [[ -z "${LEAN_SEARCH_WORKSPACE:-}" ]]; then
     fi
 fi
 export LEAN_SEARCH_WORKSPACE
+if [[ -f "${LEAN_SEARCH_NODE_ENVIRONMENT:=${LEAN_SEARCH_WORKSPACE}/node_environment.sh}" ]]; then
+    source "${LEAN_SEARCH_NODE_ENVIRONMENT}"
+fi
 export LEAN_SEARCH_DATA="${LEAN_SEARCH_DATA:-${LEAN_SEARCH_WORKSPACE}/data}"
 export LEAN_SEARCH_RUNS="${LEAN_SEARCH_RUNS:-${LEAN_SEARCH_WORKSPACE}/runs}"
 export LEAN_SEARCH_CHECKPOINTS="${LEAN_SEARCH_CHECKPOINTS:-${LEAN_SEARCH_WORKSPACE}/checkpoints}"

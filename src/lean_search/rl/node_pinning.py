@@ -33,9 +33,11 @@ class PinningRecord:
     cpu_count: int
     # The cgroup's CPU quota in cores; None without one.
     quota_cores: float | None
-    # The environment's BACKGROUND_CPUS and BACKGROUND_CPU_LIST; None when unset (the list also in older records).
+    # The environment's BACKGROUND_CPUS, BACKGROUND_CPU_LIST and SERVER_CPU_LIST (deployment/serve_model.sh's CPUs);
+    # None when unset (the lists also in records from before them).
     background_cpus: int | None
     background_cpu_list: str | None = None
+    server_cpu_list: str | None = None
 
 
 def parse_cpu_list(text: str) -> tuple[int, ...]:
@@ -77,6 +79,7 @@ def current_pinning() -> PinningRecord:
         quota_cores=cpu_quota_cores(),
         background_cpus=int(background) if background else None,
         background_cpu_list=environment_setting("BACKGROUND_CPU_LIST"),
+        server_cpu_list=environment_setting("SERVER_CPU_LIST"),
     )
 
 
@@ -111,8 +114,8 @@ def background_set(background_cpus: int | None, background_cpu_list: str | None,
 
 def pinning_refusals(record: PinningRecord) -> list[str]:
     """Why the environment's pinning would not do for a study job: not exactly one of BACKGROUND_CPUS and
-    BACKGROUND_CPU_LIST set, or background.sh's set outside the CPUs this process may use or not smaller than the quota
-    (the pinned job would leave the servers nothing)."""
+    BACKGROUND_CPU_LIST set, background.sh's set outside the CPUs this process may use or not smaller than the quota
+    (the pinned job would leave the servers nothing), or SERVER_CPU_LIST outside the CPUs this process may use."""
     if (record.background_cpus is None) == (record.background_cpu_list is None):
         return [
             "Set exactly one of BACKGROUND_CPUS and BACKGROUND_CPU_LIST: every study job runs pinned (DESIGN.md, Load)."
@@ -126,6 +129,10 @@ def pinning_refusals(record: PinningRecord) -> list[str]:
         refusals.append(
             f"background.sh would pin {len(pinned)} CPUs, not below the cgroup quota of {record.quota_cores:g} cores"
         )
+    if record.server_cpu_list is not None:
+        outside_servers = sorted(set(parse_cpu_list(record.server_cpu_list)) - set(record.affinity))
+        if outside_servers:
+            refusals.append(f"SERVER_CPU_LIST names CPUs this process may not use: {cpu_list_text(outside_servers)}")
     return refusals
 
 

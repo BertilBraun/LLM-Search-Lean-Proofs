@@ -19,6 +19,7 @@ from lean_search.rl.node_pinning import (
 
 REPOSITORY_DIRECTORY = Path(__file__).resolve().parents[2]
 BACKGROUND_SCRIPT = REPOSITORY_DIRECTORY / "deployment" / "background.sh"
+ENVIRONMENT_SCRIPT = REPOSITORY_DIRECTORY / "deployment" / "environment.sh"
 ALL_CPUS = tuple(range(128))
 
 
@@ -59,9 +60,14 @@ def test_a_cpu_count_and_a_cpu_list_together_are_refused() -> None:
 
 
 def record(
-    affinity: tuple[int, ...] = ALL_CPUS, background_cpus: int | None = None, background_cpu_list: str | None = None
+    affinity: tuple[int, ...] = ALL_CPUS,
+    background_cpus: int | None = None,
+    background_cpu_list: str | None = None,
+    server_cpu_list: str | None = None,
 ) -> PinningRecord:
-    return PinningRecord("2026-11-14T00:00:00+00:00", affinity, 128, 61.0, background_cpus, background_cpu_list)
+    return PinningRecord(
+        "2026-11-14T00:00:00+00:00", affinity, 128, 61.0, background_cpus, background_cpu_list, server_cpu_list
+    )
 
 
 @pytest.mark.parametrize(
@@ -85,6 +91,14 @@ def test_a_pinned_set_at_the_quota_is_refused(pinning: PinningRecord) -> None:
 )
 def test_a_pinned_set_outside_the_allowed_cpus_is_refused(pinning: PinningRecord) -> None:
     assert pinning_refusals(pinning)
+
+
+def test_a_server_cpu_list_outside_the_allowed_cpus_is_refused() -> None:
+    assert pinning_refusals(record(background_cpus=52, server_cpu_list="0-75,128-130"))
+
+
+def test_a_server_cpu_list_within_the_allowed_cpus_passes() -> None:
+    assert pinning_refusals(record(background_cpus=52, server_cpu_list="0-75")) == []
 
 
 @pytest.mark.parametrize(
@@ -167,3 +181,32 @@ def node_checks_pinning(settings: dict[str, str]) -> subprocess.CompletedProcess
 
 def test_node_checks_pass_a_cpu_list_within_the_allowed_cpus() -> None:
     assert node_checks_pinning({"BACKGROUND_CPU_LIST": str(min(os.sched_getaffinity(0)))}).returncode == 0
+
+
+NODE_ENVIRONMENT = """export BACKGROUND_CPU_LIST="${BACKGROUND_CPU_LIST-48-95,144-191}"
+export SERVER_CPU_LIST="${SERVER_CPU_LIST-0-47,96-143}"
+"""
+
+
+def cpu_settings_after_environment(directory: Path, settings: dict[str, str]) -> str:
+    """BACKGROUND_CPU_LIST and SERVER_CPU_LIST once environment.sh sourced NODE_ENVIRONMENT as the node's file."""
+    node_environment = directory / "node_environment.sh"
+    node_environment.write_text(NODE_ENVIRONMENT, encoding="utf-8")
+    inherited = {key: value for key, value in os.environ.items() if not key.endswith("_CPU_LIST")}
+    environment = inherited | {
+        "LEAN_SEARCH_WORKSPACE": str(directory),
+        "LEAN_SEARCH_NODE_ENVIRONMENT": str(node_environment),
+        **settings,
+    }
+    command = f'source "{ENVIRONMENT_SCRIPT}"; echo "${{BACKGROUND_CPU_LIST}} ${{SERVER_CPU_LIST}}"'
+    return subprocess.run(  # noqa: S603
+        ["bash", "-c", command], env=environment, capture_output=True, text=True, check=True
+    ).stdout
+
+
+def test_environment_sh_takes_the_cpu_lists_of_the_node_environment(tmp_path: Path) -> None:
+    assert cpu_settings_after_environment(tmp_path, {}) == "48-95,144-191 0-47,96-143\n"
+
+
+def test_a_commands_empty_setting_wins_over_the_node_environment(tmp_path: Path) -> None:
+    assert cpu_settings_after_environment(tmp_path, {"BACKGROUND_CPU_LIST": ""}) == " 0-47,96-143\n"
