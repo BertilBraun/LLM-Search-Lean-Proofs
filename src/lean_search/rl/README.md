@@ -814,9 +814,12 @@ dashboard warns below `min_free_disk_gib` (50) free.
   `grpo_evaluate.py` and `run_search.py` refuse to start while it is held) and never while a loop runs; a session
   during which a loop came up is discarded on resume. One concurrency and a 7,200 s wall cap for every run. The budget
   rule: a run given `--search-config` searches at that file's own `max_expansions`, every other run at the config's
-  `[probe] max_expansions`. Accepted only under 1% wall-clock stops (run.json, per stratum too); `probe_rating` rates
-  accepted runs only, pooled by an identity of checkpoint and search settings, against the run marked `--anchor` (the
-  loop config's starting policy and value adapters, checked by content).
+  `[probe] max_expansions`. The study's runs start the longest known proofs first (`submission_order =
+  "longest_proof_first"`, ties in file order; default `"file"`), so a run's tail is short searches rather than a few
+  long ones that leave the GPUs idle; the order changes no statement and no search, only when each starts, and is
+  recorded per session, not in the identity. Accepted only under 1% wall-clock stops (run.json, per stratum too);
+  `probe_rating` rates accepted runs only, pooled by an identity of checkpoint and search settings, against the run
+  marked `--anchor` (the loop config's starting policy and value adapters, checked by content).
 - `probe`: 16 expansions, no harvesting, no ε, with `evaluation.value_model` (the published value model in
   `loop.toml`), in slots: slot k searches
   part k % `probe_parts` (3) of the set (`fixed_targets.probe_part`: every third problem of each stratum, so each part

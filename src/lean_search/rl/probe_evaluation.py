@@ -40,7 +40,13 @@ from lean_search.policy.config import StepLogProbability
 from lean_search.policy.rotation import RequestFailures
 from lean_search.policy.server_control import is_healthy, is_sleeping
 from lean_search.policy.server_processes import server_process, swapped_marker
-from lean_search.rl.evaluation import EvaluationProblem, EvaluationSummary, SearchFailure, ServerRecoveryError
+from lean_search.rl.evaluation import (
+    EvaluationProblem,
+    EvaluationSummary,
+    SearchFailure,
+    ServerRecoveryError,
+    SubmissionOrder,
+)
 from lean_search.rl.loop_config import EvaluationTarget
 from lean_search.rl.loop_services import (
     CHECK_GOALS,
@@ -131,6 +137,8 @@ class ProbeEvaluationConfig:
     # again from the merges at most this often a run (evaluation.ToleratedSearches).
     server_failure_retries: int = 3
     max_server_restarts: int = 3
+    # The order the searches start in; the same statements and searches either way (probe_evaluate.py).
+    submission_order: SubmissionOrder = SubmissionOrder.FILE
 
 
 @dataclass(frozen=True)
@@ -239,6 +247,8 @@ class ProbeSession:
     spoiled: bool = False
     serving: SessionServing = field(default_factory=SessionServing)
     started_at: str = ""
+    # The order its searches started in (sessions from before the setting started in the set's).
+    submission_order: SubmissionOrder = SubmissionOrder.FILE
 
 
 @dataclass(frozen=True)
@@ -761,6 +771,7 @@ class ProbeServers:
         start: Callable[[Sequence[ServerStart]], Awaitable[None]],
         request_failures: RequestFailures,
         rule: DeathRule,
+        submission_order: SubmissionOrder = SubmissionOrder.FILE,
     ) -> None:
         self.serving = serving
         self.assignments = served.assignments(serving)
@@ -771,6 +782,7 @@ class ProbeServers:
         self.start = start
         self.request_failures = request_failures
         self.rule = rule
+        self.submission_order = submission_order
 
     async def answers_request(self, server: ServerEndpoint) -> bool:
         model = self.serving.policy_model if server in self.serving.policy_servers else self.serving.value_model
@@ -811,6 +823,7 @@ class ProbeServers:
             self.checkpoint,
             self.results,
             SessionServing(SwapMethod.RESTART, restarted=tuple(names), completed=False),
+            self.submission_order,
         )
         try:
             await self.start(starts)
@@ -905,7 +918,13 @@ def append_session(directory: Path, session: ProbeSession) -> None:
         handle.write(to_json(session) + "\n")
 
 
-def start_session(directory: Path, checkpoint: ProbeCheckpoint, results: Path, serving: SessionServing) -> ProbeSession:
+def start_session(
+    directory: Path,
+    checkpoint: ProbeCheckpoint,
+    results: Path,
+    serving: SessionServing,
+    submission_order: SubmissionOrder = SubmissionOrder.FILE,
+) -> ProbeSession:
     count = len(results.read_text(encoding="utf-8").splitlines()) if results.exists() else 0
     started = datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds")
     session = ProbeSession(
@@ -915,6 +934,7 @@ def start_session(directory: Path, checkpoint: ProbeCheckpoint, results: Path, s
         checkpoint.value_digest,
         serving=serving,
         started_at=started,
+        submission_order=submission_order,
     )
     append_session(directory, session)
     return session

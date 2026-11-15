@@ -63,6 +63,26 @@ class EvaluationProblem:
     problem: Problem
     # The probe's difficulty stratum; empty for miniF2F.
     stratum: str = ""
+    # The fixed set's recorded difficulty (probe v2's: the shortest known proof's characters / 100); 0 for miniF2F.
+    difficulty: float = 0.0
+
+
+class SubmissionOrder(StrEnum):
+    """The order a standalone evaluation starts its searches in; each search is independent of the others."""
+
+    # The set's own (probe v2's: band after band, the shortest proofs first).
+    FILE = "file"
+    # The largest recorded difficulty first, ties in the set's order: the long, Lean-heavy searches start while every
+    # search slot is busy, and the run ends on short ones instead of a few long ones that leave the GPUs idle.
+    LONGEST_PROOF_FIRST = "longest_proof_first"
+
+
+def in_submission_order(problems: Sequence[EvaluationProblem], order: SubmissionOrder) -> list[EvaluationProblem]:
+    match order:
+        case SubmissionOrder.FILE:
+            return list(problems)
+        case SubmissionOrder.LONGEST_PROOF_FIRST:
+            return sorted(problems, key=lambda problem: -problem.difficulty)
 
 
 @dataclass(frozen=True)
@@ -675,6 +695,12 @@ class ToleratedSearches[Item, Outcome]:
             self.feeding.set()
 
 
+def pending_problems(problems: Sequence[EvaluationProblem], done: Sequence[SearchResult]) -> list[Problem]:
+    """The problems without a result, in the order given: a resumed run starts what is left in its own order."""
+    finished = {result.problem_name for result in done}
+    return [problem.problem for problem in problems if problem.problem.name not in finished]
+
+
 async def search_problem_set(
     problems: Sequence[EvaluationProblem],
     config: RunConfig,
@@ -687,8 +713,7 @@ async def search_problem_set(
     that `tolerance` gave up on has none)."""
     keep_config(paths, config)
     done = read_results(paths.results) if paths.results.exists() else []
-    finished = {result.problem_name for result in done}
-    pending = [problem.problem for problem in problems if problem.problem.name not in finished]
+    pending = pending_problems(problems, done)
     results = list(done)
     write_json_atomically(paths.progress, SearchProgress(len(pending), config.lean.concurrency))
 
