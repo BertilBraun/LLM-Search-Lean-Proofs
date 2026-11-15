@@ -257,9 +257,11 @@ a reference token the start fails). What it does not: it does not tell adjacent 
 its root. A difference above the tolerance (0.05 nats, not yet measured on the node) is a warning in the session entry
 and run.json, not a failed start. In place, without a fresh start, the servers are held to each other only.
 
-Pid files are written since the boot or they are stale; a server's processes are recorded (`<name>.members`, pid and
-start) once it answers, and stop_model.sh signals a group whose API process died only if every live member is such a
-recorded vLLM process (otherwise it reports, keeps the pid file and signals nothing).
+Pid files are written since the boot or they are stale; a server's processes are recorded (`<name>.members`: pid,
+start and parent) once it answers, and stop_model.sh signals a group whose API process died only if every live member
+is such a recorded vLLM process or the API process's `multiprocessing` resource tracker (`python -c from
+multiprocessing.resource_tracker import main;main(<fd>)`, recorded as its child); otherwise it reports, keeps the pid
+file and signals nothing. The tracker ignores SIGTERM, so such a stop ends in SIGKILL after 60 s.
 
 Known limits of the restart path, left for later: a loop resumed during publishing starts every server twice (its
 session's start, then the publish), ~400 s; `arm_loop.sh` cold-starts down servers before the loop starts them again;
