@@ -1,7 +1,7 @@
 # Step 1's runs 1 and 2 (DESIGN.md, "Follow-up study: controlled arms", "Step 1"): v0 with value v0 at 16 expansions,
 # the rating's anchor and its A/A repeat (the noise floor measured again on probe v2). The two set T for runs 3 and 4
 # (experiments/followup_step1.py token-budget).
-#   PROBE_CONCURRENCY=84 deployment/probe_runs.sh experiments/configs/grpo/followup/step1/runs_anchor.toml
+#   PROBE_CONCURRENCY=112 deployment/probe_runs.sh experiments/configs/grpo/followup/step1/runs_anchor.toml
 [[runs]]
 name = "step1_run1_v0_value_v0"
 arm = "v0"

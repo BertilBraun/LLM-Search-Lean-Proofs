@@ -2,7 +2,7 @@
 # The follow-up's probe evaluations, one after another on the node (experiments/probe_evaluate.py; run lists such as
 # experiments/configs/grpo/followup/step1/runs_*.toml, src/lean_search/rl/probe_run_list.py).
 #
-#   PROBE_CONCURRENCY=84 deployment/probe_runs.sh [--foreground] <run list.toml> [<run list.toml> ...]
+#   PROBE_CONCURRENCY=112 deployment/probe_runs.sh [--foreground] <run list.toml> [<run list.toml> ...]
 #
 # By default the lists run detached (nohup), so an SSH drop cannot stop them: the output goes to
 # $LEAN_SEARCH_RUNS/probe_runs/<lists>.log, the process id to <lists>.pid, and the command prints both and the ledgers

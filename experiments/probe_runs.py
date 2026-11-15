@@ -1,6 +1,6 @@
 """The steps deployment/probe_runs.sh takes over its run lists (src/lean_search/rl/probe_run_list.py).
 
-    python experiments/probe_runs.py check --concurrency 84 <run list.toml> ...   # prints the servers' loop config
+    python experiments/probe_runs.py check --concurrency 112 <run list.toml> ...   # prints the servers' loop config
     python experiments/probe_runs.py next <run list.toml> ...     # the next run's directory and arguments
     python experiments/probe_runs.py record <run list.toml> ...   # ledger lines for the runs finished since
     python experiments/probe_runs.py ledgers <run list.toml> ...  # where the ledgers are

@@ -432,7 +432,7 @@ def test_the_followup_base_differs_from_the_loop_only_in_the_followups_settings(
     expected = dataclasses.replace(
         old,
         name="grpo_followup_base",
-        sampling=dataclasses.replace(old.sampling, concurrency=84, options_arm=OptionsArmConfig()),
+        sampling=dataclasses.replace(old.sampling, concurrency=112, options_arm=OptionsArmConfig()),
         training=dataclasses.replace(
             old.training, kl_reference_policy_adapter="", phase_generated_tokens=12_000_000, max_phases=16
         ),
@@ -501,7 +501,7 @@ def test_the_followup_searches_wait_for_the_held_out_states_last_checks() -> Non
 
 def test_the_followup_samples_at_the_probes_concurrency_from_the_throughput_test() -> None:
     probe = tomllib.loads((CONFIGS / "grpo/followup/probe_evaluation.toml").read_text(encoding="utf-8"))["probe"]
-    assert followup().sampling.concurrency == probe["concurrency"] == 84
+    assert followup().sampling.concurrency == probe["concurrency"] == 112
 
 
 def test_the_followup_held_out_states_keep_their_concurrency() -> None:

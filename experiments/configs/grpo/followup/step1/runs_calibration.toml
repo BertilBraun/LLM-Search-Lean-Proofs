@@ -4,7 +4,7 @@
 #   HF_HUB_OFFLINE=1 python experiments/followup_step1.py automation-constant \
 #       $LEAN_SEARCH_RUNS/calibration_evaluations/probe_calibration_v0_value_v0
 # prints each setting's [[value_free_priority.automation_constants]] entry, calibrated, for value_free_<setting>.toml.
-#   PROBE_CONCURRENCY=84 deployment/probe_runs.sh \
+#   PROBE_CONCURRENCY=112 deployment/probe_runs.sh \
 #       experiments/configs/grpo/followup/step1/runs_calibration.toml
 [[runs]]
 name = "calibration_v0_value_v0"

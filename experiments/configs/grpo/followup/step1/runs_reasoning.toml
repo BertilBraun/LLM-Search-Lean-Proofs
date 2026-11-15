@@ -4,7 +4,7 @@
 # stops the list (exit 3), and runs 3 and 4 then need an evaluation config with the wall cap doubled (they share one
 # cap). Run 4 is compared with run 3 only (probe_compare.py pair --across-search-modes), never with runs 1-2; run 3
 # against run 1 shows what depth_weight 0 cost the tuned visible search (a caveat on Q3 at 3 or more points).
-#   PROBE_CONCURRENCY=84 deployment/probe_runs.sh \
+#   PROBE_CONCURRENCY=112 deployment/probe_runs.sh \
 #       experiments/configs/grpo/followup/step1/runs_reasoning.toml
 [[runs]]
 name = "step1_run4_pilot_no_reasoning_T"
