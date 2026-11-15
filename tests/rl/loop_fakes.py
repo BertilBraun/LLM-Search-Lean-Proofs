@@ -571,7 +571,7 @@ class CountingGpuStates:
 
     def __call__(self) -> tuple[GpuPowerState, ...]:
         self.queries += 1
-        return (GpuPowerState(0, 300.0 + self.queries, 350.0, 1695.0, 9751.0),)
+        return (GpuPowerState(0, 300.0 + self.queries, 350.0),)
 
 
 class SteppingClock:

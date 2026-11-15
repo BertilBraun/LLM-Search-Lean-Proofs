@@ -301,8 +301,8 @@ class ProbeRunRecord:
     # The cgroup's CPU counters at the run's end; against pinning.jsonl's at its sessions' starts, the CPU time it
     # used and the periods throttled while it ran.
     cpu_counters: CpuCounters | None = None
-    # Each GPU's power limits and clocks at the run's end (at each session's start: `sessions`); None where nvidia-smi
-    # failed.
+    # Each GPU's enforced and default power limit at the run's end (at each session's start: `sessions`); None where
+    # nvidia-smi failed.
     gpus_at_end: tuple[GpuPowerState, ...] | None = None
 
 
