@@ -259,8 +259,12 @@ prompts, written only from a server freshly started from that merge whose root i
 servers of a merge answer alike, and none holds grossly other weights (another model, a broken load: above 1.0 nat on
 a reference token the start fails). What it does not: it does not tell adjacent RL versions apart (they differ by
 ~1e-3 to 1e-2 nats a token); on the restart path the guarantee is the content-addressed merge each server reports as
-its root. A difference above the tolerance (0.05 nats, not yet measured on the node) is a warning in the session entry
-and run.json, not a failed start. In place, without a fresh start, the servers are held to each other only.
+its root. A difference above the tolerance (0.3 nats) is a warning in the session entry and run.json, not a failed
+start. The tolerance sits above the measured noise: on the 2026-11-15 node, servers of identical weights (fresh starts
+of one merge) differed by up to 0.20 nats between policy servers and 0.11 between value servers on this measure (top 5
+against top 20), one server across two cold starts by up to 0.18 (policy) and 0.11 (value), and the held-out tool
+logged 0.248 between policy servers: one to two steps of bf16 logit resolution. In place, without a fresh start, the
+servers are held to each other only.
 
 Pid files are written since the boot or they are stale; a server's processes are recorded (`<name>.members`: pid,
 start and parent) once it answers, and stop_model.sh signals a group whose API process died only if every live member

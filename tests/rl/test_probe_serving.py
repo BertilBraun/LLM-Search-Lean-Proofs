@@ -296,6 +296,10 @@ def test_a_server_somewhat_off_its_reference_is_a_warning_not_a_failure(tmp_path
     assert (check.error, len(check.warnings), "policy-gpu1" in check.warnings[0]) == ("", 1, True)
 
 
+def test_a_server_within_the_measured_noise_of_its_reference_raises_no_warning(tmp_path: Path) -> None:
+    assert asyncio.run(check_two_servers(tmp_path, 0.2, frozenset({"policy-gpu0"}))).warnings == ()
+
+
 def test_a_server_grossly_off_its_reference_fails_the_start(tmp_path: Path) -> None:
     assert "policy-gpu1" in asyncio.run(check_two_servers(tmp_path, 1.5, frozenset({"policy-gpu0"}))).error
 

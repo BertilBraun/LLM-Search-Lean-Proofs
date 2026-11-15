@@ -594,9 +594,9 @@ FINGERPRINT_PROMPTS = (
 # The reference keeps the top tokens; a server is asked for more, so that it lists every reference token.
 FINGERPRINT_TOKENS = 5
 FINGERPRINT_ASKED_TOKENS = 20
-# Above this a difference is a warning (recorded, the start stands), above GROSS a failed start. The tolerance is NOT
-# YET MEASURED: two cold starts of one merge on the node set the noise floor (the report's node commands).
-FINGERPRINT_TOLERANCE = 0.05
+# Above this a difference is a warning (recorded, the start stands), above GROSS a failed start. Servers of identical
+# weights differed by up to 0.25 nats on the 2026-11-15 node (one to two steps of bf16 logit resolution).
+FINGERPRINT_TOLERANCE = 0.3
 FINGERPRINT_GROSS = 1.0
 
 
@@ -688,7 +688,7 @@ async def check_fingerprints(
             if distance > FINGERPRINT_TOLERANCE:
                 warning = (
                     f"{name} answers the fixed prompts {distance:.3f} nats off {reference.server}, the reference of "
-                    f"{weights} (tolerance {FINGERPRINT_TOLERANCE}, unmeasured)"
+                    f"{weights} (tolerance {FINGERPRINT_TOLERANCE})"
                 )
                 log(f"Warning: {warning}")
                 warnings.append(warning)
