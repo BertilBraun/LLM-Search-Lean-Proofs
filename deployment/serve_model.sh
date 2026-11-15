@@ -20,6 +20,10 @@
 # pattern and the free space there). Dev-mode endpoints (/pause, /collective_rpc,
 # /reset_prefix_cache, ...) are on for in-place weight swaps (experiments/publish_weights.py); the server only listens
 # on 127.0.0.1.
+# The server never inherits its caller's CPUs or niceness (a restart from a job run through background.sh would put
+# it on Lean's CPUs at nice 19): it runs on SERVER_CPU_LIST (environment.sh's default: every CPU the cgroup allows)
+# at niceness 0, which from a niced caller needs root (as on the nodes; otherwise the start is refused), and
+# <name>.cpus records both (`<CPU list> <niceness>`, as the server runs) once it answers.
 
 set -euo pipefail
 
@@ -36,6 +40,16 @@ shift 4
 # A local weights directory by its absolute path: vLLM may run in another working directory (CORE_DUMPS).
 if [[ -e "${model}" ]]; then
     model="$(realpath "${model}")"
+fi
+taskset --cpu-list "${SERVER_CPU_LIST}" true || {
+    echo "SERVER_CPU_LIST=${SERVER_CPU_LIST} is not a CPU list this node can run on." >&2
+    exit 2
+}
+# nice -n is relative: this takes the server back to 0 from the caller's niceness.
+niceness_change=$(( -$(nice) ))
+if [[ "$(nice -n "${niceness_change}" nice 2>/dev/null)" != 0 ]]; then
+    echo "Cannot reset the server's niceness from $(nice) to 0 (that needs root): start it from a process at nice 0." >&2
+    exit 1
 fi
 
 server_directory="${LEAN_SEARCH_RUNS}/servers"
@@ -104,9 +118,12 @@ fi
 
 # Persisting Triton autotuning results removes about a minute of warmup from later starts.
 cd "${working_directory}"
-rm -f "${server_directory}/${name}.members"
+rm -f "${server_directory}/${name}.members" "${server_directory}/${name}.cpus"
+# Each of setsid, nohup, taskset and nice execs the next, so the pid stays the vLLM API process's (server_pid.sh).
+# LEAN_SEARCH_VLLM_EXECUTABLE is for tests' stand-in.
 CUDA_VISIBLE_DEVICES="${gpu}" VLLM_ALLOW_RUNTIME_LORA_UPDATING=True VLLM_SERVER_DEV_MODE=1 TRITON_CACHE_AUTOTUNING=1 \
-    setsid nohup vllm "${arguments[@]}" "$@" >> "${log_file}" 2>&1 < /dev/null &
+    setsid nohup taskset --cpu-list "${SERVER_CPU_LIST}" nice -n "${niceness_change}" \
+    "${LEAN_SEARCH_VLLM_EXECUTABLE:-vllm}" "${arguments[@]}" "$@" >> "${log_file}" 2>&1 < /dev/null &
 # Written before the wait below, so that an interrupted start leaves a server stop_model.sh can find.
 echo $! > "${pid_file}"
 cd - > /dev/null
@@ -124,4 +141,5 @@ until curl -sf "http://127.0.0.1:${port}/health" > /dev/null; do
 done
 # Its processes, for stop_model.sh to stop an engine its dead API process left (and nothing else).
 record_server_members "$(cat "${pid_file}")" "${server_directory}/${name}.members"
+record_server_cpus "$(cat "${pid_file}")" "${server_directory}/${name}.cpus"
 echo "Server ${name} is healthy after ${SECONDS} s at http://127.0.0.1:${port}/v1"

@@ -17,3 +17,15 @@ cgroup_quota_cores() {
     fi
     echo $(( quota / period > 0 ? quota / period : 1 ))
 }
+
+# The CPUs the cgroup's cpuset allows (v2 cpuset.cpus.effective, v1 cpuset/cpuset.cpus), else all the host's, as a
+# CPU list: never the caller's affinity, which a pinned caller has narrowed.
+cgroup_allowed_cpus() {
+    local root="${CGROUP_ROOT:-/sys/fs/cgroup}" cpus=""
+    if [[ -r "${root}/cpuset.cpus.effective" ]]; then
+        cpus="$(< "${root}/cpuset.cpus.effective")"
+    elif [[ -r "${root}/cpuset/cpuset.cpus" ]]; then
+        cpus="$(< "${root}/cpuset/cpuset.cpus")"
+    fi
+    echo "${cpus:-0-$(( $(nproc --all) - 1 ))}"
+}

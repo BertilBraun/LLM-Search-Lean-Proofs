@@ -4,6 +4,7 @@ from pathlib import Path
 
 V2_TREE = {
     "cgroup.controllers": "cpuset cpu io memory pids",
+    "cpuset.cpus.effective": "0-191",
     "cpu.max": "6100000 100000",
     "cpu.stat": "usage_usec 5000000\nuser_usec 4000000\nsystem_usec 1000000\nnr_periods 10\nnr_throttled 3\n"
     "throttled_usec 700",
@@ -13,6 +14,7 @@ V2_TREE = {
 }
 V1_TREE = {
     "cpu/cpu.cfs_quota_us": "10532571",
+    "cpuset/cpuset.cpus": "0-191",
     "cpu/cpu.cfs_period_us": "100000",
     "cpu/cpu.stat": "nr_periods 179768\nnr_throttled 4\nthrottled_time 0\nnr_bursts 0\nburst_time 0",
     "cpuacct/cpuacct.usage": "5000000000",

@@ -37,6 +37,8 @@ effective_cpu_count() {
     echo "${quota:-$(nproc)}"
 }
 export LEAN_SEARCH_CPU_COUNT="${LEAN_SEARCH_CPU_COUNT:-$(effective_cpu_count)}"
+# serve_model.sh's CPUs (deployment/README.md, "CPU budget"); by default all the cgroup allows, whatever the caller's.
+export SERVER_CPU_LIST="${SERVER_CPU_LIST:-$(cgroup_allowed_cpus)}"
 
 mkdir -p "${LEAN_SEARCH_DATA}" "${LEAN_SEARCH_RUNS}" "${LEAN_SEARCH_CHECKPOINTS}" "${HF_HOME}"
 ulimit -Sn 65536 2>/dev/null || true

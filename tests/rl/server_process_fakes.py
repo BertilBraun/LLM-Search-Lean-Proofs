@@ -12,6 +12,30 @@ from pathlib import Path
 FAKE_VLLM = "import time\ntime.sleep(600)\n"
 
 
+FAKE_VLLM_SERVER = """import http.server, sys
+
+class Health(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+
+    def log_message(self, *arguments):
+        pass
+
+http.server.HTTPServer(("127.0.0.1", int(sys.argv[sys.argv.index("--port") + 1])), Health).serve_forever()
+"""
+
+
+def fake_vllm_server_executable(directory: Path) -> Path:
+    """An executable `vllm` that answers /health on its --port, for serve_model.sh (LEAN_SEARCH_VLLM_EXECUTABLE): it
+    runs as `python <dir>/vllm serve ...`, as vLLM's CLI does."""
+    script = directory / "bin" / "vllm"
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text(f"#!{sys.executable}\n{FAKE_VLLM_SERVER}", encoding="utf-8")
+    script.chmod(0o755)
+    return script
+
+
 def fake_vllm_script(directory: Path) -> Path:
     script = directory / "bin" / "vllm"
     script.parent.mkdir(parents=True, exist_ok=True)

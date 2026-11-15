@@ -61,6 +61,12 @@ record_server_members() {
     done > "${members_file}"
 }
 
+# What the server runs on, whoever started it: `<CPU list> <niceness>` of its API process in <name>.cpus.
+record_server_cpus() {
+    local pid="$1" cpus_file="$2"
+    echo "$(taskset --cpu-list --pid "${pid}" | awk '{print $NF}') $(ps -o ni= -p "${pid}" | tr -d ' ')" > "${cpus_file}"
+}
+
 # vLLM's CLI (argument 1 or 2 ends in vllm) or a process title such as VLLM::EngineCore, which also overwrites its
 # environment.
 vllm_command() {

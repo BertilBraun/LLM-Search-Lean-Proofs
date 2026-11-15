@@ -38,7 +38,7 @@ for pid_file in ${pid_files[@]+"${pid_files[@]}"}; do
             0) ;;
             1)
                 echo "Stale pid file ${pid_file}: no vLLM of ${name} started with it; removed, nothing signalled." >&2
-                rm -f "${pid_file}" "${pid_file%.pid}.members"
+                rm -f "${pid_file}" "${pid_file%.pid}.members" "${pid_file%.pid}.cpus"
                 continue
                 ;;
             *)
@@ -57,7 +57,7 @@ for pid_file in ${pid_files[@]+"${pid_files[@]}"}; do
     if [[ -n "$(live_group_members "${process_group}")" ]]; then
         kill -KILL -- "-${process_group}" 2>/dev/null || true
     fi
-    rm -f "${pid_file}" "${pid_file%.pid}.members"
+    rm -f "${pid_file}" "${pid_file%.pid}.members" "${pid_file%.pid}.cpus"
     echo "Stopped ${name}."
 done
 exit "${status}"

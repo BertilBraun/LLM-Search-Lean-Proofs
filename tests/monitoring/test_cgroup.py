@@ -104,3 +104,18 @@ def test_the_shell_quota_prints_nothing_when_unlimited(tmp_path: Path, files: di
 
 def test_the_shell_quota_prints_nothing_without_a_cpu_controller(tmp_path: Path) -> None:
     assert shell_quota(tmp_path) == ""
+
+
+def shell_allowed_cpus(root: Path) -> str:
+    command = f'set -euo pipefail; source "{CGROUP_SCRIPT}"; cgroup_allowed_cpus'
+    environment = os.environ | {"CGROUP_ROOT": str(root)}
+    return subprocess.run(["bash", "-c", command], env=environment, capture_output=True, text=True, check=True).stdout
+
+
+@BOTH_LAYOUTS
+def test_the_allowed_cpus_are_the_cgroups_cpuset(tmp_path: Path, files: dict[str, str]) -> None:
+    assert shell_allowed_cpus(cgroup_tree(tmp_path, files)) == "0-191\n"
+
+
+def test_without_a_cpuset_every_cpu_of_the_host_is_allowed(tmp_path: Path) -> None:
+    assert shell_allowed_cpus(tmp_path) == f"0-{os.cpu_count() - 1}\n"
