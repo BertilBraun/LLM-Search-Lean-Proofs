@@ -80,10 +80,7 @@ def run_target(evaluation: EvaluationConfig, run: EvaluationRun) -> EvaluationTa
 
 
 def probe_problems(path: Path) -> list[EvaluationProblem]:
-    return [
-        EvaluationProblem(statement.problem, statement.stratum, statement.difficulty)
-        for statement in read_fixed_set(path)
-    ]
+    return [EvaluationProblem(statement.problem, statement.stratum) for statement in read_fixed_set(path)]
 
 
 def first_problems_by_stratum(problems: Sequence[EvaluationProblem], count: int) -> list[EvaluationProblem]:

@@ -18,12 +18,6 @@
 The budget rule: a run given --search-config searches at that file's own max_expansions (even when it names the
 config's default file), every other run at the config's [probe] max_expansions.
 
-The searches start in the config's submission_order: "file" (the set's order) or "longest_proof_first" (the largest
-recorded difficulty first, probe v2's the shortest known proof's characters / 100; ties in the set's order), after a
-pilot (--problems) took its statements as in file order. Only the start order changes, never a statement or its
-search, so it is not part of the run's identity; each session records its order (sessions.jsonl, run.json). A resumed
-run starts the statements without a result in its order.
-
 It runs only pinned through deployment/background.sh (the node environment's BACKGROUND_CPU_LIST) and records each
 session's CPUs, layout and cgroup CPU counters in pinning.jsonl (run.json holds the counters at the end); a session on
 another layout than the run's first is refused unless --allow-other-pinning (recorded).
@@ -91,7 +85,6 @@ from lean_search.rl.evaluation import (
     EvaluationPaths,
     FailureTolerance,
     ServerRecoveryError,
-    in_submission_order,
     read_failures,
     run_problem_set_evaluation,
 )
@@ -299,9 +292,7 @@ async def evaluate(arguments: argparse.Namespace) -> int:
                     restarts_granted=arguments.allow_restarts,
                     fingerprint_warnings=served.fingerprint_warnings,
                 )
-                session = start_session(
-                    directory, chosen, paths.results, serving, config.submission_order, gpu_power_states()
-                )
+                session = start_session(directory, chosen, paths.results, serving, gpu_power_states())
                 request_failures = RequestFailures()
                 servers = ProbeServers(
                     loop.serving,
@@ -313,7 +304,6 @@ async def evaluate(arguments: argparse.Namespace) -> int:
                     functools.partial(start_servers, servers_directory=SERVERS_DIRECTORY, log=log),
                     request_failures,
                     DeathRule(),
-                    config.submission_order,
                 )
                 sessions = read_sessions(directory)
                 tolerance = FailureTolerance(
@@ -324,15 +314,12 @@ async def evaluate(arguments: argparse.Namespace) -> int:
                     len(server_restarts(sessions)),
                     request_failures,
                 )
-                log(
-                    f"{len(problems)} problems of {config.probe_set} into {directory}, started in "
-                    f"{config.submission_order} order"
-                )
+                log(f"{len(problems)} problems of {config.probe_set} into {directory}")
                 summary = await run_problem_set_evaluation(
                     EvaluationKind.PROBE,
                     directory.name,
                     (chosen.policy_version, chosen.value_version),
-                    in_submission_order(problems, config.submission_order),
+                    problems,
                     run_config,
                     paths,
                     log,

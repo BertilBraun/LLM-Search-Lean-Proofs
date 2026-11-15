@@ -13,11 +13,6 @@ probe_set = "grpo/fixed_sets/probe_v2.jsonl"
 # is repeated with the cap doubled, and every run it is compared with at the same cap.
 max_wall_clock_stop_share = 0.01
 output = "probe_evaluations"
-# The longest known proofs start first, so a run ends on short searches: in file order (bands from the shortest proofs
-# up) its last few long searches left the four GPUs nearly idle for ~25 min of ~4 h. Only the start order changes, not
-# a statement or its search; the gate and calibration configs inherit it (the old gate set's recorded difficulty is
-# its tactic count and root value, not characters: there the hardest estimate starts first).
-submission_order = "longest_proof_first"
 
 [probe]
 max_expansions = 16

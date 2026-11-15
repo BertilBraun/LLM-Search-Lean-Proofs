@@ -815,12 +815,17 @@ dashboard warns below `min_free_disk_gib` (50) free.
   `grpo_evaluate.py` and `run_search.py` refuse to start while it is held) and never while a loop runs; a session
   during which a loop came up is discarded on resume. One concurrency and a 7,200 s wall cap for every run. The budget
   rule: a run given `--search-config` searches at that file's own `max_expansions`, every other run at the config's
-  `[probe] max_expansions`. The study's runs start the longest known proofs first (`submission_order =
-  "longest_proof_first"`, ties in file order; default `"file"`), so a run's tail is short searches rather than a few
-  long ones that leave the GPUs idle; the order changes no statement and no search, only when each starts, and is
-  recorded per session, not in the identity. Accepted only under 1% wall-clock stops (run.json, per stratum too);
-  `probe_rating` rates accepted runs only, pooled by an identity of checkpoint and search settings, against the run
-  marked `--anchor` (the loop config's starting policy and value adapters, checked by content).
+  `[probe] max_expansions`. Accepted only under 1% wall-clock stops (run.json, per stratum too); `probe_rating` rates
+  accepted runs only, pooled by an identity of checkpoint and search settings, against the run marked `--anchor` (the
+  loop config's starting policy and value adapters, checked by content).
+  Known limits: the searches start in the probe set's file order, and a run's last searches leave the GPUs partly
+  idle, about 40 minutes of a 3.4-hour run (review AP's 112-slot simulation of a complete recorded run: 3.35 h in file
+  order, 2.67 h for an oracle that starts the longest searches first). Starting the longest known proofs first does
+  not help: it took 4.24 h, because proof length hardly predicts a search's length (rank correlation 0.41) and the
+  longest searches are low- and middle-band statements that hit repeated 60 s tactic timeouts, which it starts last.
+  Any reordering also changes which searches run beside which, so the load pattern the anchors ran under, and load
+  changes outcomes (one wall-clock timeout drops an automation tactic for the rest of that search): every study run
+  keeps file order.
 - `probe`: 16 expansions, no harvesting, no ε, with `evaluation.value_model` (the published value model in
   `loop.toml`), in slots: slot k searches
   part k % `probe_parts` (3) of the set (`fixed_targets.probe_part`: every third problem of each stratum, so each part
