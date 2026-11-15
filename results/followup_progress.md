@@ -2,7 +2,7 @@
 
 Kept current by the orchestrator. Details live in the linked files.
 
-**Last update:** 2026-11-15, 15:25 UTC.
+**Last update:** 2026-11-15, 19:05 UTC.
 
 ## Where we are
 
@@ -16,8 +16,8 @@ two independent reviews and a re-review (`results/reviews/2026-11-14_review_aa_*
 | Throughput test (10 runs, two CPU layouts, four concurrencies, hard statements) | done: this node does 14.6k expansions/h at 112 searches, about 35-40% more than the first node; GPUs are the bottleneck, no CPU throttling | `node_backup/2026-11-15/live/runs/throughput/` |
 | Fixed settings for this node | 112 concurrent searches for probe runs and sampling, 56 for held-out states; Lean on socket 1 (96 CPUs), servers and training on socket 0 | `experiments/configs/grpo/followup/`, `/workspace/node_environment.sh` on the node |
 | Code: CPU quota on this node's cgroup layout, explicit CPU layout without raising priority, each run's layout recorded and checked | merged (reviews AM and AN, re-reviewed), master 40b2409 | `results/reviews/2026-11-15_review_am_*`, `_an_*` |
-| Step 1, anchor runs 1 and 2 (v0 with value v0, 2,000 statements) | run 1 accepted (713 of 2,000); run 2 running since 15:19 UTC | `node_backup/2026-11-15/live/` |
-| Step 1: token budget, calibration run | follows the anchors by itself (a chain on the node that survives a restart) | |
+| Step 1, anchor runs 1 and 2 (v0 with value v0, 2,000 statements) | done: 713 and 716 of 2,000 | `node_backup/2026-11-15/live/runs/step1_chain/` |
+| Step 1: token budget, calibration run | running since 18:57 UTC | |
 | Step 1: three value-free pilots, reasoning at equal tokens | held until the timeout question below is decided | |
 | Code: GPU power limits and Lean load (tactic timeouts, REPL failures) in every run record; quota reserve enforced on every start path | merged (reviews AO and AP, re-reviewed), master 3309652; deployed after the anchors | |
 | Step 1, last: old final value model with v0's policy; the full value-free run | after a check-in on the pilots | |
@@ -47,17 +47,26 @@ nodes had finished at the time, it fired 554 times on the new node against 860 o
 
 ## Results so far
 
-**v0 with value v0 on probe v2** (2,000 statements, 16 expansions):
+**The baseline: v0 with value v0 on probe v2** (2,000 statements, 16 expansions; both anchors accepted):
 
 | Proof characters | 0-499 | 500-999 | 1,000-1,499 | 1,500-1,999 | 2,000-2,999 | 3,000-4,499 | 4,500+ | All |
 |---|---|---|---|---|---|---|---|---|
-| Anchor run 1, this node (2026-11-15) | 129/150 | 155/250 | 143/350 | 129/350 | 89/400 | 51/300 | 17/200 | **713 (35.65%)** |
-| First node, one run (2026-11-14), cross-check only | 120/150 | 159/250 | 156/350 | 134/350 | 101/400 | 39/300 | 13/200 | 722 (36.1%) |
+| Anchor run 1 | 129/150 | 155/250 | 143/350 | 129/350 | 89/400 | 51/300 | 17/200 | **713 (35.65%)** |
+| Anchor run 2 | 121/150 | 157/250 | 147/350 | 130/350 | 98/400 | 51/300 | 12/200 | **716 (35.80%)** |
+| First node, one run, cross-check only | 120/150 | 159/250 | 156/350 | 134/350 | 101/400 | 39/300 | 13/200 | 722 (36.1%) |
 
-- Anchor run 1 here: accepted, 1 wall-clock stop (0.05%), 39.6M generated tokens, 1,672 tokens per expansion, 3.17
-  hours (the last 35 minutes a tail with the GPUs mostly idle), no CPU throttling (about 68 cores used on average), no
-  server restart.
-- Anchor run 2 started at 15:19 UTC on the same code; expected around 18:30 UTC.
+- **Noise floor on this node.** 303 statements (15.2%) are solved in only one of the two runs (150 and 153). The paired
+  difference is -0.1 points (95% interval -1.8 to +1.6). Solved within 1/2/4/8/16 expansions: 10.3/16.7/23.2/29.3/35.6%
+  and 9.9/16.3/22.4/29.8/35.8%.
+- **Cost of a run.** 3.2 and 3.6 hours, 39.6M and 39.8M generated tokens (1,672 and 1,678 per expansion), no server
+  restart, no CPU throttling (62-68 cores used on average), 1 and 0 wall-clock stops. Each run ends with a tail of
+  25-35 minutes on a few long searches.
+- **Tactic timeouts.** The 60-second limit fired 2,856 and 3,209 times per run, in 367 and 375 statements, with no
+  throttling; the first node had 3,001 in 379. The same count on a node with twice the CPU points to steps that are
+  slow by themselves, not to contention. The replay on the idle node confirms or refutes this.
+- **Lean process crashes** (35 and 11 per run) come almost entirely from `ring_nf` on huge powers or long sums: memory
+  exhaustion or stack overflow, which heartbeats do not stop, tried again on the same state because a crash, unlike a
+  timeout, does not disable the tactic.
 
 - Probe v2 is drawn and fixed: 2,000 statements, 33 near-identical pool statements held out of the curriculum
   (`node_backup/2026-11-14/probe_v2/`).
