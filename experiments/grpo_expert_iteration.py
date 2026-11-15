@@ -2,7 +2,7 @@
 current policy adapter on the loop's own verified proof-graph blocks as sampled, with replay.
 
     python experiments/grpo_expert_iteration.py --config experiments/configs/grpo/expert_iteration_1.toml count
-    HF_HUB_OFFLINE=1 BACKGROUND_CPUS=16 deployment/background.sh python experiments/grpo_expert_iteration.py \
+    HF_HUB_OFFLINE=1 deployment/background.sh python experiments/grpo_expert_iteration.py \
         --config experiments/configs/grpo/expert_iteration_1.toml build --processes 16
     HF_HUB_OFFLINE=1 python experiments/grpo_expert_iteration.py --config ... train --dry-run
     HF_HUB_OFFLINE=1 torchrun --standalone --nproc-per-node 4 experiments/grpo_expert_iteration.py \

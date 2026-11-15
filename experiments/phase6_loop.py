@@ -446,7 +446,7 @@ def print_commands(config: LoopConfig, config_path: Path, paths: LoopPaths) -> N
         str(merged_directory(publisher.weights_root, 0, "value")),
     )
     ports = " ".join(str(server_port(server)) for server in config.serving.servers)
-    background = "BACKGROUND_CPUS=40 setsid nohup deployment/background.sh python"
+    background = "setsid nohup deployment/background.sh python"
     earlier = config.search.previous_loops[-1] if config.search.previous_loops else ""
     carried = f" --curriculum-from {earlier} --value-buffer-from {earlier}" if earlier else ""
     print(
@@ -460,7 +460,8 @@ def print_commands(config: LoopConfig, config_path: Path, paths: LoopPaths) -> N
                 f"for port in {ports}; do until curl -sf http://127.0.0.1:$port/v1/models > /dev/null; do sleep 10; "
                 "done; done",
                 "# 3. The search service with its training phases, which also evaluate version 0 on miniF2F-valid and "
-                f"again in the first phase pause {config.evaluation.every_hours:g} h after the last evaluation",
+                f"again in the first phase pause {config.evaluation.every_hours:g} h after the last evaluation; pinned "
+                "to the node environment's BACKGROUND_CPU_LIST (without one: BACKGROUND_CPUS=40 in front)",
                 f"{background} experiments/phase6_service.py {option} >> {log}/service.log 2>&1 < /dev/null &",
                 "# Optional, not run by default (the curriculum feeds unverified statements): the pool v3 verifier",
                 f"# {background} experiments/phase6_pool_v3.py"

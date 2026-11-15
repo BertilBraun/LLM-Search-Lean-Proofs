@@ -1014,7 +1014,7 @@ h, each published variant 1.5-1.8 h (publish, servers, held-out states, whole pr
 less when a variant's held-out states fail and its probe is skipped. The watchdog covers the whole window.
 
 1. While the loop samples: `python experiments/grpo_expert_iteration.py --config
-   experiments/configs/grpo/expert_iteration_1.toml count`, then `HF_HUB_OFFLINE=1 BACKGROUND_CPUS=16
+   experiments/configs/grpo/expert_iteration_1.toml count`, then `HF_HUB_OFFLINE=1
    deployment/background.sh python experiments/grpo_expert_iteration.py --config ... build --processes 16` (once: B
    and C read A's data; read its README.md: held out 0, the easy share, the below-band share, block lengths and
    explanations like the phases'), and `HF_HUB_OFFLINE=1 python experiments/grpo_expert_iteration.py --config ... train
