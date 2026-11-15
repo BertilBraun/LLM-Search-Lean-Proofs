@@ -5,9 +5,11 @@ background.sh pins to BACKGROUND_CPU_LIST (taskset's CPU list, e.g. 48-95,144-19
 all the host's CPUs (`nproc --all`; 32 when neither is set), never both. Servers run on SERVER_CPU_LIST and training
 jobs on TRAINING_CPU_LIST (monitoring/cpu_layout.py). Before a launcher starts, the layout is checked: the background
 set against the CPUs the process may use and against the cgroup quota with a reserve for the servers, no physical core
-shared between the background set and the servers' or training jobs' CPUs. Each session of a run records its CPUs,
-the layout and the cgroup's CPU counters (pinning.jsonl beside its results) and is refused when its layout differs
-from the run's first session's, so an unpinned or differently pinned run shows and cannot pass for the same.
+shared between the background set and the servers' or training jobs' CPUs; a background set that leaves less than
+the reserve of the quota beside it is refused unless SERVER_RESERVE_CORES sets a smaller reserve (recorded). Each
+session of a run records its CPUs, the layout and the cgroup's CPU counters (pinning.jsonl beside its results) and is
+refused when its layout differs from the run's first session's, so an unpinned or differently pinned run shows and
+cannot pass for the same.
 """
 
 import dataclasses
@@ -35,7 +37,7 @@ PINNING_FILE = "pinning.jsonl"
 # background.sh's set when neither BACKGROUND_CPUS nor BACKGROUND_CPU_LIST is set.
 DEFAULT_BACKGROUND_CPUS = 32
 # Cores of the quota kept for the servers and the search orchestrator beside the background set (SERVER_RESERVE_CORES
-# overrides it). A placeholder until the 2026-11-15 node's throughput test measures what the servers use.
+# overrides it, recorded). On the 2026-11-15 node the 8 servers used under 4 cores beside Lean's 96 (quota 105.3).
 DEFAULT_SERVER_RESERVE_CORES = 8.0
 
 
@@ -62,6 +64,8 @@ class PinningRecord:
     cpu_counters: CpuCounters | None = None
     # This session started with --allow-other-pinning on a layout other than the run's first session's.
     other_pinning_allowed: bool = False
+    # SERVER_RESERVE_CORES when set: the quota's reserve beside the background set in place of the default.
+    server_reserve_cores: float | None = None
 
 
 @dataclass(frozen=True)
@@ -78,6 +82,7 @@ def node_environment_file() -> Path | None:
 
 def current_pinning(cgroup: Path = CGROUP_ROOT) -> PinningRecord:
     background = environment_setting("BACKGROUND_CPUS")
+    reserve = environment_setting("SERVER_RESERVE_CORES")
     node_environment = node_environment_file()
     return PinningRecord(
         recorded_at=datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds"),
@@ -94,6 +99,7 @@ def current_pinning(cgroup: Path = CGROUP_ROOT) -> PinningRecord:
         if node_environment is None
         else hashlib.sha256(node_environment.read_bytes()).hexdigest(),
         cpu_counters=cpu_counters(cgroup),
+        server_reserve_cores=None if reserve is None else float(reserve),
     )
 
 
@@ -134,8 +140,8 @@ def pinning_check(record: PinningRecord, siblings: Mapping[int, tuple[int, ...]]
     """Whether the environment's layout will do for a study job. Refused: not exactly one of BACKGROUND_CPUS and
     BACKGROUND_CPU_LIST, a set outside the CPUs this process may use, a background set not below the quota, or one
     sharing a physical core with the servers' or training jobs' CPUs (a warning instead for those that are every CPU
-    the cgroup allows on a node without a node environment, the old single-socket layout). A warning: a background set
-    that leaves less of the quota than `reserve_cores` beside it. ValueError for a malformed CPU list."""
+    the cgroup allows on a node without a node environment, the old single-socket layout), or a background set that
+    leaves less of the quota than `reserve_cores` beside it. ValueError for a malformed CPU list."""
     if (record.background_cpus is None) == (record.background_cpu_list is None):
         both = record.background_cpus is not None
         hint = " (both set: BACKGROUND_CPU_LIST= or BACKGROUND_CPUS= unsets the node environment's)" if both else ""
@@ -154,10 +160,12 @@ def pinning_check(record: PinningRecord, siblings: Mapping[int, tuple[int, ...]]
     if quota is not None and len(pinned) >= quota:
         refusals.append(f"background.sh would pin {len(pinned)} CPUs, not below the cgroup quota of {quota:g} cores")
     elif quota is not None and len(pinned) + reserve_cores > quota:
-        warnings.append(
+        refusals.append(
             f"background.sh's {len(pinned)} CPUs leave {quota - len(pinned):.1f} cores of the {quota:g}-core quota "
-            f"beside them, less than the {reserve_cores:g} reserved for the servers and the orchestrator "
-            "(SERVER_RESERVE_CORES): the cgroup may throttle"
+            f"beside them, less than the {reserve_cores:g} reserved for the servers and the orchestrator: once Lean "
+            "fills its CPUs the cgroup throttles the GPU feeders with it. Pin fewer CPUs (BACKGROUND_CPU_LIST), or set "
+            "SERVER_RESERVE_CORES to the cores the servers and the orchestrator were measured to use (recorded in "
+            "each run's pinning.jsonl)"
         )
     old_default = record.node_environment is None
     allowed = set(parse_cpu_list(record.allowed_cpu_list))

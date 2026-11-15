@@ -92,9 +92,22 @@ def test_a_background_set_at_the_quota_is_refused(pinning: PinningRecord) -> Non
     assert checked(pinning).refusals
 
 
-def test_a_background_set_leaving_less_than_the_reserve_beside_it_is_a_warning_only() -> None:
-    check = checked(record(background_cpus=56, server_cpu_list="0-7,64-71"))
-    assert (check.refusals, len(check.warnings)) == ((), 1)
+def test_a_background_set_leaving_less_than_the_reserve_beside_it_is_refused() -> None:
+    assert len(checked(record(background_cpus=56, server_cpu_list="0-7,64-71")).refusals) == 1
+
+
+def test_a_smaller_reserve_set_explicitly_lets_the_background_set_pass() -> None:
+    pinning = record(background_cpus=56, server_cpu_list="0-7,64-71")
+    assert pinning_check(pinning, SIBLINGS, 4.0) == PinningCheck((), ())
+
+
+def test_an_explicit_reserve_is_recorded(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SERVER_RESERVE_CORES", "4")
+    assert current_pinning().server_reserve_cores == 4.0
+
+
+def test_the_default_reserve_is_recorded_as_unset() -> None:
+    assert current_pinning().server_reserve_cores is None
 
 
 @pytest.mark.parametrize(

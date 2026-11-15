@@ -676,10 +676,12 @@ prints the file, its settings and sha256, the effective `BACKGROUND_CPUS`, `BACK
 and `TRAINING_CPU_LIST`, the cpuset and the quota, and refuses: not exactly one background setting, a list outside the
 allowed CPUs, a background set not below the quota, or one sharing a physical core
 (`/sys/devices/system/cpu/cpu<N>/topology/thread_siblings_list`) with the servers' or training jobs' CPUs; only the
-old single-socket default (those lists every allowed CPU, no node file) is a warning. It warns when the background set
-leaves less of the quota than `SERVER_RESERVE_CORES` (8, a placeholder until the throughput test measures the
-servers' and the orchestrator's CPU use) beside it. `probe_evaluate.py`, `held_out_evaluate.py` and `grpo_loop.py run`
-record each session's layout, the node file's path and sha256 and the cgroup's CPU counters (usage, periods,
+old single-socket default (those lists every allowed CPU, no node file) is a warning. It also refuses a background set
+that leaves less of the quota than `SERVER_RESERVE_CORES` beside it (8 by default; the 2026-11-15 node's 8 servers
+used under 4 cores beside Lean's 96 of its 105.3): once Lean fills its CPUs the cgroup would throttle the servers
+with it. The override is setting `SERVER_RESERVE_CORES` to the measured use (in the node environment or the command);
+each session records it (`server_reserve_cores` in `pinning.jsonl`, null for the default). `probe_evaluate.py`,
+`held_out_evaluate.py` and `grpo_loop.py run` record each session's layout, the node file's path and sha256 and the cgroup's CPU counters (usage, periods,
 throttled periods) in the run's `pinning.jsonl`, and refuse a session whose layout differs from the run's first
 unless `--allow-other-pinning` (recorded; `grpo_loop.sh loop --allow-other-pinning`). run.json (probe runs) and each
 phase's line in `phases.jsonl` hold the counters at the end, so the throttled share of any run or phase reads off two
