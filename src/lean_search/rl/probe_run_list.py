@@ -22,10 +22,12 @@ from lean_search.rl.probe_evaluation import (
     ProbeRunStart,
     ValueFreePriority,
     probe_run_config,
+    read_sessions,
     run_config_sha256,
     run_directory,
 )
 from lean_search.rl.study_configs import PLACEHOLDER, placeholders, resolved_toml
+from lean_search.rl.submission_order import RecordedRun, StartOrder, SubmissionOrder, configured_start_order
 from lean_search.search import load_run_config
 from lean_search.search.records import from_json_object
 
@@ -134,12 +136,16 @@ def run_refusals(run: PlannedRun, repository: Path, concurrency: int) -> list[st
 
 
 def missing_files(run: PlannedRun, repository: Path, data_root: Path) -> list[str]:
-    """What the node lacks for the run: its adapters and its probe set."""
+    """What the node lacks for the run: its adapters, its probe set and its expected-seconds file."""
     paths = [Path(run.policy_adapter), *([Path(run.value)] if run.value not in VALUE_CHOICES else [])]
     missing = [f"{run.name}: no adapter directory at {path}" for path in paths if not path.is_dir()]
-    probe_set = data_root / evaluation_config(run, repository)["probe_set"]
+    evaluation = evaluation_config(run, repository)
+    probe_set = data_root / evaluation["probe_set"]
     if not probe_set.is_file():
         missing.append(f"{run.name}: no probe set at {probe_set}")
+    expected_seconds = evaluation.get("expected_search_seconds", "")
+    if expected_seconds and not (repository / expected_seconds).is_file():
+        missing.append(f"{run.name}: no expected search seconds at {repository / expected_seconds}")
     return missing
 
 
@@ -155,9 +161,18 @@ def planned_run_config_sha256(run: PlannedRun, repository: Path) -> str:
     )
 
 
-def start_mismatches(run: PlannedRun, start: ProbeRunStart, repository: Path) -> list[str]:
+def planned_start_order(run: PlannedRun, repository: Path) -> StartOrder:
+    evaluation = evaluation_config(run, repository)
+    order = SubmissionOrder(evaluation.get("submission_order", SubmissionOrder.FILE))
+    return configured_start_order(order, evaluation.get("expected_search_seconds", ""), repository)
+
+
+def start_mismatches(
+    run: PlannedRun, start: ProbeRunStart, repository: Path, recorded_order: StartOrder | None = None
+) -> list[str]:
     """Where a run already started under the name differs from what the list asks for; the search settings by their
-    content digest, so a config moved or renamed with the same contents still matches."""
+    content digest, so a config moved or renamed with the same contents still matches. `recorded_order`: its first
+    session's start order (None before one started)."""
     evaluation = evaluation_config(run, repository)
     loop = read_toml(repository / evaluation["loop_config"])
     match run.value:
@@ -177,6 +192,8 @@ def start_mismatches(run: PlannedRun, start: ProbeRunStart, repository: Path) ->
         ("wall cap", start.max_wall_seconds, float(evaluation["probe"]["max_wall_seconds"])),
         ("concurrency", start.concurrency, evaluation["probe"]["concurrency"]),
     ]
+    if recorded_order is not None:
+        expected.append(("start order", recorded_order.text, planned_start_order(run, repository).text))
     return [
         f"{run.name}: its record has {what} {found!r}, the list asks for {wanted!r}"
         for what, found, wanted in expected
@@ -213,6 +230,23 @@ def recorded_start(directory: Path) -> ProbeRunStart | None:
     if not path.exists():
         return None
     return from_json_object(ProbeRunStart, json.loads(path.read_text(encoding="utf-8")))
+
+
+def recorded_start_order(directory: Path) -> StartOrder | None:
+    """The run's first session's start order; None before one started."""
+    sessions = read_sessions(directory)
+    return sessions[0].start_order if sessions else None
+
+
+def recorded_run(directory: Path) -> RecordedRun:
+    """A run's recorded search seconds per statement (results.jsonl's accounting.wall_seconds)."""
+    start = recorded_start(directory)
+    if start is None:
+        raise ValueError(f"{directory} is not a probe run (no checkpoint.json)")
+    lines = (directory / "results.jsonl").read_text(encoding="utf-8").splitlines()
+    results = [json.loads(line) for line in lines if line.strip()]
+    wall_seconds = {result["problem_name"]: result["accounting"]["wall_seconds"] for result in results}
+    return RecordedRun(directory.name, start.identity, start.probe_set_sha256, wall_seconds)
 
 
 @dataclass(frozen=True)

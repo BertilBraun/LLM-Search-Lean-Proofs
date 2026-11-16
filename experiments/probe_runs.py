@@ -4,14 +4,18 @@
     python experiments/probe_runs.py next <run list.toml> ...     # the next run's directory and arguments
     python experiments/probe_runs.py record <run list.toml> ...   # ledger lines for the runs finished since
     python experiments/probe_runs.py ledgers <run list.toml> ...  # where the ledgers are
+    python experiments/probe_runs.py expected-search-seconds <run directory> ... --output <file>
 
 check refuses (exit 1, every reason on stderr) a run with a placeholder in its settings, its evaluation config or its
 search config, an uncalibrated automation constant (value-free runs), arguments probe_evaluate.py would refuse, a
-probe concurrency other than --concurrency, a missing adapter or probe set, and runs on more than one loop config's
-servers. next prints, NUL-separated, the run directory and the arguments of the first run in interleaved order that
-is not accepted, or nothing when all are; a rejected run stops it (exit 3), and so does a run whose record
-(checkpoint.json) differs from what the list asks for (exit 1), accepted or not. record appends each finished run's
-line to <output>/ledger.tsv beside the runs, once.
+probe concurrency other than --concurrency, a missing adapter, probe set or expected-seconds file, and runs on more
+than one loop config's servers. next prints, NUL-separated, the run directory and the arguments of the first run in
+interleaved order that is not accepted, or nothing when all are; a rejected run stops it (exit 3), and so does a run
+whose record (checkpoint.json, and its first session's start order) differs from what the list asks for (exit 1),
+accepted or not. record appends each finished run's line to <output>/ledger.tsv beside the runs, once.
+expected-search-seconds writes the file an evaluation config's expected_search_seconds names (submission_order =
+"longest_expected_search_first"): per statement the mean recorded wall seconds over the given runs
+(rl/submission_order.py).
 """
 
 import argparse
@@ -29,11 +33,14 @@ from lean_search.rl.probe_run_list import (
     probe_arguments,
     read_run_list,
     record_finished,
+    recorded_run,
     recorded_start,
+    recorded_start_order,
     run_refusals,
     run_state,
     start_mismatches,
 )
+from lean_search.rl.submission_order import expected_search_seconds_text
 
 REPOSITORY_DIRECTORY = Path(__file__).resolve().parents[1]
 DATA_DIRECTORY = Path(os.environ["LEAN_SEARCH_DATA"])
@@ -49,6 +56,9 @@ def parse_arguments() -> argparse.Namespace:
     check.add_argument("lists", nargs="+", type=Path)
     for name in ("next", "record", "ledgers"):
         commands.add_parser(name).add_argument("lists", nargs="+", type=Path)
+    expected = commands.add_parser("expected-search-seconds")
+    expected.add_argument("runs", nargs="+", type=Path, help="probe run directories")
+    expected.add_argument("--output", type=Path, required=True)
     return parser.parse_args()
 
 
@@ -74,7 +84,7 @@ def next_run(lists: list[Path]) -> int:
         directory = planned_directory(run, RUNS_DIRECTORY, REPOSITORY_DIRECTORY)
         start = recorded_start(directory)
         if start is not None:
-            refuse(start_mismatches(run, start, REPOSITORY_DIRECTORY))
+            refuse(start_mismatches(run, start, REPOSITORY_DIRECTORY, recorded_start_order(directory)))
         match run_state(directory):
             case RunState.ACCEPTED:
                 continue
@@ -106,6 +116,13 @@ def main() -> None:
         case "ledgers":
             runs = interleaved([read_run_list(path) for path in arguments.lists])
             print("\n".join(str(path) for path in ledger_paths(runs, RUNS_DIRECTORY, REPOSITORY_DIRECTORY)))
+        case "expected-search-seconds":
+            try:
+                text = expected_search_seconds_text([recorded_run(directory) for directory in arguments.runs])
+            except ValueError as error:
+                raise SystemExit(str(error)) from error
+            arguments.output.write_bytes(text.encode("utf-8"))
+            print(f"{arguments.output}: {len(text.splitlines())} lines")
 
 
 if __name__ == "__main__":

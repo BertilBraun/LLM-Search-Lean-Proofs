@@ -5,7 +5,7 @@
         --name v0_value_v0_run1 --arm v0 --phase 0 --anchor \
         --policy-adapter /workspace/checkpoints/data_rewrite_sft_numbered/adapter --value v0 \
         [--search-config experiments/configs/grpo/search/<other>.toml] [--problems 200] [--keep-merge] \
-        [--allow-restarts N] [--allow-other-pinning]
+        [--allow-restarts N] [--allow-other-pinning] [--allow-other-order]
     --value none             no value model: best-first on the path's mean step log-probability per block (the
                              config's [value_free_priority]: the policy's step log-probability and its calibrated
                              automation constant; refused for a placeholder; other priority settings kept)
@@ -17,6 +17,14 @@
 
 The budget rule: a run given --search-config searches at that file's own max_expansions (even when it names the
 config's default file), every other run at the config's [probe] max_expansions.
+
+The searches start in the config's submission_order: "file" (the set's order, the default) or
+"longest_expected_search_first" (by the expected_search_seconds file, experiments/probe_runs.py
+expected-search-seconds: the longest first, statements it lacks before them, ties in the set's order; a file of
+another probe set is refused), after a pilot (--problems) took its statements as in file order. Only the start order
+changes, never a statement or its search, so it is not part of the run's identity; each session records it and the
+file's digest (sessions.jsonl, run.json). A session in another order or file than the run's first is refused unless
+--allow-other-order (recorded).
 
 It runs only pinned through deployment/background.sh (the node environment's BACKGROUND_CPU_LIST) and records each
 session's CPUs, layout and cgroup CPU counters in pinning.jsonl (run.json holds the counters at the end); a session on
@@ -112,6 +120,7 @@ from lean_search.rl.probe_evaluation import (
     keep_merges,
     mark_spoiled,
     merges_in_use,
+    other_start_order,
     probe_run_config,
     read_sessions,
     remove_merges,
@@ -131,6 +140,13 @@ from lean_search.rl.probe_evaluation import (
     verify_served,
 )
 from lean_search.rl.study_configs import resolved_toml
+from lean_search.rl.submission_order import (
+    StartOrder,
+    SubmissionOrder,
+    configured_start_order,
+    longest_expected_search_first,
+    read_expected_search_seconds,
+)
 from lean_search.search import load_run_config, read_results
 from lean_search.search.records import from_json_object, to_json
 
@@ -168,6 +184,11 @@ def parse_arguments() -> argparse.Namespace:
         "--allow-other-pinning",
         action="store_true",
         help="resume although the CPU layout differs from the run's first session's (recorded in pinning.jsonl)",
+    )
+    parser.add_argument(
+        "--allow-other-order",
+        action="store_true",
+        help="resume although the start order or its expected-seconds file differs from the run's first session's",
     )
     parser.add_argument(
         "--allow-restarts",
@@ -228,6 +249,20 @@ def refuse_while_loops_run() -> None:
         raise SystemExit(f"Loops run on this node: {list(activity.running)}; a probe evaluation runs with none beside.")
 
 
+def start_order(config: ProbeEvaluationConfig, probe_set_sha256: str) -> tuple[StartOrder, dict[str, float]]:
+    """The configured order and its expected seconds per statement (none in file order)."""
+    try:
+        order = configured_start_order(config.submission_order, config.expected_search_seconds, REPOSITORY_DIRECTORY)
+        match order.order:
+            case SubmissionOrder.FILE:
+                return order, {}
+            case SubmissionOrder.LONGEST_EXPECTED_SEARCH_FIRST:
+                path = REPOSITORY_DIRECTORY / config.expected_search_seconds
+                return order, read_expected_search_seconds(path, probe_set_sha256)
+    except (ValueError, FileNotFoundError) as error:
+        raise SystemExit(str(error)) from error
+
+
 def refuse_another_start(path: Path, start: ProbeRunStart) -> None:
     """A resumed run must search the checkpoint with the settings it began with."""
     if path.exists() and from_json_object(ProbeRunStart, json.loads(path.read_text(encoding="utf-8"))) != start:
@@ -263,11 +298,22 @@ async def evaluate(arguments: argparse.Namespace) -> int:
     directory = run_directory(RUNS_DIRECTORY / config.output, arguments.name)
     paths = EvaluationPaths(directory)
     refuse_another_start(directory / "checkpoint.json", start)
+    order, expected_seconds = start_order(config, start.probe_set_sha256)
+    other_order = other_start_order(read_sessions(directory), order)
+    if other_order and not arguments.allow_other_order:
+        raise SystemExit(f"Refused: {other_order} (--allow-other-order resumes it so, recorded).")
     refusals = record_session_pinning(directory, True, arguments.allow_other_pinning)
     if refusals:
         raise SystemExit("\n".join(refusals))
     problems = probe_problems(DATA_DIRECTORY / config.probe_set)
     problems = first_problems_by_stratum(problems, chosen.problems) if chosen.problems else problems
+    match order.order:
+        case SubmissionOrder.FILE:
+            started = problems
+        case SubmissionOrder.LONGEST_EXPECTED_SEARCH_FIRST:
+            started = longest_expected_search_first(problems, expected_seconds)
+            uncovered = sum(problem.problem.name not in expected_seconds for problem in problems)
+            log(f"{uncovered} of {len(problems)} statements have no expected seconds; they start first")
     weights_root = CHECKPOINTS_DIRECTORY / config.output / "weights"
     merges = checkpoint_merges(loop.serving, chosen, weights_root)
     log(f"{start.identity}: {start.max_expansions} expansions (the budget rule), {start.concurrency} REPLs")
@@ -294,7 +340,9 @@ async def evaluate(arguments: argparse.Namespace) -> int:
                     restarts_granted=arguments.allow_restarts,
                     fingerprint_warnings=served.fingerprint_warnings,
                 )
-                session = start_session(directory, chosen, paths.results, serving, gpu_power_states())
+                session = start_session(
+                    directory, chosen, paths.results, serving, gpu_power_states(), order, bool(other_order)
+                )
                 request_failures = RequestFailures()
                 servers = ProbeServers(
                     loop.serving,
@@ -306,6 +354,7 @@ async def evaluate(arguments: argparse.Namespace) -> int:
                     functools.partial(start_servers, servers_directory=SERVERS_DIRECTORY, log=log),
                     request_failures,
                     DeathRule(),
+                    order,
                 )
                 sessions = read_sessions(directory)
                 tolerance = FailureTolerance(
@@ -316,12 +365,12 @@ async def evaluate(arguments: argparse.Namespace) -> int:
                     len(server_restarts(sessions)),
                     request_failures,
                 )
-                log(f"{len(problems)} problems of {config.probe_set} into {directory}")
+                log(f"{len(problems)} problems of {config.probe_set} into {directory}, started in {order.text}")
                 summary = await run_problem_set_evaluation(
                     EvaluationKind.PROBE,
                     directory.name,
                     (chosen.policy_version, chosen.value_version),
-                    problems,
+                    started,
                     run_config,
                     paths,
                     log,

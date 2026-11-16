@@ -57,6 +57,7 @@ from lean_search.rl.loop_services import (
 )
 from lean_search.rl.search_models import evaluation_run_config, run_config_text, served_run_config
 from lean_search.rl.search_options import without_search_options
+from lean_search.rl.submission_order import IN_FILE_ORDER, StartOrder, SubmissionOrder
 from lean_search.search import PriorityKind, RunConfig, SearchResult, StopReason
 from lean_search.search.records import from_json_object, to_json
 from lean_search.value.estimator import open_value_estimator
@@ -133,6 +134,10 @@ class ProbeEvaluationConfig:
     # again from the merges at most this often a run (evaluation.ToleratedSearches).
     server_failure_retries: int = 3
     max_server_restarts: int = 3
+    # Only when the searches start (rl/submission_order.py); the expected-seconds file is relative to the repository
+    # or absolute.
+    submission_order: SubmissionOrder = SubmissionOrder.FILE
+    expected_search_seconds: str = ""
 
 
 @dataclass(frozen=True)
@@ -244,6 +249,10 @@ class ProbeSession:
     # Each GPU's enforced and default power limit at its start; None where nvidia-smi failed, and for a restart's
     # session.
     gpus: tuple[GpuPowerState, ...] | None = None
+    # Sessions from before the setting started in file order.
+    start_order: StartOrder = field(default_factory=StartOrder)
+    # Its order differs from the run's first session's (--allow-other-order).
+    other_order_allowed: bool = False
 
 
 @dataclass(frozen=True)
@@ -307,6 +316,8 @@ class ProbeRunRecord:
     gpus_at_end: tuple[GpuPowerState, ...] | None = None
     # Lean's load on its searches, the total first, then per stratum (`lean_load.lean_loads`).
     lean_load: tuple[LeanLoad, ...] = ()
+    # The orders its sessions started their searches in, each once, the first session's first.
+    start_orders: tuple[StartOrder, ...] = ()
 
 
 def adapter_digest(directory: Path) -> str:
@@ -771,6 +782,7 @@ class ProbeServers:
         start: Callable[[Sequence[ServerStart]], Awaitable[None]],
         request_failures: RequestFailures,
         rule: DeathRule,
+        start_order: StartOrder = IN_FILE_ORDER,
     ) -> None:
         self.serving = serving
         self.assignments = served.assignments(serving)
@@ -781,6 +793,7 @@ class ProbeServers:
         self.start = start
         self.request_failures = request_failures
         self.rule = rule
+        self.start_order = start_order
 
     async def answers_request(self, server: ServerEndpoint) -> bool:
         model = self.serving.policy_model if server in self.serving.policy_servers else self.serving.value_model
@@ -821,6 +834,7 @@ class ProbeServers:
             self.checkpoint,
             self.results,
             SessionServing(SwapMethod.RESTART, restarted=tuple(names), completed=False),
+            start_order=self.start_order,
         )
         try:
             await self.start(starts)
@@ -921,6 +935,8 @@ def start_session(
     results: Path,
     serving: SessionServing,
     gpus: tuple[GpuPowerState, ...] | None = None,
+    start_order: StartOrder = IN_FILE_ORDER,
+    other_order_allowed: bool = False,
 ) -> ProbeSession:
     count = len(results.read_text(encoding="utf-8").splitlines()) if results.exists() else 0
     started = datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds")
@@ -932,9 +948,22 @@ def start_session(
         serving=serving,
         started_at=started,
         gpus=gpus,
+        start_order=start_order,
+        other_order_allowed=other_order_allowed,
     )
     append_session(directory, session)
     return session
+
+
+def other_start_order(sessions: Sequence[ProbeSession], wanted: StartOrder) -> str:
+    """How `wanted` differs from the order of the run's first session; empty when it does not (or none started)."""
+    if not sessions or sessions[0].start_order == wanted:
+        return ""
+    return f"the run started in {sessions[0].start_order.text}, this session would start in {wanted.text}"
+
+
+def distinct_start_orders(sessions: Sequence[ProbeSession]) -> tuple[StartOrder, ...]:
+    return tuple(dict.fromkeys(session.start_order for session in sessions))
 
 
 def mark_spoiled(directory: Path, session: ProbeSession) -> None:
@@ -1030,4 +1059,5 @@ def run_record(
         fingerprint_warnings=tuple(warning for session in sessions for warning in session.serving.fingerprint_warnings),
         retried_statements=retried_statements(failures),
         dropped_statements=dropped,
+        start_orders=distinct_start_orders(sessions),
     )

@@ -25,7 +25,9 @@ pair and against also print Lean's load on each run's searches, in total and per
 timeouts (and the statements with one), the REPL failures and the Lean seconds per policy attempt (rl/lean_load.py).
 The 60 s backstop changes outcomes (an automation tactic is dropped for the rest of a search after one), so unlike
 figures mean the two sides ran under unlike load. load prints the same for any run directories from their
-results.jsonl, finished, accepted or not (a run still in progress included).
+results.jsonl, finished, accepted or not (a run still in progress included). They also print the order each run
+started its searches in (its sessions'; probe_evaluate.py's submission_order), and a line when the orders differ: the
+order is not part of the identity, so runs in different orders pool and pair, under different load patterns.
 """
 
 import argparse
@@ -47,6 +49,8 @@ from lean_search.rl.arm_comparison import (
 from lean_search.rl.evaluation import EvaluationPaths
 from lean_search.rl.fixed_sets import read_fixed_set
 from lean_search.rl.lean_load import LOAD_HEADER, LeanLoad, lean_loads, load_cell
+from lean_search.rl.probe_evaluation import distinct_start_orders, read_sessions
+from lean_search.rl.submission_order import orders_note
 from lean_search.search import read_results
 from lean_search.search.summary import markdown_table
 
@@ -116,6 +120,19 @@ def print_load(runs: list[str]) -> None:
     print()
 
 
+def print_orders(runs: list[str]) -> None:
+    orders = [distinct_start_orders(read_sessions(run_directory(run))) for run in runs]
+    rows = [
+        [run_directory(run).name, ", ".join(order.text for order in run_orders)]
+        for run, run_orders in zip(runs, orders, strict=True)
+    ]
+    print(markdown_table(["run", "start order"], rows))
+    note = orders_note(orders)
+    if note:
+        print(note)
+    print()
+
+
 def points(value: float) -> str:
     return f"{100 * value:+.1f}"
 
@@ -157,6 +174,7 @@ def print_comparison(comparison: ArmComparison, runs: list[str]) -> None:
     print(markdown_table(["run", "what ended its searches", "generated tokens per statement"], rows))
     print()
     print_load(runs)
+    print_orders(runs)
     print(f"Verdict: {comparison.verdict.text}")
     print(CONFIRMATION_NOTE)
 
@@ -209,7 +227,9 @@ def main() -> None:
             print(f"\n{reference.label}: {found[0].comparison.overall.y_solved:.1%} solved")
             print(multiple_comparisons_note(len(found)))
             print()
-            print_load([*arguments.reference, *(run for _, *runs in arguments.variant for run in runs)])
+            compared = [*arguments.reference, *(run for _, *runs in arguments.variant for run in runs)]
+            print_load(compared)
+            print_orders(compared)
         case "load":
             print_load(arguments.runs)
 
