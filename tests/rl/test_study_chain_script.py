@@ -158,6 +158,10 @@ def supervise(node: Node, extra: dict[str, str] | None = None, limit: int = 12) 
     return codes
 
 
+def held_out_steps(name: str) -> list[str]:
+    return ["grpo_loop.sh servers", f"held_out_evaluate.py {name}", "learning_rate_step.py check-held-out"]
+
+
 def expected_steps(node: Node) -> list[str]:
     mode = node.state / "mode.toml"
     steps = [
@@ -166,8 +170,7 @@ def expected_steps(node: Node) -> list[str]:
         "stop_model.sh --all",
         f"arm_loop.sh --kind shared sampling --mode {mode} experiments/configs/grpo/followup/shared_sampling.toml",
         "slice_trees.py",
-        "grpo_loop.sh servers",
-        "held_out_evaluate.py step2_v0",
+        *held_out_steps("step2_v0"),
         "stop_model.sh --all",
     ]
     steps += [
@@ -179,10 +182,11 @@ def expected_steps(node: Node) -> list[str]:
         steps += [f"dry run {build}", "learning_rate_step.py check-dry-run"]
     steps += [f"train {variant.run_name}" for variant in STEP_VARIANTS if variant.kind == RoundKind.EXPERT_ITERATION]
     for variant in STEP_VARIANTS:
-        steps += ["grpo_loop.sh servers", f"held_out_evaluate.py {variant.run_name}"]
+        steps += held_out_steps(variant.run_name)
+    steps += held_out_steps("step2_v0_end")
     for signal in Signal:
         steps += ["learning_rate_step.py rank-arguments", f"rank_learning_rates.py {signal}"]
-    return [*steps, "learning_rate_step.py report"]
+    return [*steps, "learning_rate_step.py report", "stop_model.sh --all"]
 
 
 @pytest.fixture
@@ -204,6 +208,10 @@ def test_a_clean_run_takes_the_steps_in_order(finished: Node) -> None:
 
 def test_a_clean_run_ends_in_hold(finished: Node) -> None:
     assert (finished.state / "HOLD").read_text(encoding="utf-8").split(" ", 1)[1].startswith("step 2 done")
+
+
+def test_the_hold_says_the_servers_are_stopped(finished: Node) -> None:
+    assert (finished.state / "HOLD").read_text(encoding="utf-8").rstrip().endswith("the servers are stopped")
 
 
 def test_a_clean_run_writes_no_stopped(finished: Node) -> None:
@@ -351,10 +359,99 @@ def test_servers_that_kept_dying_in_a_held_out_run_stop_the_chain(node: Node) ->
     assert "held-out run step2_A_1e-4: the servers kept dying" in node.stopped()
 
 
-def test_gpus_held_by_another_process_stop_the_chain_before_training(node: Node) -> None:
-    node.set("gpu_holders", "4242, python\n")
+def test_gpu_memory_in_use_stops_the_chain_before_training_though_no_process_is_listed(node: Node) -> None:
+    node.set("gpu_memory", "0, 1\n1, 20480\n2, 1\n3, 1\n")
     supervise(node)
-    assert ("stay held" in node.stopped(), any(line.startswith("grpo_phase") for line in node.lines())) == (True, False)
+    assert ("GPU 1 20480 MiB" in node.stopped(), any(line.startswith("grpo_phase") for line in node.lines())) == (
+        True,
+        False,
+    )
+
+
+def test_gpus_reading_their_idle_memory_are_free(node: Node) -> None:
+    node.set("gpu_memory", "0, 1\n1, 1\n2, 99\n3, 1\n")
+    assert supervise(node) == [0]
+
+
+def test_a_gpu_count_other_than_four_stops_the_chain(node: Node) -> None:
+    node.set("gpu_memory", "0, 1\n1, 1\n2, 1\n")
+    supervise(node)
+    assert "reads not 4 GPUs" in node.stopped()
+
+
+def test_a_held_out_run_leaving_states_without_a_tree_is_resumed_by_the_next_start(node: Node) -> None:
+    node.set("fail_complete_held_out_step2_A_5e-5", "1")
+    supervise(node)
+    assert node.lines().count("held_out_evaluate.py step2_A_5e-5") == 2
+
+
+def test_a_held_out_run_leaving_states_without_a_tree_is_not_done_until_complete(node: Node) -> None:
+    node.set("fail_complete_held_out_step2_A_5e-5", "1")
+    assert supervise(node) == [1, 0] and (node.state / "HOLD").exists()
+
+
+def test_the_slicing_waits_for_the_finished_loops_process_to_exit(node: Node) -> None:
+    node.set("live_loop")
+    assert (supervise(node), "SLICED BESIDE A LIVE LOOP" in node.lines()) == ([0], False)
+
+
+def test_a_live_sampling_loop_is_not_started_again(node: Node) -> None:
+    node.set("live_loop")
+    supervise(node)
+    assert sum(line.startswith("arm_loop.sh ") for line in node.lines()) == 1
+
+
+def test_arm_loop_failing_three_times_stops_the_chain(node: Node) -> None:
+    node.set("fail_sampling", "3")
+    assert (supervise(node), node.stopped().split(" ", 1)[1]) == ([0], "step s1_sampling_start failed 3 times\n")
+
+
+def test_arm_loop_failing_twice_is_tried_again_by_the_driver(node: Node) -> None:
+    node.set("fail_sampling", "2")
+    assert supervise(node) == [0] and (node.state / "HOLD").exists()
+
+
+def test_a_background_build_alive_across_a_restart_is_waited_for_not_started_again(node: Node) -> None:
+    node.set("slow_build_step2_C_w1", "3")
+    node.set("fail_round_step2_A_2e-5", "1")
+    codes = supervise(node)
+    assert (codes, node.lines().count("build step2_C_w1")) == ([1, 0], 1)
+
+
+def test_a_background_build_that_failed_is_built_again_before_c_trains(node: Node) -> None:
+    node.set("fail_build_step2_C_w1", "1")
+    supervise(node)
+    lines = node.lines()
+    assert (
+        lines.count("build step2_C_w1"),
+        lines.index("dry run step2_C_w1") > lines.index("failed at build_step2_C_w1"),
+    ) == (2, True)
+
+
+def test_servers_failing_to_start_before_a_held_out_run_are_retried(node: Node) -> None:
+    node.set("fail_servers", "1")
+    assert supervise(node) == [1, 0] and (node.state / "HOLD").exists()
+
+
+def test_a_round_finished_before_its_driver_died_is_kept_not_trained_again(node: Node) -> None:
+    node.set("kill_after_round_step2_A_5e-5")
+    supervise(node)
+    aside = list((node.workspace / "checkpoints").glob("step2_A_5e-5.interrupted_*"))
+    assert (node.lines().count("trained step2_A_5e-5"), aside) == (1, [])
+
+
+def test_a_search_config_changed_after_the_step_began_stops_the_chain(node: Node) -> None:
+    node.set("kill_slices")
+    start(node)
+    node.set("search_config_changed")
+    supervise(node)
+    assert "or its search config differs" in node.stopped()
+
+
+def test_the_servers_left_up_at_the_end_are_stopped_before_hold(node: Node) -> None:
+    node.set("fail_stop", "0")
+    supervise(node)
+    assert node.steps()[-1] == "stop_model.sh --all"
 
 
 def test_a_dry_run_planning_no_step_stops_the_chain_before_c_trains(node: Node) -> None:

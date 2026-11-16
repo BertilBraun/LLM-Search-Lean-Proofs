@@ -5,13 +5,14 @@
 # study_chain.sh, never run from the checkout: bash reads a running script lazily, and a deploy rewrites the checkout.
 #
 #   S1  the servers step 1 left up stopped; the shared sampling run from v0 and value v0 (48M generated tokens, no
-#       training) in the sampling mode $state/mode.toml, then its four slices by finish order
+#       training) in the sampling mode $state/mode.toml, then (once the loop process is gone) its four slices
 #   S3a v0's held-out run, while the servers still hold v0
 #   S2  the servers stopped; ten training rounds from v0, one at a time on the 4 GPUs (GRPO A and B2 on slice 4 at
 #       2e-5, 5e-5, 1e-4; expert iteration C at 5e-5, 1e-4 on window 1 and window 4), the expert-iteration data built
 #       beside the GRPO rounds on the Lean CPUs and sized by `train --dry-run` before C trains
-#   S3b the servers started; each variant's held-out run
-#   S4  rank_learning_rates.py per signal (C over its windows too), the report learning_rates_report.md, then HOLD
+#   S3b the servers started; each variant's held-out run, then v0's again (the A/A and drift check)
+#   S4  rank_learning_rates.py per signal (C over its windows too), the report learning_rates_report.md, the servers
+#       stopped (an arm's launcher keeps any server that answers, whatever it holds), then HOLD
 #
 # The plan (rounds, configs, held-out runs) comes from experiments/learning_rate_step.py. Steps done are marked under
 # $state (done_<step>); a rerun (container restart, supervisord's retry) continues at the first step not done. A round
@@ -24,6 +25,9 @@ state="${STUDY_CHAIN_STATE:-/workspace/runs/study_chain}"
 repository="${STUDY_CHAIN_REPOSITORY:-/workspace/LLM-Search-Lean-Proofs}"
 start_seconds="${STUDY_CHAIN_START_SECONDS:-60}"
 poll_seconds="${STUDY_CHAIN_POLL_SECONDS:-60}"
+# How long the shared loop may take to exit after finished.json, and the background builds to end, before giving up.
+loop_exit_seconds="${STUDY_CHAIN_LOOP_EXIT_SECONDS:-600}"
+builds_wait_seconds="${STUDY_CHAIN_BUILDS_WAIT_SECONDS:-10800}"
 mkdir -p "${state}/rounds" "${state}/held_out"
 exec >> "${state}/chain.log" 2>&1
 say() { echo "$(date -u +%FT%TZ) $*"; }
@@ -47,6 +51,8 @@ shared_loop_config="${LEAN_SEARCH_RUNS}/followup_configs/${shared}/loop.toml"
 configs="${state}/configs"
 mode="${state}/mode.toml"
 gpus=4
+# A GPU reads 1 MiB used after stop_model.sh; a CUDA context alone holds a few hundred.
+gpu_free_mib=100
 
 attempt() {
     local step="$1" count
@@ -72,13 +78,15 @@ finish() {
 [[ -f "${mode}" ]] || stop_chain "no sampling mode: copy the chosen mode (e.g. ${followup}/modes/visible.toml) to ${mode}, move STOPPED aside and start study_chain"
 "${python}" experiments/learning_rate_step.py check-mode --mode "${mode}" > "${state}/mode.txt" 2>&1 \
     || stop_chain "the sampling mode ${mode} is refused: $(tail -1 "${state}/mode.txt")"
+# mode.txt names the search config's sha256: an edit or a deploy changing that file is caught as well.
 if [[ -f "${state}/mode.recorded" ]]; then
-    cmp -s "${mode}" "${state}/mode.recorded" \
-        || stop_chain "${mode} differs from the mode the step began with (mode.recorded): the shared trees were sampled in that one"
+    cmp -s "${mode}" "${state}/mode.recorded" && cmp -s "${state}/mode.txt" "${state}/mode.recorded.txt" \
+        || stop_chain "${mode} or its search config differs from the mode the step began with (mode.recorded, mode.recorded.txt): the shared trees were sampled in that one"
 else
+    cp "${state}/mode.txt" "${state}/mode.recorded.txt"
     cp "${mode}" "${state}/mode.recorded"
 fi
-say "sampling mode: $(cat "${state}/mode.txt")"
+say "sampling mode: $(paste -sd' ' "${state}/mode.txt")"
 
 if ! done_step configs; then
     "${python}" experiments/learning_rate_step.py write-configs --output "${configs}" --shared-run "${shared}" \
@@ -109,6 +117,14 @@ if ! done_step s1_sampling; then
         sleep "${poll_seconds}"
     done
     say "shared sampling finished: $(cat "${shared_run}/finished.json")"
+    # The loop writes finished.json before it shuts down; slice_trees.py refuses while its process lives.
+    waited=0
+    while loop_alive; do
+        (( waited < loop_exit_seconds )) \
+            || { say "the shared loop still runs ${loop_exit_seconds} s after finished.json; the driver exits for supervisord to retry"; exit 1; }
+        sleep 1
+        waited=$(( waited + 1 ))
+    done
     finish s1_sampling
 fi
 
@@ -120,7 +136,6 @@ aside() {
 }
 
 if ! done_step s1_slices; then
-    attempt s1_slices
     mark_start s1_slices
     [[ -e "${shared_run}/slices" ]] && aside "${shared_run}/slices"
     "${python}" experiments/slice_trees.py --trees "${shared_run}/trees" --slices 4 --output "${shared_run}/slices" \
@@ -141,7 +156,12 @@ held_out() {
         --phase "${phase}" --policy-adapter "${adapter}" --loop-config "${shared_loop_config}" \
         >> "${state}/held_out/${name}.log" 2>&1 || status=$?
     case "${status}" in
-        0) finish "held_out_${name}" ;;
+        0)
+            # Exit 0 also after server failures left states without a tree (summary.json's dropped): resumed next start.
+            "${python}" experiments/learning_rate_step.py check-held-out --name "${name}" >> "${state}/held_out/${name}.log" 2>&1 \
+                || { say "held-out run ${name} left states without a tree; the driver exits for supervisord to resume it"; exit 1; }
+            finish "held_out_${name}"
+            ;;
         4) stop_chain "held-out run ${name}: the servers kept dying (exit 4; held_out/${name}.log, the servers' logs)" ;;
         *) say "held-out run ${name} exited ${status}; the driver exits for supervisord to retry"; exit 1 ;;
     esac
@@ -158,17 +178,20 @@ all_rounds_done() {
     done < "${configs}/rounds.tsv"
 }
 
-# The GPUs must hold no process before a round trains (a dead round's torchrun workers live in sessions of their own).
+# The GPUs must be free before a round trains (a dead round's torchrun workers live in sessions of their own). Judged
+# by the memory used, which a container sees; its process list may be empty or name host PIDs, so it is only shown.
 gpus_free() {
-    local holders check
+    local readings busy check
     for check in 1 2 3 4 5; do
-        holders="$(nvidia-smi --query-compute-apps=pid,process_name --format=csv,noheader 2>&1)" \
-            || stop_chain "nvidia-smi failed: ${holders}"
-        [[ -z "${holders}" ]] && return 0
-        say "GPUs held (check ${check} of 5): ${holders//$'\n'/; }"
+        readings="$(nvidia-smi --query-gpu=index,memory.used --format=csv,noheader,nounits)" \
+            || stop_chain "nvidia-smi --query-gpu failed: ${readings}"
+        (( $(grep -c . <<< "${readings}") == gpus )) || stop_chain "nvidia-smi reads not ${gpus} GPUs: ${readings//$'\n'/; }"
+        busy="$(awk -F', *' -v limit="${gpu_free_mib}" '$2 + 0 >= limit { printf "GPU %s %s MiB; ", $1, $2 }' <<< "${readings}")"
+        [[ -z "${busy}" ]] && return 0
+        say "GPUs in use (check ${check} of 5): ${busy}processes: $(nvidia-smi --query-compute-apps=pid,process_name --format=csv,noheader | paste -sd';' -)"
         sleep "${poll_seconds}"
     done
-    stop_chain "the GPUs stay held by other processes (${holders//$'\n'/; }): look, stop them by PID, move STOPPED aside"
+    stop_chain "the GPUs stay in use (${busy}): look (nvidia-smi), stop what holds them by PID, move STOPPED aside"
 }
 
 # The expert-iteration data, built on the Lean CPUs; no attempt is counted here (ensure_builds counts them).
@@ -181,28 +204,36 @@ build_data() {
     finish "build_${name}"
 }
 
+# builds.pid holds the background builds' pid and start time (field 22 of /proc/<pid>/stat): after a container restart
+# the pid may name another process, this driver among them.
+process_start() { sed 's/.*) //' "/proc/$1/stat" 2>/dev/null | cut -d' ' -f20; }
 builds_pid_file="${state}/builds.pid"
 builds_running() {
     [[ -f "${builds_pid_file}" ]] || return 1
-    local pid
-    pid="$(cat "${builds_pid_file}")"
-    kill -0 "${pid}" 2>/dev/null && tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null | grep -q study_chain
+    local pid started
+    read -r pid started < "${builds_pid_file}"
+    [[ "${pid}" != "$$" && -n "${started}" && "$(process_start "${pid}")" == "${started}" ]]
 }
 
 start_builds() {
-    builds_running && { say "the expert-iteration builds still run (pid $(cat "${builds_pid_file}"))"; return 0; }
+    builds_running && { say "the expert-iteration builds still run (pid $(cut -d' ' -f1 "${builds_pid_file}"))"; return 0; }
     (
         while IFS=$'\t' read -r -u 3 name config; do
             build_data "${name}" "${config}" || say "building ${name} failed (build_${name}.log); retried before C trains"
         done 3< "${configs}/builds.tsv"
     ) &
-    echo $! > "${builds_pid_file}"
+    echo "$! $(process_start $!)" > "${builds_pid_file}"
     say "expert-iteration builds started beside the GRPO rounds (pid $!)"
 }
 
 ensure_builds() {
-    local name config
-    while builds_running; do sleep "${poll_seconds}"; done
+    local name config waited=0
+    while builds_running; do
+        (( waited < builds_wait_seconds )) \
+            || stop_chain "the background builds still run after ${builds_wait_seconds} s (builds.pid, build_*.log): look"
+        sleep 1
+        waited=$(( waited + 1 ))
+    done
     while IFS=$'\t' read -r -u 3 name config; do
         if ! done_step "build_${name}"; then
             attempt "build_${name}"
@@ -220,10 +251,24 @@ ensure_builds() {
     done 3< "${configs}/builds.tsv"
 }
 
+complete() {
+    local file
+    for file in "$@"; do
+        [[ -e "${file}" ]] || return 1
+    done
+}
+
 train_round() {
     local label="$1" kind="$2" config="$3" run_name="$4" output="$5" trees="$6" lean_replay="$7" math_replay="$8"
-    local completion="$9" status=0 file
+    local completion="$9" status=0
     done_step "round_${label}" && return 0
+    # A trainer that ended with its completion files written last, but whose driver died before marking it.
+    # shellcheck disable=SC2086
+    if [[ -f "${state}/attempts_round_${label}" ]] && complete ${completion}; then
+        say "round ${label}: the earlier attempt left a finished output; kept"
+        finish "round_${label}"
+        return 0
+    fi
     attempt "round_${label}"
     mark_start "round_${label}"
     gpus_free
@@ -244,9 +289,8 @@ train_round() {
         *) stop_chain "rounds.tsv names an unknown kind ${kind}" ;;
     esac
     (( status == 0 )) || { say "round ${label} exited ${status} (rounds/${label}.log); the driver exits for supervisord to retry"; exit 1; }
-    for file in ${completion}; do
-        [[ -e "${file}" ]] || stop_chain "round ${label} exited 0 without ${file}"
-    done
+    # shellcheck disable=SC2086
+    complete ${completion} || stop_chain "round ${label} exited 0 without its completion files (${completion})"
     finish "round_${label}"
 }
 
@@ -263,7 +307,7 @@ if ! all_rounds_done; then
     done 3< "${configs}/rounds.tsv"
 fi
 
-# S3b. Every variant's held-out run (after v0's line).
+# S3b. Every variant's held-out run, then v0's again (the lines after v0's first).
 while IFS=$'\t' read -r -u 3 name arm phase adapter; do
     held_out "${name}" "${arm}" "${phase}" "${adapter}"
 done 3< <(tail -n +2 "${configs}/held_out.tsv")
@@ -284,5 +328,8 @@ if ! done_step s4_report; then
     touch "${state}/done_s4_report"
 fi
 
-echo "$(date -u +%FT%TZ) step 2 done: ${state}/learning_rates_report.md holds the arms' values (not applied)" > "${state}/HOLD"
-say "HOLD: step 2 done; the report is ${state}/learning_rates_report.md; the servers stay up"
+# The policy servers hold the last held-out run's merge, and arm_loop.sh keeps any server that answers: stopped here.
+deployment/stop_model.sh --all >> "${state}/servers.log" 2>&1 \
+    || stop_chain "stop_model.sh refused to stop a server after the report (servers.log): look before stopping it by PID"
+echo "$(date -u +%FT%TZ) step 2 done: ${state}/learning_rates_report.md holds the arms' values (not applied); the servers are stopped" > "${state}/HOLD"
+say "HOLD: step 2 done; the report is ${state}/learning_rates_report.md; the servers are stopped"

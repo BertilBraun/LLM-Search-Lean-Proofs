@@ -21,6 +21,18 @@ case "${script}" in
                     exit 1
                 fi
                 echo "visible reasoning, 32 expansions per training search"
+                if [[ -f "${FAKE_SCENARIO}/search_config_changed" ]]; then
+                    echo "search config sha256 bbbb"
+                else
+                    echo "search config sha256 aaaa"
+                fi
+                ;;
+            check-held-out)
+                summary="${LEAN_SEARCH_RUNS}/held_out_evaluations/held_out_$(option_value --name "$@")/summary.json"
+                if grep -q '"dropped": \["' "${summary}"; then
+                    echo "${summary}: 1 states without a tree" >&2
+                    exit 1
+                fi
                 ;;
             write-configs)
                 output="$(option_value --output "$@")"
@@ -45,6 +57,11 @@ case "${script}" in
         ;;
     experiments/slice_trees.py)
         log_command "slice_trees.py"
+        loop_pid="$(cat "${LEAN_SEARCH_RUNS}/followup_shared_sampling/loop.pid" 2>/dev/null)"
+        if [[ -n "${loop_pid}" ]] && kill -0 "${loop_pid}" 2>/dev/null; then
+            log_command "SLICED BESIDE A LIVE LOOP"
+            exit 1
+        fi
         output="$(option_value --output "$@")"
         mkdir -p "${output}/slice_1"
         outcome slices || exit 1
@@ -59,7 +76,11 @@ case "${script}" in
         directory="${LEAN_SEARCH_RUNS}/held_out_evaluations/held_out_${name}"
         mkdir -p "${directory}/trees"
         outcome "held_out_${name}" || exit "$(cat "${FAKE_SCENARIO}/exit_held_out_${name}" 2>/dev/null || echo 1)"
-        echo '{}' > "${directory}/summary.json"
+        if outcome "complete_held_out_${name}"; then
+            echo '{"dropped": []}' > "${directory}/summary.json"
+        else
+            echo '{"dropped": ["state_7"]}' > "${directory}/summary.json"
+        fi
         ;;
     experiments/grpo_phase.py)
         run="$(option_value --run-name "$@")"
@@ -70,6 +91,7 @@ case "${script}" in
         mkdir -p "${LEAN_SEARCH_CHECKPOINTS}/${run}/policy/adapter"
         echo '{}' > "${LEAN_SEARCH_CHECKPOINTS}/${run}/phase.json"
         log_command "trained ${run}"
+        outcome "after_round_${run}"
         ;;
     experiments/grpo_expert_iteration.py)
         config="$(option_value --config "$@")"
@@ -79,6 +101,7 @@ case "${script}" in
         case "${command} ${4:-}" in
             "build "*)
                 log_command "build ${build}"
+                sleep "$(cat "${FAKE_SCENARIO}/slow_build_${build}" 2>/dev/null || echo 0)"
                 outcome "build_${build}" || exit 1
                 mkdir -p "${LEAN_SEARCH_DATA}/grpo_expert_iteration/${build}"
                 ;;
@@ -96,6 +119,7 @@ case "${script}" in
                 mkdir -p "${LEAN_SEARCH_CHECKPOINTS}/${run}/adapter"
                 echo '{}' > "${LEAN_SEARCH_CHECKPOINTS}/${run}/training_summary.json"
                 log_command "trained ${run}"
+                outcome "after_round_${run}"
                 ;;
         esac
         ;;
