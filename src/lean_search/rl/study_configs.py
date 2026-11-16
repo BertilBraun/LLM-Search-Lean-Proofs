@@ -10,6 +10,10 @@ gets the rounds' recipe (followup/expert_iteration.toml), its [expert_iteration]
 rate. Step 2's shared sampling run (followup/shared_sampling.toml) is one over base.toml changing only
 `SHARED_SAMPLING_SETTINGS`. experiments/followup_arm.py writes the configs the loop reads, and refuses a result whose
 phases are not ended by generated tokens.
+
+The sampling mode (followup/modes/: with or without visible reasoning, the expansions per training search) is one file
+over base.toml's [sampling] that changes exactly `MODE_SETTINGS`, applied alike to the shared sampling run and every
+arm (`with_sampling_mode`), so the arms sample as the trees they took their learning rates from.
 """
 
 import tomllib
@@ -54,6 +58,28 @@ SHARED_SAMPLING_SETTINGS = frozenset(
         "loop.training.max_phases",
     }
 )
+
+
+MODE_SETTINGS = frozenset({"sampling.search_config", "sampling.max_expansions"})
+
+
+def with_sampling_mode(base: Mapping[str, object], mode: Mapping[str, object]) -> dict[str, object]:
+    """`base` searching as `mode` says; ValueError unless the mode sets exactly `MODE_SETTINGS`, none a placeholder."""
+    keys = set(leaf_keys(mode))
+    if keys != MODE_SETTINGS:
+        raise ValueError(
+            f"A sampling mode sets exactly {sorted(MODE_SETTINGS)}; this one misses {sorted(MODE_SETTINGS - keys)} "
+            f"and adds {sorted(keys - MODE_SETTINGS)}."
+        )
+    left = placeholders(mode)
+    if left:
+        raise ValueError(f"The sampling mode still has placeholders at {left}.")
+    sampling = mode["sampling"]
+    assert isinstance(sampling, Mapping)
+    expansions = sampling["max_expansions"]
+    if not isinstance(expansions, int) or isinstance(expansions, bool) or expansions < 1:
+        raise ValueError(f"The sampling mode's max_expansions must be a positive integer, not {expansions!r}.")
+    return merged(base, mode)
 
 
 def overlay_settings(kind: OverlayKind) -> frozenset[str]:

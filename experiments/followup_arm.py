@@ -1,23 +1,25 @@
 """An arm's (or step 2's shared sampling run's) loop and phase configs from its thin overlay
 (src/lean_search/rl/study_configs.py; DESIGN.md, "Follow-up study: controlled arms", "Arms", "Step 2").
 
-    python experiments/followup_arm.py --arm experiments/configs/grpo/followup/arms/A.toml \
-        --output $LEAN_SEARCH_RUNS/followup_configs
-    python experiments/followup_arm.py --arm experiments/configs/grpo/followup/arms/C.toml \
-        --output $LEAN_SEARCH_RUNS/followup_configs
-    python experiments/followup_arm.py --kind "shared sampling" \
+    python experiments/followup_arm.py --mode experiments/configs/grpo/followup/modes/visible.toml \
+        --arm experiments/configs/grpo/followup/arms/A.toml --output $LEAN_SEARCH_RUNS/followup_configs
+    python experiments/followup_arm.py --mode /workspace/runs/study_chain/mode.toml \
+        --arm experiments/configs/grpo/followup/arms/C.toml --output $LEAN_SEARCH_RUNS/followup_configs
+    python experiments/followup_arm.py --kind "shared sampling" --mode /workspace/runs/study_chain/mode.toml \
         --arm experiments/configs/grpo/followup/shared_sampling.toml --output $LEAN_SEARCH_RUNS/followup_configs
 
-Writes <output>/<name>/loop.toml (followup/base.toml with the overlay's [loop] lines, its training.phase_config
-pointing at the file beside it) and <output>/<name>/phase.toml (base.toml's phase template with the overlay's [phase]
-lines), loads both back and prints the path of loop.toml. An arm whose policy trains in expert-iteration rounds (C, D)
-also gets <output>/<name>/expert_iteration.toml (followup/expert_iteration.toml with the overlay's [expert_iteration]
-lines), which its loop config names. Refuses an overlay that changes anything but its kind's settings (an arm: name,
-seed offset, credit mode, learning rate, the rounds' schedule, window and learning rate; the shared sampling: name, the
-phase and total token budgets), one that still holds a PLACEHOLDER, an arm whose loop config has no
-phase_generated_tokens or max_phases (its phases would end on minutes and groups), a shared sampling run whose phase
-would come due, and an existing <output>/<name> with other contents (the same contents are written again silently, so a
-restart can rerun it). deployment/arm_loop.sh starts the loop from it.
+--mode is the sampling mode (followup/modes/: the search config and the expansions per training search), the same file
+for the shared sampling run and every arm. Writes <output>/<name>/loop.toml (followup/base.toml in that mode, with the
+overlay's [loop] lines, its training.phase_config pointing at the file beside it) and <output>/<name>/phase.toml
+(base.toml's phase template with the overlay's [phase] lines), loads both back and prints the path of loop.toml. An arm
+whose policy trains in expert-iteration rounds (C, D) also gets <output>/<name>/expert_iteration.toml
+(followup/expert_iteration.toml with the overlay's [expert_iteration] lines), which its loop config names. Refuses an
+overlay that changes anything but its kind's settings (an arm: name, seed offset, credit mode, learning rate, the
+rounds' schedule, window and learning rate; the shared sampling: name, the phase and total token budgets), one that
+still holds a PLACEHOLDER, a mode that sets anything but the search config and the expansions or whose search config
+does not load, an arm whose loop config has no phase_generated_tokens or max_phases (its phases would end on minutes
+and groups), a shared sampling run whose phase would come due, and an existing <output>/<name> with other contents (the
+same contents are written again silently, so a restart can rerun it). deployment/arm_loop.sh starts the loop from it.
 """
 
 import argparse
@@ -28,8 +30,9 @@ from pathlib import Path
 from lean_search.expert_iteration.toml_text import toml_text
 from lean_search.rl.expert_iteration_data import parse_expert_iteration_config
 from lean_search.rl.loop_config import load_loop_config
-from lean_search.rl.study_configs import OverlayKind, overlay_configs
+from lean_search.rl.study_configs import OverlayKind, overlay_configs, with_sampling_mode
 from lean_search.rl.training_phase import TrainingPhaseConfig
+from lean_search.search import load_run_config
 from lean_search.search.records import from_json_object
 
 REPOSITORY_DIRECTORY = Path(__file__).resolve().parents[1]
@@ -41,6 +44,7 @@ def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--arm", type=Path, required=True, help="the overlay")
     parser.add_argument("--kind", type=OverlayKind, choices=list(OverlayKind), default=OverlayKind.ARM)
+    parser.add_argument("--mode", type=Path, required=True, help="the sampling mode (followup/modes/)")
     parser.add_argument("--output", type=Path, required=True)
     return parser.parse_args()
 
@@ -52,7 +56,11 @@ def read_toml(path: Path) -> dict:
 def main() -> None:
     arguments = parse_arguments()
     overlay = read_toml(arguments.arm)
-    base = read_toml(REPOSITORY_DIRECTORY / BASE)
+    try:
+        base = with_sampling_mode(read_toml(REPOSITORY_DIRECTORY / BASE), read_toml(arguments.mode))
+        load_run_config(REPOSITORY_DIRECTORY / base["sampling"]["search_config"])
+    except (ValueError, OSError) as error:
+        raise SystemExit(f"{arguments.mode}: {error}") from error
     phase_template = read_toml(REPOSITORY_DIRECTORY / base["training"]["phase_config"])
     directory = arguments.output.absolute() / overlay["loop"]["name"]
     try:
