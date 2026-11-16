@@ -2,7 +2,7 @@
 
 Kept current by the orchestrator. Details live in the linked files.
 
-**Last update:** 2026-11-16, 11:15 UTC.
+**Last update:** 2026-11-16, 14:40 UTC.
 
 ## Where we are
 
@@ -23,7 +23,7 @@ two independent reviews and a re-review (`results/reviews/2026-11-14_review_aa_*
 | Step 1: the full value-free run (whole-completion order) | done: 642 of 2,000 against 713 and 716 with the value model | |
 | Step 1: v0's policy with the old run's final value model | done: 875 of 2,000, +8.0 points over value v0; the restart-based serving path worked on real servers | |
 | Step 1: the full value-free run in the block-sum order | done: 633 of 2,000 (the whole-completion order: 642) | |
-| Step 1, added: the old final policy (v35) with value v0, then with the final value model (the 2x2 of policy by value) | v35 with value v0 running since 10:52 UTC; about 3 hours each | |
+| Step 1, added: the old final policy (v35) with value v0, then with the final value model (the 2x2 of policy by value) | v35 with value v0 done: 1,083 of 2,000, +18.4 points; v35 with the final value model running since 14:29 UTC | |
 | Code: GPU power limits and Lean load (tactic timeouts, REPL failures) in every run record; quota reserve enforced on every start path | merged (reviews AO and AP, re-reviewed) and deployed, master 3309652 | |
 | Step 1, last: old final value model with v0's policy; the full value-free run | after a check-in on the pilots | |
 | Before any arm: time server stops and starts, one short phase on the restart-based serving path | during step 1 | |
@@ -72,6 +72,23 @@ question was whether CPU contention causes this, which would make results depend
 - **Lean process crashes** (35 and 11 per run) come almost entirely from `ring_nf` on huge powers or long sums: memory
   exhaustion or stack overflow, which heartbeats do not stop, tried again on the same state because a crash, unlike a
   timeout, does not disable the tactic.
+
+**How the old run's gain splits between policy and value model** (probe v2, 2,000 statements, 16 expansions; the cell
+with v35 and the final value model is running):
+
+| | Value v0 | The old run's final value model |
+|---|---|---|
+| **Policy v0** | 714.5 (35.7%), mean of the two anchors | 875 (43.75%) |
+| **Policy v35**, the old run's final policy | **1,083 (54.15%)** | running since 14:29 UTC |
+
+- **The old loop's policy training is worth +18.4 points** on statements it never saw (95% interval +16.6 to +20.2;
+  62 statements lost and 432 gained against anchor run 1). Every band gains: +6 points under 500 characters, +14 to
+  +24 between 500 and 4,499, +12 at 4,500 and more.
+- The policy's gain is there at the first expansion: solved within 1/2/4/8/16 expansions 18.0/28.3/38.8/47.8/54.1%
+  for v35 against 10.1/16.5/22.9/29.5/35.7% for v0. It reaches v0's 16-expansion result with under 4 expansions.
+- v35 works Lean harder (5.5 Lean seconds per policy attempt against 3.8-4.1; 1,882 tokens per expansion against
+  1,672) and still used fewer tokens in total (35.2M against 39.7M), because more searches end early.
+- 3 wall-clock stops (0.15%), accepted.
 
 **Did the old loop's value training help? Full run** (v0's policy with the old run's final value model, 2,000
 statements, 16 expansions; accepted 2026-11-16 08:20 UTC):
