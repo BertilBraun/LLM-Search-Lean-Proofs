@@ -19,6 +19,7 @@ from lean_search.monitoring.families import GrpoPhase
 from lean_search.policy.adapters import MergeSeconds, PremergedWeights, premerge_adapter
 from lean_search.reasoning.dataset import ReasoningExample, tokenize_reasoning_example
 from lean_search.rl.advantages import CreditMode
+from lean_search.rl.expert_iteration_training import ExpertIterationOutcome
 from lean_search.rl.grpo_groups import PolicyGroup, RewardConfig, policy_groups
 from lean_search.rl.policy_data import (
     PolicyData,
@@ -166,6 +167,7 @@ class TrainerTimings:
 class TrainingStage(StrEnum):
     LABELLING = "labelling"
     POLICY = "policy"
+    EXPERT_ITERATION = "expert_iteration"
     VALUE = "value"
     MERGE = "merge"
 
@@ -183,10 +185,19 @@ class StageMemory:
 class PhaseOutcome:
     trees: int
     groups: int
+    # The GRPO update.
     policy: PolicyOutcome | None
     value: ValueOutcome | None
     timings: TrainerTimings = field(default_factory=TrainerTimings)
     memory: tuple[StageMemory, ...] = ()
+    # An expert-iteration round, after the GRPO update when both ran: its adapter is the phase's policy.
+    expert_iteration: ExpertIterationOutcome | None = None
+
+    def policy_adapter(self) -> str | None:
+        """The phase's new policy adapter; None when the policy did not train."""
+        if self.expert_iteration is not None:
+            return self.expert_iteration.adapter
+        return None if self.policy is None else self.policy.adapter
 
 
 def sampled_by(record: TreeRecord, versions: Collection[int]) -> bool:
@@ -568,7 +579,7 @@ def next_version(current: ModelVersion, outcome: PhaseOutcome, trigger: str) -> 
     """The new policy adapter and the new value adapter, each if one trained; no weights yet."""
     return ModelVersion(
         version=current.version + 1,
-        policy_adapter=current.policy_adapter if outcome.policy is None else outcome.policy.adapter,
+        policy_adapter=outcome.policy_adapter() or current.policy_adapter,
         value_adapter=current.value_adapter if outcome.value is None else outcome.value.adapter,
         published_at=now(),
         trigger=trigger,

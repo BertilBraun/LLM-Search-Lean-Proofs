@@ -706,7 +706,8 @@ class BuildSummary:
 @dataclass(frozen=True)
 class ValidationPoint:
     step: int
-    expert_iteration_loss: float
+    # None without validation examples (a small round in the loop, whose statements all went to training).
+    expert_iteration_loss: float | None
     # None without a replay validation set.
     replay_loss: float | None
 

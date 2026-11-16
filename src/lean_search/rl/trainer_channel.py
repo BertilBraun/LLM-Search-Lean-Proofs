@@ -35,6 +35,8 @@ class TrainerCommand:
     value_trees: tuple[str, ...] = ()
     # Where the adapters and phase.json go.
     output_directory: str = ""
+    # The phase's expert-iteration round (`ExpertIterationConfig`, a file written by the loop); "": none.
+    expert_iteration: str = ""
 
 
 @dataclass(frozen=True)

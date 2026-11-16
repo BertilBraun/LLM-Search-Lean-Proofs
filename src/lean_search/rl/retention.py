@@ -7,7 +7,8 @@ from pathlib import Path
 from lean_search.expert_iteration.serving import ModelVersion
 from lean_search.policy.adapters import premerged_directory
 
-ADAPTER_KINDS = ("policy", "value")
+# A phase's adapters: GRPO's, an expert-iteration round's (the published one when both ran), the value model's.
+ADAPTER_KINDS = ("policy", "expert_iteration", "value")
 
 
 def kept_adapters(versions: Sequence[ModelVersion], adapter_versions: int, in_use: Collection[str]) -> set[Path]:

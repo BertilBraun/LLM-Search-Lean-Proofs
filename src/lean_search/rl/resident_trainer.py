@@ -4,10 +4,12 @@ Each rank builds the policy and value models once (`training/resident.py`), park
 then follows the loop's commands (`trainer_channel.py`). A `prepare` at the start of a phase's sampling builds the
 models the phase needs and starts the main rank reading and labelling the phase's trees as they arrive, one thread on
 the background CPUs; a `train` at the pause finishes that, sends the sequences to the other ranks and runs the phase as
-`training_phase.run_training_phase` does, with the resident models: the policy, the value model when due, and the
-merges of the new adapters on the main rank, which go to host memory (`HostDirectories.handoff`) for the servers to
-load. Between commands the ranks only poll, so no collective waits; between commands they exit once the loop's process
-is gone (a command in progress finishes first).
+`training_phase.run_training_phase` does, with the resident models: the policy's GRPO update, then an expert-iteration
+round when the loop sends one (`expert_iteration_training.py`, on the same resident policy, continuing the GRPO
+update's adapter when both run), the value model when due, and the merges of the new adapters on the main rank, which
+go to host memory (`HostDirectories.handoff`) for the servers to load: one policy merge per phase, the last update's.
+Between commands the ranks only poll, so no collective waits; between commands they exit once the loop's process is
+gone (a command in progress finishes first).
 """
 
 import abc
@@ -26,6 +28,13 @@ import transformers
 
 from lean_search.policy.adapters import MergeSeconds, PremergedWeights, handoff_directory
 from lean_search.reasoning.dataset import ReasoningExample
+from lean_search.rl.expert_iteration_data import ExpertIterationConfig, parse_expert_iteration_config
+from lean_search.rl.expert_iteration_training import (
+    ExpertIterationOutcome,
+    adapter_change,
+    round_training_data,
+    train_expert_iteration,
+)
 from lean_search.rl.loop_services import running_start_ticks
 from lean_search.rl.node_pinning import background_set, current_pinning
 from lean_search.rl.policy_data import PolicyDataParts, PolicyTokenizer, combined_policy_data
@@ -33,6 +42,8 @@ from lean_search.rl.trainer_channel import TrainerChannel, TrainerCommand, Train
 from lean_search.rl.training_phase import (
     PhaseInputs,
     PhaseOutcome,
+    PolicyOutcome,
+    StageMemory,
     TrainingPhaseConfig,
     TrainingStage,
     ValueOutcome,
@@ -50,6 +61,7 @@ from lean_search.search.records import from_json_object, to_json
 from lean_search.training.data_parallel import Ranks, broadcast_from_main, largest
 from lean_search.training.math_data import MathSolution
 from lean_search.training.resident import HostDirectories, ResidentModel, build_resident_model
+from lean_search.training.sft import LoraSettings, OptimizationConfig
 from lean_search.value.benchmark import LabelledTree
 from lean_search.value.graph_trainer import value_initial_adapter
 from lean_search.value.labels import ValueExample
@@ -85,6 +97,22 @@ class ResidentInputs:
     math_replay: Sequence[MathSolution] = ()
     # Only the main rank's, which builds the value data.
     value_replay: Sequence[ValueExample] = ()
+    # $LEAN_SEARCH_DATA, under which an expert-iteration round's replay files lie; None without rounds.
+    data_root: Path | None = None
+
+
+@dataclass(frozen=True)
+class GrpoUpdate:
+    """A phase's GRPO update in the persistent job; empty in a phase without a policy section."""
+
+    policy: PolicyOutcome | None = None
+    parts: tuple[PolicyDataParts, ...] = ()
+    preparation_seconds: float = 0.0
+    memory: tuple[StageMemory, ...] = ()
+
+    @property
+    def adapter(self) -> str | None:
+        return None if self.policy is None else self.policy.adapter
 
 
 @dataclass(frozen=True)
@@ -95,6 +123,33 @@ class Merge:
 
 def parse_phase_config(text: str) -> TrainingPhaseConfig:
     return from_json_object(TrainingPhaseConfig, tomllib.loads(text))
+
+
+@dataclass(frozen=True)
+class PolicySettings:
+    """What the resident policy is built from: the GRPO section, else an expert-iteration round's fine-tuning."""
+
+    model: str
+    optimization: OptimizationConfig
+    lora: LoraSettings
+    initial_adapter: str
+
+
+def policy_settings(config: TrainingPhaseConfig, round_config: ExpertIterationConfig | None) -> PolicySettings | None:
+    if config.policy is not None:
+        policy = config.policy
+        return PolicySettings(policy.model, policy.optimization, policy.lora, policy.initial_adapter)
+    if round_config is not None:
+        sft = round_config.sft
+        return PolicySettings(sft.model, sft.optimization, sft.lora, sft.initial_adapter)
+    return None
+
+
+def read_round_config(command: TrainerCommand) -> ExpertIterationConfig | None:
+    """The phase's expert-iteration round the loop wrote, if it sent one."""
+    if not command.expert_iteration:
+        return None
+    return parse_expert_iteration_config(Path(command.expert_iteration).read_text(encoding="utf-8"))
 
 
 def run_in_background() -> None:
@@ -246,11 +301,12 @@ class TrainerRank:
                 if preparation is not None:
                     preparation.cancel()
 
-    def ensure_models(self, config: TrainingPhaseConfig) -> None:
-        """Builds the resident models the phase needs that this job has not built yet (every rank together)."""
+    def ensure_models(self, config: TrainingPhaseConfig, round_config: ExpertIterationConfig | None = None) -> None:
+        """Builds the resident models the phase needs that this job has not built yet (every rank together); an
+        expert-iteration round trains the resident policy, built from its own section without a GRPO one."""
         parked = self.host.parked
-        if config.policy is not None and ModelKind.POLICY not in self.models:
-            policy = config.policy
+        policy = policy_settings(config, round_config)
+        if policy is not None and ModelKind.POLICY not in self.models:
             started = time.perf_counter()
             self.tokenizers[ModelKind.POLICY] = self.load_tokenizer(policy.model)
             self.models[ModelKind.POLICY] = build_resident_model(
@@ -302,7 +358,8 @@ class TrainerRank:
         config = parse_phase_config(config_text)
         self.ensure_models(config)
         if self.ranks.is_main:
-            self.start_preparation(Path(command.trees), config_text)
+            if config.policy is not None:
+                self.start_preparation(Path(command.trees), config_text)
             if config.value is not None:
                 self.start_window_preparation(command, config_text)
             self.log(f"Preparing phase {command.phase} from {command.trees}")
@@ -320,15 +377,90 @@ class TrainerRank:
         return largest(merge_seconds, self.device, self.ranks), largest(handoff_seconds, self.device, self.ranks)
 
     def train(self, command: TrainerCommand) -> None:
+        """The phase's GRPO update (the policy section), then its expert-iteration round (the round the loop sent),
+        then the value model (the value section), then one merge of each model that trained: the policy's of the last
+        update, so that the phase publishes one version holding both of its updates."""
         started = time.perf_counter()
         graphs_before = compiled_graphs()
         config_text = Path(command.config).read_text(encoding="utf-8")
         config = parse_phase_config(config_text)
-        assert config.policy is not None
-        self.ensure_models(config)
+        round_config = read_round_config(command)
+        self.ensure_models(config, round_config)
         built = time.perf_counter()
         for model in self.models.values():
             model.reset_seconds()
+        output = Path(command.output_directory)
+        output.mkdir(parents=True, exist_ok=True)
+        inputs = PhaseInputs(
+            records=(),
+            lean_replay=self.inputs.lean_replay,
+            math_replay=self.inputs.math_replay,
+            value_replay=self.inputs.value_replay,
+        )
+        grpo = (
+            self.train_grpo(command, config, config_text, inputs, output, built)
+            if config.policy is not None
+            else GrpoUpdate()
+        )
+        memory = list(grpo.memory)
+        preparation_seconds = grpo.preparation_seconds
+        expert_iteration = None
+        if round_config is not None:
+            start_adapter = round_config.sft.initial_adapter if grpo.policy is None else grpo.policy.adapter
+            expert_iteration = self.train_expert_iteration(round_config, start_adapter, output / "expert_iteration")
+            preparation_seconds += expert_iteration.data_seconds
+            memory.append(released_memory(TrainingStage.EXPERT_ITERATION, self.device, self.ranks))
+        merges = []
+        policy = policy_settings(config, round_config)
+        trained_adapter = grpo.adapter if expert_iteration is None else expert_iteration.adapter
+        if trained_adapter is not None:
+            assert policy is not None
+            merges.append(Merge(ModelKind.POLICY, PremergedWeights(policy.model, trained_adapter)))
+        value = None
+        if config.value is not None:
+            value, window_seconds = self.train_value(command, config_text, inputs, output / "value")
+            preparation_seconds += window_seconds
+            merges.append(Merge(ModelKind.VALUE, PremergedWeights(config.value.model, value.adapter)))
+            memory.append(released_memory(TrainingStage.VALUE, self.device, self.ranks))
+        merge_seconds, handoff_seconds = self.merge(merges)
+        memory.append(released_memory(TrainingStage.MERGE, self.device, self.ranks))
+        timings = trainer_timings(
+            preparation_seconds, grpo.policy, value, MergeSeconds(), time.perf_counter() - started
+        )
+        unpark_seconds = sum(model.unpark_seconds for model in self.models.values())
+        park_seconds = sum(model.park_seconds for model in self.models.values())
+        round_seconds = 0.0 if expert_iteration is None else expert_iteration.result.training_seconds
+        timings = dataclasses.replace(
+            timings,
+            policy_training_seconds=timings.policy_training_seconds + round_seconds,
+            merge_seconds=merge_seconds,
+            build_seconds=built - started,
+            unpark_seconds=largest(unpark_seconds, self.device, self.ranks),
+            park_seconds=largest(park_seconds, self.device, self.ranks),
+            handoff_seconds=handoff_seconds,
+            compiled_graphs=compiled_graphs() - graphs_before,
+        )
+        groups = sum(len(part.groups) for part in grpo.parts)
+        outcome = PhaseOutcome(len(grpo.parts), groups, grpo.policy, value, timings, tuple(memory), expert_iteration)
+        if self.ranks.is_main:
+            (output / "phase.json").write_text(to_json(outcome), encoding="utf-8")
+            self.channel.answer(TrainerReply(command.sequence, command.phase))
+            self.log(
+                f"Phase {command.phase}: {outcome.trees} trees, {outcome.groups} groups, "
+                f"{timings.total_seconds:.0f} s, {timings.compiled_graphs} graphs compiled"
+            )
+
+    def train_grpo(
+        self,
+        command: TrainerCommand,
+        config: TrainingPhaseConfig,
+        config_text: str,
+        inputs: PhaseInputs,
+        output: Path,
+        built: float,
+    ) -> GrpoUpdate:
+        """The policy's GRPO update on the phase's sequences, which the main rank prepared while the phase sampled."""
+        assert config.policy is not None
         parts = None
         if self.ranks.is_main:
             parts = self.start_preparation(Path(command.trees), config_text).finish()
@@ -337,15 +469,7 @@ class TrainerRank:
         assert parts is not None
         data = combined_policy_data(parts)
         preparation_seconds = time.perf_counter() - built
-        output = Path(command.output_directory)
-        output.mkdir(parents=True, exist_ok=True)
         memory = [released_memory(TrainingStage.LABELLING, self.device, self.ranks)]
-        inputs = PhaseInputs(
-            records=(),
-            lean_replay=self.inputs.lean_replay,
-            math_replay=self.inputs.math_replay,
-            value_replay=self.inputs.value_replay,
-        )
         policy_model = self.models[ModelKind.POLICY]
         directory = output / "policy"
         policy = train_policy_data(
@@ -363,36 +487,38 @@ class TrainerRank:
         )
         policy_model.park()
         memory.append(released_memory(TrainingStage.POLICY, self.device, self.ranks))
-        merges = [Merge(ModelKind.POLICY, PremergedWeights(config.policy.model, policy.adapter))]
-        value = None
-        if config.value is not None:
-            value, window_seconds = self.train_value(command, config_text, inputs, output / "value")
-            preparation_seconds += window_seconds
-            merges.append(Merge(ModelKind.VALUE, PremergedWeights(config.value.model, value.adapter)))
-            memory.append(released_memory(TrainingStage.VALUE, self.device, self.ranks))
-        merge_seconds, handoff_seconds = self.merge(merges)
-        memory.append(released_memory(TrainingStage.MERGE, self.device, self.ranks))
-        timings = trainer_timings(preparation_seconds, policy, value, MergeSeconds(), time.perf_counter() - started)
-        unpark_seconds = sum(model.unpark_seconds for model in self.models.values())
-        park_seconds = sum(model.park_seconds for model in self.models.values())
-        timings = dataclasses.replace(
-            timings,
-            merge_seconds=merge_seconds,
-            build_seconds=built - started,
-            unpark_seconds=largest(unpark_seconds, self.device, self.ranks),
-            park_seconds=largest(park_seconds, self.device, self.ranks),
-            handoff_seconds=handoff_seconds,
-            compiled_graphs=compiled_graphs() - graphs_before,
-        )
-        groups = sum(len(part.groups) for part in parts)
-        outcome = PhaseOutcome(len(parts), groups, policy, value, timings, tuple(memory))
+        return GrpoUpdate(policy, tuple(parts), preparation_seconds, tuple(memory))
+
+    def train_expert_iteration(
+        self, round_config: ExpertIterationConfig, start_adapter: str, directory: Path
+    ) -> ExpertIterationOutcome:
+        """The round on the resident policy, continuing `start_adapter` (the published adapter, or the phase's GRPO
+        update's); the main rank measures the whole phase's change from the published adapter."""
+        assert self.inputs.data_root is not None
+        started = time.perf_counter()
+        tokenizer = self.tokenizers[ModelKind.POLICY]
+        data = round_training_data(tokenizer, round_config, self.inputs.data_root)
+        data_seconds = time.perf_counter() - started
+        steps_path = directory / "steps.jsonl"
         if self.ranks.is_main:
-            (output / "phase.json").write_text(to_json(outcome), encoding="utf-8")
-            self.channel.answer(TrainerReply(command.sequence, command.phase))
-            self.log(
-                f"Phase {command.phase}: {outcome.trees} trees, {outcome.groups} groups, "
-                f"{timings.total_seconds:.0f} s, {timings.compiled_graphs} graphs compiled"
-            )
+            steps_path.unlink(missing_ok=True)
+        adapter = directory / "adapter"
+        policy_model = self.models[ModelKind.POLICY]
+        result = train_expert_iteration(
+            dataclasses.replace(round_config.sft, initial_adapter=start_adapter),
+            data,
+            tokenizer.pad_token_id,
+            self.device,
+            adapter,
+            lambda record: append_json_line(steps_path, record),
+            self.ranks,
+            policy_model.trainable,
+        )
+        policy_model.park()
+        published = Path(round_config.sft.initial_adapter)
+        phase_change = adapter_change(published, adapter) if self.ranks.is_main else None
+        self.log(f"Expert-iteration round: {result.steps} steps on {result.examples} examples and the replay")
+        return ExpertIterationOutcome(str(adapter), result, phase_change, data_seconds)
 
     def train_value(
         self, command: TrainerCommand, config_text: str, inputs: PhaseInputs, directory: Path
