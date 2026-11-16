@@ -2,7 +2,7 @@
 
 Kept current by the orchestrator. Details live in the linked files.
 
-**Last update:** 2026-11-16, 18:45 UTC.
+**Last update:** 2026-11-16, 21:45 UTC.
 
 ## Where we are
 
@@ -20,7 +20,7 @@ repository's root; the node's setup and operation are in `results/followup_node_
 | Step 1, anchor runs 1 and 2 (v0 with value v0, 2,000 statements) | done: 713 and 716 of 2,000 | `node_backup/2026-11-15/live/runs/step1_chain/` |
 | Step 1: token budget, calibration run | done: T = 26,804 generated tokens per statement; calibration run 65 of 200; constants -56.4 (completion), -5.35 (block sum), -0.142 (block mean) | |
 | Step 1: three value-free pilots (200 statements each) | done: 71, 68 and 65 of 200, against 70 and 75 with the value model | |
-| Step 1: reasoning at equal tokens (no-reasoning pilot, visible run, no-reasoning run) | first pilot rejected at exactly 1% wall-clock stops; wall cap doubled to 14,400 s; the repeated pilot started 2026-11-16 about 17:55 UTC, the two full runs follow by themselves, in the new start order | |
+| Step 1: reasoning at equal tokens (no-reasoning pilot, visible run, no-reasoning run) | first pilot rejected at exactly 1% wall-clock stops; wall cap doubled to 14,400 s; the repeated pilot **accepted** (2026-11-16 20:2x UTC): 70 of 200, 0 wall-clock stops, 2.47 h. 9834972 deployed by the chain; run 3 (visible, new start order) started about 20:25 UTC, run 4 follows | |
 | Step 1: the full value-free run (whole-completion order) | done: 642 of 2,000 against 713 and 716 with the value model | |
 | Step 1: v0's policy with the old run's final value model | done: 875 of 2,000, +8.0 points over value v0; the restart-based serving path worked on real servers | |
 | Step 1: the full value-free run in the block-sum order | done: 633 of 2,000 (the whole-completion order: 642) | |
@@ -29,6 +29,7 @@ repository's root; the node's setup and operation are in `results/followup_node_
 | Step 1, last: old final value model with v0's policy; the full value-free run | after a check-in on the pilots | |
 | Before any arm: time server stops and starts, one short phase on the restart-based serving path | during step 1 | |
 | Learning rates for the arms (shared v0 sampling, one round per signal, held-out states) | after the reasoning comparison and the decision on the arms' mode | |
+| Code: step 2's node automation (`deployment/study_chain.sh`: shared sampling, 4 slices, 10 rounds, held-out for v0 twice and each variant, ranking, report, HOLD with servers stopped); sampling mode as an explicit input (`followup/modes/visible.toml`, `no_reasoning.toml`), arms refused if their sampling differs from the shared run's | merged (reviews AU and AV, re-reviewed), master d500f85; tested against stand-ins only, never run on the node; about 8-11 h with visible reasoning | `results/reviews/2026-11-16_review_au_*`, `_av_*`; install in `results/followup_node_operations.md` section 3 |
 | Arms A, B, C, D with one probe run each | after the learning rates; see the plan below | |
 | Code: expert iteration inside the loop (for arms C and D) | merged (reviews AS and AT, re-reviewed), master 467d97c; 80 crash-and-restart cases simulated; needs a one-phase smoke run on the node before arm C | `results/reviews/2026-11-16_review_as_*`, `_at_*` |
 | Code: probe runs start the longest expected searches first (by the mean search time of v0's five runs) | merged (reviews AQ and AR, re-reviewed), master 9834972; used for the two full reasoning runs; a check run against the anchors follows them | `results/reviews/2026-11-16_review_aq_*`, `_ar_*` |

@@ -4,17 +4,21 @@ Written 2026-11-16 by the orchestrating agent for the agent that takes over on a
 repository, same rented node; no conversation history and no running subagents carry over. Everything needed is in this
 file and the files it points to. Keep this file current while you work, or replace it with your own.
 
-**State at a glance (2026-11-16, about 18:45 UTC)**
+**State at a glance (2026-11-16, about 21:45 UTC; updated by the second orchestrator)**
 
 - Step 1 of the study (evaluations) is done except for the reasoning comparison: six full runs have answered its
   value-model questions and measured the old run's gain on a clean probe (+26 points, policy and value gains additive).
-- The node is running by itself: the no-reasoning pilot (started 17:55 UTC), then the two full reasoning runs, then a
-  check run of the new start order, then it holds for the owner's decision. Roughly 10-14 hours of work are queued.
-- No code is in flight. Both features of 2026-11-16 are reviewed, merged and pushed (master `467d97c`): the start order
-  by measured search time, and expert iteration inside the loop (arms C and D). No subagent's work is unfinished.
-- Next decision is the owner's, after the reasoning comparison: do the arms sample with or without reasoning. Then
-  learning rates are chosen and four closed-loop arms run. The node automation for those steps is NOT written yet
-  (section 9).
+- The repeated no-reasoning pilot was ACCEPTED (70 of 200, 0 wall-clock stops, 2.47 h). The chain deployed `9834972`
+  and started run 3 (visible, longest expected search first) at about 20:25 UTC; run 4, the reports, the order check
+  run and HOLD follow by themselves.
+- Step 2's node automation is written, reviewed (AU, AV, re-reviewed), merged and pushed (master `d500f85`):
+  `deployment/study_chain.sh` runs the shared sampling, slices, the 10 rounds, held-out runs and the ranking, then
+  HOLDs with the servers stopped. Never run on the node yet; install it at step 1's HOLD after deploying master
+  (`results/followup_node_operations.md` section 3, "The study driver: step 2"). Only the arms' later automation is
+  not written. No code is in flight.
+- Next decision is the owner's, after the reasoning comparison: the arms' mode (copy `followup/modes/visible.toml` or
+  `no_reasoning.toml` to `/workspace/runs/study_chain/mode.toml`), plus the open questions of review AV: the tie rule
+  (lower rate on a tie likely picks 2e-5 for GRPO), D's window if C picks window 1, probe runs under no reasoning.
 
 ## 1. First hour: what to do
 
@@ -51,7 +55,7 @@ file and the files it points to. Keep this file current while you work, or repla
 
 - **Subagents:** implementation, analysis and review run in subagents on Opus 5.5 at high effort. Two independent
   reviews after every implementation wave, then fixes, then a re-review by the same reviewers, then merge. Reviews are
-  files in `results/reviews/` named `<date>_review_<letters>_<topic>.md`; the last used letters are `at` (next: `au`).
+  files in `results/reviews/` named `<date>_review_<letters>_<topic>.md`; the last used letters are `av` (next: `aw`).
 - **Usage:** running 5-8 Opus subagents at once exhausted the 5-hour usage limit on 2026-11-14 and left the node idle
   for hours. Keep few agents running, have node agents report on events rather than on a timer, and make node work
   self-sustaining so it does not depend on an agent being awake.
@@ -299,12 +303,15 @@ reviews AS and AT with re-reviews in `results/reviews/2026-11-16_review_as_*` an
    window 1 (slice 4) and window 4 (slices 1-4) (`experiments/grpo_expert_iteration.py` with `[data]
    tree_directories`); held-out states for v0 and each variant (`experiments/held_out_evaluate.py`), then
    `experiments/rank_learning_rates.py` without gate runs picks each signal's rate. No probe runs at this step. This is
-   the first real run of the token-budget loop: watch its first minutes. The node's second driver `study_chain.sh`
-   covers only the shared sampling (its step S1) and has never run; the slicing, the training rounds, the held-out
-   evaluations and the ranking (S2-S6) are NOT scripted yet. Writing and dry-checking that automation, in a subagent
-   with two reviews, is the most useful thing to do while the reasoning runs occupy the node; it must not start
-   anything on the node beside a running evaluation. The rates and C's window then go into the arms' PLACEHOLDER
-   values (as node-local edits, recorded like the others, or committed on the PC and deployed).
+   the first real run of the token-budget loop: watch its first minutes. All of it is automated in master `d500f85`
+   (`deployment/study_chain.sh`, `study_chain.conf`, `experiments/learning_rate_step.py`; reviews AU and AV): deploy
+   master at step 1's HOLD, put the chosen mode file at `/workspace/runs/study_chain/mode.toml`, install the conf
+   (copy, never run from the checkout). It ends in HOLD with `learning_rates_report.md` and the servers stopped. Smoke
+   points for its first run are at the end of review AU (e.g. idle GPUs reading under 100 MiB in
+   `nvidia-smi --query-gpu=index,memory.used`). The node's old `/workspace/step1_chain_tools/study_chain.sh` (S1
+   only) is superseded. Extend the PC pull to `runs/study_chain`, `runs/followup_*` and `runs/held_out_evaluations`
+   before it starts. The rates and C's window then go into the arms' PLACEHOLDER values (as node-local edits,
+   recorded like the others, or committed on the PC and deployed).
 4. **Arms**, one after another, each from v0 and value v0, 16 phases of 12M generated tokens, value model trained
    every 2 phases: A (per-tactic GRPO), B (pure proof success), C (expert iteration), D (GRPO plus a round every 4
    phases). After each arm ONE probe run of its final checkpoint with its own value model. An arm that collapses is
