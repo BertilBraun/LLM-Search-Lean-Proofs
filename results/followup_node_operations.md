@@ -1,6 +1,6 @@
 # Follow-up study: operating the node of 2026-11-15
 
-Written 2026-11-16 at about 17:30 UTC by the agent that set this node up and ran step 1 on it. It is meant to be enough on
+Written 2026-11-16 at about 17:30 UTC and updated about 18:05 UTC by the agent that set this node up and ran step 1 on it. It is meant to be enough on
 its own: a capable agent who has never seen the node should be able to take over from it. Times are UTC. "The PC" is
 the owner's Windows machine (repository `C:\Projects\Lean-Proofs`; Git Bash; WSL with the local environment at
 `~/lean-proofs`).
@@ -41,7 +41,8 @@ ssh -i ~/.ssh/vast-ssh -p 21232 root@50.173.30.254
 
 - Repository: `/workspace/LLM-Search-Lean-Proofs`, branch master.
   - At the time of writing: commit `3309652`, plus the node-local edits of section 4.
-  - The chain deploys master's head (expected `0191a12`, which is ab78ace plus docs) right after run 7 (section 3).
+  - Correction (18:00 on 2026-11-16): since 17:49 the checkout is at `9a594b1` (ab78ace plus docs) plus the node-local
+    edits. After the pilot the chain deploys `9834972` (the start order) by itself (section 3).
   - Check with `git -C /workspace/LLM-Search-Lean-Proofs log --oneline -1`.
 - Python: `.venv` in the checkout (Python 3.12, from `uv.lock`, 8.2 GB). `source deployment/environment.sh` puts it and
   elan on `PATH`, and also sources the node file (below).
@@ -136,13 +137,18 @@ Configs are in `/etc/supervisor/conf.d/`, with copies in `/workspace/step1_chain
 
 ### Other processes of ours
 
-- `relay_after_j.sh` (pid in `/workspace/runs/step1_chain/relay_after_j.pid`) is a one-shot relay.
-  - It waits for the planned STOPPED after run 7 (text "step k failed 3 times").
-  - When that appears it moves the marker to `STOPPED.deploy_ab78ace_boundary`, deletes `attempts_k` and runs
-    `supervisorctl start step1_chain`.
+- `relay_after_e1.sh` (pid in `/workspace/runs/step1_chain/relay_after_e1.pid`, started 17:55 on 2026-11-16) is a
+  one-shot relay. It waits for the stop of the driver that runs the pilot (e1):
+  - **Pilot accepted:** STOPPED "step e2 failed 3 times", a planned stop, because `attempts_e2` was preset to 3. The
+    relay moves it to `STOPPED.after_pilot_accepted`.
+  - **Pilot rejected:** STOPPED "step e1: … rejected". The relay moves it to `STOPPED.e1_pilot_rejected_cap14400` and
+    writes the marker `e1_rejected`.
+  - In both cases it then deletes `attempts_e2` and runs `supervisorctl start step1_chain`.
   - Any other STOPPED is left alone.
-  - It is not supervisord-hosted. After a container restart it is gone, but then supervisord restarts `step1_chain` with
-    the current file anyway.
+  - It is not supervisord-hosted. After a container restart it is gone, but supervisord then restarts `step1_chain` with
+    the current file. Only if the pilot had already been rejected before the restart would you need to do the relay's
+    rejected branch by hand.
+- `relay_after_j.sh` (the earlier relay) did its job at 17:48 and has exited.
 - The 8 vLLM servers: started by `serve_model.sh` (`setsid`), each in its own process group, with pid files in
   `/workspace/runs/servers/`.
 
@@ -158,74 +164,92 @@ Configs are in `/etc/supervisor/conf.d/`, with copies in `/workspace/step1_chain
 - **bash reads a running script lazily**, so never edit `step1_chain.sh` in place while it runs. Write a new file and
   `mv` it over the old one: the running bash keeps its old inode (`ls -l /proc/<pid>/fd/255` shows "(deleted)"), and the
   next start uses the new file. All driver changes so far were made this way.
+- To make a running (old-file) driver stop at a step boundary, preset that step's `attempts_<step>` to 3: its next
+  `attempt` writes STOPPED "step <x> failed 3 times". A relay or the operator then moves the STOPPED aside, deletes the
+  `attempts` file and starts the chain again.
 - After a container restart, supervisord starts the driver, which continues at the first step not done. The launcher
   resumes an interrupted run (sessions are recorded per run), and `grpo_loop.sh servers` restarts servers that do not
   answer.
 
-| Step | What | Marker / state |
+| Step | What | State (2026-11-16 18:00) |
 |---|---|---|
 | a | anchors (runs 1, 2) | done |
 | b | T = 26,804 into the token-capped configs | done |
 | c | calibration set, calibration run, constants | done (`done_c_select`, `done_c_run`, `done_c_constants`) |
-| (hold after c) | | `released_after_c` (released) |
 | d | three value-free pilots | done |
 | f | run 6, completion | done |
 | g | run 5, final value | done |
-| h | value servers back to v0, run 6 with block_sum | done (`done_h_value_v0`, `done_h`) |
+| h | value servers back to v0, run 6 with block_sum | done |
 | i | run 8 (v35, value v0) | done |
-| j | run 7 (v35, final value) | **running** (1,998 of 2,000 at 17:10) |
-| deploy_ab78ace | stash the node-local edits, fetch, `git merge --ff-only origin/master` (whatever its head is then), `git stash pop`; writes `edits/before_ab78ace.diff`, `after_ab78ace.diff`, `*.status`, `ab78ace_edit_difference.txt`; stops unless the edited lines are identical and both token-capped configs still read `max_generated_tokens = 26804` | next |
-| k | `stop_model.sh` on all 8, then `LOOP_CONFIG=experiments/configs/grpo/followup/base.toml deployment/grpo_loop.sh servers` (all 8 on v0's weights) | next |
-| (hold before e) | the driver writes `HOLD` and exits if the file `hold_before_e` exists | currently released (`hold_before_e.released`, `.released_2`) |
-| e1 | the no-reasoning pilot alone, list `runs_reasoning_e1_pilot.toml` (`step1_run4_pilot_no_reasoning_T_cap14400`, 200 statements, 14,400 s wall cap) | next |
-| boundary | waits up to 15 min for `ORDER_READY`; without it, runs 3 and 4 go in file order | `done_e_boundary` |
-| e2 | runs 3 and 4 from `runs_reasoning_e2.toml` (file order, as written now) | then `done_all`, servers stay up |
+| j | run 7 (v35, final value) | done (17:48, 1,236 of 2,000) |
+| deploy_ab78ace | stash, fast-forward to origin/master's head, pop, check | done: deployed **9a594b1** (ab78ace plus docs) at 17:49 |
+| k | all 8 servers stopped and started on v0's weights (`grpo_loop.sh servers` with `followup/base.toml`) | done 17:52 |
+| e1 | the no-reasoning pilot alone, node-local list `runs_reasoning_e1_pilot.toml` (`step1_run4_pilot_no_reasoning_T_cap14400`, first 200 statements, `token_capped_evaluation.toml`, 14,400 s wall cap, file order) | **running since 17:55:07** on the old driver file (pid 238295) |
+| boundary | (old file only) passes at once because `ORDER_READY` exists | |
+| deploy_9834972 | stash, `git merge --ff-only 9834972` (the start order by expected search time), pop; diffs `edits/before_9834972.diff`, `after_9834972.diff`, `9834972_edit_difference.txt` (must be empty); T checked | next (new file) |
+| e2 | `probe_runs.py check --concurrency 112` on node-local `runs_reasoning_e2_ordered.toml` (output `e2_check.txt`), then runs 3 `step1_run3_visible_T` and 4 `step1_run4_no_reasoning_T`, both on `token_capped_evaluation_ordered.toml` (`submission_order = "longest_expected_search_first"`). A background logger writes each run's first-session `start_order` into chain.log ("start order of <run>: …"); `run.json` (written at a run's end) holds `start_orders`. Skipped if `e1_rejected` exists | next |
+| e2 reports | `run3_load_against_file_order.txt`, `run3_against_run4.txt` (`--across-search-modes`), `anchors_against_run3.txt` (`--descriptive-across-settings`), `reasoning_readings.txt` (bulk/tail readings of the pilot, run 3 and run 4 from `/workspace/step1_chain_tools/reasoning_readings.py`) | `done_e2_reports` |
+| f_order_check | `runs_order_check.toml`: `step1_run9_v0_value_v0_ordered` (v0, value v0, 2,000, new order, not an anchor, 7,200 s cap) | |
+| f reports | `run9_against_step1_run1_v0_value_v0.txt`, `run9_against_step1_run2_v0_value_v0.txt`, `run9_load_against_anchors.txt` | `done_f_reports` |
+| HOLD | writes `HOLD` "waiting for the owner's decision on the arms' mode (…)"; servers stay up | |
 
 **What happens by itself from now on:**
-1. The old driver process (pid 198106, the file before the deploy step existed) finishes run 7. `attempts_k` was preset
-   to 3, so its `attempt k` writes `STOPPED` "step k failed 3 times" and it exits 0.
-2. The relay moves that marker to `STOPPED.deploy_ab78ace_boundary`, deletes `attempts_k` and starts `step1_chain` again,
-   now with the current file.
-3. The current driver runs `deploy_ab78ace`, then k, then e1.
-4. At the boundary it waits up to 15 minutes, then runs e2, then writes `done_all`.
+1. The pilot ends.
+   - Accepted: the old driver passes the boundary and stops on purpose at e2.
+   - Rejected: it stops with the rejection.
+2. The relay moves the STOPPED aside (writing `e1_rejected` if rejected), deletes `attempts_e2` and restarts the chain.
+3. The new driver deploys 9834972, then runs e2 (unless `e1_rejected`), writes the e2 reports, runs f and its reports,
+   then writes HOLD.
+4. Rough times: the pilot 1-3 h; run 3 3-4 h; run 4 10-25 h; f about 3 h.
 
-**What the operator does at the boundary:**
-- If the new start-order code (probe statements with the longest earlier searches first) is reviewed and on master, the
-  coordinator sends a commit and a run-list change.
-- During the e1 pilot or the boundary wait:
-  1. Deploy it: stash, `git merge --ff-only <commit>`, pop, and record the diffs as section 4 says.
-  2. Rewrite `experiments/configs/grpo/followup/step1/runs_reasoning_e2.toml` as instructed.
-  3. `echo "<commit and what changed>" > /workspace/runs/step1_chain/ORDER_READY`.
-- If nothing comes within 15 minutes of the pilot's acceptance, the driver goes on in file order. Tell the coordinator.
+Expect the start of an ordered run to be Lean-bound. The hardest statements start first, so Lean demand exceeds the 96
+Lean CPUs in the first ~30 minutes and the GPUs are partly idle in the first hour. That is not a stall. Watch run 3's
+wall-clock stops early (`run.json` is written only at the end; count `wall_clock_budget` in `results.jsonl`).
 
-To hold the chain at the next step boundary without disturbing a run, touch a marker the running file checks. Only
-`hold_before_e` is checked, and only before e1. To stop safely between runs, wait for a run's ledger line, then
-`supervisorctl stop step1_chain`. To resume after a STOPPED: read it, fix the cause, move it aside (keep a renamed
-copy), then `supervisorctl start step1_chain`.
+**What a new agent must check on arrival:**
+- `supervisorctl status`: `step1_chain`, `power_limits` and `reasoning_sampler` should be RUNNING, unless HOLD was
+  reached.
+- `tail -30 /workspace/runs/step1_chain/chain.log`, and whether `STOPPED` or `HOLD` exists in
+  `/workspace/runs/step1_chain/`.
+- `cat /workspace/runs/probe_evaluations/ledger.tsv`.
+- The relay, if the pilot has not ended: `ps -p $(cat /workspace/runs/step1_chain/relay_after_e1.pid)`.
+- The PC pull: `live/last_pull.txt` under 10 minutes old (section 7).
+- If the chain sits on a STOPPED that no relay handles, read its text, fix the cause, move it aside (renamed, not
+  deleted) and `supervisorctl start step1_chain`.
+
+To stop safely between runs, wait for a run's ledger line, then `supervisorctl stop step1_chain`.
 
 Markers in `/workspace/runs/step1_chain/` and what they mean:
 
 | Marker | Meaning |
 |---|---|
 | `done_<step>` | step finished |
-| `attempts_<step>` | tries so far; ≥ 3 makes the next try stop the chain |
+| `attempts_<step>` | tries so far; ≥ 3 makes the next try stop the chain (used on purpose to stop an old-file driver at a boundary) |
 | `attempts_e.before_cap14400` | the old e's counter, kept |
 | `STOPPED` | the chain is stopped; its text says why |
 | `STOPPED.deploy_boundary` | the planned stop before deploying 3309652 (2026-11-15) |
 | `STOPPED.step_e_pilot_rejected` | the first no-reasoning pilot, rejected at 1.00% wall stops with the 7,200 s cap |
-| `STOPPED.deploy_ab78ace_boundary` | will be written by the relay |
-| `HOLD` | the driver exits 0 at start |
+| `STOPPED.deploy_ab78ace_boundary` | the planned stop after run 7 (2026-11-16 17:48) |
+| `STOPPED.after_pilot_accepted` / `STOPPED.e1_pilot_rejected_cap14400` | written by `relay_after_e1.sh` |
+| `e1_rejected` | the second pilot was rejected: e2 skipped, f runs |
+| `HOLD` | the driver exits 0 at start; the final HOLD says "waiting for the owner's decision on the arms' mode" |
 | `HOLD.after_c`, `HOLD.after_h` | old holds, released |
-| `hold_before_e`, `hold_before_e.released*` | the hold switch before e; released |
+| `hold_before_e`, `hold_before_e.released*` | the hold switch before e1; released |
 | `released_after_c` | the hold after c happened once |
-| `ORDER_READY` | operator → driver: runs 3/4 use the new order |
-| `done_all` | the whole list ran |
+| `ORDER_READY` | written 17:55: the start order is reviewed (9834972); it only makes the old file's boundary pass at once |
+| `done_e_boundary` | the old file's boundary passed |
 
-Other files there: `chain.log`, `supervisor.log`, `edits/` (copies and diffs of every node-local edit), reports
-(`anchor1_report.txt`, `anchor2_report.txt`, `anchors_load.txt`, `anchors_pair.txt`, `run5_*`, `run6_*`, `run8_*`,
-`pilots_load.txt`, `token_budget.txt`, `automation_constants.txt`, `calibration_select.log`), readings
-(`checks_before_anchor.log`, `readings_run1_5min.log`, `run5_restart_readings_*.log`, `run8_restart_readings.log`,
-`run7_restart_readings.log`), `power_limits.txt` and `sampler_reasoning.tsv`.
+Other files there:
+- `chain.log`, `supervisor.log`, and `edits/` (copies and diffs of every node-local edit).
+- Reports:
+  - `anchor1_report.txt`, `anchor2_report.txt`, `anchors_load.txt`, `anchors_pair.txt`;
+  - `run5_*`, `run6_*`, `run7_*`, `run8_*`;
+  - `two_by_two.txt`, `pair_run8_run7.txt`, `pair_run5_run7.txt`;
+  - `pilots_load.txt`, `token_budget.txt`, `automation_constants.txt`, `calibration_select.log`;
+  - later the e2 and f reports named above.
+- Readings: `checks_before_anchor.log`, `readings_run1_5min.log`, `run5_restart_readings_*.log`,
+  `run8_restart_readings.log`, `run7_restart_readings.log`.
+- `power_limits.txt` and `sampler_reasoning.tsv`.
 
 ### The study driver (prepared, on hold)
 
@@ -263,7 +287,11 @@ Untracked run lists written on the node (same folder):
 | `runs_v35_value_v0.toml` | `step1_run8_v35_value_v0` |
 | `runs_v35_value_final.toml` | `step1_run7_v35_value_final` |
 | `runs_reasoning_e1_pilot.toml` | the pilot entry of master's `runs_reasoning.toml` |
-| `runs_reasoning_e2.toml` | runs 3 and 4 of it |
+| `runs_reasoning_e2.toml` | runs 3 and 4 of it in file order (superseded, unused) |
+| `runs_reasoning_e2_ordered.toml` | runs 3 and 4 of master 9834972's `runs_reasoning.toml`, both on `token_capped_evaluation_ordered.toml`: what step e2 runs |
+
+The edits are in place as of 9a594b1, and the driver re-applies them across the 9834972 deploy. Copies of every list are
+in `/workspace/runs/step1_chain/edits/`.
 
 The tools used for the edits are in `/workspace/step1_chain_tools/`: `fill_placeholder.py`, `fill_run_lists.sh` and
 `make_v35_lists.sh`.
@@ -369,7 +397,8 @@ Run directories are under `/workspace/runs/probe_evaluations/` unless noted. Eac
 | step1_run5_v0_value_final | v0 | final (v35's value) | visible | 2,000 | 875 (43.75%) | 0 | 2.82 | yes |
 | step1_run6_v0_no_value_block_sum | v0 | none | block_sum | 2,000 | 633 (31.65%) | 0 | 2.33 | yes |
 | step1_run8_v35_value_v0 | v35 | v0 | visible | 2,000 | 1,083 (54.15%) | 3 | 3.57 | yes |
-| step1_run7_v35_value_final | v35 | final | visible | 2,000 | running (1,236 solved at 1,998) | | | |
+| step1_run7_v35_value_final | v35 | final | visible | 2,000 | 1,236 (61.80%) | 1 | 3.31 | yes |
+| step1_run4_pilot_no_reasoning_T_cap14400 | v0 | v0 | no reasoning, T, 14,400 s cap | first 200 | running since 17:55 on 2026-11-16 | | | |
 
 Other places:
 
@@ -475,28 +504,51 @@ Merged weights are in `/workspace/checkpoints/probe_evaluations/weights/<digest>
 
 ## 9. The plan from here
 
-1. **Now:** run 7 finishes, then deploy master's head with the edits kept, then all 8 servers back on v0. All of this is
-   automatic (section 3).
-2. **e1:** the no-reasoning pilot at the 14,400 s cap (200 statements). If rejected, the chain stops and the coordinator
-   decides.
-3. **Boundary:** up to 15 minutes for `ORDER_READY` (the start-order feature: longest searches first). Without it, runs
-   3 and 4 go in file order.
-4. **e2:** run 3 (visible, 2,000 statements at T = 26,804), then run 4 (no reasoning, 2,000 statements). Run 4 may take
-   10-25 h. Then `done_all`, with the servers up.
-5. **Owed to the coordinator:**
-   - run 7's report: the 2x2 of policy (v0, v35) by value (v0, final), per band, and the pairs run 8 against run 7 and
-     run 5 against run 7;
-   - for the pilot, run 3 and run 4: bulk (≥ 100 searches running) against tail readings from `sampler_reasoning.tsv`.
-     That covers GPU utilisation, tokens/s per GPU, policy requests/s, Lean cores in use of 96, REPL run-queue wait
-     share, throttling, expansions per hour, Lean against model-wait seconds per expansion, and the minutes with fewer
-     than 56 and fewer than 20 searches;
-   - what ended the searches; mean and maximum expansions; the longest search's wall time;
-   - `probe_compare.py pair --across-search-modes` run 3 against run 4, and `--descriptive-across-settings` run 3
-     against the pooled anchors.
-   - Count searches running from `chain.log`'s finish lines: running = min(112, statements not yet finished).
-6. **After that, on the owner's word only:** step 2 (shared sampling 48M tokens → 4 slices → learning-rate rounds for A
-   per-tactic, B pure proof success, C expert iteration window 1 and 4 → held-out ranking without gate runs), then arms
-   A and B (16 phases × 12M tokens, one probe run of each final checkpoint).
-   - Only S1 is prepared, in `study_chain.sh`, and it is not tested.
-   - The owner's rules for the arms: stop at the first valid-Lean collapse, capture and report; pull adapters of phases
-     8 and 16.
+State at about 18:00 UTC on 2026-11-16. Everything up to the final HOLD runs by itself (section 3).
+
+1. **Done:** run 7 (1,236 of 2,000), the deploy of 9a594b1, the 8 servers back on v0.
+2. **e1, running:** the no-reasoning pilot `step1_run4_pilot_no_reasoning_T_cap14400` at the 14,400 s cap, in file
+   order, on 9a594b1.
+3. **After the pilot:** the relay restarts the chain, which deploys 9834972 (the start order).
+   - Accepted pilot: e2 runs 3 and 4 in the new order (longest expected search first), then the e2 reports.
+   - Rejected pilot: e2 is skipped (`e1_rejected`).
+4. **f:** the order check run `step1_run9_v0_value_v0_ordered`, then its pairs against both anchors and its load.
+5. **HOLD:** "waiting for the owner's decision on the arms' mode". The servers stay up.
+6. **On the owner's word only**, the study:
+   - step 2: shared sampling of 48M tokens → 4 slices → learning-rate rounds for A per-tactic, B pure proof success and
+     C expert iteration (window 1 and 4) → held-out ranking without gate runs;
+   - then arms A and B: 16 phases × 12M tokens each, with one probe run of each final checkpoint;
+   - arms C and D need code that is not on the node.
+   - The owner may first decide whether the arms sample with or without reasoning (runs 3 and 4 answer that).
+   - Only S1 (shared sampling plus slices) is prepared, in `/workspace/step1_chain_tools/study_chain.sh` with
+     `study_chain.conf`. It is not installed and not tested. Install it only on the owner's word: copy the conf into
+     `/etc/supervisor/conf.d/`, then `supervisorctl reread && supervisorctl update`.
+   - The owner's rules for the arms: stop at the first valid-Lean collapse, capture and report; pull the adapters of
+     phases 8 and 16 to the PC; extend the PC pull to the arms' run directories (section 7).
+
+What the coordinator expects to be reported, from the files the chain writes in `/workspace/runs/step1_chain/`:
+- **The pilot:** accepted or rejected, its wall-stop share, and its bulk/tail readings in `reasoning_readings.txt`.
+  For the pilot alone run `/workspace/LLM-Search-Lean-Proofs/.venv/bin/python -I /workspace/step1_chain_tools/reasoning_readings.py step1_run4_pilot_no_reasoning_T_cap14400`.
+  It includes the longest search's wall time.
+- **Run 3:** started in the new order (the "start order of step1_run3_visible_T" line in chain.log); its early
+  wall-clock stops; accepted.
+- **Run 4:** accepted, with `run3_against_run4.txt`, `anchors_against_run3.txt`, `run3_load_against_file_order.txt`
+  and `reasoning_readings.txt`.
+- **f:** `run9_*` files.
+- Running searches are counted from `chain.log`'s finish lines: running = min(112, statements not yet finished). Bulk
+  means at least 100 running.
+
+## 10. Least certain
+
+1. **The automatic hand-offs between driver files.**
+   - The 17:48 hand-off after run 7 worked: relay, deploy of 9a594b1 with the edits re-applied unchanged, servers back
+     on v0.
+   - The second one is untested: `relay_after_e1.sh`, the deploy of 9834972, e2 with the start-order logger, f, HOLD.
+   - It fails safe: a STOPPED with its reason, and nothing runs. But it then needs someone to look.
+2. **The reasoning sampler's REPL run-queue wait share** (`repl_run_queue_wait_share` in `reasoning_readings.py`).
+   - It sums `/proc/<pid>/schedstat` deltas over REPLs alive in two consecutive samples.
+   - It has not been checked against a known load; read it as indicative.
+   - `reasoning_readings.py` also assumes `results.jsonl` lines are written in finish order, to split bulk from tail.
+3. **`study_chain.sh` (S1 only) has never run.** S2-S6 (learning-rate rounds, ranking, arms) are not written: use
+   DESIGN.md "Follow-up study: controlled arms" and the tools' docstrings (`arm_loop.sh`, `followup_arm.py`,
+   `slice_trees.py`, `grpo_phase.py`, `grpo_expert_iteration.py`, `rank_learning_rates.py`).
