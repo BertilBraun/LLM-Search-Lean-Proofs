@@ -2,7 +2,7 @@
 
 Kept current by the orchestrator. Details live in the linked files.
 
-**Last update:** 2026-11-16, 08:30 UTC.
+**Last update:** 2026-11-16, 11:15 UTC.
 
 ## Where we are
 
@@ -19,11 +19,11 @@ two independent reviews and a re-review (`results/reviews/2026-11-14_review_aa_*
 | Step 1, anchor runs 1 and 2 (v0 with value v0, 2,000 statements) | done: 713 and 716 of 2,000 | `node_backup/2026-11-15/live/runs/step1_chain/` |
 | Step 1: token budget, calibration run | done: T = 26,804 generated tokens per statement; calibration run 65 of 200; constants -56.4 (completion), -5.35 (block sum), -0.142 (block mean) | |
 | Step 1: three value-free pilots (200 statements each) | done: 71, 68 and 65 of 200, against 70 and 75 with the value model | |
-| Step 1: reasoning at equal tokens (no-reasoning pilot, visible run, no-reasoning run) | pilot rejected at exactly 1% wall-clock stops; waits for a raised wall cap | |
+| Step 1: reasoning at equal tokens (no-reasoning pilot, visible run, no-reasoning run) | first pilot rejected at exactly 1% wall-clock stops; wall cap doubled to 14,400 s (master ab78ace); runs after the 2x2 | |
 | Step 1: the full value-free run (whole-completion order) | done: 642 of 2,000 against 713 and 716 with the value model | |
 | Step 1: v0's policy with the old run's final value model | done: 875 of 2,000, +8.0 points over value v0; the restart-based serving path worked on real servers | |
-| Step 1: the full value-free run in the block-sum order | running since 08:22 UTC | |
-| Step 1, added: the old final policy (v35) with value v0, then with the final value model (the 2x2 of policy by value) | follows the block-sum run | |
+| Step 1: the full value-free run in the block-sum order | done: 633 of 2,000 (the whole-completion order: 642) | |
+| Step 1, added: the old final policy (v35) with value v0, then with the final value model (the 2x2 of policy by value) | v35 with value v0 running since 10:52 UTC; about 3 hours each | |
 | Code: GPU power limits and Lean load (tactic timeouts, REPL failures) in every run record; quota reserve enforced on every start path | merged (reviews AO and AP, re-reviewed) and deployed, master 3309652 | |
 | Step 1, last: old final value model with v0's policy; the full value-free run | after a check-in on the pilots | |
 | Before any arm: time server stops and starts, one short phase on the restart-based serving path | during step 1 | |
@@ -106,7 +106,9 @@ expansions; accepted 2026-11-16 05:24 UTC):
 - Solved within 1/2/4/8/16 expansions: 9.7/14.1/20.8/27.0/32.1% without, 10.1/16.5/22.9/29.5/35.7% with: the gap opens
   from the second expansion on, as expected for a model that only orders states.
 - Same compute: 39.7M generated tokens against 39.6M and 39.8M; no wall-clock stops; no throttling.
-- One training seed of the value model and one search order; the block-sum order is being run in full as well.
+- The result does not hinge on how the value-free search orders states: the block-sum order solves 633 of 2,000
+  (31.65%), +4.1 points for the value model (95% interval +2.6 to +5.7); the two orders differ by 0.4 points
+  (-1.3 to +2.2).
 - The 200-statement pilots had not shown it (71, 68, 65 against 70 and 75): the effect is real but smaller than a
   pilot's noise.
 
