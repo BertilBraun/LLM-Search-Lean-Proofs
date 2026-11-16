@@ -234,24 +234,40 @@ in `results/reviews/2026-11-16_review_aq_*` and `_ar_*`; full suite 4,590 passed
   arms' probe runs stay in file order (`probe_evaluation.toml`); if both pass, switch the arms' probe runs to
   `step1/probe_evaluation_ordered.toml` (or an arms copy of it) and say so in the progress document.
 
-**B. Expert iteration inside the loop** — branch `worktree-agent-af77525dfc814e9c3`, commits up to `2db23ca` or later
-(worktree `.claude/worktrees/agent-af77525dfc814e9c3`).
+**B. Expert iteration inside the loop** — NOT merged; branch `worktree-agent-af77525dfc814e9c3`
+(worktree `.claude/worktrees/agent-af77525dfc814e9c3`), reviewed at `2db23ca`, fixes from `1b54f53` on.
 
-- **What:** the loop's policy update can be an expert-iteration round (supervised fine-tuning on the verified
-  proof-graph blocks of the last W phases) instead of, or in addition to, the GRPO update; arm overlays `arms/C.toml`
-  (expert iteration every phase) and `arms/D.toml` (GRPO every phase plus a round every 4 phases). It is the last
-  missing code for arms C and D; arms A and B need none of it.
-- **State:** implemented in eight commits; the implementer confirmed on the old run's trees that the loop path builds
-  byte-identical data to the hand-run builder and was running the full suite. Two reviews were started on
-  2026-11-16 at about 17:40 UTC: AS (`results/reviews/2026-11-16_review_as_expert_iteration_loop_code.md`, by reading
-  against the design) and AT (`..._at_expert_iteration_loop_code.md`, by simulation). If those files exist, they are
-  the reviews; if they are missing or stop mid-way, the reviewers died with the session and must be redone. Read the
-  branch's commit messages and `src/lean_search/rl/README.md` on the branch for what it does.
-- **Then:** run the full suite on the branch; two independent reviews (suggested: one on correctness against the
-  design and review AB's finding M6 — the round must be the phase's one version, the persistent trainer and /dev/shm,
-  D's GRPO on A's code path, restart at every point; one by simulation with the loop's fakes, hostile restart
-  schedules, and equivalence of arms A and B with master); fixes; re-review; merge. Before arm C runs on the node: a
-  one-phase smoke run with a small token budget, with GPU memory logged.
+- **What:** the loop's policy update can be an expert-iteration round (supervised fine-tuning continuing the current
+  adapter on the verified proof-graph blocks of the last W phases, with replay data) instead of, or in addition to,
+  the GRPO update; arm overlays `arms/C.toml` (a round every phase, no GRPO) and `arms/D.toml` (GRPO every phase plus
+  a round every 4 phases). The persistent trainer runs the round after the phase's GRPO update; a phase still
+  publishes exactly one policy version. It is the last missing code for arms C and D; arms A and B need none of it,
+  so they can run from master as it is.
+- **Reviews (2026-11-16):** AS, by reading against the design
+  (`results/reviews/2026-11-16_review_as_expert_iteration_loop_code.md`): merge after fixes. AT, by simulation with
+  the loop's fakes, 60 crash-and-restart scenarios (`..._at_expert_iteration_loop_code.md`): merge, nothing must-fix.
+  Both found no path that publishes a half-trained, stale, duplicate or missing version; arms A and B produce records
+  identical to master.
+- **Findings being fixed** (sent to the implementer; `1b54f53` covers the first four, the fifth was sent at about
+  18:45 UTC):
+  1. The design asks for restart tests while PUBLISHING (the likeliest kill on the node, during the large copy to
+     disk); they were missing (AS M1).
+  2. A round that passes the minimum-examples check but yields 0 optimizer steps published the unchanged adapter and
+     recorded it as trained (AS S1, AT S2).
+  3. No test that the in-loop round trains exactly like the hand-run trainer that picks C's learning rate (AS S2).
+  4. Contradictory keys load silently: GRPO-only keys in arm C, round keys in arms A and B (AS S3, AT S3).
+  5. After a crash while publishing and a restart, the phase's round record is written twice; master already does the
+     same with the GRPO and value-training records (AT S1). Fix for all arms: one record per phase and kind.
+- **To finish:** the implementer's final head and its full-suite counts; a re-review by both angles of the fix commits
+  (`git diff 2db23ca <head>`), appended to the two review files as "Re-review"; then merge with `--no-ff` and push.
+  If you arrive and the branch head is `1b54f53`, finding 5 is not fixed yet; if the two review files have no
+  "Re-review" section, the re-review has not happened. A new implementer can pick this up from the two review files
+  and the branch alone.
+- **Before arm C or D runs on the node** (neither review could test this; no GPU locally): a one-phase smoke run of
+  each with a small token budget — real training of a round by the persistent trainer on 4 GPUs, GPU memory after
+  GRPO plus a round in one trainer process (the round records its peak), the size and time of the weight handoff, the
+  in-loop data build on real trees, and one kill by PID during publishing followed by a restart. The lists are at the
+  end of both review files.
 
 ## 9. Next steps, in order
 
