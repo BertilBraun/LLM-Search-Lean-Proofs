@@ -6,11 +6,12 @@ file and the files it points to. Keep this file current while you work, or repla
 
 **State at a glance (2026-11-16, about 18:00 UTC)**
 
-- Step 1 of the study (evaluations) is almost done; five full runs have answered its value-model questions and
-  measured the old run's gain on a clean probe.
-- The node is running by itself: the last of those runs, then the reasoning comparison (a pilot, then two full runs).
-- Two code features are in flight on branches: a faster start order for probe runs (in review) and expert iteration
-  inside the loop (implemented, not yet reviewed). Section 8 has their exact state.
+- Step 1 of the study (evaluations) is done except for the reasoning comparison: six full runs have answered its
+  value-model questions and measured the old run's gain on a clean probe (+26 points, policy and value gains additive).
+- The node is running by itself: the no-reasoning pilot, then the two full reasoning runs, then a check run of the new
+  start order, then it holds for the owner's decision.
+- The faster start order for probe runs is merged and used from the two full reasoning runs on. Expert iteration
+  inside the loop (needed for arms C and D only) is on a branch, in review. Section 8 has the exact state.
 - After the reasoning comparison the owner decides whether the arms sample with or without reasoning; then learning
   rates are chosen and four closed-loop arms run.
 
@@ -104,13 +105,15 @@ points and one paired comparison resolves about 2.6 points.
 | v0 | v0 — the baseline ("anchors"), twice | 713 and 716 (35.7%) | `step1_run1_v0_value_v0`, `step1_run2_v0_value_v0` |
 | v0 | the old run's final value model | 875 (43.75%) | `step1_run5_v0_value_final` |
 | v35 (the old run's final policy) | v0 | 1,083 (54.15%) | `step1_run8_v35_value_v0` |
-| v35 | the old run's final value model | 1,236 of 1,998 when last seen; finishing | `step1_run7_v35_value_final` |
+| v35 | the old run's final value model | 1,236 (61.8%) | `step1_run7_v35_value_final` |
 
 - The starting value model is worth about 4 points over a policy-only search (+3.6 and +4.1, intervals exclude 0).
 - The old loop's value training: +8.0 points with the policy unchanged (95% +6.4 to +9.7).
 - The old loop's policy training: +18.4 points with the value model unchanged (95% +16.6 to +20.2).
-- So the old run's in-pool gain is real, large, and came from both models. Which ingredient of the loop produced the
-  policy's gain is what the arms test.
+- With v35's policy the value model's gain is +7.6 points, and with the final value model the policy's gain is +18.1:
+  the two gains add up (predicted 62.1%, measured 61.8%).
+- So the old run's in-pool gain is real and large (+26.1 points, 95% +24.2 to +28.1), about 70% from the policy and
+  30% from the value model. Which ingredient of the loop produced the policy's gain is what the arms test.
 - Reasoning at equal tokens: only a hint so far. A 200-statement pilot without reasoning solved 76 against 70 and 75
   with it; that pilot was rejected by the acceptance rule (2 of 200 searches hit the wall cap) and is being repeated
   at a doubled cap.
@@ -141,13 +144,20 @@ Full tables, per band, with intervals: `results/followup_progress.md`, "Results 
 - A chain driver under the node's supervisord (`step1_chain`; files in `/workspace/step1_chain_tools/`, state and logs
   in `/workspace/runs/step1_chain/`, the log is `chain.log`). It marks finished steps on disk and continues at the
   first unfinished step after a restart; a failed check or a rejected run stops it with a `STOPPED` marker.
-- From here it will: finish `step1_run7_v35_value_final`; update the node's checkout to master while keeping its
-  node-local edits; put all 8 servers back on v0's weights; run the reasoning comparison from
-  `experiments/configs/grpo/followup/step1/runs_reasoning.toml` — the pilot
-  `step1_run4_pilot_no_reasoning_T_cap14400` (200 statements), then `step1_run3_visible_T` and
-  `step1_run4_no_reasoning_T` (2,000 statements each, at T = 26,804 generated tokens per statement, depth weight 0,
-  wall cap 14,400 s). The node agent was asked to pause after the pilot so the new start order (section 8) can be
-  deployed before the two full runs; if nobody acts within about 15 minutes it starts them in file order.
+- At 17:50 UTC on 2026-11-16 it had finished run 7, deployed master by itself (node-local edits kept) and was
+  putting the 8 servers back on v0's weights. From there it runs the reasoning comparison from
+  `experiments/configs/grpo/followup/step1/runs_reasoning.toml`: step e1, the pilot
+  `step1_run4_pilot_no_reasoning_T_cap14400` (200 statements, file order); then, after deploying master again
+  (9834972 or later, which has the start order), step e2: `step1_run3_visible_T` and `step1_run4_no_reasoning_T`
+  (2,000 statements each, T = 26,804 generated tokens per statement, depth weight 0, wall cap 14,400 s, both started
+  longest expected search first). Expected: pilot 1-2.5 hours, each full run 3-5 hours.
+- After run 4 it writes the comparison files (run 3 against run 4 across search modes, the solved-within-N-expansions
+  view, run 3 against the anchors, the sampler's bulk and tail readings) under `/workspace/runs/step1_chain/`, then
+  runs step f, the start order's check run (`step1/runs_order_check.toml`: `step1_run9_v0_value_v0_ordered`, about 2.5
+  hours), then stops with a `HOLD` marker: waiting for the owner's decision on the arms' mode.
+- If the pilot is rejected again, e2 does not run; step f runs instead and a marker says why.
+- This sequence was requested from the node agent at 17:52 UTC; `results/followup_node_operations.md` says what was
+  actually set up. If `chain.log` shows something else, the operations document and the log are right, not this file.
 - A second driver, `study_chain.sh`, is prepared for the learning rates and the arms and is on hold until the owner's
   decision after the reasoning comparison.
 - Node-local edits to the checkout (recorded with copies and diffs in `/workspace/runs/step1_chain/edits/`): the token
@@ -189,17 +199,21 @@ rebooted, or the PC's results pull is more than 25 minutes old. It dies with the
 - **Shell quirk:** long heredocs with quotes can fail in the Bash tool on this PC; write files with the file tool or
   a small Python script instead.
 
-## 8. Code in flight (two branches, not merged)
+## 8. Code: one feature just merged, one branch in review
 
-Master is `0191a12` or later and pushed. Every merged package had two reviews and a re-review.
+Master is `9834972` or later and pushed. Every merged package had two reviews and a re-review.
 
-**A. Start order by measured search time** — branch `worktree-agent-a8257711895071364`, commit `68e70fe`
-(worktree `.claude/worktrees/agent-a8257711895071364`).
+**A. Start order by measured search time** — MERGED 2026-11-16 (master `f29df21`; reviews AQ and AR with re-reviews
+in `results/reviews/2026-11-16_review_aq_*` and `_ar_*`; full suite 4,590 passed).
 
-- **What:** probe runs can start the statements with the longest expected search first
-  (`submission_order = "longest_expected_search_first"`, `expected_search_seconds = <file>`; default file order; no
-  shipped config turns it on). The file `experiments/configs/grpo/followup/probe_v2_expected_search_seconds.tsv` holds
-  each statement's mean search seconds over the five v0 runs. A run keeps its first session's order.
+- **What:** a probe run can start the statements with the longest expected search first
+  (`submission_order = "longest_expected_search_first"`, `expected_search_seconds = <file>` at the top level of an
+  evaluation config; default file order). The file `experiments/configs/grpo/followup/probe_v2_expected_search_seconds.tsv`
+  holds each statement's mean search seconds over the five v0 runs. A run keeps its first session's order; a resume in
+  another order or with another file is refused; a file lacking more than 1% of the run's statements is refused.
+- **Where it is on:** only in configs named `*_ordered.toml`: `step1/token_capped_evaluation_ordered.toml` (the two
+  full reasoning runs) and `step1/probe_evaluation_ordered.toml` (the check run in `step1/runs_order_check.toml`).
+  `probe_evaluation.toml` itself stays in file order.
 - **Why:** the owner proposed it to cut the idle tail of a run. Review AR's out-of-sample simulation on the recorded
   runs: file order takes 2.32-3.57 hours, the new order 2.41-2.88 hours; about 15 minutes saved per v0 run on average,
   40 and 16 minutes on the two v35 runs, and one run (block sum) gets 32 minutes longer. The gain should be largest
@@ -209,31 +223,16 @@ Master is `0191a12` or later and pushed. Every merged package had two reviews an
   cores in the first 30 minutes against 42-55 in file order, on 96 Lean CPUs, and only 3-9 searches waiting on the
   model in the first hour. Low GPU use in a run's first hour is therefore expected in this order. The 200 Lean-heaviest
   searches see slightly more contention, so outcomes could shift a little; that is what the checks below are for.
-- **Review AQ** (`results/reviews/2026-11-16_review_aq_search_order_code.md`): merge after one fix. The launcher
-  compares the start order of every run in a list, finished ones included; the reasoning pilot shares its evaluation
-  config with runs 3 and 4 and ran in file order, so turning the order on in that config would stop the chain. Two
-  fixes, either enough: (code) compare the order only for a run that will be resumed, never for a finished one; (no
-  code) give runs 3 and 4 their own evaluation config (`step1/token_capped_evaluation_ordered.toml`, based on
-  `token_capped_evaluation.toml`, with the order and the file) and point only those two runs at it in
-  `runs_reasoning.toml`.
-- **Review AR** (`..._ar_search_order_code.md`, by simulation with the production code): merge after the same fix.
-  With real Lean both orders give identical per-statement results; a resume in another order is refused. The
-  no-reasoning pilot's search times correlate 0.74 in rank with the file, so the file predicts that mode too. Should
-  fixes: correct the README's numbers; refuse a file that misses many of the probe's statements.
-- **State:** the implementer was sent both reviews' fixes on 2026-11-16 at about 17:45 UTC (the code fix, an own
-  evaluation config `step1/token_capped_evaluation_ordered.toml` for runs 3 and 4 only, README numbers, the refusal).
-  If the branch's head is still `68e70fe`, none of that happened; the fix is small (AR says an uncommitted
-  `recorded_mismatches` edit in the worktree already does the code part).
-- **Then:** re-review by AQ's and AR's angles, merge, push; on the node deploy at a boundary between runs (keeping
-  the node-local edits). The two full reasoning runs must both use the same order and file: both `run.json` files show
-  the same `start_orders` and file digest, `sessions.jsonl` shows a single order, and `probe_compare.py pair` prints no
-  "orders differ" line.
-- **Checks before trusting a comparison ACROSS orders** (every arm's probe run in the new order is compared with the
-  file-order anchors): (1) after the first ordered run, `probe_compare.py load` per band against the range of the five
-  file-order runs; (2) one v0 / value v0 run in the new order, not marked as anchor, paired against the two file-order
-  anchors (about 2.5 hours); it passes if its difference to each is within their A/A difference and its Lean-load
-  figures match. A good time for (2) is while the owner decides on the arms' mode. If either check fails, the arms'
-  probe runs stay in file order.
+- **The two full reasoning runs** both use it, so they pair cleanly with each other: both `run.json` files must show
+  the same `start_orders` and file digest, and `probe_compare.py pair` must print no "orders differ" line. Run 3
+  against the file-order anchors crosses orders and is descriptive only.
+- **Checks before trusting a comparison ACROSS orders** (an arm's probe run in the new order would be compared with
+  the file-order anchors): (1) after the first ordered run, `probe_compare.py load` per band against the range of the
+  file-order runs, and its share of wall-clock stops; (2) the check run `step1_run9_v0_value_v0_ordered` (not an
+  anchor, never pooled into the anchors) paired against each anchor: it passes if its difference to each is within
+  their A/A difference (-0.1 points, interval -1.8 to +1.6) and its Lean-load figures match. If either fails, the
+  arms' probe runs stay in file order (`probe_evaluation.toml`); if both pass, switch the arms' probe runs to
+  `step1/probe_evaluation_ordered.toml` (or an arms copy of it) and say so in the progress document.
 
 **B. Expert iteration inside the loop** — branch `worktree-agent-af77525dfc814e9c3`, commits up to `2db23ca` or later
 (worktree `.claude/worktrees/agent-af77525dfc814e9c3`).

@@ -2,12 +2,13 @@
 
 Kept current by the orchestrator. Details live in the linked files.
 
-**Last update:** 2026-11-16, 16:55 UTC.
+**Last update:** 2026-11-16, 17:55 UTC.
 
 ## Where we are
 
-Step 1 (evaluations only) restarts on a new node. All code for steps 1 and 2 is merged and pushed; every package had
-two independent reviews and a re-review (`results/reviews/2026-11-14_review_aa_*` to `_al_*`).
+Step 1 (evaluations only) is done except for the reasoning comparison, which is running. Every merged package had
+two independent reviews and a re-review (`results/reviews/`). A new agent takes over from `HANDOFF.md` in the
+repository's root; the node's setup and operation are in `results/followup_node_operations.md`.
 
 | Item | State | Result or file |
 |---|---|---|
@@ -19,17 +20,18 @@ two independent reviews and a re-review (`results/reviews/2026-11-14_review_aa_*
 | Step 1, anchor runs 1 and 2 (v0 with value v0, 2,000 statements) | done: 713 and 716 of 2,000 | `node_backup/2026-11-15/live/runs/step1_chain/` |
 | Step 1: token budget, calibration run | done: T = 26,804 generated tokens per statement; calibration run 65 of 200; constants -56.4 (completion), -5.35 (block sum), -0.142 (block mean) | |
 | Step 1: three value-free pilots (200 statements each) | done: 71, 68 and 65 of 200, against 70 and 75 with the value model | |
-| Step 1: reasoning at equal tokens (no-reasoning pilot, visible run, no-reasoning run) | first pilot rejected at exactly 1% wall-clock stops; wall cap doubled to 14,400 s (master ab78ace); runs next, before the arms, about 16 hours | |
+| Step 1: reasoning at equal tokens (no-reasoning pilot, visible run, no-reasoning run) | first pilot rejected at exactly 1% wall-clock stops; wall cap doubled to 14,400 s; the repeated pilot started 2026-11-16 about 17:55 UTC, the two full runs follow by themselves, in the new start order | |
 | Step 1: the full value-free run (whole-completion order) | done: 642 of 2,000 against 713 and 716 with the value model | |
 | Step 1: v0's policy with the old run's final value model | done: 875 of 2,000, +8.0 points over value v0; the restart-based serving path worked on real servers | |
 | Step 1: the full value-free run in the block-sum order | done: 633 of 2,000 (the whole-completion order: 642) | |
-| Step 1, added: the old final policy (v35) with value v0, then with the final value model (the 2x2 of policy by value) | v35 with value v0 done: 1,083 of 2,000, +18.4 points; v35 with the final value model running since 14:29 UTC | |
+| Step 1, added: the old final policy (v35) with value v0, then with the final value model (the 2x2 of policy by value) | done: 1,083 of 2,000 with value v0 (+18.4 points) and 1,236 of 2,000 with the final value model (61.8%); the two gains add up | |
 | Code: GPU power limits and Lean load (tactic timeouts, REPL failures) in every run record; quota reserve enforced on every start path | merged (reviews AO and AP, re-reviewed) and deployed, master 3309652 | |
 | Step 1, last: old final value model with v0's policy; the full value-free run | after a check-in on the pilots | |
 | Before any arm: time server stops and starts, one short phase on the restart-based serving path | during step 1 | |
 | Learning rates for the arms (shared v0 sampling, one round per signal, held-out states) | after the reasoning comparison and the decision on the arms' mode | |
 | Arms A, B, C, D with one probe run each | after the learning rates; see the plan below | |
-| Code: expert iteration inside the loop (for arms C and D) | being implemented; two reviews follow | |
+| Code: expert iteration inside the loop (for arms C and D) | implemented on a branch; first review: merge after fixes (one missing restart test, three smaller points); second review running | `results/reviews/2026-11-16_review_as_*`, `_at_*` |
+| Code: probe runs start the longest expected searches first (by the mean search time of v0's five runs) | merged (reviews AQ and AR, re-reviewed), master 9834972; used for the two full reasoning runs; a check run against the anchors follows them | `results/reviews/2026-11-16_review_aq_*`, `_ar_*` |
 | Results safety | small result files pulled to the PC every 10 minutes | `node_backup/2026-11-15/live/` |
 
 ## Settled: tactic timeouts and load (2026-11-15)
@@ -48,8 +50,12 @@ question was whether CPU contention causes this, which would make results depend
 - **Why steps pass 60 seconds at all.** `nlinarith`, `linarith` and `ring_nf` spend most of their time where Lean
   hardly counts heartbeats, so the heartbeat limit bounds only a minority of them.
 - **Dropped.** Starting the longest proofs first to shorten a run's idle tail: a simulation on recorded durations
-  showed it makes runs longer (4.24 against 3.35 hours), and any reordering changes the load the anchors ran under. The
-  study keeps file order; the tail (25-35 minutes per run) stays.
+  showed it makes runs longer (4.24 against 3.35 hours), and any reordering changes the load the anchors ran under.
+- **Replaced by (2026-11-16, the owner's proposal):** starting the searches with the longest MEASURED search time
+  first. Out-of-sample simulation on the recorded runs: 2.41-2.88 hours against 2.32-3.57 in file order, about 15
+  minutes saved per v0 run on average and more where single searches run for hours. It moves the Lean pressure and
+  the idle GPU time to the start of a run. Off by default; before a run in this order is compared with the
+  file-order anchors, one v0 run in the new order is paired against them.
 
 ## Results so far
 
@@ -74,13 +80,23 @@ question was whether CPU contention causes this, which would make results depend
   exhaustion or stack overflow, which heartbeats do not stop, tried again on the same state because a crash, unlike a
   timeout, does not disable the tactic.
 
-**How the old run's gain splits between policy and value model** (probe v2, 2,000 statements, 16 expansions; the cell
-with v35 and the final value model is running):
+**How the old run's gain splits between policy and value model** (probe v2, 2,000 statements, 16 expansions; all four
+cells accepted, the last on 2026-11-16 17:48 UTC):
 
 | | Value v0 | The old run's final value model |
 |---|---|---|
 | **Policy v0** | 714.5 (35.7%), mean of the two anchors | 875 (43.75%) |
-| **Policy v35**, the old run's final policy | **1,083 (54.15%)** | running since 14:29 UTC |
+| **Policy v35**, the old run's final policy | **1,083 (54.15%)** | **1,236 (61.8%)** |
+
+- **The two gains add up.** Value training: +8.0 points with v0's policy, +7.6 with v35's (95% interval +5.9 to
+  +9.6). Policy training: +18.4 points with value v0, +18.1 with the final value model (+16.1 to +20.0). Adding both
+  to the baseline predicts 62.1%; measured 61.8%. The interaction (-0.3 points) is inside the noise.
+- **The old run's whole in-pool gain is +26.1 points** on statements it never saw (95% interval +24.2 to +28.1):
+  about 70% from the policy and 30% from the value model.
+- By band (solved of 150/250/350/350/400/300/200): v35 with the final value model 140/195/236/235/229/148/53. The
+  policy's gain is largest between 1,000 and 4,499 characters (+19 to +24 points); the value model's is spread more
+  evenly (+5 to +11 from 1,000 characters up).
+- The last run: 3.31 hours, 32.5M generated tokens, 1 wall-clock stop, no throttling, no server restart.
 
 - **The old loop's policy training is worth +18.4 points** on statements it never saw (95% interval +16.6 to +20.2;
   62 statements lost and 432 gained against anchor run 1). Every band gains: +6 points under 500 characters, +14 to
@@ -203,7 +219,7 @@ default), safe server stops, results pulled to the PC as they are written.
 
 | Order | What | Rough cost |
 |---|---|---|
-| 1 | Step 1's last cell: v35 with the final value model | running |
+| 1 | Step 1's last cell: v35 with the final value model | done: 1,236 of 2,000 |
 | 1b | Reasoning at equal tokens, first (owner, 2026-11-16): the no-reasoning pilot, the visible run and the no-reasoning run on 2,000 statements each, with GPU use and Lean load recorded. It decides whether the arms sample with or without reasoning | about $14 |
 | 2 | Learning rates: v0 samples 48M tokens once; one training round per signal from the same trees (per-tactic GRPO, pure proof success, expert iteration with window 1 and 4, two or three rates each); the 512 held-out states pick each signal's rate. No probe runs, no gate | about $7 |
 | 3 | Arm A (per-tactic GRPO), then one probe run of its final checkpoint | about $19 |
@@ -214,7 +230,9 @@ default), safe server stops, results pulled to the PC as they are written.
 
 - Every arm: from v0 and value v0, 16 phases of 12M generated tokens, value model trained every 2 phases, stops at its
   first valid-Lean collapse (then assessed and reported).
-- Expert iteration inside the loop (needed for C and D) is being implemented now, with two reviews before it runs.
+- Expert iteration inside the loop (needed for C and D) is implemented and in review; arms A and B do not need it.
+- While the owner decides on the arms' mode after the reasoning comparison, the node runs the start order's check
+  (v0 with value v0 in the new order, about 2.5 hours).
 - Credit loaded: $190 on 2026-11-16; not a cap.
 
 ## Decisions (owner, 2026-11-14)
