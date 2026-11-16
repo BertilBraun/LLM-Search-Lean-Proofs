@@ -75,3 +75,27 @@ identity (`ProbeRunStart`) is untouched.
   It passes if its difference to each anchor is within their A/A difference and its Lean-load table matches theirs.
 
 **Verdict: merge after M1** (the code fix or the separate config; deploy only with one of them in place).
+
+## Re-review (2026-11-16)
+
+193ce6e and eb422ce. WSL: `test_submission_order.py`, `test_followup_step1.py` and `test_probe_runs_script.py`,
+**116 passed**. **Verdict: merge.**
+- **M1 resolved.** `recorded_mismatches` compares the order only when `run_state` is PENDING. Covered by the tests
+  `test_a_finished_run_in_another_order_does_not_stop_the_list` and
+  `test_an_unfinished_run_in_another_order_still_refuses_to_resume`. The identity is still compared for every run.
+- **The config is right.** `token_capped_evaluation_ordered.toml` is based on `token_capped_evaluation.toml` and
+  adds only the order and the TSV. Only runs 3 and 4 use it; the pilot keeps file order (both pinned by
+  `test_followup_step1`). Runs 3 and 4 have no record yet, so a deploy mid-chain picks them up at the next `next`.
+- **S4 partly resolved.** `missing_files` (`check`) now reads the TSV against the probe set's digest, and more than
+  1% uncovered is refused at start. Two runs of one list with different digests are still only flagged by
+  `probe_compare`, so the operator check stays.
+- **S1 still open**, an operator step: rank-correlate the pilot's `wall_seconds` with the TSV before trusting the
+  gain. **S2** is accepted as documented. **S3 still open**: an ordered v0 repeat would pool into the anchors.
+- **Minors resolved:** the header is sorted by name, so the committed TSV's moved header line is that sort and the
+  file is reproducible; the ValueError in `next` is now caught. The TSV's new digest does not matter, since no run used
+  the old one.
+- **New finding, should:** the README's out-of-sample figures show Lean demand of 102-110 cores on 96 CPUs in the first
+  30 minutes, with the longest searches run together. Runs 3 and 4 share that pattern, so the pair stays fair. But
+  their acceptance (under 1% wall-clock stops; the cap-7,200 pilot was rejected at exactly 1.00%) is now tested under
+  more pressure on the long searches. Watch the wall-clock-stop share and the Lean-load table of run 3 early. The
+  14,400 s cap gives about 2x headroom over the longest mean (6,587 s).

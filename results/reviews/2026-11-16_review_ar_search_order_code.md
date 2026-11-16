@@ -80,3 +80,26 @@ file's first 20 / 50 / 100 of the 200: 15 / 19 / 20; its two wall-clock stops (7
   is not. A file of another probe set: ValueError naming both digests (SystemExit in probe_evaluate). A statement
   missing from the file starts first. 0 of 2,000 probe statements are missing from the committed file.
 Verdict: merge after M1 (commit the in-progress fix); use the order for runs 3 and 4 together, with S1's check.
+
+## Re-review (2026-11-16)
+
+193ce6e and eb422ce on 68e70fe; WSL: `test_submission_order.py`, `test_followup_step1.py` 113 passed. Verdict: merge.
+
+- M1 resolved. `probe_runs.py next` on the real `runs_reasoning.toml` (a copy with T = 26,804 in place of its
+  placeholder; fake run directories): pilot accepted in file order -> exit 0, next `step1_run3_visible_T` with
+  `token_capped_evaluation_ordered.toml`; run 3 accepted in file order -> next run 4; run 3 interrupted in file order
+  -> exit 1 "its record has start order 'file'"; interrupted in the order with another file digest -> exit 1; in the
+  order with this file -> resumed; pilot interrupted in file order -> resumed on its file-order config.
+- S3 resolved. `uncovered_statements` with the committed file: pilot subset 200 with 2 missing logged, 3 refused; full
+  2,000 with 20 logged, 21 refused ("lacks 21 of the run's 2000 statements (more than 1%)").
+- S2 resolved. README: file 2.32-3.57 h, new 2.41-2.88 h, ~15 min mean, block-sum +32 min, v35 3.55 -> 2.88 and
+  2.68 -> 2.41 h, first-30-min Lean 102-110 vs 42-55 cores, and the 40-60 s caveat: as measured.
+- TSV: only the `# run` header lines changed (sorted by name; run5 moved up); 2,000 data lines unchanged, each over 5
+  runs, none of the probe's 2,000 statements missing; regenerated from the five runs with the production writer it is
+  byte-identical.
+- Config path (in place of a Lean run, which needs the servers): run 3's arguments name the ordered config; it resolves
+  to `longest_expected_search_first (expected seconds 02f7eda36482)`, digest = the TSV's sha256, and a session started
+  with it gives `run.json` `start_orders` that one entry.
+- S1 (validate against file-order runs) stays an operator step; runs 3 and 4 share the order.
+- New, minor: once a run of the list has a record, `next` refuses (exit 1) while the token-capped search configs hold T's placeholder, as `check`
+  does; fill T before starting the list.
