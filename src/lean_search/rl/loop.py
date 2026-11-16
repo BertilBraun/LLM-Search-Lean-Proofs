@@ -83,6 +83,8 @@ from lean_search.expert_iteration.toml_text import toml_text
 from lean_search.monitoring.cgroup import CpuCounters, cpu_counters
 from lean_search.monitoring.cpu_layout import thread_on_cpus, training_cpu_list
 from lean_search.monitoring.families import (
+    ExpertIterationPhase,
+    GrpoPhase,
     HealthCheck,
     LoopState,
     LoopStatus,
@@ -1979,13 +1981,22 @@ class GrpoLoop:
         if removed:
             self.log(f"Deleted {len(removed)} adapter directories of old phases: {[str(path) for path in removed]}")
 
+    def write_phase_record(self, record: GrpoPhase | ValueTraining | ExpertIterationPhase) -> bool:
+        """Once per phase and family: a restart in the publishing stage, which writes the phase's training records
+        again before recording its version, finds the line its first attempt wrote. Whether this call wrote it."""
+        if self.writer.written_for_phase(record.family, self.progress.phase):
+            return False
+        self.writer.write(record)
+        return True
+
     def write_training_metrics(self, outcome: PhaseOutcome, candidate_version: int) -> None:
         if outcome.policy is not None:
-            self.writer.write(grpo_phase_record(outcome.policy, self.progress.sampling_seconds, candidate_version - 1))
-            self.log(policy_update_text(self.progress.phase, outcome.policy))
+            grpo = grpo_phase_record(outcome.policy, self.progress.sampling_seconds, candidate_version - 1)
+            if self.write_phase_record(grpo):
+                self.log(policy_update_text(self.progress.phase, outcome.policy))
         if outcome.value is not None:
             value = outcome.value
-            self.writer.write(
+            self.write_phase_record(
                 ValueTraining(
                     value_version=candidate_version,
                     trees=value.trees,
@@ -2002,7 +2013,8 @@ class GrpoLoop:
         summary = read_build_summary(self.paths.expert_iteration_round(phase))
         assert summary is not None
         record = round_record(summary, outcome, self.config.training.expert_iteration_min_examples)
-        self.writer.write(record)
+        if not self.write_phase_record(record):
+            return
         self.log(round_update_text(phase, record))
         alert = replay_loss_alert(phase, record)
         if alert is not None:

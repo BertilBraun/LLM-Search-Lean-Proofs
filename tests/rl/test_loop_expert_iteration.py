@@ -5,12 +5,14 @@ records, metric lines, versions and the phase configs it sent the trainer: tests
 captured on master 40c266d). The window reaching before phase 1 is the builder's `phase_window`
 (test_expert_iteration_data.py)."""
 
+import contextlib
 import dataclasses
 import json
 import threading
 import tomllib
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 
 import pytest
@@ -28,6 +30,7 @@ from test_loop_budget import (
 
 from lean_search.expert_iteration.serving import ModelVersion, read_versions
 from lean_search.policy.adapters import handoff_directory
+from lean_search.policy.server_control import PhaseSeconds
 from lean_search.rl.expert_iteration_data import ExpertIterationConfig, parse_expert_iteration_config
 from lean_search.rl.expert_iteration_rounds import round_config
 from lean_search.rl.loop import ExpertIterationSetup, PhaseStage, phase_config_text
@@ -285,8 +288,18 @@ async def test_arm_c_publishes_its_policy_unchanged_after_a_round_without_a_step
     assert versions(world)[1].policy_adapter == versions(world)[0].policy_adapter
 
 
-def test_a_recipe_named_without_rounds_is_refused() -> None:
-    settings = 'phase_generated_tokens = 250\nexpert_iteration_config = "recipe.toml"\n'
+@pytest.mark.parametrize(
+    "setting",
+    [
+        'expert_iteration_config = "recipe.toml"',
+        "expert_iteration_every_phases = 4",
+        "expert_iteration_window_phases = 4",
+        "expert_iteration_min_examples = 50",
+    ],
+    ids=["a recipe", "a period", "a window", "a minimum"],
+)
+def test_a_round_setting_without_rounds_is_refused(setting: str) -> None:
+    settings = f"phase_generated_tokens = 250\n{setting}\n"
     with pytest.raises(ValueError, match="runs no rounds"):
         parse_loop_config(TOKEN_TOML.replace("phase_generated_tokens = 250\n", settings))
 
@@ -589,12 +602,112 @@ async def test_a_restart_in_publishing_keeps_an_uninterrupted_runs_last_round_re
     assert last_round_lines(restarted) == last_round_lines(reference)
 
 
-@pytest.mark.parametrize(("toml", "lines"), [(C_TOML, [1, 2, 2, 3]), (D_TOML, [2, 2])], ids=ARM_NAMES)
-async def test_a_restart_in_publishing_writes_the_interrupted_rounds_record_again(
+@pytest.mark.parametrize(("toml", "lines"), [(C_TOML, [1, 2, 3]), (D_TOML, [2])], ids=ARM_NAMES)
+async def test_a_restart_in_publishing_writes_the_interrupted_rounds_record_once(
     tmp_path: Path, toml: str, lines: list[int]
 ) -> None:
     world = await restarted_in_publishing(tmp_path, toml)
     assert [line["last_phase"] for line in round_lines(world)] == lines
+
+
+# A crash at each point of phase 2's publish before its version is recorded, then a restart: every training record
+# (GRPO's, the value model's, the round's) once per phase, for a GRPO arm as for C and D.
+A_TOML = ROUND_TOML.replace("phase_generated_tokens = 250\n", "phase_generated_tokens = 250\npersistent = true\n")
+CRASHED_FAMILIES = ("grpo", "value_training", "expert_iteration")
+
+
+class CrashOnce:
+    """A merge or a serve that fails once, at phase 2's version, as a crash there would."""
+
+    def __init__(self) -> None:
+        self.crashed = False
+
+    def due(self, version: int) -> bool:
+        if version != 2 or self.crashed:
+            return False
+        self.crashed = True
+        return True
+
+
+def crashing_merge(inner: Callable[[str, str, Path], None], crash: CrashOnce) -> Callable[[str, str, Path], None]:
+    def merge(base_model: str, adapter: str, output: Path) -> None:
+        if crash.due(int(output.parent.name.removeprefix("v"))):
+            raise RuntimeError("crashed in the merge")
+        inner(base_model, adapter, output)
+
+    return merge
+
+
+def crashing_serve(world: LoopWorld, crash: CrashOnce) -> Callable[[ModelVersion], Awaitable[PhaseSeconds]]:
+    serve = world.servers.serve
+
+    async def crashing(version: ModelVersion) -> PhaseSeconds:
+        if crash.due(version.version):
+            raise RuntimeError("crashed while the servers started")
+        return await serve(version)
+
+    return crashing
+
+
+class PublishCrash(StrEnum):
+    # Recording a version merged on the CPU (no merges in host memory).
+    DISK_MERGE = "the merge on the disk path"
+    # Writing the merges from host memory to disk after the servers loaded them.
+    DURABLE_WRITE = "the durable write"
+    # Starting the servers on the merges in host memory.
+    SERVE = "the servers' start"
+
+
+def crashing_world(root: Path, toml: str, crash: PublishCrash) -> RoundWorld:
+    once = CrashOnce()
+    match crash:
+        case PublishCrash.DISK_MERGE:
+            world = round_world(root, toml)
+            world.merge = crashing_merge(world.merge, once)
+        case PublishCrash.DURABLE_WRITE:
+            world = handoff_round_world(root, toml)
+            world.merge = crashing_merge(world.merge, once)
+        case PublishCrash.SERVE:
+            world = handoff_round_world(root, toml)
+            world.servers.serve = crashing_serve(world, once)  # type: ignore[method-assign]
+    return world
+
+
+async def crashed_in_publishing(root: Path, toml: str, crash: PublishCrash) -> RoundWorld:
+    world = crashing_world(root, toml, crash)
+    with contextlib.suppress(RuntimeError):
+        await run_while(world.loop(), lambda: True)
+    world.searcher.open.set()
+    return await ran(world, 3)
+
+
+def phases_per_record(world: LoopWorld) -> dict[str, list[int]]:
+    found = {}
+    for family in CRASHED_FAMILIES:
+        path = world.paths.directory / "metrics" / f"{family}.jsonl"
+        if path.exists():
+            found[family] = [json.loads(line)["phase"] for line in path.read_text(encoding="utf-8").splitlines()]
+    return found
+
+
+@pytest.mark.parametrize("crash", list(PublishCrash), ids=[crash.value for crash in PublishCrash])
+@pytest.mark.parametrize("toml", [A_TOML, C_TOML, D_TOML], ids=["arm A", *ARM_NAMES])
+async def test_a_crash_while_publishing_leaves_one_training_record_per_phase(
+    tmp_path: Path, toml: str, crash: PublishCrash
+) -> None:
+    world = await crashed_in_publishing(tmp_path, toml, crash)
+    records = phases_per_record(world)
+    assert {family: sorted(set(phases)) for family, phases in records.items()} == records
+
+
+@pytest.mark.parametrize("crash", list(PublishCrash), ids=[crash.value for crash in PublishCrash])
+@pytest.mark.parametrize("toml", [A_TOML, C_TOML, D_TOML], ids=["arm A", *ARM_NAMES])
+async def test_a_crash_while_publishing_leaves_an_uninterrupted_runs_training_records(
+    tmp_path: Path, toml: str, crash: PublishCrash
+) -> None:
+    crashed = await crashed_in_publishing(tmp_path / "crashed", toml, crash)
+    reference = await ran(round_world(tmp_path / "reference", toml), 3)
+    assert phases_per_record(crashed) == phases_per_record(reference)
 
 
 def published_versions(world: LoopWorld, root: Path) -> object:

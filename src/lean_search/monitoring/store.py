@@ -97,6 +97,14 @@ class MetricsWriter:
     def update_context(self, **changes: int | None) -> None:
         self.context = dataclasses.replace(self.context, **changes)
 
+    def written_for_phase(self, family: str, phase: int) -> bool:
+        """Whether a line of the family carries this phase in its context."""
+        path = family_path(self.run_directory, family)
+        if not path.exists():
+            return False
+        with path.open(encoding="utf-8") as lines:
+            return any(json.loads(line)["phase"] == phase for line in lines if line.strip())
+
     def write(self, record: MetricRecord, record_time: float | None = None) -> None:
         assert dataclasses.is_dataclass(record) and not isinstance(record, type)
         moment = time.time() if record_time is None else record_time

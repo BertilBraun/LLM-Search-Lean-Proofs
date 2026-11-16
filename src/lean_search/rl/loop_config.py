@@ -64,6 +64,15 @@ class SamplingConfig:
     options_arm: OptionsArmConfig = field(default_factory=OptionsArmConfig)
 
 
+# The settings of expert-iteration rounds, refused without them.
+ROUND_SETTINGS = (
+    "expert_iteration_every_phases",
+    "expert_iteration_window_phases",
+    "expert_iteration_config",
+    "expert_iteration_min_examples",
+)
+
+
 class PolicyUpdate(StrEnum):
     # The phase config's GRPO update, every phase.
     GRPO = "grpo"
@@ -420,8 +429,11 @@ def parse_loop_config(text: str) -> GrpoLoopConfig:
         raise ValueError("health needs reference_phases >= 1 and late_solve_phases >= 1.")
     if training.value_every_phases and training.value_window_phases < 1:
         raise ValueError("training.value_window_phases must be at least 1.")
-    if training.policy_update == PolicyUpdate.GRPO and training.expert_iteration_config:
-        raise ValueError('training.expert_iteration_config names a recipe, but policy_update = "grpo" runs no rounds.')
+    if training.policy_update == PolicyUpdate.GRPO:
+        defaults = LoopTrainingConfig(phase_config="")
+        set_without_rounds = [name for name in ROUND_SETTINGS if getattr(training, name) != getattr(defaults, name)]
+        if set_without_rounds:
+            raise ValueError(f'training.{set_without_rounds} set, but policy_update = "grpo" runs no rounds.')
     if training.policy_update != PolicyUpdate.GRPO:
         update = f"training.policy_update = {training.policy_update.value!r}"
         if not training.expert_iteration_config:
