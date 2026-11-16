@@ -133,7 +133,8 @@ Configs are in `/etc/supervisor/conf.d/`, with copies in `/workspace/step1_chain
 - Start, stop and status: `supervisorctl start|stop|status <program>`.
 - Stopping `step1_chain` (`stopasgroup`) kills the launcher and its running `probe_evaluate.py`. The launcher resumes the
   interrupted run when started again, but stop it only between runs if you can.
-- `study_chain.conf` (in `/workspace/step1_chain_tools/`) is prepared but **not installed**: the arms are on hold.
+- `study_chain.conf` (in `/workspace/step1_chain_tools/`) is the S1-only draft's and **not installed**; the step-2
+  driver and its conf are in the repository (`deployment/study_chain.sh`, `.conf`; "The study driver" below).
 
 ### Other processes of ours
 
@@ -251,19 +252,102 @@ Other files there:
   `run8_restart_readings.log`, `run7_restart_readings.log`.
 - `power_limits.txt` and `sampler_reasoning.tsv`.
 
-### The study driver (prepared, on hold)
+### The study driver: step 2, the learning rates (written 2026-11-16, not installed)
 
-- `/workspace/step1_chain_tools/study_chain.sh` has state in `/workspace/runs/study_chain/`.
-- It implements S1 only:
-  - `deployment/arm_loop.sh --kind "shared sampling" experiments/configs/grpo/followup/shared_sampling.toml`.
-  - It polls every 60 s until `finished.json`, restarts the loop through `arm_loop.sh` if it is found not running, and
-    stops on `health_stop.json`.
-  - Then `experiments/slice_trees.py --trees $LEAN_SEARCH_RUNS/followup_shared_sampling/trees --slices 4 --output
-    …/slices`, then `HOLD`.
-- To start it: `cp /workspace/step1_chain_tools/study_chain.conf /etc/supervisor/conf.d/ && supervisorctl reread &&
-  supervisorctl update`.
-- S2-S6 (learning-rate rounds, held-out ranking, arms) are **not written**.
-- Untested: it has not been run once.
+The repository's `deployment/study_chain.sh` (supervisord program `study_chain`, conf `deployment/study_chain.conf`)
+runs the whole learning-rate step unattended and ends in a HOLD with a report. It replaces the S1-only
+`/workspace/step1_chain_tools/study_chain.sh` prepared on 2026-11-16, which never ran. State and logs are in
+`/workspace/runs/study_chain/` (log `chain.log`). The plan, the round configs and the report come from
+`experiments/learning_rate_step.py` (logic in `src/lean_search/rl/learning_rate_step.py`).
+
+**What it runs, in this order** (node hours are estimates; the first real run sets them):
+
+| Step | What | Markers | Hours |
+|---|---|---|---|
+| mode | `learning_rate_step.py check-mode` on `mode.toml`; the first start copies it to `mode.recorded` | `mode.txt` | - |
+| configs | `learning_rate_step.py write-configs`: `configs/<label>.toml` (10 rounds), `rounds.tsv`, `builds.tsv`, `held_out.tsv` | `done_configs` | - |
+| S1 sampling | `stop_model.sh --all` (first start only: step 1's servers would otherwise be kept whatever they hold), then `arm_loop.sh --kind "shared sampling" --mode mode.toml followup/shared_sampling.toml`, polled every 60 s until `finished.json`; a loop found dead is started again through `arm_loop.sh` | `done_s1_sampling`, `attempts_s1_sampling_start` | 2-3 visible (about 25M tokens/h at 112 searches), more without reasoning |
+| S1 slices | `slice_trees.py --slices 4` into `followup_shared_sampling/slices/` (a partial one moved aside first) | `done_s1_slices` | minutes |
+| S3a | v0's held-out run `held_out_step2_v0`, on the servers the loop left on v0 | `done_held_out_step2_v0` | 0.2 |
+| S2 | `stop_model.sh --all`, GPUs checked free (`nvidia-smi`), the two expert-iteration builds started beside (`build --processes 16` on the Lean CPUs), then the rounds one at a time on the 4 GPUs (`torchrun`, training CPUs, `HF_HUB_OFFLINE=1`): `grpo_phase.py --part policy` with the loop's Lean and math replay for A and B2 at 2e-5, 5e-5, 1e-4 (slice 4); before C, `train --dry-run` on both windows (`dry_run_step2_C_w1.log`, `…_w4.log`), then `grpo_expert_iteration.py train` for C at 5e-5 and 1e-4 on window 1 (slice 4) and window 4 (slices 1-4) | `done_round_<label>`, `done_build_<build>`, `done_dry_run_<build>` | 3-5 (6 GRPO rounds of ~0.5 h, 4 rounds of 0.2-0.5 h) |
+| S3b | `grpo_loop.sh servers` (starts those not answering), then each variant's `held_out_evaluate.py --name step2_<label>` (merge, policy servers restarted onto it, 512 states at concurrency 56) | `done_held_out_step2_<label>` | about 2 (10 × ~12 min) |
+| S4 | `rank_learning_rates.py` per signal without gate runs (`rank_A.txt`, `rank_B2.txt`, `rank_C.txt`; C over its four variants, so its window is chosen with its rate), then `learning_rate_step.py report` → `learning_rates_report.md` | `done_s4_report` | minutes |
+| HOLD | "step 2 done: …learning_rates_report.md holds the arms' values (not applied)"; the servers stay up | `HOLD` | |
+
+Altogether about 8-11 hours with visible reasoning. Labels: `A_2e-5`, `A_5e-5`, `A_1e-4`, `B2_…`, `C_w1_5e-5`,
+`C_w4_5e-5`, `C_w1_1e-4`, `C_w4_1e-4`; run names and held-out names are `step2_<label>`, outputs in
+`$LEAN_SEARCH_CHECKPOINTS/step2_<label>/`, the expert-iteration data in `$LEAN_SEARCH_DATA/grpo_expert_iteration/
+step2_C_w1` and `step2_C_w4`. A GRPO round's phase config is the arm's own (`arms/A.toml`, `arms/B2.toml` through
+`followup_arm`'s overlay code) at the variant's rate, v0 as start and KL reference; a C round's recipe is arm C's at
+its rate with `[data] tree_directories` set to its slices.
+
+**v0's baseline is run again** (`held_out_step2_v0`), not taken from `held_out_v0` of 2026-11-15: that run used older
+code, the Lean side pinned to 48 CPUs (`BACKGROUND_CPUS=48`, `pinning.jsonl`) instead of today's 96, and visible
+reasoning whatever the arms' mode; the rerun costs about 10 minutes. The report shows the old run against the new one,
+paired per state, as a descriptive drift check.
+
+**The report** (`learning_rates_report.md`): first the values for the arms' PLACEHOLDERs (A's rate, B2's rate, C's
+window and rate, D's window, GRPO rate and round rate), then per signal every variant minus v0 in valid Lean and success
+with 95% intervals, the rule's choice and reason, a note when the chosen variant is within noise of v0; the rounds'
+sizes (GRPO: trees, groups, sequences, steps, trained tokens, KL to v0, clip fraction, trainer and wall time; C:
+examples, replay examples, planned and real steps, tokens, replay-loss change, training and wall time); v0's baseline
+against the earlier run; wall-clock durations of the sampling, the slices, the held-out runs and the rounds. Filling
+the PLACEHOLDERs is the orchestrator's job (node-local edits recorded as in section 4, or committed and deployed).
+
+**Install and start** (only on the owner's word, at step 1's HOLD, with nothing else running):
+
+1. Deploy a master that holds the driver, keeping the node-local edits (section 4; the driver needs `--mode` in
+   `arm_loop.sh`, `experiments/learning_rate_step.py` and the expert-iteration code of 467d97c or later). Never deploy
+   while the driver runs: its steps must all use the same code.
+2. Put the mode in place. With visible reasoning:
+   `mkdir -p /workspace/runs/study_chain && cp experiments/configs/grpo/followup/modes/visible.toml /workspace/runs/study_chain/mode.toml`.
+   Without reasoning, a mode file with exactly `[sampling] search_config = "<a reviewed loop search config without
+   visible reasoning>"` and `max_expansions = <n>`; no such search config exists in the repository yet (the token-capped
+   step-1 configs are evaluation configs). The driver refuses to start without the file and stops if it changes later.
+3. Install the driver as a copy, never editing a running file in place:
+   ```bash
+   cd /workspace/LLM-Search-Lean-Proofs
+   mv /workspace/step1_chain_tools/study_chain.sh /workspace/step1_chain_tools/study_chain.sh.s1_only
+   cp deployment/study_chain.sh /workspace/step1_chain_tools/study_chain.sh.new
+   chmod +x /workspace/step1_chain_tools/study_chain.sh.new
+   mv /workspace/step1_chain_tools/study_chain.sh.new /workspace/step1_chain_tools/study_chain.sh
+   cp deployment/study_chain.conf /workspace/step1_chain_tools/study_chain.conf
+   cp deployment/study_chain.conf /etc/supervisor/conf.d/study_chain.conf
+   supervisorctl reread && supervisorctl update        # autostart: it starts now
+   ```
+   A later driver change is installed the same way (`.new`, then `mv`): the running bash keeps the old file.
+4. Watch the first minutes: `tail -f /workspace/runs/study_chain/chain.log`, then the loop's
+   `/workspace/runs/followup_shared_sampling/loop.log`. Extend the PC pull to `runs/study_chain`,
+   `runs/followup_shared_sampling` (without `trees`) and `runs/followup_configs` (section 7).
+
+**Markers in `/workspace/runs/study_chain/`**: `done_<step>` (step finished), `attempts_<step>` (tries; the 4th
+writes STOPPED), `started_<step>` (first attempt's start; with the end in `timings.tsv`), `STOPPED` (text says why),
+`HOLD`, `mode.recorded`, `builds.pid` (the background builds' bash). Logs: `chain.log`, `servers.log`, `slices.log`,
+`rounds/<label>.log`, `build_<build>.log`, `dry_run_<build>.log`, `held_out/<name>.log`, `rank_<signal>.txt`,
+`report.log`.
+
+**Failures.** Any exit but 0 is retried by supervisord; a step's 4th attempt writes STOPPED and exits 0. STOPPED at
+once: no or a refused `mode.toml`, a changed one, a health stop of the shared sampling run, `stop_model.sh` refusing,
+GPUs still held by another process after five checks a minute apart (a dead round's torchrun workers live in sessions of
+their own: find them with `nvidia-smi`, stop them by PID), a dry run that would refuse or plans no step, servers that
+kept dying in a held-out run (exit 4), slicing, ranking or report failures. A round whose job died is trained again
+into a fresh output: the interrupted `step2_<label>` is renamed `step2_<label>.interrupted_<time>`; a round is done only
+when its trainer exited 0 and left `phase.json` and `policy/adapter` (GRPO) or `training_summary.json` and `adapter`
+(C), so no half-trained adapter is evaluated. A held-out run resumes its states. After fixing a STOPPED cause: rename
+STOPPED (e.g. `STOPPED.<reason>`), delete the step's `attempts_<step>` if its tries were used up, `supervisorctl start
+study_chain`.
+
+**Stopping safely.** Best between steps (after a "step … done" line in `chain.log`): `supervisorctl stop study_chain`.
+It stops the driver's process group: the shared sampling loop (SIGTERM saves its state), a held-out run, a build. A
+round's torchrun workers may outlive it; check `nvidia-smi --query-compute-apps=pid,process_name --format=csv` and stop
+them by PID. Servers keep running (`deployment/stop_model.sh --all` stops them). `supervisorctl start study_chain`
+continues at the first step not done. A start after HOLD or STOPPED does nothing.
+
+**Tested only locally** (`tests/rl/test_study_chain_script.py`: the driver against stand-ins for every command, a kill
+at each step, each stop, a start after HOLD; `tests/rl/test_learning_rate_step.py`, `tests/rl/test_study_commands.py`).
+Not yet seen on the node: the real tools' run times and memory, `nvidia-smi`'s empty output when no process holds a
+GPU, `grpo_expert_iteration.py train` accepting the finished sampling-only run as "stopped in its sampling stage",
+held-out runs restarting the policy servers onto each variant.
 
 ## 4. Node-local edits and deploying master
 
@@ -365,8 +449,10 @@ source deployment/environment.sh; source deployment/server_pid.sh; for f in "$LE
   - Done once on this node for v0 (name `v0`): 34.0% success, 58.7% valid Lean, 444 s. The output is
     `/workspace/runs/held_out_evaluations/held_out_v0/`.
 - **Shared sampling and arms:**
-  - `deployment/arm_loop.sh --kind "shared sampling" experiments/configs/grpo/followup/shared_sampling.toml`, or
-    `deployment/arm_loop.sh experiments/configs/grpo/followup/arms/<A>.toml`.
+  - `deployment/arm_loop.sh --kind "shared sampling" --mode <mode.toml> experiments/configs/grpo/followup/shared_sampling.toml`,
+    or `deployment/arm_loop.sh --mode <mode.toml> experiments/configs/grpo/followup/arms/<A>.toml`. `--mode` is
+    required: the sampling mode (`followup/modes/`; the study driver's copy is `/workspace/runs/study_chain/mode.toml`),
+    the same file for the shared sampling run and every arm.
   - It writes configs via `experiments/followup_arm.py` into `$LEAN_SEARCH_RUNS/followup_configs/<name>/`, runs `init`
     once, starts the servers and the loop detached. `--status` shows the state.
   - Not run yet on this node. See the headers of `deployment/arm_loop.sh` and `experiments/followup_arm.py`, and
@@ -377,7 +463,7 @@ source deployment/environment.sh; source deployment/server_pid.sh; for f in "$LE
     --math-replay …` (under `torchrun` for 4 GPUs).
   - Expert iteration: `experiments/grpo_expert_iteration.py` (`count`, `build` with `[data] tree_directories`, `train`).
   - Then `experiments/rank_learning_rates.py --v0 v0 --variant <label> <rate> <held-out name> …`, without gate runs.
-  - None of these has been run on this node; read their docstrings and DESIGN.md "Step 2" first.
+  - None of these has been run on this node; the study driver (section 3, "The study driver") runs them all.
 
 ## 6. Results
 
@@ -520,9 +606,8 @@ State at about 18:00 UTC on 2026-11-16. Everything up to the final HOLD runs by 
    - then arms A and B: 16 phases × 12M tokens each, with one probe run of each final checkpoint;
    - arms C and D need code that is not on the node.
    - The owner may first decide whether the arms sample with or without reasoning (runs 3 and 4 answer that).
-   - Only S1 (shared sampling plus slices) is prepared, in `/workspace/step1_chain_tools/study_chain.sh` with
-     `study_chain.conf`. It is not installed and not tested. Install it only on the owner's word: copy the conf into
-     `/etc/supervisor/conf.d/`, then `supervisorctl reread && supervisorctl update`.
+   - Step 2 is automated by `deployment/study_chain.sh` (section 3, "The study driver"), tested locally only. Install
+     it only on the owner's word, with his mode decision in `/workspace/runs/study_chain/mode.toml`.
    - The owner's rules for the arms: stop at the first valid-Lean collapse, capture and report; pull the adapters of
      phases 8 and 16 to the PC; extend the PC pull to the arms' run directories (section 7).
 
@@ -549,6 +634,6 @@ What the coordinator expects to be reported, from the files the chain writes in 
    - It sums `/proc/<pid>/schedstat` deltas over REPLs alive in two consecutive samples.
    - It has not been checked against a known load; read it as indicative.
    - `reasoning_readings.py` also assumes `results.jsonl` lines are written in finish order, to split bulk from tail.
-3. **`study_chain.sh` (S1 only) has never run.** S2-S6 (learning-rate rounds, ranking, arms) are not written: use
-   DESIGN.md "Follow-up study: controlled arms" and the tools' docstrings (`arm_loop.sh`, `followup_arm.py`,
-   `slice_trees.py`, `grpo_phase.py`, `grpo_expert_iteration.py`, `rank_learning_rates.py`).
+3. **The step-2 driver `study_chain.sh` has never run on the node.** It is tested against stand-ins only; its first
+   run must be watched (section 3, "The study driver", lists what is not yet seen). The arms (step 3) are not
+   automated.
