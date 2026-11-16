@@ -824,11 +824,30 @@ dashboard warns below `min_free_disk_gib` (50) free.
   not help: it took 4.24 h, because proof length hardly predicts a search's length (rank correlation 0.41) and the
   longest searches are low- and middle-band statements that hit repeated 60 s tactic timeouts, which it starts last.
   Any reordering also changes which searches run beside which, so the load pattern the anchors ran under, and load
-  changes outcomes (one wall-clock timeout drops an automation tactic for the rest of that search): every study run
-  keeps file order. So that a load difference between two runs shows, run.json holds Lean's load on the searches in
-  total and per stratum (`lean_load.py`: per-tactic wall-clock timeouts and the statements with one, REPL failures,
-  Lean seconds per policy attempt), and `probe_compare.py pair` and `against` print it for every run beside the
-  verdict; `probe_compare.py load <runs>` reads it from any run's results.jsonl, a run in progress included.
+  changes outcomes (one wall-clock timeout drops an automation tactic for the rest of that search): the shipped
+  configs keep file order. So that a load difference between two runs shows, run.json holds Lean's load on the
+  searches in total and per stratum (`lean_load.py`: per-tactic wall-clock timeouts and the statements with one, REPL
+  failures, Lean seconds per policy attempt), and `probe_compare.py pair` and `against` print it for every run beside
+  the verdict; `probe_compare.py load <runs>` reads it from any run's results.jsonl, a run in progress included.
+  Ordering by measured search time (`submission_order = "longest_expected_search_first"`, `expected_search_seconds =
+  "<file>"`; `submission_order.py`): the searches start longest expected first, by the mean recorded wall seconds per
+  statement of earlier runs (`probe_runs.py expected-search-seconds <run directories> --output <file>`, whose header
+  names the runs and the probe set's digest; a file of another probe set is refused), statements the file lacks first,
+  ties in file order; a file lacking more than 1% of the run's statements is refused. A pilot takes the same statements
+  as in file order; results, summaries and run.json's per-stratum figures are keyed by statement as before. Simulated
+  out of sample (review AR: 112 slots, recorded wall seconds, each v0 run ordered by a file of the other four): file
+  order 2.32-3.57 h per run, the new order 2.41-2.88 h, about 15 minutes saved per v0 run on average, but one run (the
+  block-sum run, whose file-order tail was short) 32 minutes longer; the two v35 runs 3.55 -> 2.88 h and 2.68 -> 2.41 h;
+  an oracle 2.0-2.6 h. The order moves Lean pressure and the GPU idle time to the START of a run: Lean demand in the
+  first 30 minutes is 102-110 cores against 42-55 in file order, on 96 Lean CPUs, and the Lean-heaviest searches now
+  run together above those 96. A replay on the node found no tactic wall-clock timeout whose step succeeds alone (0 of
+  300), so timeouts are not made by load; it does not show that steps taking 40-60 s stay under 60 s at that pressure.
+  The order is recorded per session and in run.json (`start_orders`, with the file's sha256), not in the identity, so
+  a checkpoint's repeats still pool; a resume in another order or file is refused without `--allow-other-order`
+  (recorded), the launcher compares the order of a run it resumes (not of a finished one, which it only skips), and
+  `probe_compare.py pair` and `against` print each run's order and a line when they differ. Before relying on it,
+  validate a new order once: repeat the anchor in that order and pair it against the file-order anchors (it should
+  land within their A/A difference).
 - `probe`: 16 expansions, no harvesting, no ε, with `evaluation.value_model` (the published value model in
   `loop.toml`), in slots: slot k searches
   part k % `probe_parts` (3) of the set (`fixed_targets.probe_part`: every third problem of each stratum, so each part
