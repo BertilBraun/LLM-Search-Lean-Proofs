@@ -132,3 +132,83 @@ loop calls the hand-run `grpo_expert_iteration.py build` itself on the round con
    during a build, the restart must refuse while the builder lives.
 7. **Replay inside the trainer.** `--data-root` reaches the trainer, the replay files resolve, and the Lean and math
    replay counts in the `Expert-iteration update of phase k` line are non-zero.
+
+## Re-review (2026-11-16)
+
+**Verdict for head 041389e: merge.** S1, S2 and S3 are resolved, and nothing new needs fixing before C and D start.
+
+I tested git-archive snapshots of 68a6970 and then of head 041389e, never the moving worktree. My scripts and tests
+are in the same scratchpad directory: `tests/test_review_at_rereview.py`, `tests/test_review_at_torn.py`,
+`run_rereview.sh`. Results are in `rereview_results_68a6970.txt` and `rereview_results.txt`.
+
+At head, the branch's `test_loop_expert_iteration.py`, `test_followup_arms.py`, `tests/graph/test_expert_iteration_round.py`
+and `tests/monitoring/test_store.py` give **200 passed**. All my review tests together give 271 passed and 20 skipped
+(combinations that do not exist, such as arm A at a round's build). The one failure is the known one: the fakes'
+token boundaries on the handoff path are not reproducible, even master against itself (N5).
+
+- **S1 (duplicate records after a crash while publishing): resolved.**
+  - *Setup.* Every training attempt now writes its own numbers into `phase.json` (GRPO steps, value trees, round
+    steps), so a stale record shows. I crashed at phase 4 at every point: before and after the build, before
+    training, between the updates, during value training, after `phase.json`, in the merge or durable write, and in
+    the serve. Each crash happened once and twice in a row, on the disk and the handoff path, for arms A, C and D:
+    80 cases.
+  - *Result.* In every case there is exactly one `grpo`, `value_training` and `expert_iteration` line per phase. The
+    lines sit at the right phases: GRPO 1-8 (none in C), value 2, 4, 6, 8, rounds C 1-8 and D 4 and 8. Each line
+    holds the numbers of the `phase.json` the version was published from. After a crash once `phase.json` was written
+    the phase trains again, and the record holds the second attempt's numbers. A crash after the record but before
+    the version keeps the first record, which belongs to that same, published outcome. My original 60 cases now match
+    the uninterrupted run in full.
+  - *Torn last line (041389e).* At each publishing crash point (merge on disk, merge on handoff, serve on handoff), I
+    cut the last line of `grpo`, `value_training`, `expert_iteration` or all three at the first byte, at half, at all
+    but the last byte, and as a whole line without its newline: 48 cases.
+  - *Result.* Every case restarts once and publishes through phase 8. There is one record per phase and kind,
+    holding the published outcome's numbers, and every line of the three files parses.
+  - *68a6970 without this commit.* A torn `grpo` line stopped every later restart with `JSONDecodeError`.
+  - *Damaged complete lines.* A cut last line *with* its newline, and a damaged middle line, both stop the loop
+    loudly (`JSONDecodeError`) as intended. See N7.
+- **S2 (zero-step round): resolved.** The trainer now checks `plan_steps` before training and returns no round
+  (`resident_trainer.py`). The loop records `skipped = true, skip = "no_optimizer_step"`. I ran it with
+  `stepless_phases = {4}`, with no crash and with a crash after `phase.json`, in the merge or in the serve, on both
+  paths (16 cases).
+  - C publishes v3's adapter unchanged.
+  - D publishes its GRPO update alone.
+  - There is one round line per round phase, the same after every restart.
+
+  The branch's `test_a_round_trains_only_when_its_data_fills_an_optimizer_step` passes. `train_expert_iteration`
+  called directly still saves a 0-step adapter, but the resident path no longer reaches it.
+- **S3 (round settings without rounds): resolved.**
+  - Refused at load: a GRPO loop config with `expert_iteration_every_phases`, `_window_phases` or `_config`.
+  - Refused by `overlay_configs`: an A overlay with a round interval, window or round learning rate, and a C overlay
+    with `phase.policy.data.credit` or `phase.policy.optimization.learning_rate`.
+  - My 11 bad configs are still refused at load.
+  - The shipped C and D overlays still write and load, with no recipe refusals.
+  - N2's contradictions still load: C with `expert_iteration_every_phases = 4`, and a D interval or window larger than
+    `max_phases`. That is a note only.
+- **A and B against master: unchanged.**
+  - Records (disk path), 6 phases with credits per_tactic, sequence and proof_success: identical to master apart from
+    one tree's `started_phase`, which flips between two master runs too.
+  - Uninterrupted runs at 041389e against 2db23ca: likewise only `started_phase`.
+  - The golden file: 10/10 on master and 10/10 at 041389e.
+  - `followup_arm.py` configs for A, B1 and B2: identical apart from the output directory.
+  - Handoff path: as before, master is not reproducible against itself.
+- **The other reviewer's points: tests exist and pass at head.**
+  - `test_a_restart_in_publishing_*`: publishes once, records the round's adapter, serves from host memory, trains
+    and builds nothing again, matches the uninterrupted run's versions and phases, writes the round record once. Each
+    is parametrised for arm C and arm D.
+  - `test_a_crash_while_publishing_*`: A, C and D × merge, durable write and the servers' start.
+  - `test_the_loops_round_trains_the_adapter_the_hand_run_trainer_trains`, `..._takes_the_hand_run_trainers_steps`
+    and `test_on_two_ranks_the_loops_round_trains_the_hand_run_trainers_adapter`.
+
+### New notes
+
+- **N7. Two cases of a damaged metrics line need a better message.**
+  - A damaged complete line stops the loop at every restart. The error names neither the file nor the line:
+    `JSONDecodeError: Unterminated string starting at: line 1 column 506` comes from `written_for_phase`
+    (`store.py`). Naming the path and line number would let the operator repair it in a minute.
+  - Cutting a torn final line is silent. One `loop.log` line ("cut a torn last line of grpo.jsonl, N bytes") would
+    keep the record honest.
+  - Inferred from reading: if a torn line were ever found only at a *later* phase's publish, the cut would drop that
+    earlier phase's record without a word. This cannot happen in order, because the record is written before the
+    version.
+- N1-N6 stand as written. N5 still means the fakes cannot pin token boundaries on the handoff path. The node smoke
+  tests are unchanged.

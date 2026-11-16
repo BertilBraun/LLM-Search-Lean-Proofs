@@ -203,3 +203,53 @@ data fills less than one optimizer step (S1). No node and no full suite.
    - One trainer rank during the round: one retry, one version.
    - The loop during `record_durably` of a round phase (M1's case, for real).
 6. **Durations of C's phases 1-4 with W = 4** against the 2x-median timeout (N6).
+
+## Re-review (2026-11-16)
+
+**Verdict: merge.** M1 and S1-S3 are resolved, and so is review AT's duplicate-records finding. I found nothing the
+fixes broke. The new notes below are minor and none blocks the merge.
+
+I read `git diff 2db23ca 68a6970` (1b54f53, 68a6970). WSL, targeted only: `test_loop_expert_iteration.py`,
+`test_followup_arms.py`, `test_expert_iteration_round.py`, `test_loop_handoff.py`, `test_loop_budget.py`,
+`test_data_parallel_trainers.py`, **290 passed**. The golden file is byte-identical to 98604e0's, and its test is
+unchanged and passes.
+
+| Finding | Status | Evidence |
+|---|---|---|
+| M1 restart while publishing | **Resolved** | `HeldRecord` waits inside the merge `record_durably` runs for `v0002`, after the servers loaded the round's merge from host memory and before `record_published`. It then dies, and the loop restarts. For C and D it asserts: one version per phase; phase 2's adapter is `expert_iteration/adapter`; version 2 is served from the handoff directory; no retraining or rebuilding; versions and phase records equal an uninterrupted run's; one round line per phase. |
+| S1 round without a step | **Resolved** | `TrainerRank.train_expert_iteration` returns None when `plan_steps(data.train, ...)` is empty. That is the hand-run trainer's step plan, which also drops a step's remainder. C then publishes its policy unchanged and D its GRPO update. The record says `skipped`, `skip = "no_optimizer_step"` (or `too_few_examples`). Tested at the boundary in the trainer (exactly one step trains, one micro-batch short does not) and in the loop's record. |
+| S2 against the hand-run trainer | **Resolved, a real equivalence** | `sft.train` (now CPU-capable; on a GPU its behaviour is unchanged, since `fused`, autocast, `device_ids`, the peak and synchronize calls only follow the device) and `train_expert_iteration` are separate code paths. On one rank they give bit-identical adapters and step records: learning rate, loss, gradient norm, tokens. On two gloo ranks, DDP against the gradient sums agree within 1e-5. |
+| S3 contradictory keys | **Resolved** | `unused_settings` (a `match` on `PolicyUpdate`) refuses overlays that set what their policy update never reads: `expert_iteration.*` and `loop.training.expert_iteration_*` in GRPO arms, `phase.policy.*` in C. D may set both rates. `parse_loop_config` refuses any of the four round settings away from its default under `policy_update = "grpo"`. Parametrized tests cover both directions. |
+| AT S1 records written twice | **Resolved** | `write_phase_record` skips a `grpo`, `value_training` or `expert_iteration` line whose family already has a line with this phase in its context, and skips its log line too. Crash tests cover arms A, C and D at three points (disk merge, durable write, servers' start), 9 cases each. The families and phases recorded equal an uninterrupted run's. |
+
+Why de-duplication cannot drop a record:
+- The lines are written only in `publish`, under the context phase that equals `progress.phase`.
+- A restart in PUBLISHING never retrains. It re-reads the same phase.json and the same progress, so the second
+  attempt's record would equal the first except for `time`. The skipped write therefore loses nothing.
+- A crash between the record and the version leaves the record in place, and the version is then recorded once.
+- Nothing else writes these families into a loop's run, with one exception: `grpo_phase.py --metrics-run`, by hand
+  (N-b).
+- An uninterrupted run writes the same lines as before (the golden test).
+- Arms A and B are otherwise unchanged. The new `parse_loop_config` refusal only hits non-default round settings, and
+  the `sft.py` changes are no-ops on a GPU.
+
+New notes (minor, none blocks):
+- **N-a. A torn metrics line could now stop the loop.** `MetricsWriter.written_for_phase` runs `json.loads` on every
+  line. A torn last line (killed mid-append, no newline) raises inside `publish` on every restart. `RunReader.refresh`
+  skips such a line. Skip lines without a trailing newline here too, or catch `JSONDecodeError`.
+- **N-b. A hand-written `grpo` line would suppress the loop's own.** `experiments/grpo_phase.py --metrics-run
+  <loop run> --phase k` writes a `grpo` line under phase k. If anyone ever points it at a live loop's run, the loop's
+  own line for phase k is then skipped. Worth one sentence in grpo_phase.py's docstring.
+- **N-c. One test's helper documents the behaviour 68a6970 removed.** `last_round_lines`'s docstring still says "a
+  restart in publishing writes a round's line again, as GRPO's". Since 68a6970 that is wrong, and
+  `test_a_restart_in_publishing_keeps_an_uninterrupted_runs_last_round_records` is now subsumed by
+  `..._writes_the_interrupted_rounds_record_once`. Fix the docstring or drop the test.
+- **N-d. The crash tests do not assert that the crash fired.** `crashed_in_publishing` suppresses any `RuntimeError`.
+  An unrelated error would pass silently, though the uninterrupted-run comparison would probably catch it. Assert
+  `CrashOnce.crashed` and the message.
+- **N-e. Style slips.**
+  - rl/README.md:1094 runs to 175 characters (the section's other lines wrap at 120).
+  - `ExpertIterationPhase` now has both `skipped: bool` and `skip: RoundSkip | None`, and the comment on `skipped`
+    says "and why".
+  - `train_on_ranks` dispatches on the string `"hand_run"` / `"loop"`, and passes `print` as an evaluation callback.
+  - The README's "Restarts" paragraph does not say that a phase's training records are written once.

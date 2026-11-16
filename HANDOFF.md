@@ -249,7 +249,7 @@ in `results/reviews/2026-11-16_review_aq_*` and `_ar_*`; full suite 4,590 passed
   Both found no path that publishes a half-trained, stale, duplicate or missing version; arms A and B produce records
   identical to master.
 - **Findings being fixed** (sent to the implementer; `1b54f53` covers the first four, the fifth was sent at about
-  18:45 UTC):
+  18:05 UTC):
   1. The design asks for restart tests while PUBLISHING (the likeliest kill on the node, during the large copy to
      disk); they were missing (AS M1).
   2. A round that passes the minimum-examples check but yields 0 optimizer steps published the unchanged adapter and
