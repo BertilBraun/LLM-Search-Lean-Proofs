@@ -164,3 +164,20 @@ def test_an_arm_whose_search_config_changed_since_the_shared_run_is_refused(tmp_
     (tmp_path / "search.toml").write_text(visible_search.replace("temperature = 0.8", "temperature = 0.7"), "utf-8")
     result = start_configs(tmp_path, "arm", filled_arm(tmp_path), mode)
     assert "the arms must sample in the mode their learning rates were chosen in" in result.stderr
+
+
+def test_configs_a_killed_start_left_half_written_do_not_block_the_next(tmp_path: Path) -> None:
+    staging = tmp_path / "followup_configs" / ".followup_shared_sampling.staging"
+    staging.mkdir(parents=True)
+    (staging / "phase.toml").write_text("cut sho", encoding="utf-8")
+    result = start_configs(tmp_path, "shared sampling", SHARED_SAMPLING, VISIBLE)
+    written = sorted(path.name for path in (tmp_path / "followup_configs" / "followup_shared_sampling").iterdir())
+    assert (result.returncode, written, staging.exists()) == (0, ["loop.toml", "phase.toml", "sampling.json"], False)
+
+
+def test_a_round_whose_outcome_file_was_cut_short_is_not_complete(tmp_path: Path) -> None:
+    phase = tmp_path / "checkpoints" / "step2_A_5e-5" / "phase.json"
+    phase.parent.mkdir(parents=True)
+    phase.write_text('{"trees": 2400, "groups"', encoding="utf-8")
+    result = command(tmp_path, "learning_rate_step.py", "check-round", "--label", "A_5e-5")
+    assert (result.returncode, "does not read back" in result.stderr) == (1, True)

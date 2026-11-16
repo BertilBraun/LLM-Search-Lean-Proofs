@@ -26,6 +26,7 @@ are written again silently, so a restart can rerun it). deployment/arm_loop.sh s
 
 import argparse
 import json
+import shutil
 import sys
 import tomllib
 from pathlib import Path
@@ -93,6 +94,18 @@ def shared_sampling_refusal(output: Path, record: SamplingRecord) -> str | None:
     return sampling_refusal(record, expected)
 
 
+def write_directory(directory: Path, texts: dict[str, str]) -> None:
+    """All files or none: written beside it and renamed into place, so a kill mid-write leaves no partial directory
+    that later starts would refuse as holding other configs. A staging directory a killed start left is replaced."""
+    staging = directory.with_name(f".{directory.name}.staging")
+    if staging.exists():
+        shutil.rmtree(staging)
+    staging.mkdir(parents=True)
+    for name, text in texts.items():
+        (staging / name).write_text(text, encoding="utf-8")
+    staging.rename(directory)
+
+
 def main() -> None:
     arguments = parse_arguments()
     overlay = read_toml(arguments.arm)
@@ -132,9 +145,7 @@ def main() -> None:
         if differing:
             raise SystemExit(f"{directory} holds other {differing}: an arm's configs are written once.")
     else:
-        directory.mkdir(parents=True)
-        for name, text in texts.items():
-            (directory / name).write_text(text, encoding="utf-8")
+        write_directory(directory, texts)
     load_loop_config(directory / "loop.toml")
     from_json_object(TrainingPhaseConfig, read_toml(directory / "phase.toml"))
     if configs.expert_iteration is not None:
