@@ -2,7 +2,7 @@
 
 Kept current by the orchestrator. Details live in the linked files.
 
-**Last update:** 2026-11-16, 14:40 UTC.
+**Last update:** 2026-11-16, 16:30 UTC.
 
 ## Where we are
 
@@ -19,7 +19,7 @@ two independent reviews and a re-review (`results/reviews/2026-11-14_review_aa_*
 | Step 1, anchor runs 1 and 2 (v0 with value v0, 2,000 statements) | done: 713 and 716 of 2,000 | `node_backup/2026-11-15/live/runs/step1_chain/` |
 | Step 1: token budget, calibration run | done: T = 26,804 generated tokens per statement; calibration run 65 of 200; constants -56.4 (completion), -5.35 (block sum), -0.142 (block mean) | |
 | Step 1: three value-free pilots (200 statements each) | done: 71, 68 and 65 of 200, against 70 and 75 with the value model | |
-| Step 1: reasoning at equal tokens (no-reasoning pilot, visible run, no-reasoning run) | first pilot rejected at exactly 1% wall-clock stops; wall cap doubled to 14,400 s (master ab78ace); runs after the 2x2 | |
+| Step 1: reasoning at equal tokens (no-reasoning pilot, visible run, no-reasoning run) | first pilot rejected at exactly 1% wall-clock stops; wall cap doubled to 14,400 s (master ab78ace); postponed behind the arms | |
 | Step 1: the full value-free run (whole-completion order) | done: 642 of 2,000 against 713 and 716 with the value model | |
 | Step 1: v0's policy with the old run's final value model | done: 875 of 2,000, +8.0 points over value v0; the restart-based serving path worked on real servers | |
 | Step 1: the full value-free run in the block-sum order | done: 633 of 2,000 (the whole-completion order: 642) | |
@@ -27,8 +27,9 @@ two independent reviews and a re-review (`results/reviews/2026-11-14_review_aa_*
 | Code: GPU power limits and Lean load (tactic timeouts, REPL failures) in every run record; quota reserve enforced on every start path | merged (reviews AO and AP, re-reviewed) and deployed, master 3309652 | |
 | Step 1, last: old final value model with v0's policy; the full value-free run | after a check-in on the pilots | |
 | Before any arm: time server stops and starts, one short phase on the restart-based serving path | during step 1 | |
-| Step 2: one training round per signal from shared v0 trees | after step 1 | |
-| Not built: expert iteration inside the loop | only if that arm goes on after step 2 | |
+| Learning rates for the arms (shared v0 sampling, one round per signal, held-out states) | starts after the run in progress, tonight | |
+| Arms A, B, C, D with one probe run each | A starts after the learning rates; see the plan below | |
+| Code: expert iteration inside the loop (for arms C and D) | being implemented; two reviews follow | |
 | Results safety | small result files pulled to the PC every 10 minutes | `node_backup/2026-11-15/live/` |
 
 ## Settled: tactic timeouts and load (2026-11-15)
@@ -198,14 +199,22 @@ default), safe server stops, results pulled to the PC as they are written.
   mass of per-tactic credit; expert iteration trains on a tenth of the tokens at five times the rate. Arms should be
   matched on step size (the same KL to v0 per phase), not only on learning rate.
 
-## Plan
+## Plan (revised 2026-11-16 with the owner)
 
-| Step | What | Rough cost | Decides |
-|---|---|---|---|
-| 0 | Analyses, node setup, design, work package 1 | node time | arm length, power, pool fix |
-| 1 | Evaluations only: reasoning against none at equal tokens; value model final, v0, none | $15-25 | both questions |
-| 2 | One training round per signal from shared v0 trees; 2-3 learning rates each; window 1 against 4 | $40-60 | whether signals separate; step sizes |
-| 3 | Closed loop: two arms, one seed each; more arms and second seeds after a check-in | $30-45 per arm | which signal works best |
+| Order | What | Rough cost |
+|---|---|---|
+| 1 | Step 1's last cell: v35 with the final value model | running |
+| 2 | Learning rates: v0 samples 48M tokens once; one training round per signal from the same trees (per-tactic GRPO, pure proof success, expert iteration with window 1 and 4, two or three rates each); the 512 held-out states pick each signal's rate. No probe runs, no gate | about $7 |
+| 3 | Arm A (per-tactic GRPO), then one probe run of its final checkpoint | about $19 |
+| 4 | Arm B (pure proof success), then one probe run | about $19 |
+| 5 | Arms C (expert iteration) and D (GRPO plus an expert-iteration round every 4 phases), one probe run each | about $38 |
+| 6 | Second pass, arm by arm: the final checkpoint a second time, phase 8, v0's policy with the arm's final value model | about $36 |
+| Later | Reasoning at equal tokens (pilot, visible run, no-reasoning run); second seeds | about $14; $19 per seed |
+
+- Every arm: from v0 and value v0, 16 phases of 12M generated tokens, value model trained every 2 phases, stops at its
+  first valid-Lean collapse (then assessed and reported).
+- Expert iteration inside the loop (needed for C and D) is being implemented now, with two reviews before it runs.
+- Credit loaded: $190 on 2026-11-16; not a cap.
 
 ## Decisions (owner, 2026-11-14)
 
@@ -233,14 +242,11 @@ default), safe server stops, results pulled to the PC as they are written.
 | First node, 2026-11-14 11:20 UTC to its outage at about 23:35 UTC | about $11 at most; partly refunded by the provider (owner) |
 | Second node, from 2026-11-15 about 08:30 UTC | $0.83 per hour |
 
-## For the owner's next check-in
+## Decisions (owner, 2026-11-16)
 
-1. **Which arms to run.** Graph credit against pure outcome is expected to show little. Candidates with a larger
-   expected contrast: graph credit against expert iteration, and a new arm E that learns from unsolved trees and
-   off-graph expansions (the 82-85% never used). E brings back the conditions of the old reward hacking, so it would
-   get its own step-2 round and a habit check first.
-2. **Closed-loop outcome-only control.** Pure proof success instead of "whichever differs more" (a reviewer's point:
-   that rule selects on noise).
-3. **Proposed defaults.** 12M generated tokens per phase, 16 phases per arm; stop an arm at its first collapse; an
-   expert-iteration round every 4 phases in the interleaved arm.
-4. **Half probe.** 1,000 statements at intermediate checkpoints (phases 4 and 8), saving 4-6 hours per arm.
+- **Arms.** A, B (pure proof success), C and D all run. Dropped: an arm that learns from unsolved trees (no positive
+  signal there except the value model's estimate, which is how the old reward hacking arose) and a value-only arm.
+- **Defaults.** 12M generated tokens per phase, 16 phases. An arm that collapses is stopped, assessed, and reported.
+- **Evaluation, breadth first.** After each arm one probe run of its final checkpoint. Only when all four arms have
+  one: the second final run, phase 8, and v0's policy with the arm's final value model, arm by arm.
+- **Learning rates.** Chosen on the held-out states from one training round per signal; no probe runs at that step.
