@@ -21,7 +21,6 @@ from lean_search.expert_iteration.serving import ModelVersion
 from lean_search.policy.prompts import render_prompt, visible_explanation
 from lean_search.reasoning.dataset import read_examples as read_reasoning_examples
 from lean_search.reasoning.dataset import tokenize_reasoning_example
-from lean_search.rl.health_checks import ContinuedVersion
 from lean_search.rl.policy_data import CompletionTokens, PolicyTokenizer, completion_tokens
 from lean_search.search.graph_labels import (
     EdgeKind,
@@ -43,6 +42,19 @@ from lean_search.training.sft_data import SftExample, TokenizedExample
 EXAMPLE_SOURCE = "expert_iteration"
 # Block lengths in the summary: 1 to 7 tactics, then 8 or more.
 LONGEST_COUNTED_BLOCK = 8
+# Beside an adapter trained outside the loop (`ContinuedVersion`).
+CONTINUED_FROM_FILE = "continued_from.json"
+# A round whose replay validation loss rose more than this over its first evaluation forgot (`screened`; the loop's
+# rounds alert on it).
+MAX_REPLAY_LOSS_RISE = 0.03
+
+
+@dataclass(frozen=True)
+class ContinuedVersion:
+    """The published version an adapter trained outside the loop continued, written beside it by its training."""
+
+    version: int
+    policy_adapter: str
 
 
 @dataclass(frozen=True)
@@ -658,6 +670,37 @@ class DataSummary:
     # The explanation's characters before the fence: 10th percentile, median, 90th percentile.
     explanation_characters: tuple[int, ...]
     policy_versions: tuple[int, ...]
+
+
+# The build's record, written last: a round directory with it is complete.
+BUILD_SUMMARY_FILE = "summary.json"
+
+
+@dataclass(frozen=True)
+class BuildSummary:
+    """What `grpo_expert_iteration.py build` selected, beside the round's train.jsonl and validation.jsonl."""
+
+    name: str
+    built_at: str
+    git_revision: str
+    loop: str
+    # 0 for tree directories.
+    first_phase: int
+    last_phase: int
+    window_phases: int
+    tree_directories: tuple[str, ...]
+    minimum_version: int
+    rejected_versions: tuple[int, ...]
+    trees: int
+    held_out_statements: int
+    held_out_states: int
+    counts: FilterCounts
+    states: int
+    capped_states: int
+    dropped_easy_examples: int
+    easy_states: int
+    sampled_states: int
+    data: DataSummary
 
 
 @dataclass(frozen=True)

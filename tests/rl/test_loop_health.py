@@ -32,9 +32,8 @@ from lean_search.monitoring.alerts import AlertThresholds, run_alerts
 from lean_search.monitoring.families import HealthMeasurements, HealthThresholds, PhaseHealth
 from lean_search.monitoring.store import RunReader
 from lean_search.rl.evaluation import EvaluationKind, EvaluationPaths
+from lean_search.rl.expert_iteration_data import CONTINUED_FROM_FILE, ContinuedVersion
 from lean_search.rl.health_checks import (
-    CONTINUED_FROM_FILE,
-    ContinuedVersion,
     ReferenceHabits,
     RewardFix,
     append_health,
