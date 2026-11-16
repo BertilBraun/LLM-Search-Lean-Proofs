@@ -2,7 +2,7 @@
 
 Kept current by the orchestrator. Details live in the linked files.
 
-**Last update:** 2026-11-16, 05:40 UTC.
+**Last update:** 2026-11-16, 08:30 UTC.
 
 ## Where we are
 
@@ -21,8 +21,9 @@ two independent reviews and a re-review (`results/reviews/2026-11-14_review_aa_*
 | Step 1: three value-free pilots (200 statements each) | done: 71, 68 and 65 of 200, against 70 and 75 with the value model | |
 | Step 1: reasoning at equal tokens (no-reasoning pilot, visible run, no-reasoning run) | pilot rejected at exactly 1% wall-clock stops; waits for a raised wall cap | |
 | Step 1: the full value-free run (whole-completion order) | done: 642 of 2,000 against 713 and 716 with the value model | |
-| Step 1: v0's policy with the old run's final value model | running since 05:31 UTC; the restart-based serving path worked on real servers | |
-| Step 1: the full value-free run in the block-sum order | follows | |
+| Step 1: v0's policy with the old run's final value model | done: 875 of 2,000, +8.0 points over value v0; the restart-based serving path worked on real servers | |
+| Step 1: the full value-free run in the block-sum order | running since 08:22 UTC | |
+| Step 1, added: the old final policy (v35) with value v0, then with the final value model (the 2x2 of policy by value) | follows the block-sum run | |
 | Code: GPU power limits and Lean load (tactic timeouts, REPL failures) in every run record; quota reserve enforced on every start path | merged (reviews AO and AP, re-reviewed) and deployed, master 3309652 | |
 | Step 1, last: old final value model with v0's policy; the full value-free run | after a check-in on the pilots | |
 | Before any arm: time server stops and starts, one short phase on the restart-based serving path | during step 1 | |
@@ -71,6 +72,25 @@ question was whether CPU contention causes this, which would make results depend
 - **Lean process crashes** (35 and 11 per run) come almost entirely from `ring_nf` on huge powers or long sums: memory
   exhaustion or stack overflow, which heartbeats do not stop, tried again on the same state because a crash, unlike a
   timeout, does not disable the tactic.
+
+**Did the old loop's value training help? Full run** (v0's policy with the old run's final value model, 2,000
+statements, 16 expansions; accepted 2026-11-16 08:20 UTC):
+
+| Value model (policy v0 in all) | 0-499 | 500-999 | 1,000-1,499 | 1,500-1,999 | 2,000-2,999 | 3,000-4,499 | 4,500+ | All |
+|---|---|---|---|---|---|---|---|---|
+| None | 115/150 | 133/250 | 142/350 | 109/350 | 86/400 | 46/300 | 11/200 | 642 (32.1%) |
+| v0 (anchors, mean of two runs) | 125/150 | 156/250 | 145/350 | 129.5/350 | 93.5/400 | 51/300 | 14.5/200 | 714.5 (35.7%) |
+| The old run's final value model | 132/150 | 171/250 | 175/350 | 157/350 | 133/400 | 76/300 | 31/200 | **875 (43.75%)** |
+
+- **+8.0 points over value v0** (95% interval +6.4 to +9.7; against each anchor alone p below 1e-15), with the policy
+  unchanged. The gain is in every band and largest in the hard ones (+8 to +10 points from 1,000 characters up).
+- Solved within 1/2/4/8/16 expansions: 8.7/16.7/25.1/34.2/43.8% against 10.1/16.5/22.9/29.5/35.7%: no gain at the
+  first two expansions, growing from the fourth on.
+- Fewer tokens for more proofs: 36.5M generated tokens against 39.7M.
+- **What this changes.** The old run's in-pool gain (+17 to +20 points on its probe) was credited to the policy; a
+  large part may have come from the value model. The old value benchmark, which stayed flat, missed it. Next: the old
+  final policy (v35) with value v0 and with the final value model, to split the gain between policy and value.
+- Not contamination by construction: probe v2 excludes every statement the old run searched. One value model, one run.
 
 **Does the value model matter? Full run** (v0's policy, no value model, whole-completion order, 2,000 statements, 16
 expansions; accepted 2026-11-16 05:24 UTC):
