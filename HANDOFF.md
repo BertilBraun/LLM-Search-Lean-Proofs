@@ -48,7 +48,7 @@ file and the files it points to. Keep this file current while you work, or repla
 
 - **Subagents:** implementation, analysis and review run in subagents on Opus 5.5 at high effort. Two independent
   reviews after every implementation wave, then fixes, then a re-review by the same reviewers, then merge. Reviews are
-  files in `results/reviews/` named `<date>_review_<letters>_<topic>.md`; the last used letters are `ar` (next: `as`).
+  files in `results/reviews/` named `<date>_review_<letters>_<topic>.md`; the last used letters are `at` (next: `au`).
 - **Usage:** running 5-8 Opus subagents at once exhausted the 5-hour usage limit on 2026-11-14 and left the node idle
   for hours. Keep few agents running, have node agents report on events rather than on a timer, and make node work
   self-sustaining so it does not depend on an agent being awake.
@@ -200,9 +200,15 @@ Master is `0191a12` or later and pushed. Every merged package had two reviews an
   (`submission_order = "longest_expected_search_first"`, `expected_search_seconds = <file>`; default file order; no
   shipped config turns it on). The file `experiments/configs/grpo/followup/probe_v2_expected_search_seconds.tsv` holds
   each statement's mean search seconds over the five v0 runs. A run keeps its first session's order.
-- **Why:** a simulation on six recorded runs cuts a run from 3.1-3.6 hours to 2.4-2.9 hours and most of the idle tail.
-  The owner proposed it. An earlier version ordered by proof length and was dropped (reviews AO, AP): proof length
-  does not predict search time.
+- **Why:** the owner proposed it to cut the idle tail of a run. Review AR's out-of-sample simulation on the recorded
+  runs: file order takes 2.32-3.57 hours, the new order 2.41-2.88 hours; about 15 minutes saved per v0 run on average,
+  40 and 16 minutes on the two v35 runs, and one run (block sum) gets 32 minutes longer. The gain should be largest
+  where single searches can run for hours (the token-capped runs at the 14,400 s cap). An earlier version ordered by
+  proof length and was dropped (reviews AO, AP): proof length does not predict search time.
+- **What it costs:** it moves the Lean pressure and the GPU idle time to the START of a run: Lean demand of 102-110
+  cores in the first 30 minutes against 42-55 in file order, on 96 Lean CPUs, and only 3-9 searches waiting on the
+  model in the first hour. Low GPU use in a run's first hour is therefore expected in this order. The 200 Lean-heaviest
+  searches see slightly more contention, so outcomes could shift a little; that is what the checks below are for.
 - **Review AQ** (`results/reviews/2026-11-16_review_aq_search_order_code.md`): merge after one fix. The launcher
   compares the start order of every run in a list, finished ones included; the reasoning pilot shares its evaluation
   config with runs 3 and 4 and ran in file order, so turning the order on in that config would stop the chain. Two
@@ -210,15 +216,24 @@ Master is `0191a12` or later and pushed. Every merged package had two reviews an
   code) give runs 3 and 4 their own evaluation config (`step1/token_capped_evaluation_ordered.toml`, based on
   `token_capped_evaluation.toml`, with the order and the file) and point only those two runs at it in
   `runs_reasoning.toml`.
-- **Review AR** (`..._ar_search_order_code.md`, by simulation with the production code): requested; check whether the
-  file exists and is complete. It should say whether v0's visible-mode search time predicts the no-reasoning mode, and
-  whether starting all slow searches together makes the START of a run Lean-bound.
-- **Then:** fixes, re-review, merge, push; on the node deploy at a boundary between runs (keeping the node-local
-  edits) and turn the order on per run list. The two full reasoning runs must both use the same order and file: both
-  `run.json` files show the same `start_orders` and file digest, `sessions.jsonl` shows a single order, and
-  `probe_compare.py pair` prints no "orders differ" line. First use: one v0 / value v0 run in the new order, not
-  marked as anchor, paired against the two file-order anchors (about 2.5 hours); it passes if its difference to each is
-  within their A/A difference and its Lean-load figures match.
+- **Review AR** (`..._ar_search_order_code.md`, by simulation with the production code): merge after the same fix.
+  With real Lean both orders give identical per-statement results; a resume in another order is refused. The
+  no-reasoning pilot's search times correlate 0.74 in rank with the file, so the file predicts that mode too. Should
+  fixes: correct the README's numbers; refuse a file that misses many of the probe's statements.
+- **State:** the implementer was sent both reviews' fixes on 2026-11-16 at about 17:45 UTC (the code fix, an own
+  evaluation config `step1/token_capped_evaluation_ordered.toml` for runs 3 and 4 only, README numbers, the refusal).
+  If the branch's head is still `68e70fe`, none of that happened; the fix is small (AR says an uncommitted
+  `recorded_mismatches` edit in the worktree already does the code part).
+- **Then:** re-review by AQ's and AR's angles, merge, push; on the node deploy at a boundary between runs (keeping
+  the node-local edits). The two full reasoning runs must both use the same order and file: both `run.json` files show
+  the same `start_orders` and file digest, `sessions.jsonl` shows a single order, and `probe_compare.py pair` prints no
+  "orders differ" line.
+- **Checks before trusting a comparison ACROSS orders** (every arm's probe run in the new order is compared with the
+  file-order anchors): (1) after the first ordered run, `probe_compare.py load` per band against the range of the five
+  file-order runs; (2) one v0 / value v0 run in the new order, not marked as anchor, paired against the two file-order
+  anchors (about 2.5 hours); it passes if its difference to each is within their A/A difference and its Lean-load
+  figures match. A good time for (2) is while the owner decides on the arms' mode. If either check fails, the arms'
+  probe runs stay in file order.
 
 **B. Expert iteration inside the loop** — branch `worktree-agent-af77525dfc814e9c3`, commits up to `2db23ca` or later
 (worktree `.claude/worktrees/agent-af77525dfc814e9c3`).
@@ -228,7 +243,10 @@ Master is `0191a12` or later and pushed. Every merged package had two reviews an
   (expert iteration every phase) and `arms/D.toml` (GRPO every phase plus a round every 4 phases). It is the last
   missing code for arms C and D; arms A and B need none of it.
 - **State:** implemented in eight commits; the implementer confirmed on the old run's trees that the loop path builds
-  byte-identical data to the hand-run builder and was running the full suite. It has NOT been reviewed. Read the
+  byte-identical data to the hand-run builder and was running the full suite. Two reviews were started on
+  2026-11-16 at about 17:40 UTC: AS (`results/reviews/2026-11-16_review_as_expert_iteration_loop_code.md`, by reading
+  against the design) and AT (`..._at_expert_iteration_loop_code.md`, by simulation). If those files exist, they are
+  the reviews; if they are missing or stop mid-way, the reviewers died with the session and must be redone. Read the
   branch's commit messages and `src/lean_search/rl/README.md` on the branch for what it does.
 - **Then:** run the full suite on the branch; two independent reviews (suggested: one on correctness against the
   design and review AB's finding M6 — the round must be the phase's one version, the persistent trainer and /dev/shm,
