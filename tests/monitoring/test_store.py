@@ -141,3 +141,49 @@ def test_families_are_the_files_present(tmp_path: Path) -> None:
 @pytest.mark.skipif(importlib.util.find_spec("tensorboard") is not None, reason="TensorBoard is installed")
 def test_tensorboard_mirror_is_skipped_without_tensorboard(tmp_path: Path) -> None:
     assert MetricsWriter(tmp_path, tensorboard=True).mirror is None
+
+
+def phase_writer(root: Path, phases: tuple[int, ...]) -> MetricsWriter:
+    """A writer with one `example` line per phase."""
+    writer = MetricsWriter(root)
+    for phase in phases:
+        writer.update_context(phase=phase)
+        writer.write(Example(float(phase)), record_time=1.0)
+    return writer
+
+
+@pytest.mark.parametrize(("phase", "written"), [(2, True), (3, False)])
+def test_a_writer_knows_the_phases_a_family_has_lines_for(tmp_path: Path, phase: int, written: bool) -> None:
+    assert phase_writer(tmp_path, (1, 2)).written_for_phase("example", phase) == written
+
+
+def tear_last_line(root: Path) -> None:
+    """An append cut off by a killed process: a line without its end."""
+    with family_path(root, "example").open("a", encoding="utf-8") as file:
+        file.write('{"time": 1.0, "phase": 3, "fie')
+
+
+def test_a_torn_last_line_counts_as_not_written(tmp_path: Path) -> None:
+    writer = phase_writer(tmp_path, (1, 2))
+    tear_last_line(tmp_path)
+    assert not writer.written_for_phase("example", 3)
+
+
+def test_the_line_after_a_torn_one_reads_whole(tmp_path: Path) -> None:
+    writer = phase_writer(tmp_path, (1, 2))
+    tear_last_line(tmp_path)
+    writer.written_for_phase("example", 3)
+    writer.update_context(phase=3)
+    writer.write(Example(3.0), record_time=1.0)
+    lines = family_path(tmp_path, "example").read_text(encoding="utf-8").splitlines()
+    assert [json.loads(line)["phase"] for line in lines] == [1, 2, 3]
+
+
+def test_a_damaged_line_before_the_last_raises(tmp_path: Path) -> None:
+    writer = phase_writer(tmp_path, (1,))
+    with family_path(tmp_path, "example").open("a", encoding="utf-8") as file:
+        file.write('{"time": 1.0, "pha\n')
+    writer.update_context(phase=2)
+    writer.write(Example(2.0), record_time=1.0)
+    with pytest.raises(json.JSONDecodeError):
+        writer.written_for_phase("example", 3)

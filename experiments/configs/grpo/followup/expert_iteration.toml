@@ -1,0 +1,78 @@
+# The follow-up arms' expert-iteration recipe (DESIGN.md, "Follow-up study: controlled arms", arms C and D;
+# src/lean_search/rl/README.md, "Expert iteration inside the loop"): the hand-run round's (grpo/expert_iteration_1.toml,
+# variant A) selection, replay and fine-tuning, run by the loop at its pauses. An arm overlay sets the learning rate
+# ([expert_iteration] in arms/C.toml, arms/D.toml); experiments/followup_arm.py writes this file with it beside the
+# arm's loop config, whose [training] expert_iteration_config names it. Per round the loop fills in run_name, [data]
+# loop, last_phase and window_phases (training.expert_iteration_window_phases), [sft] data (the round's directory in the
+# run) and initial_adapter (the published policy, or the phase's GRPO update in arm D), and the seeds: at seed offset
+# 0, phase k selects with "followup-expert-iteration/phase-k", draws the replay with
+# "followup-expert-iteration/replay/phase-k" and trains with seed k; a seed offset n appends "/offset-n" and adds
+# n x 1,000,000. The loop refuses a recipe that sets what it fills in.
+run_name = ""
+
+[data]
+loop = ""
+last_phase = 0
+window_phases = 0
+# Per state at most 2 distinct blocks (by a seeded hash, so block length plays no part), per statement at most 6 states
+# (those on the root's shortest route first).
+blocks_per_state = 2
+states_per_statement = 6
+# Easy states: at least 7 of 8 first-round samples, pooled over every tree, ran a proof-graph block; at most 20% of
+# the examples.
+easy_proof_graph_share = 0.875
+max_easy_share = 0.2
+validation_fraction = 0.05
+seed = "followup-expert-iteration"
+# As phase.toml's [reward] off_graph_min_expanded_nodes.
+off_graph_min_expanded_nodes = 4
+
+# The loop's own replay (base.toml [training] lean_replay, math_replay), 30% and 10% of the training completion tokens;
+# the replay validation loss is reported apart, and a rise above 3% over the round is an alert.
+[replay]
+lean_replay = "reasoning/visible_student_v3_numbered/train.jsonl"
+math_replay = "reasoning/visible_student_v3_numbered/math.jsonl"
+lean_token_share = 0.3
+math_token_share = 0.1
+validation = "reasoning/visible_student_v3_numbered/validation.jsonl"
+validation_examples = 1000
+seed = "followup-expert-iteration/replay"
+
+[sft]
+# base.toml's serving.policy_base_model: the adapter continues on the raw base, as every phase does.
+model = "Qwen/Qwen3.5-4B"
+data = ""
+merge = false
+initial_adapter = ""
+
+# Unused with initial_adapter (the adapter keeps its own rank and alpha, 64/64).
+[sft.lora]
+rank = 64
+alpha = 64
+dropout = 0.0
+
+# Round 1's: warmup 3%, cosine to 0.1x, 1 epoch, 4 GPUs x 1 micro-batch of 16,384 packed tokens. The structure
+# (method, packing, checkpointing, compiled layers) is phase.toml's policy's: arm D's GRPO and rounds train one resident
+# policy.
+[sft.optimization]
+method = "lora"
+learning_rate = 5e-5
+warmup_fraction = 0.03
+minimum_learning_rate_ratio = 0.1
+weight_decay = 0.0
+max_gradient_norm = 1.0
+epochs = 1
+micro_batch_tokens = 16384
+micro_batches_per_step = 1
+gradient_checkpointing = true
+packing = true
+compile_layers = true
+seed = 0
+
+# The loop's rounds validate at the start, halfway and the end on all their validation examples and the replay's,
+# with these micro-batches; interval_steps and validation_examples are the hand-run train's and unused here.
+[sft.evaluation]
+interval_steps = 100
+validation_examples = 2000
+micro_batch_tokens = 16384
+generation_examples = 0

@@ -26,6 +26,9 @@ refuses to start until rollback or clear-health-stop ran. publish-adapter publis
 loop (an expert-iteration round, src/lean_search/rl/README.md, "Expert iteration") as the next version, with the current
 value model; the loop stopped in its sampling stage, the adapter on the policy base at the current adapter's rank and
 scale. rollback and publish-adapter merge the new policy on the CPU and reuse the current value model's merged weights.
+With [training] policy_update naming expert-iteration rounds, run reads their recipe ([training]
+expert_iteration_config) and builds each round's data with experiments/grpo_expert_iteration.py build
+(src/lean_search/rl/README.md, "Expert iteration inside the loop").
 """
 
 import argparse
@@ -52,6 +55,7 @@ from lean_search.monitoring.gpu_power import gpu_power_states
 from lean_search.monitoring.store import MetricsWriter
 from lean_search.policy.expander import load_tokenizer
 from lean_search.rl.evaluation import EvaluationKind
+from lean_search.rl.expert_iteration_data import parse_expert_iteration_config
 from lean_search.rl.fixed_sets import read_fixed_set
 from lean_search.rl.health_checks import (
     clear_health_stop,
@@ -61,6 +65,7 @@ from lean_search.rl.health_checks import (
     roll_back_by_hand,
 )
 from lean_search.rl.loop import (
+    ExpertIterationSetup,
     GrpoLoop,
     GrpoLoopPaths,
     ValueBenchmarkScoring,
@@ -69,10 +74,11 @@ from lean_search.rl.loop import (
     request_evaluation,
     set_value_share,
 )
-from lean_search.rl.loop_config import GrpoLoopConfig, StatementSourceKind, load_loop_config
+from lean_search.rl.loop_config import GrpoLoopConfig, PolicyUpdate, StatementSourceKind, load_loop_config
 from lean_search.rl.loop_services import (
     ServedValueScorer,
     SubprocessEvaluations,
+    SubprocessExpertIterationBuilder,
     VllmServers,
     check_policy_server,
     gpu_memory_text,
@@ -230,6 +236,14 @@ async def check_servers(config: GrpoLoopConfig) -> None:
             raise SystemExit(f"{server.url}: the response lacks what the search or the trainer needs (above).")
 
 
+def expert_iteration_setup(config: GrpoLoopConfig, paths: GrpoLoopPaths) -> ExpertIterationSetup | None:
+    """The rounds' recipe and builder when the policy trains in expert-iteration rounds."""
+    if config.training.policy_update == PolicyUpdate.GRPO:
+        return None
+    recipe = (REPOSITORY_DIRECTORY / config.training.expert_iteration_config).read_text(encoding="utf-8")
+    return ExpertIterationSetup(parse_expert_iteration_config(recipe), SubprocessExpertIterationBuilder(paths))
+
+
 async def run(config: GrpoLoopConfig, paths: GrpoLoopPaths) -> None:
     log = logger(paths)
     stop = asyncio.Event()
@@ -270,6 +284,7 @@ async def run(config: GrpoLoopConfig, paths: GrpoLoopPaths) -> None:
             gpu_memory=functools.partial(gpu_memory_text, config),
             decoder=load_tokenizer(search_run_config(config).policy.tokenizer),
             gpu_power=gpu_power_states,
+            expert_iteration=expert_iteration_setup(config, paths),
         )
         await loop.run(stop)
 

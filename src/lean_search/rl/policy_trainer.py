@@ -18,6 +18,7 @@ import transformers
 from lean_search.policy.adapters import load_adapter_weights, lora_rank, lora_scale, saved_adapter_weights
 from lean_search.rl.policy_data import (
     AdvantageSignRatios,
+    ParameterChange,
     PolicyDataConfig,
     PolicySequence,
     SamplerAgreement,
@@ -157,6 +158,18 @@ def parameter_snapshot(parameters: Sequence[torch.nn.Parameter]) -> list[torch.T
     return [parameter.detach().to("cpu", torch.float32, copy=True) for parameter in parameters]
 
 
+def parameter_change(parameters: Sequence[torch.Tensor], start: Sequence[torch.Tensor]) -> ParameterChange:
+    """The L2 change of the parameters from `start` (`parameter_snapshot`), absolute and relative to the start."""
+    change = math.sqrt(
+        sum(
+            float((parameter.detach().to("cpu", torch.float32) - before).square().sum())
+            for parameter, before in zip(parameters, start, strict=True)
+        )
+    )
+    size = math.sqrt(sum(float(before.square().sum()) for before in start))
+    return ParameterChange(change, change / size if size else None)
+
+
 def update_size(
     records: Sequence[GrpoStepRecord],
     replay_weight: float,
@@ -166,16 +179,10 @@ def update_size(
     """None without a step. `start`: `parameter_snapshot` before the first step."""
     if not records:
         return None
-    change = math.sqrt(
-        sum(
-            float((parameter.detach().to("cpu", torch.float32) - before).square().sum())
-            for parameter, before in zip(parameters, start, strict=True)
-        )
-    )
-    size = math.sqrt(sum(float(before.square().sum()) for before in start))
+    change = parameter_change(parameters, start)
     return UpdateSize(
-        parameter_change_norm=change,
-        relative_parameter_change=change / size if size else None,
+        parameter_change_norm=change.norm,
+        relative_parameter_change=change.relative,
         mean_gradient_norm=statistics.fmean(record.gradient_norm for record in records),
         mean_absolute_policy_loss=statistics.fmean(abs(record.policy_loss) for record in records),
         mean_kl_penalty=statistics.fmean(record.kl_penalty for record in records),

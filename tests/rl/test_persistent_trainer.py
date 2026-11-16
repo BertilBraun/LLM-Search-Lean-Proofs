@@ -121,9 +121,17 @@ async def test_a_job_that_hangs_twice_fails_the_phase(tmp_path: Path) -> None:
 async def test_a_later_phase_waits_the_timeout_of_its_kind(tmp_path: Path, value_phase: bool, minutes: float) -> None:
     async with persistent_trainer(tmp_path) as world:
         await world.trainer.train(world.request(1))
-        world.trainer.train_seconds = {False: [60.0], True: [600.0, 900.0, 1200.0]}
+        world.trainer.train_seconds = {(False, False): [60.0], (True, False): [600.0, 900.0, 1200.0]}
         request = dataclasses.replace(world.request(2), train_value=value_phase)
         assert world.trainer.train_timeout_seconds(request) == minutes * 60
+
+
+async def test_the_first_phase_with_an_expert_iteration_round_waits_the_first_phases_timeout(tmp_path: Path) -> None:
+    async with persistent_trainer(tmp_path) as world:
+        await world.trainer.train(world.request(1))
+        world.trainer.train_seconds = {(False, False): [60.0, 60.0, 60.0]}
+        request = dataclasses.replace(world.request(4), expert_iteration=tmp_path / "round.toml")
+        assert world.trainer.train_timeout_seconds(request) == 45.0 * 60
 
 
 async def test_closing_removes_the_parked_weights(tmp_path: Path) -> None:

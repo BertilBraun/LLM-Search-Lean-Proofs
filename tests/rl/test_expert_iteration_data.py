@@ -14,6 +14,7 @@ from lean_search.reasoning.dataset import ReasoningExample, ReasoningOrigin, wri
 from lean_search.rl.expert_iteration_data import (
     CompletionFilter,
     CompletionSelector,
+    ContinuedVersion,
     ExpertIterationDataConfig,
     PhaseWindow,
     ProofGraphCompletion,
@@ -36,7 +37,7 @@ from lean_search.rl.expert_iteration_data import (
     training_data,
     write_completions,
 )
-from lean_search.rl.health_checks import ContinuedVersion, RewardFix
+from lean_search.rl.health_checks import RewardFix
 from lean_search.rl.policy_data import PolicyDataConfig, build_policy_data
 from lean_search.rl.probe_rating import read_markers
 from lean_search.rl.training_phase import TrainingPhaseConfig, label_phase_data

@@ -361,6 +361,55 @@ class GrpoPhase:
     update: UpdateSize | None = None
 
 
+class RoundSkip(StrEnum):
+    # Fewer training examples than `expert_iteration_min_examples`: the loop sent no round.
+    TOO_FEW_EXAMPLES = "too_few_examples"
+    # Its examples and replay fill no optimizer step (the remainder of a step is dropped, as in the hand-run round).
+    NO_OPTIMIZER_STEP = "no_optimizer_step"
+
+
+@dataclass(frozen=True)
+class ExpertIterationPhase:
+    """A phase's expert-iteration round (rl/README.md, "Expert iteration inside the loop"): its data, and how big its
+    step was beside GRPO's (`GrpoPhase.update`), alone and, after a GRPO update in the same phase, with it."""
+
+    family: ClassVar[str] = "expert_iteration"
+    # The window's phases (fewer than configured at the start), the oldest sampling version it took, its solved trees.
+    first_phase: int
+    last_phase: int
+    minimum_version: int
+    solved_trees: int
+    # Selected training and validation examples (validation by statement).
+    examples: int
+    validation_examples: int
+    # The round did not train (`skip` says why).
+    skipped: bool
+    lean_replay_examples: int = 0
+    math_replay_examples: int = 0
+    optimizer_steps: int = 0
+    # The completion tokens the loss covered (the round's and the replay's), and every token.
+    trained_tokens: int = 0
+    tokens: int = 0
+    mean_loss: float | None = None
+    # As `UpdateSize`: the LoRA parameters' change over the round, absolute and relative to their start, and the mean
+    # total gradient norm before clipping.
+    parameter_change_norm: float | None = None
+    relative_parameter_change: float | None = None
+    mean_gradient_norm: float | None = None
+    # The replay validation loss at the round's end over its start's, minus 1 (an alert above 3%).
+    replay_loss_change: float | None = None
+    # The phase's whole policy update from the published adapter, the GRPO update before the round included when one
+    # ran: the LoRA change, the optimizer steps and the trained tokens.
+    phase_parameter_change_norm: float | None = None
+    phase_relative_parameter_change: float | None = None
+    phase_optimizer_steps: int = 0
+    phase_trained_tokens: int = 0
+    training_seconds: float = 0.0
+    # The round's peak GPU memory, the largest over the ranks (beside the parked models' CUDA contexts).
+    peak_memory_gib: float = 0.0
+    skip: RoundSkip | None = None
+
+
 @dataclass(frozen=True)
 class ValueTraining:
     """One value retrain, published with the next version: what it trained on."""

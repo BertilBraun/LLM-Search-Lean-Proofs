@@ -56,12 +56,15 @@ from lean_search.reasoning.records import read_records
 from lean_search.reasoning.states import ReasoningState
 from lean_search.rl.evaluation import EvaluationPaths, EvaluationSummary
 from lean_search.rl.expert_iteration_data import (
+    BUILD_SUMMARY_FILE,
+    CONTINUED_FROM_FILE,
+    MAX_REPLAY_LOSS_RISE,
+    BuildSummary,
     CompletionFilter,
     CompletionSelector,
-    DataSummary,
+    ContinuedVersion,
     ExpertIterationConfig,
     ExpertIterationDataConfig,
-    FilterCounts,
     SpaceRequirement,
     TrainingData,
     TrainingSummary,
@@ -91,8 +94,6 @@ from lean_search.rl.expert_iteration_trees import RoundTrees, check_one_version,
 from lean_search.rl.fixed_sets import read_fixed_set
 from lean_search.rl.grpo_groups import RewardConfig
 from lean_search.rl.health_checks import (
-    CONTINUED_FROM_FILE,
-    ContinuedVersion,
     check_continued_adapter,
     held_out_rates,
     read_rejected_versions,
@@ -136,8 +137,6 @@ MIN_FREE_SHARED_MEMORY_GIB = 8.0
 HELD_OUT_DIRECTORY = re.compile(r"held_out_states_v(\d{4})")
 TRAINING_SUMMARY_FILE = "training_summary.json"
 REPLAY_VALIDATION = "replay"
-# A variant whose replay validation loss rose more than this over its first evaluation forgot (`screen`).
-MAX_REPLAY_LOSS_RISE = 0.03
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -289,31 +288,6 @@ def tree_completions(task: TreeTask) -> TreeCompletions:
     return file_completions(task.path, tokenizer, inputs.data, inputs.completion_filter, task.below_band)
 
 
-@dataclass(frozen=True)
-class BuildSummary:
-    name: str
-    built_at: str
-    git_revision: str
-    loop: str
-    # 0 for tree directories.
-    first_phase: int
-    last_phase: int
-    window_phases: int
-    tree_directories: tuple[str, ...]
-    minimum_version: int
-    rejected_versions: tuple[int, ...]
-    trees: int
-    held_out_statements: int
-    held_out_states: int
-    counts: FilterCounts
-    states: int
-    capped_states: int
-    dropped_easy_examples: int
-    easy_states: int
-    sampled_states: int
-    data: DataSummary
-
-
 def git_revision() -> str:
     return subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=REPOSITORY_DIRECTORY, capture_output=True, text=True, check=True
@@ -366,7 +340,7 @@ def build(config: ExpertIterationConfig, processes: int) -> None:
         sampled_states=selected.sampled_states,
         data=data_summary(selected),
     )
-    (directory / "summary.json").write_text(to_json(summary) + "\n", encoding="utf-8", newline="\n")
+    (directory / BUILD_SUMMARY_FILE).write_text(to_json(summary) + "\n", encoding="utf-8", newline="\n")
     markdown = build_markdown(summary)
     (directory / "README.md").write_text(markdown, encoding="utf-8", newline="\n")
     print(markdown, flush=True)

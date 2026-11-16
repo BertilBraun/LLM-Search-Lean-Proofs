@@ -1,6 +1,6 @@
 """The GRPO loop's production boundaries: Lean searches with the served models, the training job, the vLLM servers,
-the evaluation jobs, the value benchmark's scoring through the value servers, the servers' start commands and the
-first-hour check of a policy server's responses."""
+the evaluation jobs, the expert-iteration rounds' data builds, the value benchmark's scoring through the value servers,
+the servers' start commands and the first-hour check of a policy server's responses."""
 
 import asyncio
 import contextlib
@@ -91,8 +91,11 @@ CHECK_GOALS = ("x : ℝ\nh₀ : 3 * x + 2 = 11\n⊢ x = 3",)
 # A stopped job's process group gets SIGTERM, then SIGKILL after this long.
 CHILD_STOP_SECONDS = 30.0
 JOB_MARKER_VARIABLE = "LEAN_SEARCH_LOOP_JOB"
-# The job records under children/: the per-phase training job's, the persistent trainer's and the evaluations'.
+# The job records under children/: the per-phase training job's, the persistent trainer's, the evaluations' and the
+# expert-iteration builds'.
 EVERY_RECORD = "**/*.pid"
+# An expert-iteration round's build: the hand-run round's 2,947 trees took ~80 s on 16 processes.
+EXPERT_ITERATION_BUILD_PROCESSES = 16
 
 
 @dataclass(frozen=True)
@@ -414,6 +417,7 @@ class SubprocessTrainer:
         """The phase's job reads and labels its trees when it starts."""
 
     async def train(self, request: TrainingRequest) -> PhaseOutcome:
+        assert request.expert_iteration is None, "rounds run in the persistent trainer (parse_loop_config)"
         config_path = write_phase_config(self.paths, request)
         log_path = self.paths.training / f"phase_{request.phase:04d}.log"
         arguments = self.arguments(request, config_path)
@@ -462,8 +466,8 @@ class PersistentTrainer:
         self.job: asyncio.Task[None] | None = None
         self.sequence = 0
         self.starts = 0
-        # Seconds of the `train`s answered so far, of value phases (True) and the others.
-        self.train_seconds: dict[bool, list[float]] = {False: [], True: []}
+        # Seconds of the `train`s answered so far, by kind (`train_kind`): a value phase or not, with a round or not.
+        self.train_seconds: dict[tuple[bool, bool], list[float]] = {}
         # The running job answered a `train`: its models are built and its layers compiled.
         self.trained_in_job = False
 
@@ -514,11 +518,11 @@ class PersistentTrainer:
                 )
 
     def train_timeout_seconds(self, request: TrainingRequest) -> float:
-        """A job's first phase (model building, compilation) gets `first_train_timeout_minutes`; later ones
-        `train_timeout_factor` times the median of the earlier phases of the same kind, at least
+        """A job's first phase (model building, compilation) gets `first_train_timeout_minutes`, as its first phase of
+        a kind; later ones `train_timeout_factor` times the median of the earlier phases of the same kind, at least
         `train_timeout_minimum_minutes`."""
         config = self.config
-        earlier = self.train_seconds[request.train_value]
+        earlier = self.train_seconds.get(train_kind(request), [])
         if not self.trained_in_job or not earlier:
             return config.first_train_timeout_minutes * 60
         return max(config.train_timeout_minimum_minutes * 60, config.train_timeout_factor * statistics.median(earlier))
@@ -536,6 +540,7 @@ class PersistentTrainer:
             trees=str(request.trees),
             value_trees=tuple(str(directory) for directory in request.value_trees),
             output_directory=str(request.output_directory),
+            expert_iteration="" if request.expert_iteration is None else str(request.expert_iteration),
         )
         self.channel.send(command)
         return self.sequence
@@ -568,7 +573,7 @@ class PersistentTrainer:
         sequence = self.send(TrainerCommandKind.TRAIN, request)
         what = f"training phase {request.phase} (timeout {timeout / 60:.0f} min)"
         await self.wait_for(lambda: self.channel.reply_to(sequence) is not None, what, deadline)
-        self.train_seconds[request.train_value].append(time.monotonic() - started)
+        self.train_seconds.setdefault(train_kind(request), []).append(time.monotonic() - started)
         self.trained_in_job = True
         return read_phase_outcome(request.output_directory / PHASE_OUTCOME_FILE)
 
@@ -586,6 +591,11 @@ class PersistentTrainer:
         await asyncio.to_thread(shutil.rmtree, self.host.parked, True)
 
 
+def train_kind(request: TrainingRequest) -> tuple[bool, bool]:
+    """Phases of one kind take about as long: a value phase or not, with an expert-iteration round or not."""
+    return request.train_value, request.expert_iteration is not None
+
+
 def persistent_trainer_arguments(paths: GrpoLoopPaths, config: GrpoLoopConfig) -> list[str]:
     training = config.training
     arguments = [
@@ -600,6 +610,8 @@ def persistent_trainer_arguments(paths: GrpoLoopPaths, config: GrpoLoopConfig) -
         "--loop-start-ticks",
         str(running_start_ticks(os.getpid())),
         *replay_arguments(paths, training),
+        "--data-root",
+        str(paths.data_root),
     ]
     return arguments
 
@@ -620,6 +632,28 @@ async def open_trainer(
         yield trainer
     finally:
         await trainer.close()
+
+
+class SubprocessExpertIterationBuilder:
+    """The hand-run round's builder (`grpo_expert_iteration.py build`) on a phase's round config, as a job the loop
+    records under children/ and a stop cancels. Its processes inherit the loop's CPUs, Lean's, which the paused
+    searches' REPL processes left idle for the training stage."""
+
+    def __init__(self, paths: GrpoLoopPaths) -> None:
+        self.paths = paths
+
+    async def build(self, round_config: Path) -> None:
+        arguments = [
+            sys.executable,
+            "experiments/grpo_expert_iteration.py",
+            "--config",
+            str(round_config),
+            "build",
+            "--processes",
+            str(EXPERT_ITERATION_BUILD_PROCESSES),
+        ]
+        record_path = self.paths.children / "expert_iteration" / "build.pid"
+        await run_logged(arguments, round_config.parent / "build.log", dict(os.environ), record_path)
 
 
 def slowest(seconds: Sequence[PhaseSeconds]) -> PhaseSeconds:

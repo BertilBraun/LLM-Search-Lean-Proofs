@@ -5,9 +5,11 @@ config does not load and a launcher names what is left to set. A study evaluatio
 changes (`resolved_toml`), so every one inherits probe_evaluation.toml's one probe concurrency.
 
 An arm (experiments/configs/grpo/followup/arms/) is a thin overlay over base.toml and base.toml's phase template whose
-[loop] and [phase] tables change only `ARM_SETTINGS`; step 2's shared sampling run (followup/shared_sampling.toml)
-is one over base.toml changing only `SHARED_SAMPLING_SETTINGS`. experiments/followup_arm.py writes the configs the
-loop reads, and refuses a result whose phases are not ended by generated tokens.
+[loop] and [phase] tables change only `ARM_SETTINGS`; an arm whose policy trains in expert-iteration rounds (C, D) also
+gets the rounds' recipe (followup/expert_iteration.toml), its [expert_iteration] table changing only the learning
+rate. Step 2's shared sampling run (followup/shared_sampling.toml) is one over base.toml changing only
+`SHARED_SAMPLING_SETTINGS`. experiments/followup_arm.py writes the configs the loop reads, and refuses a result whose
+phases are not ended by generated tokens.
 """
 
 import tomllib
@@ -15,6 +17,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+
+from lean_search.rl.loop_config import PolicyUpdate
 
 PLACEHOLDER = "PLACEHOLDER"
 BASE_KEY = "base"
@@ -34,6 +38,11 @@ ARM_SETTINGS = frozenset(
         "loop.seed_offset",
         "phase.policy.data.credit",
         "phase.policy.optimization.learning_rate",
+        # Expert-iteration rounds (arms C, D): instead of or beside GRPO, their schedule and window, their rate.
+        "loop.training.policy_update",
+        "loop.training.expert_iteration_every_phases",
+        "loop.training.expert_iteration_window_phases",
+        "expert_iteration.sft.optimization.learning_rate",
     }
 )
 # Step 2's shared sampling: v0 sampling without training until a total token count, a phase never due.
@@ -104,9 +113,11 @@ def resolved_toml(path: Path, repository: Path) -> dict[str, object]:
 
 @dataclass(frozen=True)
 class OverlayConfigs:
-    # The loop config, its training.phase_config set to where the phase config goes, and that phase config.
+    # The loop config, its training.phase_config set to where the phase config goes, and that phase config; with
+    # expert-iteration rounds also its training.expert_iteration_config set to where their recipe goes, and the recipe.
     loop: dict[str, object]
     phase: dict[str, object]
+    expert_iteration: dict[str, object] | None = None
 
 
 def budget_refusals(kind: OverlayKind, training: Mapping[str, object]) -> list[str]:
@@ -126,15 +137,30 @@ def budget_refusals(kind: OverlayKind, training: Mapping[str, object]) -> list[s
             return [] if phase_tokens > total else ["a phase would come due before the total: it would train"]
 
 
+def unused_settings(update: PolicyUpdate, overlay: Mapping[str, object]) -> list[str]:
+    """An overlay's settings its policy update ignores: the rounds' without rounds, GRPO's without GRPO."""
+    match update:
+        case PolicyUpdate.GRPO:
+            unused = ("expert_iteration.", "loop.training.expert_iteration_")
+        case PolicyUpdate.EXPERT_ITERATION:
+            unused = ("phase.policy.",)
+        case PolicyUpdate.GRPO_AND_EXPERT_ITERATION:
+            unused = ()
+    return [key for key in leaf_keys(overlay) if key.startswith(unused)]
+
+
 def overlay_configs(
     kind: OverlayKind,
     overlay: Mapping[str, object],
     base: Mapping[str, object],
     phase_template: Mapping[str, object],
     phase_path: str,
+    expert_iteration_template: Mapping[str, object] | None = None,
+    expert_iteration_path: str = "",
 ) -> OverlayConfigs:
     """ValueError for an overlay that changes anything but its kind's settings, still holds a placeholder, or whose
-    loop config would not be budgeted by generated tokens."""
+    loop config would not be budgeted by generated tokens; `expert_iteration_template` is the rounds' recipe, which an
+    overlay with rounds needs."""
     allowed = overlay_settings(kind)
     unexpected = [key for key in leaf_keys(overlay) if key not in allowed]
     if unexpected:
@@ -149,4 +175,12 @@ def overlay_configs(
     if refusals:
         raise ValueError(f"The {kind}'s loop config: {'; '.join(refusals)}.")
     loop["training"] = {**training, "phase_config": phase_path}
-    return OverlayConfigs(loop, merged(phase_template, overlay.get("phase", {})))
+    phase = merged(phase_template, overlay.get("phase", {}))
+    contradictions = unused_settings(PolicyUpdate(training.get("policy_update", PolicyUpdate.GRPO)), overlay)
+    if contradictions:
+        raise ValueError(f"The {kind} sets what its policy update never reads: {contradictions}.")
+    if training.get("policy_update", PolicyUpdate.GRPO) == PolicyUpdate.GRPO:
+        return OverlayConfigs(loop, phase)
+    assert expert_iteration_template is not None
+    loop["training"] = {**loop["training"], "expert_iteration_config": expert_iteration_path}
+    return OverlayConfigs(loop, phase, merged(expert_iteration_template, overlay.get("expert_iteration", {})))

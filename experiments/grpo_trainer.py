@@ -2,13 +2,14 @@
 
     [torchrun --standalone --nproc-per-node 4] experiments/grpo_trainer.py --channel runs/<loop>/training/trainer \
         --host-directory /dev/shm/lean_search/<loop> --loop-process-id <pid> --loop-start-ticks <ticks> \
-        [--lean-replay ...] [--math-replay ...] [--value-replay ...]
+        [--lean-replay ...] [--math-replay ...] [--value-replay ...] [--data-root $LEAN_SEARCH_DATA]
 
 Started by the loop with `[training] persistent = true` (loop_services.PersistentTrainer), which sends its commands
 through the channel directory (rl/trainer_channel.py). The ranks build the policy and value models once, keep them
-parked in host memory between phases and train each phase the loop asks for (rl/resident_trainer.py); a phase's
-adapters, steps and phase.json go where grpo_phase.py writes them, its merged weights to <host-directory>/handoff for
-the servers. The ranks stop on the loop's `stop` command or, between commands, once the loop's process is gone.
+parked in host memory between phases and train each phase the loop asks for, its expert-iteration round included
+(rl/resident_trainer.py); a phase's adapters, steps and phase.json go where grpo_phase.py writes them, its merged
+weights to <host-directory>/handoff for the servers. The ranks stop on the loop's `stop` command or, between commands,
+once the loop's process is gone.
 """
 
 import argparse
@@ -36,6 +37,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--lean-replay", type=Path, help="reasoning data set JSON lines (Lean SFT replay)")
     parser.add_argument("--math-replay", type=Path, help="math solutions JSON lines")
     parser.add_argument("--value-replay", type=Path, help="v0 value examples JSON lines")
+    parser.add_argument("--data-root", type=Path, help="$LEAN_SEARCH_DATA, for expert-iteration rounds' replay")
     return parser.parse_args()
 
 
@@ -52,6 +54,7 @@ def main() -> None:
         value_replay=list(read_value_examples(arguments.value_replay))
         if arguments.value_replay and ranks.is_main
         else [],
+        data_root=arguments.data_root,
     )
     channel = TrainerChannel(arguments.channel)
     barrier(ranks)

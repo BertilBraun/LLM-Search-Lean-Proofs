@@ -148,6 +148,15 @@ class UpdateSize:
 
 
 @dataclass(frozen=True)
+class ParameterChange:
+    """The trainable parameters' L2 change over an update, and relative to their L2 norm before it."""
+
+    norm: float
+    # None for parameters that started at 0.
+    relative: float | None
+
+
+@dataclass(frozen=True)
 class SignedRatios:
     # An update going the right way raises the positive tokens' ratio above 1 and lowers the negative ones' below.
     positive: AdvantageSignRatios

@@ -37,6 +37,7 @@ from lean_search.monitoring.families import (
 )
 from lean_search.policy.adapters import ADAPTER_CONFIG_FILE, lora_rank, lora_scale
 from lean_search.rl.evaluation import EvaluationSummary
+from lean_search.rl.expert_iteration_data import CONTINUED_FROM_FILE, ContinuedVersion
 from lean_search.rl.loop_config import HealthConfig
 from lean_search.rl.training_phase import PhaseOutcome
 from lean_search.rl.tree_store import TreeEntry
@@ -660,16 +661,6 @@ def publish_rollback(paths: LoopPaths, publisher: Publisher, version: int, trigg
 PHASE_TRIGGER = re.compile(r"phase \d+")
 # `rollback_trigger`'s, by hand or after a collapse.
 ROLLBACK_TRIGGER = re.compile(r"rollback to v\d+")
-# Beside an adapter trained outside the loop (`ContinuedVersion`).
-CONTINUED_FROM_FILE = "continued_from.json"
-
-
-@dataclass(frozen=True)
-class ContinuedVersion:
-    """The published version an adapter trained outside the loop continued, written beside it by its training."""
-
-    version: int
-    policy_adapter: str
 
 
 def continued_version(

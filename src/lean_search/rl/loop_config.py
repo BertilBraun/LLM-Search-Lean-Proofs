@@ -64,6 +64,24 @@ class SamplingConfig:
     options_arm: OptionsArmConfig = field(default_factory=OptionsArmConfig)
 
 
+# The settings of expert-iteration rounds, refused without them.
+ROUND_SETTINGS = (
+    "expert_iteration_every_phases",
+    "expert_iteration_window_phases",
+    "expert_iteration_config",
+    "expert_iteration_min_examples",
+)
+
+
+class PolicyUpdate(StrEnum):
+    # The phase config's GRPO update, every phase.
+    GRPO = "grpo"
+    # An expert-iteration round every `expert_iteration_every_phases` phases instead, no GRPO update.
+    EXPERT_ITERATION = "expert_iteration"
+    # The GRPO update every phase, and after it an expert-iteration round every `expert_iteration_every_phases`.
+    GRPO_AND_EXPERT_ITERATION = "grpo_and_expert_iteration"
+
+
 @dataclass(frozen=True)
 class LoopTrainingConfig:
     # A training phase template (experiments/grpo_phase.py); the loop fills in the adapters, μ (`grpo_loop.py
@@ -126,6 +144,18 @@ class LoopTrainingConfig:
     # The policy adapter (on serving.policy_base_model) the KL penalty pulls towards, e.g. an expert-iteration round's
     # (rl/README.md, "Expert iteration"); empty: [initial] policy_adapter. Same rank and scale as the trained adapter.
     kl_reference_policy_adapter: str = ""
+    # How the policy trains at each pause (rl/README.md, "Expert iteration inside the loop"). With rounds: one at phases
+    # N, 2N, ... (N = `expert_iteration_every_phases`) on the verified blocks of the last
+    # `expert_iteration_window_phases` phases (fewer at the start), by the recipe in `expert_iteration_config` (an
+    # `ExpertIterationConfig` file whose learning rate is the round's; the loop fills in its window, seeds, data
+    # directory and the adapter to continue). A round with fewer training examples than `expert_iteration_min_examples`
+    # does not train: the phase publishes its policy unchanged, or with its GRPO update alone.
+    policy_update: PolicyUpdate = PolicyUpdate.GRPO
+    expert_iteration_every_phases: int = 1
+    expert_iteration_window_phases: int = 1
+    expert_iteration_config: str = ""
+    # About one optimizer step: 4 GPUs x 16,384 packed tokens, 60% of them the round's at ~430 tokens an example.
+    expert_iteration_min_examples: int = 100
 
     def sampling_only(self) -> bool:
         return 0 < self.max_generated_tokens < self.phase_generated_tokens
@@ -399,6 +429,28 @@ def parse_loop_config(text: str) -> GrpoLoopConfig:
         raise ValueError("health needs reference_phases >= 1 and late_solve_phases >= 1.")
     if training.value_every_phases and training.value_window_phases < 1:
         raise ValueError("training.value_window_phases must be at least 1.")
+    if training.policy_update == PolicyUpdate.GRPO:
+        defaults = LoopTrainingConfig(phase_config="")
+        set_without_rounds = [name for name in ROUND_SETTINGS if getattr(training, name) != getattr(defaults, name)]
+        if set_without_rounds:
+            raise ValueError(f'training.{set_without_rounds} set, but policy_update = "grpo" runs no rounds.')
+    if training.policy_update != PolicyUpdate.GRPO:
+        update = f"training.policy_update = {training.policy_update.value!r}"
+        if not training.expert_iteration_config:
+            raise ValueError(f"{update} needs training.expert_iteration_config, the rounds' recipe.")
+        if (
+            min(
+                training.expert_iteration_every_phases,
+                training.expert_iteration_window_phases,
+                training.expert_iteration_min_examples,
+            )
+            < 1
+        ):
+            raise ValueError(f"{update} needs expert_iteration_every_phases, _window_phases and _min_examples >= 1.")
+        if not training.persistent:
+            raise ValueError(f"{update} needs training.persistent: the rounds run in the persistent trainer.")
+        if not config.initial.policy_adapter:
+            raise ValueError(f"{update} needs [initial] policy_adapter: the first round continues it.")
     evaluation = config.evaluation
     targets = (evaluation.probe, evaluation.minif2f, evaluation.held_out_states)
     if any(target.baseline_runs < 1 or target.baseline_concurrency < 0 for target in targets):
