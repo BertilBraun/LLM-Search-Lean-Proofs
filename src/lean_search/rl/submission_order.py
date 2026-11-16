@@ -48,7 +48,8 @@ class RecordedRun:
 
 def expected_search_seconds_text(runs: Sequence[RecordedRun]) -> str:
     """One line per statement (sorted by name): the mean recorded wall seconds over the runs that searched it, and how
-    many did; a header naming the runs, their identities and the probe set's digest."""
+    many did; a header naming the runs (sorted by name), their identities and the probe set's digest."""
+    runs = sorted(runs, key=lambda run: run.name)
     digests = sorted({run.probe_set_sha256 for run in runs})
     if len(digests) != 1:
         raise ValueError(f"The runs searched different probe sets: {digests}")

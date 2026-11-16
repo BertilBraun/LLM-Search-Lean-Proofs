@@ -15,6 +15,7 @@ from enum import StrEnum
 from itertools import zip_longest
 from pathlib import Path
 
+from lean_search.expert_iteration.curriculum import file_sha256
 from lean_search.rl.loop_config import load_loop_config
 from lean_search.rl.probe_evaluation import (
     ProbeEvaluationConfig,
@@ -27,7 +28,13 @@ from lean_search.rl.probe_evaluation import (
     run_directory,
 )
 from lean_search.rl.study_configs import PLACEHOLDER, placeholders, resolved_toml
-from lean_search.rl.submission_order import RecordedRun, StartOrder, SubmissionOrder, configured_start_order
+from lean_search.rl.submission_order import (
+    RecordedRun,
+    StartOrder,
+    SubmissionOrder,
+    configured_start_order,
+    read_expected_search_seconds,
+)
 from lean_search.search import load_run_config
 from lean_search.search.records import from_json_object
 
@@ -146,6 +153,11 @@ def missing_files(run: PlannedRun, repository: Path, data_root: Path) -> list[st
     expected_seconds = evaluation.get("expected_search_seconds", "")
     if expected_seconds and not (repository / expected_seconds).is_file():
         missing.append(f"{run.name}: no expected search seconds at {repository / expected_seconds}")
+    elif expected_seconds and probe_set.is_file():
+        try:
+            read_expected_search_seconds(repository / expected_seconds, file_sha256(probe_set))
+        except ValueError as error:
+            missing.append(f"{run.name}: {error}")
     return missing
 
 
@@ -236,6 +248,19 @@ def recorded_start_order(directory: Path) -> StartOrder | None:
     """The run's first session's start order; None before one started."""
     sessions = read_sessions(directory)
     return sessions[0].start_order if sessions else None
+
+
+def recorded_mismatches(run: PlannedRun, directory: Path, repository: Path) -> list[str]:
+    """Where a run already started under the name differs from what the list asks for; its start order only when it
+    will be resumed (a finished run is only skipped, and the order is not part of its identity)."""
+    start = recorded_start(directory)
+    if start is None:
+        return []
+    recorded_order = recorded_start_order(directory) if run_state(directory) == RunState.PENDING else None
+    try:
+        return start_mismatches(run, start, repository, recorded_order)
+    except ValueError as error:
+        return [f"{run.name}: {error}"]
 
 
 def recorded_run(directory: Path) -> RecordedRun:

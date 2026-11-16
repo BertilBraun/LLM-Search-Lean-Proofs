@@ -5,7 +5,8 @@
 # was rejected at exactly 1.00% wall-clock stops, so this pilot has a new name. Run 4 is compared with run 3 only
 # (probe_compare.py pair --across-search-modes), never with runs 1-2; run 3 against run 1 shows what depth_weight 0 and
 # the token cap cost the tuned visible search (a caveat on Q3 at 3 or more points; probe_compare.py pair
-# --descriptive-across-settings).
+# --descriptive-across-settings). Runs 3 and 4 start their searches longest expected first
+# (token_capped_evaluation_ordered.toml: the same cap, only the start order differs); the pilot keeps file order.
 #   PROBE_CONCURRENCY=112 deployment/probe_runs.sh #       experiments/configs/grpo/followup/step1/runs_reasoning.toml
 [[runs]]
 name = "step1_run4_pilot_no_reasoning_T_cap14400"
@@ -24,7 +25,7 @@ arm = "v0"
 phase = 0
 policy_adapter = "/workspace/checkpoints/data_rewrite_sft_numbered/adapter"
 value = "v0"
-config = "experiments/configs/grpo/followup/step1/token_capped_evaluation.toml"
+config = "experiments/configs/grpo/followup/step1/token_capped_evaluation_ordered.toml"
 search_config = "experiments/configs/grpo/followup/step1/token_capped_visible.toml"
 purpose = "Q3: visible reasoning at equal generated tokens"
 
@@ -34,6 +35,6 @@ arm = "v0"
 phase = 0
 policy_adapter = "/workspace/checkpoints/data_rewrite_sft_numbered/adapter"
 value = "v0"
-config = "experiments/configs/grpo/followup/step1/token_capped_evaluation.toml"
+config = "experiments/configs/grpo/followup/step1/token_capped_evaluation_ordered.toml"
 search_config = "experiments/configs/grpo/followup/step1/token_capped_no_reasoning.toml"
 purpose = "Q3: no reasoning at equal generated tokens"

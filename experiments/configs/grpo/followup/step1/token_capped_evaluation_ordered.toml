@@ -1,0 +1,6 @@
+# Step 1's runs 3 and 4 (runs_reasoning.toml): token_capped_evaluation.toml with the searches started longest expected
+# first (rl/submission_order.py), by the mean recorded wall seconds of the starting policy's five step-1 runs. Only the
+# start order differs; the pilot keeps file order on token_capped_evaluation.toml.
+base = "experiments/configs/grpo/followup/step1/token_capped_evaluation.toml"
+submission_order = "longest_expected_search_first"
+expected_search_seconds = "experiments/configs/grpo/followup/probe_v2_expected_search_seconds.tsv"

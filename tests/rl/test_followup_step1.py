@@ -171,6 +171,33 @@ def test_the_reasoning_runs_share_the_doubled_wall_cap() -> None:
     assert {evaluation_config(run, REPOSITORY)["probe"]["max_wall_seconds"] for run in runs} == {14400.0}
 
 
+ORDER_KEYS = {"submission_order", "expected_search_seconds"}
+
+
+def without_wall_cap_and_order(evaluation: dict) -> dict:
+    kept = {key: value for key, value in evaluation.items() if key not in ORDER_KEYS}
+    return {**kept, "probe": {key: value for key, value in kept["probe"].items() if key != "max_wall_seconds"}}
+
+
+@pytest.mark.parametrize("run", read_run_list(STEP1 / "runs_reasoning.toml").runs, ids=lambda run: run.name)
+def test_a_reasoning_run_differs_from_the_probe_evaluation_only_in_its_wall_cap_and_start_order(
+    run: PlannedRun,
+) -> None:
+    assert without_wall_cap_and_order(evaluation_config(run, REPOSITORY)) == without_wall_cap_and_order(
+        resolved_toml(PROBE_EVALUATION, REPOSITORY)
+    )
+
+
+def test_only_runs_3_and_4_start_the_longest_expected_searches_first() -> None:
+    runs = read_run_list(STEP1 / "runs_reasoning.toml").runs
+    orders = {run.name: evaluation_config(run, REPOSITORY).get("submission_order", "file") for run in runs}
+    assert orders == {
+        "step1_run4_pilot_no_reasoning_T_cap14400": "file",
+        "step1_run3_visible_T": "longest_expected_search_first",
+        "step1_run4_no_reasoning_T": "longest_expected_search_first",
+    }
+
+
 def test_the_value_free_pilots_try_every_step_log_probability_setting() -> None:
     runs = read_run_list(STEP1 / "runs_value_free_pilots.toml").runs
     settings = [evaluation_config(run, REPOSITORY)["value_free_priority"]["step_log_probability"] for run in runs]

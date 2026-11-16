@@ -8,11 +8,13 @@
 
 check refuses (exit 1, every reason on stderr) a run with a placeholder in its settings, its evaluation config or its
 search config, an uncalibrated automation constant (value-free runs), arguments probe_evaluate.py would refuse, a
-probe concurrency other than --concurrency, a missing adapter, probe set or expected-seconds file, and runs on more
-than one loop config's servers. next prints, NUL-separated, the run directory and the arguments of the first run in
-interleaved order that is not accepted, or nothing when all are; a rejected run stops it (exit 3), and so does a run
-whose record (checkpoint.json, and its first session's start order) differs from what the list asks for (exit 1),
-accepted or not. record appends each finished run's line to <output>/ledger.tsv beside the runs, once.
+probe concurrency other than --concurrency, a missing adapter, probe set or expected-seconds file (or one made on
+another probe set), and runs on more than one loop config's servers. next prints, NUL-separated, the run directory
+and the arguments of the first run in interleaved order that is not accepted, or nothing when all are; a rejected run
+stops it (exit 3), and so does a run whose record (checkpoint.json) differs from what the list asks for (exit 1),
+accepted or not, and a run to be resumed whose first session started in another order than the list asks for (a
+finished run's order is not compared: it is only skipped). record appends each finished run's line to
+<output>/ledger.tsv beside the runs, once.
 expected-search-seconds writes the file an evaluation config's expected_search_seconds names (submission_order =
 "longest_expected_search_first"): per statement the mean recorded wall seconds over the given runs
 (rl/submission_order.py).
@@ -33,12 +35,10 @@ from lean_search.rl.probe_run_list import (
     probe_arguments,
     read_run_list,
     record_finished,
+    recorded_mismatches,
     recorded_run,
-    recorded_start,
-    recorded_start_order,
     run_refusals,
     run_state,
-    start_mismatches,
 )
 from lean_search.rl.submission_order import expected_search_seconds_text
 
@@ -82,9 +82,7 @@ def check(lists: list[Path], concurrency: int) -> None:
 def next_run(lists: list[Path]) -> int:
     for run in interleaved([read_run_list(path) for path in lists]):
         directory = planned_directory(run, RUNS_DIRECTORY, REPOSITORY_DIRECTORY)
-        start = recorded_start(directory)
-        if start is not None:
-            refuse(start_mismatches(run, start, REPOSITORY_DIRECTORY, recorded_start_order(directory)))
+        refuse(recorded_mismatches(run, directory, REPOSITORY_DIRECTORY))
         match run_state(directory):
             case RunState.ACCEPTED:
                 continue

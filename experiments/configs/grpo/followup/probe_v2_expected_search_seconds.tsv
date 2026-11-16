@@ -2,9 +2,9 @@
 # probe_set_sha256	2cf5a308258e79a18684a36d9b7015db1da305fada4b8211b85d3b2b892bfbbe
 # run	probe_step1_run1_v0_value_v0	v0/phase 0/policy 01284f4d0299/value 14c67de799b8/steps completion/search eee4c06bd727 (16 expansions, 7200 s cap)	2000 statements
 # run	probe_step1_run2_v0_value_v0	v0/phase 0/policy 01284f4d0299/value 14c67de799b8/steps completion/search eee4c06bd727 (16 expansions, 7200 s cap)	2000 statements
+# run	probe_step1_run5_v0_value_final	v0/phase 0/policy 01284f4d0299/value 5ac96039d6ec/steps completion/search eee4c06bd727 (16 expansions, 7200 s cap)	2000 statements
 # run	probe_step1_run6_v0_no_value	v0/phase 0/policy 01284f4d0299/no value model/steps completion/search dcb176300780 (16 expansions, 7200 s cap)	2000 statements
 # run	probe_step1_run6_v0_no_value_block_sum	v0/phase 0/policy 01284f4d0299/no value model/steps block_sum/search ceb032cd91e1 (16 expansions, 7200 s cap)	2000 statements
-# run	probe_step1_run5_v0_value_final	v0/phase 0/policy 01284f4d0299/value 5ac96039d6ec/steps completion/search eee4c06bd727 (16 expansions, 7200 s cap)	2000 statements
 goedel_sft_v2.B@ca01fcf6af23	1065.2	5
 goedel_sft_v2.E28_1756@109e3e2b3c68	298.6	5
 goedel_sft_v2.Lean4301@f5a8c3cdc8aa	77.0	5

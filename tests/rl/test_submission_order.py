@@ -1,5 +1,6 @@
 import hashlib
 import json
+import tomllib
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -12,15 +13,24 @@ from lean_search.rl.fixed_targets import first_problems_by_stratum
 from lean_search.rl.probe_evaluation import (
     ProbeCheckpoint,
     ProbeEvaluationConfig,
+    ProbeRunRecord,
     ProbeRunStart,
     ProbeSession,
+    RunEnvironment,
     SessionServing,
     distinct_start_orders,
     other_start_order,
     read_sessions,
     start_session,
 )
-from lean_search.rl.probe_run_list import PlannedRun, missing_files, recorded_run, start_mismatches
+from lean_search.rl.probe_run_list import (
+    PlannedRun,
+    missing_files,
+    planned_run_config_sha256,
+    recorded_mismatches,
+    recorded_run,
+    start_mismatches,
+)
 from lean_search.rl.study_configs import resolved_toml
 from lean_search.rl.submission_order import (
     RecordedRun,
@@ -89,9 +99,9 @@ def test_an_evaluation_config_without_the_setting_keeps_file_order() -> None:
     assert (config.submission_order, config.expected_search_seconds) == (SubmissionOrder.FILE, "")
 
 
-@pytest.mark.parametrize("path", STUDY_EVALUATIONS, ids=lambda path: path.name)
-def test_no_shipped_study_config_turns_the_order_on(path: Path) -> None:
-    assert resolved_toml(path, REPOSITORY).get("submission_order", "file") == "file"
+def test_only_the_reasoning_runs_ordered_config_turns_the_order_on() -> None:
+    ordered = [path.name for path in STUDY_EVALUATIONS if "submission_order" in resolved_toml(path, REPOSITORY)]
+    assert ordered == ["token_capped_evaluation_ordered.toml"]
 
 
 @pytest.mark.parametrize(
@@ -134,6 +144,10 @@ def test_the_header_names_the_probe_set_and_each_run_with_its_identity() -> None
         "# run\trun1\trun1 identity\t2 statements",
         "# run\trun2\trun2 identity\t2 statements",
     ]
+
+
+def test_the_header_names_the_runs_in_name_order_whatever_order_they_are_given_in() -> None:
+    assert expected_search_seconds_text(RUNS[::-1]) == expected_search_seconds_text(RUNS)
 
 
 def test_runs_of_different_probe_sets_are_refused() -> None:
@@ -249,6 +263,50 @@ def test_a_run_started_in_file_order_mismatches_a_list_asking_for_another(tmp_pa
 
 def test_a_run_started_in_the_order_the_list_asks_for_matches(tmp_path: Path) -> None:
     assert order_mismatches(tmp_path, StartOrder(LONGEST_FIRST, hashlib.sha256(b"x").hexdigest())) == []
+
+
+def file_order_run(root: Path, finished: bool) -> Path:
+    """A run of the ordered list's "r" recorded with every setting the list asks for, its session in file order."""
+    repository = write_repository(root)
+    (repository / "expected.tsv").write_text("x", encoding="utf-8")
+    run = PlannedRun("r", "v0", 0, "/adapters/v0", "v0", config="evaluation.toml")
+    value_adapter = tomllib.loads((FOLLOWUP / "base.toml").read_text(encoding="utf-8"))["initial"]["value_adapter"]
+    checkpoint = ProbeCheckpoint("v0", 0, str(Path("/adapters/v0").absolute()), "p", value_adapter, "v", 0, 0, 0)
+    digest = planned_run_config_sha256(run, repository)
+    start = ProbeRunStart("r", False, checkpoint, "search.toml", digest, 112, 7200.0, 16, "probe.jsonl", "probe")
+    directory = root / "probe_r"
+    directory.mkdir()
+    (directory / "checkpoint.json").write_text(to_json(start), encoding="utf-8")
+    start_session(directory, checkpoint, directory / "results.jsonl", SessionServing())
+    if finished:
+        environment = RunEnvironment("node", "lean", "vllm", "torch")
+        record = ProbeRunRecord(start, environment, 2000, 700, 4, 0.002, (), 0.01, True)
+        (directory / "run.json").write_text(to_json(record), encoding="utf-8")
+    return directory
+
+
+def test_a_finished_run_in_another_order_does_not_stop_the_list(tmp_path: Path) -> None:
+    directory = file_order_run(tmp_path, finished=True)
+    run = PlannedRun("r", "v0", 0, "/adapters/v0", "v0", config="evaluation.toml")
+    assert recorded_mismatches(run, directory, tmp_path) == []
+
+
+def test_an_unfinished_run_in_another_order_still_refuses_to_resume(tmp_path: Path) -> None:
+    directory = file_order_run(tmp_path, finished=False)
+    run = PlannedRun("r", "v0", 0, "/adapters/v0", "v0", config="evaluation.toml")
+    assert [line.split(" 'file'")[0] for line in recorded_mismatches(run, directory, tmp_path)] == [
+        "r: its record has start order"
+    ]
+
+
+def test_an_expected_seconds_file_of_another_probe_set_is_reported(tmp_path: Path) -> None:
+    repository = write_repository(tmp_path)
+    (tmp_path / "probe.jsonl").write_text("", encoding="utf-8")
+    (tmp_path / "expected.tsv").write_text(expected_search_seconds_text(RUNS), encoding="utf-8")
+    run = PlannedRun("r", "v0", 0, str(tmp_path), "v0", config="evaluation.toml")
+    assert [line.split(" was made")[0] for line in missing_files(run, repository, tmp_path)] == [
+        f"r: {tmp_path / 'expected.tsv'}"
+    ]
 
 
 def test_a_missing_expected_seconds_file_is_reported(tmp_path: Path) -> None:
