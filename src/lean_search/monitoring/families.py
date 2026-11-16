@@ -398,6 +398,8 @@ class ExpertIterationPhase:
     phase_optimizer_steps: int = 0
     phase_trained_tokens: int = 0
     training_seconds: float = 0.0
+    # The round's peak GPU memory, the largest over the ranks (beside the parked models' CUDA contexts).
+    peak_memory_gib: float = 0.0
 
 
 @dataclass(frozen=True)

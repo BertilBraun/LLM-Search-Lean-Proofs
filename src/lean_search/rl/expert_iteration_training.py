@@ -26,7 +26,7 @@ from lean_search.rl.expert_iteration_data import (
 )
 from lean_search.rl.policy_data import ParameterChange, PolicyTokenizer
 from lean_search.rl.policy_trainer import parameter_change, parameter_snapshot
-from lean_search.training.data_parallel import SINGLE_PROCESS, Ranks, barrier, sum_gradients, summed
+from lean_search.training.data_parallel import SINGLE_PROCESS, Ranks, barrier, largest, sum_gradients, summed
 from lean_search.training.sft import (
     CompletionLoss,
     SftConfig,
@@ -66,6 +66,8 @@ class ExpertIterationResult:
     curve: tuple[ValidationPoint, ...]
     replay_loss_change: float | None
     training_seconds: float
+    # The largest over the ranks; 0 on the CPU.
+    peak_memory_gib: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -140,6 +142,8 @@ def train_expert_iteration(
         barrier(ranks)
 
     validate(0)
+    if device.type == "cuda":
+        torch.cuda.reset_peak_memory_stats(device)
     totals = torch.zeros(5, dtype=torch.float64, device=device)
     losses: list[float] = []
     gradient_norms: list[float] = []
@@ -200,6 +204,7 @@ def train_expert_iteration(
     if ranks.is_main:
         saved_module.save_pretrained(output_directory)
     barrier(ranks)
+    peak_memory = torch.cuda.max_memory_allocated(device) / 2**30 if device.type == "cuda" else 0.0
     points = tuple(curve)
     return ExpertIterationResult(
         steps=len(steps),
@@ -215,6 +220,7 @@ def train_expert_iteration(
         curve=points,
         replay_loss_change=replay_loss_change(points) if ranks.is_main else None,
         training_seconds=training_seconds,
+        peak_memory_gib=largest(peak_memory, device, ranks),
     )
 
 

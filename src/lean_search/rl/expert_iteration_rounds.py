@@ -116,6 +116,7 @@ def round_record(summary: BuildSummary, outcome: PhaseOutcome) -> ExpertIteratio
         phase_optimizer_steps=result.steps + (0 if grpo is None else grpo.steps),
         phase_trained_tokens=result.trained_tokens + (0 if grpo is None else grpo.trained_tokens),
         training_seconds=result.training_seconds,
+        peak_memory_gib=result.peak_memory_gib,
     )
 
 
@@ -135,7 +136,8 @@ def round_update_text(phase: int, record: ExpertIterationPhase) -> str:
         f"{optional(record.mean_gradient_norm)}, mean loss {optional(record.mean_loss)}, replay validation loss "
         f"{optional(record.replay_loss_change, '+.1%')}; the phase's whole update: "
         f"{optional(record.phase_parameter_change_norm)} ({optional(record.phase_relative_parameter_change, '.3%')}), "
-        f"{record.phase_optimizer_steps} steps, {record.phase_trained_tokens:,} trained tokens"
+        f"{record.phase_optimizer_steps} steps, {record.phase_trained_tokens:,} trained tokens; peak GPU memory "
+        f"{record.peak_memory_gib:.1f} GiB"
     )
 
 
