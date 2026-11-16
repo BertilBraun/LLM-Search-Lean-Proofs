@@ -5,18 +5,21 @@ learning_rate_step.py; DESIGN.md, "Follow-up study: controlled arms", "Step 2"; 
     python experiments/learning_rate_step.py write-configs --output /workspace/runs/study_chain/configs \
         --shared-run followup_shared_sampling
     python experiments/learning_rate_step.py check-dry-run --log /workspace/runs/study_chain/dry_run_step2_C_w1.log
+    python experiments/learning_rate_step.py check-held-out --name step2_A_5e-5
     python experiments/learning_rate_step.py rank-arguments --signal A
     python experiments/learning_rate_step.py report --state /workspace/runs/study_chain --mode .../mode.toml \
         --shared-run followup_shared_sampling --earlier-v0 v0 --output .../learning_rates_report.md
 
-check-mode refuses a sampling mode followup_arm.py would refuse and prints what it samples with. write-configs writes
+check-mode refuses a sampling mode followup_arm.py would refuse (a search config with a per-search token cap among
+them) and prints what it samples with and the search config's sha256. write-configs writes
 each round's config (<label>.toml: a GRPO round's phase config or an expert-iteration round's recipe, the arm's at the
 variant's rate) and the driver's plan (rounds.tsv, builds.tsv, held_out.tsv), and refuses an output with other contents
 (the same contents are written again silently). check-dry-run prints the steps a `grpo_expert_iteration.py train
---dry-run` planned and fails when it would refuse or plans none. rank-arguments prints rank_learning_rates.py's
-arguments for one signal, one per line. report ranks every signal as rank_learning_rates.py does (and fails unless its
-choice is the one in the state directory's rank_<signal>.txt), reads the rounds' outcomes and the driver's timings, and
-writes the report the step ends with.
+--dry-run` planned and fails when it would refuse or plans none. check-held-out fails while a held-out run's
+summary.json names states it left without a tree (the run is resumed under its name). rank-arguments prints
+rank_learning_rates.py's arguments for one signal, one per line. report ranks every signal as rank_learning_rates.py
+does (and fails unless its choice is the one in the state directory's rank_<signal>.txt), reads the rounds' outcomes,
+v0's two runs of the step and the driver's timings, and writes the report the step ends with.
 """
 
 import argparse
@@ -32,9 +35,11 @@ from rank_learning_rates import States, held_out_states, read_held_out
 from lean_search.rl.expert_iteration_data import TrainingSummary
 from lean_search.rl.learning_rate_step import (
     STEP_VARIANTS,
+    V0_END_HELD_OUT,
     V0_HELD_OUT,
     ExpertIterationRoundSize,
     GrpoRoundSize,
+    PairedRun,
     PlanPaths,
     RoundKind,
     RoundRecord,
@@ -45,6 +50,7 @@ from lean_search.rl.learning_rate_step import (
     StudyTemplates,
     V0Baseline,
     chosen_label,
+    dropped_states,
     dry_run_steps,
     expert_iteration_round_size,
     grpo_round_size,
@@ -67,7 +73,7 @@ from lean_search.rl.rate_ranking import (
     success_rate,
     valid_rate,
 )
-from lean_search.rl.study_configs import with_sampling_mode
+from lean_search.rl.study_configs import sampling_record, training_search_refusal, with_sampling_mode
 from lean_search.rl.training_phase import PhaseOutcome
 from lean_search.search import load_run_config
 from lean_search.search.records import from_json_object
@@ -89,6 +95,8 @@ def parse_arguments() -> argparse.Namespace:
     write_configs.add_argument("--shared-run", required=True)
     check_dry_run = commands.add_parser("check-dry-run")
     check_dry_run.add_argument("--log", type=Path, required=True)
+    check_held_out = commands.add_parser("check-held-out")
+    check_held_out.add_argument("--name", required=True, help="held_out_evaluations/held_out_<name>")
     arguments = commands.add_parser("rank-arguments")
     arguments.add_argument("--signal", type=Signal, choices=list(Signal), required=True)
     report = commands.add_parser("report")
@@ -112,6 +120,7 @@ def environment_path(name: str) -> Path:
 class SamplingMode:
     description: str
     visible_reasoning: bool
+    search_config_sha256: str
 
 
 def sampling_mode(mode_path: Path) -> SamplingMode:
@@ -121,8 +130,12 @@ def sampling_mode(mode_path: Path) -> SamplingMode:
         run_config = load_run_config(REPOSITORY_DIRECTORY / sampling["search_config"])
     except (ValueError, OSError) as error:
         raise SystemExit(f"{mode_path}: {error}") from error
+    refusal = training_search_refusal(run_config)
+    if refusal is not None:
+        raise SystemExit(f"{mode_path}: {refusal}")
     description = mode_description(sampling["search_config"], run_config, sampling["max_expansions"])
-    return SamplingMode(description, run_config.policy.visible_reasoning)
+    record = sampling_record(sampling, REPOSITORY_DIRECTORY)
+    return SamplingMode(description, run_config.policy.visible_reasoning, record.search_config_sha256)
 
 
 def write_configs(output: Path, shared_run: str) -> None:
@@ -168,6 +181,14 @@ def check_dry_run(log: Path) -> None:
     print(f"{steps} steps")
 
 
+def check_held_out(name: str) -> None:
+    summary = environment_path("LEAN_SEARCH_RUNS") / "held_out_evaluations" / f"held_out_{name}" / "summary.json"
+    dropped = dropped_states(summary.read_text(encoding="utf-8"))
+    if dropped:
+        raise SystemExit(f"{summary}: {len(dropped)} states without a tree, e.g. {dropped[0]}; run it again to resume.")
+    print(f"{name}: every state sampled")
+
+
 def round_record(variant: StepVariant, state: Path, checkpoints: Path, durations: dict[str, float]) -> RoundRecord:
     output = checkpoints / variant.run_name
     size: GrpoRoundSize | ExpertIterationRoundSize
@@ -197,24 +218,30 @@ def signal_ranking(signal: Signal, v0: HeldOutStates, states: States, state: Pat
     return SignalRanking(signal, against_v0(variants, v0, None), choice)
 
 
-def v0_baseline(v0: HeldOutStates, earlier_name: str, states: States, visible_reasoning: bool) -> V0Baseline:
-    earlier_directory = environment_path("LEAN_SEARCH_RUNS") / "held_out_evaluations" / f"held_out_{earlier_name}"
-    if not (earlier_directory / "summary.json").exists():
-        return V0Baseline(run_rates(v0), None, None, None, visible_reasoning)
-    earlier = read_held_out(f"{earlier_name} (2026-11-15)", earlier_name, states)
-    return V0Baseline(
-        run_rates(v0),
-        run_rates(earlier),
-        paired_states(v0, earlier, valid_rate),
-        paired_states(v0, earlier, success_rate),
-        visible_reasoning,
+def paired_run(other: HeldOutStates, first: HeldOutStates) -> PairedRun:
+    return PairedRun(
+        run_rates(other), paired_states(other, first, valid_rate), paired_states(other, first, success_rate)
     )
 
 
+def earlier_run(v0: HeldOutStates, earlier_name: str, states: States) -> PairedRun | str:
+    """Descriptive only: a run that cannot be read against today's states is named, not a failure of the report."""
+    try:
+        return paired_run(read_held_out(f"{earlier_name} (2026-11-15)", earlier_name, states), v0)
+    except (SystemExit, OSError, ValueError) as error:
+        return f"{earlier_name}: {error}"
+
+
+def v0_baseline(v0: HeldOutStates, earlier_name: str, states: States, visible_reasoning: bool) -> V0Baseline:
+    end = read_held_out("v0 after the variants", V0_END_HELD_OUT, states)
+    return V0Baseline(run_rates(v0), paired_run(end, v0), earlier_run(v0, earlier_name, states), visible_reasoning)
+
+
 def git_revision() -> str:
-    return subprocess.run(
-        ["git", "rev-parse", "--short", "HEAD"], cwd=REPOSITORY_DIRECTORY, capture_output=True, text=True, check=True
-    ).stdout.strip()
+    found = subprocess.run(
+        ["git", "rev-parse", "--short", "HEAD"], cwd=REPOSITORY_DIRECTORY, capture_output=True, text=True, check=False
+    )
+    return found.stdout.strip() if found.returncode == 0 else "of an unknown revision (git rev-parse failed)"
 
 
 def report(arguments: argparse.Namespace) -> None:
@@ -244,11 +271,14 @@ def main() -> None:
     arguments = parse_arguments()
     match arguments.command:
         case "check-mode":
-            print(sampling_mode(arguments.mode).description)
+            mode = sampling_mode(arguments.mode)
+            print(f"{mode.description}\nsearch config sha256 {mode.search_config_sha256}")
         case "write-configs":
             write_configs(arguments.output, arguments.shared_run)
         case "check-dry-run":
             check_dry_run(arguments.log)
+        case "check-held-out":
+            check_held_out(arguments.name)
         case "rank-arguments":
             print("\n".join(rank_arguments(arguments.signal)))
         case "report":

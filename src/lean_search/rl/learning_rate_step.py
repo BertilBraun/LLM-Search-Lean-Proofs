@@ -4,12 +4,16 @@ as the study driver (deployment/study_chain.sh) runs it through experiments/lear
 
 Ten training rounds, each from v0 on the shared sampling run's slices: per-tactic GRPO (A) and pure proof success (B2)
 on slice 4 at 2e-5, 5e-5 and 1e-4, expert iteration (C) at 5e-5 and 1e-4 on slice 4 (window 1) and slices 1-4 (window
-4). A GRPO round's phase config and a round's recipe are what the arm's overlay gives at that rate (study_configs), so
-the arm later trains exactly as its chosen variant did. Each variant's held-out run is compared with v0's own run under
-the same code and mode; C's window is chosen with its rate, by the same rule over its four variants.
+4). A GRPO round's phase config and a round's recipe are what the arm's overlay gives at that rate (study_configs): the
+arm trains with its chosen variant's recipe, though not with its seeds (the template's, not the loop's per-phase ones),
+its trees (slices, not the arm's phase 1) or its trainer (grpo_phase.py and the hand-run train, not the persistent
+one). Each variant's held-out run is compared with v0's own run under the same code and mode, and v0 runs again after
+the variants as the step's A/A and drift check; C's window is chosen with its rate, by the same rule over its four
+variants.
 """
 
 import dataclasses
+import json
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -18,6 +22,7 @@ from pathlib import Path
 
 from lean_search.expert_iteration.toml_text import toml_text
 from lean_search.rl.arm_comparison import multiple_comparisons_note
+from lean_search.rl.evaluation import EvaluationSummary
 from lean_search.rl.expert_iteration_data import (
     ExpertIterationConfig,
     TrainingSummary,
@@ -28,11 +33,18 @@ from lean_search.rl.rate_ranking import HeldOutStates, RateChoice, VariantReport
 from lean_search.rl.study_configs import OverlayKind, merged, overlay_configs
 from lean_search.rl.training_phase import PhaseOutcome
 from lean_search.search.config import RunConfig
+from lean_search.search.records import from_json_object
 from lean_search.search.summary import markdown_table
 
 SLICES = 4
 RUN_PREFIX = "step2_"
 V0_HELD_OUT = f"{RUN_PREFIX}v0"
+# v0 again after the variants: the step's A/A and drift check.
+V0_END_HELD_OUT = f"{RUN_PREFIX}v0_end"
+# An in-loop round with fewer examples is skipped (LoopTrainingConfig.expert_iteration_min_examples); DESIGN expected
+# about 8 optimizer steps from one slice.
+MIN_ROUND_EXAMPLES = 100
+MIN_ROUND_STEPS = 5
 
 
 class Signal(StrEnum):
@@ -85,8 +97,8 @@ class StepVariant:
         return f"{RUN_PREFIX}{self.signal}_w{self.window}"
 
 
-# In ranking order within a signal: on a tie the rule takes the lower rate, the first listed among equal rates, so C's
-# window 1 wins a tie with window 4 at the same rate.
+# In ranking order within a signal: the tie rule (rate_ranking.tie_break) takes the lower rate, the first listed among
+# equal rates, so C's window 1 wins a tie with window 4 at the same rate.
 STEP_VARIANTS = (
     StepVariant(Signal.A, "2e-5"),
     StepVariant(Signal.A, "5e-5"),
@@ -211,7 +223,7 @@ def tsv_lines(rows: Sequence[Sequence[object]]) -> str:
 def plan_files(paths: PlanPaths) -> PlanFiles:
     """rounds.tsv: label, kind, config, run name, output directory, then for GRPO the trees and the two replay files
     (`NO_VALUE` otherwise), last the completion files, space separated; builds.tsv: build name, a config of it;
-    held_out.tsv: name, arm, phase, policy adapter, v0 first."""
+    held_out.tsv: name, arm, phase, policy adapter, v0 first and last."""
     rounds = []
     builds: dict[str, Path] = {}
     for variant in STEP_VARIANTS:
@@ -229,6 +241,7 @@ def plan_files(paths: PlanPaths) -> PlanFiles:
     held_out += [
         [variant.run_name, variant.label, 1, round_adapter(variant, paths.checkpoints)] for variant in STEP_VARIANTS
     ]
+    held_out.append([V0_END_HELD_OUT, "v0", 0, paths.v0_adapter])
     return PlanFiles(tsv_lines(rounds), tsv_lines(list(builds.items())), tsv_lines(held_out))
 
 
@@ -257,6 +270,11 @@ def dry_run_steps(text: str) -> int:
     if steps == 0:
         raise ValueError("The dry run plans no optimizer step: the round would not train.")
     return steps
+
+
+def dropped_states(summary_text: str) -> tuple[str, ...]:
+    """The states a held-out run left without a tree (its summary.json); the run is complete only without any."""
+    return from_json_object(EvaluationSummary, json.loads(summary_text)).dropped
 
 
 CHOSEN_LINE = re.compile(r"^Chosen: (\S+) \(", re.MULTILINE)
@@ -394,13 +412,22 @@ def mode_description(search_config: str, run_config: RunConfig, max_expansions: 
 
 
 @dataclass(frozen=True)
+class PairedRun:
+    """Another v0 run and its differences to the step's first v0 run, paired per state (the other minus the first)."""
+
+    rates: RunRates
+    valid: DifferenceInterval
+    success: DifferenceInterval
+
+
+@dataclass(frozen=True)
 class V0Baseline:
-    """v0's run of this step against the 2026-11-15 run (older code, another pinning), paired per state."""
+    """The step's first v0 run, which every variant is paired with, its run after the variants (the A/A and drift
+    check) and the 2026-11-15 run (older code, 48 Lean CPUs; descriptive), or why that one could not be compared."""
 
     current: RunRates
-    earlier: RunRates | None
-    valid: DifferenceInterval | None
-    success: DifferenceInterval | None
+    end: PairedRun
+    earlier: PairedRun | str
     visible_reasoning: bool
 
 
@@ -425,7 +452,29 @@ def hours(seconds: float | None) -> str:
     return "-" if seconds is None else f"{seconds / 3600:.2f} h"
 
 
-def values_section(values: ArmValues) -> str:
+def side_of_v0(interval: DifferenceInterval) -> str:
+    if includes_zero(interval):
+        return "within noise"
+    return "above v0" if interval.lower > 0 else "below v0"
+
+
+def below_v0(report: VariantReport) -> list[str]:
+    """The measures on which the variant is below v0 with its 95% interval excluding 0."""
+    measures = (("success", report.success), ("valid Lean", report.valid))
+    return [name for name, interval in measures if side_of_v0(interval) == "below v0"]
+
+
+def chosen_report(ranking: SignalRanking) -> VariantReport:
+    return next(report for report in ranking.reports if report.label == ranking.choice.chosen)
+
+
+def values_section(values: ArmValues, rankings: Sequence[SignalRanking]) -> str:
+    warnings = [
+        f"**Look first:** signal {ranking.signal}'s chosen variant {ranking.choice.chosen} is below v0 in "
+        f"{' and '.join(below_v0(chosen_report(ranking)))}: the round made the policy worse on the held-out states."
+        for ranking in rankings
+        if below_v0(chosen_report(ranking))
+    ]
     rows = [
         ["arms/A.toml", "phase.policy.optimization.learning_rate", values.a_rate],
         ["arms/B2.toml", "phase.policy.optimization.learning_rate", values.b2_rate],
@@ -435,23 +484,27 @@ def values_section(values: ArmValues) -> str:
         ["arms/D.toml", "phase.policy.optimization.learning_rate", values.a_rate],
         ["arms/D.toml", "expert_iteration.sft.optimization.learning_rate", values.c_rate],
     ]
-    return "## Values for the arms (not applied: the orchestrator fills the PLACEHOLDERs)\n\n" + markdown_table(
-        ["File", "Setting", "Value"], rows
-    )
+    title = "## Values for the arms (not applied: the orchestrator fills the PLACEHOLDERs)"
+    return "\n\n".join([title, *warnings, markdown_table(["File", "Setting", "Value"], rows)])
+
+
+def variant_of(label: str) -> StepVariant:
+    return next(variant for variant in STEP_VARIANTS if variant.label == label)
 
 
 def ranking_section(ranking: SignalRanking) -> str:
     rows = [
         [
             report.label,
-            f"{report.learning_rate:g}",
+            variant_of(report.label).rate,
             points(report.valid),
+            side_of_v0(report.valid),
             points(report.success),
-            "no" if includes_zero(report.success) else "yes",
+            side_of_v0(report.success),
         ]
         for report in ranking.reports
     ]
-    headers = ["Variant", "Rate", "Valid Lean, points [95%]", "Success, points [95%]", "Success apart from v0"]
+    headers = ["Variant", "Rate", "Valid Lean, points [95%]", "Valid Lean", "Success, points [95%]", "Success"]
     choice = ranking.choice
     lines = [
         f"## Signal {ranking.signal}: chosen {choice.chosen}",
@@ -459,11 +512,22 @@ def ranking_section(ranking: SignalRanking) -> str:
         f"{', '.join(choice.tied)}.",
         markdown_table(headers, rows),
     ]
-    chosen = next(report for report in ranking.reports if report.label == choice.chosen)
-    if includes_zero(chosen.success):
+    chosen = chosen_report(ranking)
+    worse = below_v0(chosen)
+    if worse:
+        lines.append(
+            f"**The chosen variant is below v0 in {' and '.join(worse)}.** The rule ranks the variants against each "
+            "other, not against v0: every rate of this signal may have hurt. Look before filling its value."
+        )
+    elif includes_zero(chosen.success):
         lines.append(
             "The chosen variant's success is within noise of v0's on the held-out states: one round at this rate may "
             "be a step too small to see here, not evidence that the signal does nothing."
+        )
+    if len({variant_of(label).window for label in choice.tied}) > 1:
+        lines.append(
+            "C's window was chosen by the tie rule (the lower rate, window 1 first among equal rates; "
+            "rate_ranking.tie_break), not measured apart: the tied variants hold both windows."
         )
     return "\n\n".join(lines)
 
@@ -506,6 +570,23 @@ def round_rows(rounds: Sequence[RoundRecord]) -> tuple[list[list[object]], list[
     return grpo_rows, expert_iteration_rows
 
 
+def small_round_notes(rounds: Sequence[RoundRecord]) -> list[str]:
+    notes = []
+    for record in rounds:
+        match record.size:
+            case ExpertIterationRoundSize() as size if size.expert_iteration_examples < MIN_ROUND_EXAMPLES:
+                notes.append(
+                    f"{record.variant.label} trained on {size.expert_iteration_examples} examples: the loop skips a "
+                    f"round under {MIN_ROUND_EXAMPLES}, so arm C would not train on data this small."
+                )
+            case ExpertIterationRoundSize() as size if size.dry_run_steps < MIN_ROUND_STEPS:
+                notes.append(
+                    f"{record.variant.label} planned {size.dry_run_steps} optimizer steps (under {MIN_ROUND_STEPS}): "
+                    "too few to tell its rates apart."
+                )
+    return notes
+
+
 def rounds_section(rounds: Sequence[RoundRecord]) -> str:
     grpo_rows, expert_iteration_rows = round_rows(rounds)
     grpo_headers = [
@@ -538,6 +619,7 @@ def rounds_section(rounds: Sequence[RoundRecord]) -> str:
             markdown_table(grpo_headers, grpo_rows),
             "Expert iteration, from v0 (window 1: slice 4; window 4: slices 1-4):",
             markdown_table(expert_iteration_headers, expert_iteration_rows),
+            *small_round_notes(rounds),
         ]
     )
 
@@ -547,27 +629,39 @@ def rates_text(rates: RunRates) -> str:
 
 
 def baseline_section(baseline: V0Baseline) -> str:
+    end = baseline.end
     lines = [
         "## v0's held-out baseline",
-        "v0 was run again in this step (`held_out_step2_v0`), under the step's code, sampling mode, servers and CPU "
-        "layout, and every variant is paired with that run. The 2026-11-15 run (`held_out_v0`) was made on older code, "
-        "with the Lean side pinned to 48 CPUs instead of 96, and with visible reasoning whatever the arms' mode; a "
-        "baseline differing from its variants in anything but the adapter would bias every comparison, and the rerun "
-        "costs about ten minutes.",
+        f"v0 was run again in this step (`held_out_{V0_HELD_OUT}`), under the step's code, sampling mode, servers and "
+        "CPU layout, and every variant is paired with that run. The 2026-11-15 run (`held_out_v0`) was made on older "
+        "code, with the Lean side pinned to 48 CPUs instead of 96, and with visible reasoning whatever the arms' "
+        "mode; a baseline differing from its variants in anything but the adapter would bias every comparison, and "
+        "the rerun costs about ten minutes.",
         rates_text(baseline.current),
+        f"{rates_text(end.rates)}. After the variants minus before them, paired per state (the A/A and drift check): "
+        f"valid Lean {points(end.valid)}, success {points(end.success)} points.",
     ]
-    if baseline.earlier is not None:
-        lines.append(rates_text(baseline.earlier))
-    if baseline.valid is not None and baseline.success is not None:
-        caveat = (
-            ""
-            if baseline.visible_reasoning
-            else " Not an A/A check: the step's mode samples without visible reasoning, the earlier run with it."
-        )
+    measures = (("valid Lean", end.valid), ("success", end.success))
+    drifted = [name for name, interval in measures if not includes_zero(interval)]
+    if drifted:
         lines.append(
-            f"This step's v0 minus the earlier run, paired per state (descriptive): valid Lean "
-            f"{points(baseline.valid)}, success {points(baseline.success)} points.{caveat}"
+            f"**v0 moved during the step in {' and '.join(drifted)}**: every variant's difference to v0 may carry "
+            "that drift; the ranking compares the variants with each other and is less affected."
         )
+    match baseline.earlier:
+        case PairedRun() as earlier:
+            caveat = (
+                ""
+                if baseline.visible_reasoning
+                else " Not an A/A check: the step's mode samples without visible reasoning, the earlier run with it."
+            )
+            lines.append(rates_text(earlier.rates))
+            lines.append(
+                f"The earlier run minus this step's v0, paired per state (descriptive): valid Lean "
+                f"{points(earlier.valid)}, success {points(earlier.success)} points.{caveat}"
+            )
+        case str() as reason:
+            lines.append(f"The earlier run is not compared: {reason}")
     return "\n\n".join(lines)
 
 
@@ -575,6 +669,7 @@ DURATION_STEPS = (
     ("s1_sampling", "Shared sampling (48M tokens)"),
     ("s1_slices", "Slices"),
     (f"held_out_{V0_HELD_OUT}", "v0's held-out run"),
+    (f"held_out_{V0_END_HELD_OUT}", "v0's held-out run after the variants"),
 )
 
 
@@ -602,7 +697,7 @@ def report_markdown(report: StepReport) -> str:
         f"Code {report.revision}. Sampling mode: {report.mode}. Shared sampling: {report.sampled_tokens:,} generated "
         f"tokens counted, {report.lost_tokens:,} lost. Every variant is one round from v0; the 512 held-out states "
         "decide (no probe or gate-set runs; owner, 2026-11-16).",
-        values_section(values),
+        values_section(values, report.rankings),
         *(ranking_section(ranking) for ranking in report.rankings),
         multiple_comparisons_note(intervals),
         rounds_section(report.rounds),
