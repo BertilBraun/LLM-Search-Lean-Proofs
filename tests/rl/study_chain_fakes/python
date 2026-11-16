@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+# The stand-in for the checkout's python: each experiments/ script the driver runs, logged, writing what the real one
+# leaves behind. A trainer writes part of its output before its outcome, so a kill or failure leaves a half-trained one.
+source "${FAKE_REPOSITORY}/deployment/fake_common.sh"
+if [[ "$1" == -m ]]; then
+    [[ "$2 $3 $4" == "torch.distributed.run --standalone --nproc-per-node=4" ]] || exit 2
+    log_command "torchrun on CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset} HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-unset}"
+    shift 4
+fi
+script="$1"
+shift
+config_value() { sed -n "s/^$1 = \"\(.*\)\"$/\1/p" "$2" | head -1; }
+
+case "${script}" in
+    experiments/learning_rate_step.py)
+        log_command "learning_rate_step.py $1"
+        case "$1" in
+            check-mode)
+                if [[ -f "${FAKE_SCENARIO}/mode_refused" ]]; then
+                    echo "$(option_value --mode "$@"): A sampling mode sets exactly [...]" >&2
+                    exit 1
+                fi
+                # A library warning that differs from start to start, as the real one's may.
+                echo "warning at $(date +%s%N)" >&2
+                echo "visible reasoning, 32 expansions per training search"
+                if [[ -f "${FAKE_SCENARIO}/search_config_changed" ]]; then
+                    echo "search config sha256 bbbb"
+                else
+                    echo "search config sha256 aaaa"
+                fi
+                ;;
+            check-round)
+                label="$(option_value --label "$@")"
+                if [[ -f "${FAKE_SCENARIO}/truncated_${label}" ]]; then
+                    echo "phase.json does not read back: JSONDecodeError" >&2
+                    exit 1
+                fi
+                ;;
+            check-held-out)
+                summary="${LEAN_SEARCH_RUNS}/held_out_evaluations/held_out_$(option_value --name "$@")/summary.json"
+                if grep -q '"dropped": \["' "${summary}"; then
+                    echo "${summary}: 1 states without a tree" >&2
+                    exit 1
+                fi
+                ;;
+            write-configs)
+                output="$(option_value --output "$@")"
+                mkdir -p "${output}"
+                cp "${FAKE_SCENARIO}"/configs/* "${output}/"
+                ;;
+            check-dry-run)
+                if grep -q ' 0 steps on' "$(option_value --log "$@")"; then
+                    echo "The dry run plans no optimizer step: the round would not train." >&2
+                    exit 1
+                fi
+                echo "9 steps"
+                ;;
+            rank-arguments)
+                cat "${FAKE_SCENARIO}/rank_$(option_value --signal "$@").arguments"
+                ;;
+            report)
+                outcome report || exit 1
+                echo "# Step 2: learning rates" > "$(option_value --output "$@")"
+                ;;
+        esac
+        ;;
+    experiments/slice_trees.py)
+        log_command "slice_trees.py"
+        loop_pid="$(cat "${LEAN_SEARCH_RUNS}/followup_shared_sampling/loop.pid" 2>/dev/null)"
+        if [[ -n "${loop_pid}" ]] && kill -0 "${loop_pid}" 2>/dev/null; then
+            log_command "SLICED BESIDE A LIVE LOOP"
+            exit 1
+        fi
+        output="$(option_value --output "$@")"
+        mkdir -p "${output}/slice_1"
+        outcome slices || exit 1
+        mkdir -p "${output}"/slice_{2,3,4}
+        echo "4 slices"
+        ;;
+    experiments/held_out_evaluate.py)
+        name="$(option_value --name "$@")"
+        adapter="$(option_value --policy-adapter "$@")"
+        log_command "held_out_evaluate.py ${name}"
+        [[ -d "${adapter}" ]] || { log_command "MISSING adapter ${adapter}"; exit 1; }
+        directory="${LEAN_SEARCH_RUNS}/held_out_evaluations/held_out_${name}"
+        mkdir -p "${directory}/trees"
+        outcome "held_out_${name}" || exit "$(cat "${FAKE_SCENARIO}/exit_held_out_${name}" 2>/dev/null || echo 1)"
+        if outcome "complete_held_out_${name}"; then
+            echo '{"dropped": []}' > "${directory}/summary.json"
+        else
+            echo '{"dropped": ["state_7"]}' > "${directory}/summary.json"
+        fi
+        ;;
+    experiments/grpo_phase.py)
+        run="$(option_value --run-name "$@")"
+        log_command "grpo_phase.py ${run} part $(option_value --part "$@") trees $(basename "$(option_value --trees "$@")")"
+        mkdir -p "${LEAN_SEARCH_CHECKPOINTS}/${run}/policy"
+        touch "${LEAN_SEARCH_CHECKPOINTS}/${run}/policy/steps.jsonl"
+        outcome "round_${run}" || exit 1
+        mkdir -p "${LEAN_SEARCH_CHECKPOINTS}/${run}/policy/adapter"
+        echo '{}' > "${LEAN_SEARCH_CHECKPOINTS}/${run}/phase.json"
+        log_command "trained ${run}"
+        outcome "after_round_${run}" || exit 1
+        ;;
+    experiments/grpo_expert_iteration.py)
+        config="$(option_value --config "$@")"
+        command="${3:-}"
+        build="$(config_value data "${config}")"
+        run="$(config_value run_name "${config}")"
+        case "${command} ${4:-}" in
+            "build "*)
+                log_command "build ${build}"
+                sleep "$(cat "${FAKE_SCENARIO}/slow_build_${build}" 2>/dev/null || echo 0)"
+                outcome "build_${build}" || exit 1
+                mkdir -p "${LEAN_SEARCH_DATA}/grpo_expert_iteration/${build}"
+                ;;
+            "train --dry-run")
+                log_command "dry run ${build}"
+                outcome "dry_run_${build}" || exit 1
+                [[ -d "${LEAN_SEARCH_DATA}/grpo_expert_iteration/${build}" ]] || { log_command "MISSING build ${build}"; exit 1; }
+                echo "Continuing v0's adapter /adapter: 800 expert-iteration examples, $(cat "${FAKE_SCENARIO}/dry_run_steps" 2>/dev/null || echo 9) steps on 4 GPUs"
+                ;;
+            "train ")
+                log_command "train ${run}"
+                [[ -d "${LEAN_SEARCH_DATA}/grpo_expert_iteration/${build}" ]] || { log_command "MISSING build ${build}"; exit 1; }
+                mkdir -p "${LEAN_SEARCH_CHECKPOINTS}/${run}"
+                outcome "round_${run}" || exit 1
+                mkdir -p "${LEAN_SEARCH_CHECKPOINTS}/${run}/adapter"
+                echo '{}' > "${LEAN_SEARCH_CHECKPOINTS}/${run}/training_summary.json"
+                log_command "trained ${run}"
+                outcome "after_round_${run}" || exit 1
+                ;;
+        esac
+        ;;
+    experiments/rank_learning_rates.py)
+        signal="$(option_value --variant "$@")"
+        signal="${signal%%_*}"
+        log_command "rank_learning_rates.py ${signal}"
+        outcome "rank_${signal}" || exit 1
+        echo "Chosen: ${signal}_5e-5 (the held-out states decide; tied on the held-out states: ${signal}_5e-5)"
+        ;;
+    *)
+        log_command "UNKNOWN ${script} $*"
+        exit 2
+        ;;
+esac

@@ -2,10 +2,13 @@
 # An arm's loop (or step 2's shared sampling) started detached from its overlay (DESIGN.md, "Follow-up study:
 # controlled arms"; experiments/configs/grpo/followup/arms/, followup/shared_sampling.toml).
 #
-#   deployment/arm_loop.sh experiments/configs/grpo/followup/arms/A.toml
-#   deployment/arm_loop.sh --kind "shared sampling" experiments/configs/grpo/followup/shared_sampling.toml
-#   deployment/arm_loop.sh --status [--kind ...] <overlay>   # running, finished or stopped; which servers are up
+#   deployment/arm_loop.sh --mode <mode.toml> experiments/configs/grpo/followup/arms/A.toml
+#   deployment/arm_loop.sh --kind "shared sampling" --mode <mode.toml> \
+#       experiments/configs/grpo/followup/shared_sampling.toml
+#   deployment/arm_loop.sh --status [--kind ...] --mode <mode.toml> <overlay>   # running, finished or stopped; servers
 #
+# --mode is the sampling mode (experiments/configs/grpo/followup/modes/; the study driver reads its copy in
+# /workspace/runs/study_chain/mode.toml): one file for the shared sampling run and every arm.
 # Refuses on a CPU layout node_checks.py pinning refuses (the node environment's: the Lean side of every arm runs
 # pinned), while the serving lock is held or a loop runs, and when experiments/followup_arm.py refuses the overlay (a
 # placeholder left, a setting outside the arm's own, no token budget per phase or no phase count). Writes the arm's
@@ -33,9 +36,15 @@ if [[ "${1:-}" == --kind ]]; then
     kind="$2"
     shift 2
 fi
-[[ $# -eq 1 ]] || { sed -n '2,18p' "$0" >&2; exit 2; }
+mode=""
+if [[ "${1:-}" == --mode ]]; then
+    mode="$2"
+    shift 2
+fi
+[[ $# -eq 1 && -n "${mode}" ]] || { sed -n '2,21p' "$0" >&2; exit 2; }
 
-loop_config="$(python experiments/followup_arm.py --kind "${kind}" --arm "$1" --output "${LEAN_SEARCH_RUNS}/followup_configs")"
+loop_config="$(python experiments/followup_arm.py --kind "${kind}" --mode "${mode}" --arm "$1" \
+    --output "${LEAN_SEARCH_RUNS}/followup_configs")"
 name="$(python -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["name"])' "${loop_config}")"
 run_directory="${LEAN_SEARCH_RUNS}/${name}"
 
@@ -99,4 +108,4 @@ if ! kill -0 "$(cat "${run_directory}/loop.pid")" 2>/dev/null; then
     exit 1
 fi
 echo "Logs: ${run_directory}/loop.out (its output), ${run_directory}/loop.log; pid in ${run_directory}/loop.pid"
-echo "When it ends by itself (finished.json) its servers stay up: deployment/arm_loop.sh --status $1"
+echo "When it ends by itself (finished.json) its servers stay up: deployment/arm_loop.sh --status --mode ${mode} $1"

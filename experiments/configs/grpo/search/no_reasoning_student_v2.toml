@@ -1,0 +1,91 @@
+# The GRPO loop's searches without visible reasoning (the follow-up's no-reasoning sampling mode,
+# experiments/configs/grpo/followup/modes/no_reasoning.toml): step 1's run 4 (followup/step1/token_capped_no_reasoning.toml)
+# as a training search, without its per-search token cap. Everything else is run 4's: policy.visible_reasoning off
+# (render_prompt(goals) plus the fence prefill, v0's no-explanation SFT examples), depth weight 0 (A*'s depth term counts
+# blocks, and a block without reasoning is about one tactic against two or three, so visible_student_v2.toml's 0.25
+# would push it breadth-first), depth cap 64, harvesting and exploration as in visible_student_v2.toml.
+[search]
+# The loop's [sampling] max_expansions (the mode's) replaces this.
+max_expansions = 64
+# Expansions are the budget; the wall cap only catches hung searches (run 4's).
+max_wall_seconds = 14400.0
+# Run 4's cap. Each expansion's children lie one block below the node expanded, so it does not bind while the mode's
+# expansions plus 16 harvesting stay at most 64 (the mode's 32: depth 48 at most); check-mode warns beyond that.
+max_depth = 64
+score_children_early = true
+# Policy steps stop at 50k heartbeats inside Lean, an ordinary error without a restart.
+tactic_heartbeats = 50000
+# Emergency stop for hangs heartbeats do not count (kernel reduction, big-number arithmetic).
+tactic_timeout_seconds = 60.0
+flatten_blocks = true
+name_inaccessible_hypotheses = true
+check_identifiers = true
+forbidden_steps = [
+    "exact?",
+    "apply?",
+    "rw?",
+    "simp?",
+    "simp_all?",
+    "dsimp?",
+    "aesop?",
+    "hint",
+    "rw_search",
+    "library_search",
+]
+
+# DESIGN.md "The loop": after the first proof, finish the proving expansion, then expand states the value model puts
+# at most 2 tactics from done, for up to 16 more expansions. Off for evaluations.
+[search.harvest]
+enabled = true
+max_remaining_steps = 2.0
+max_expansions = 16
+
+# With probability 0.1 the next expansion is drawn uniformly from the 8 best frontier states. Off for evaluations.
+[search.exploration]
+enabled = true
+epsilon = 0.1
+top_k = 8
+seed = 0
+
+[expander]
+kind = "automation_then_policy"
+overlap = true
+
+[automation]
+tactics = ["omega", "constructor", "rfl", "field_simp", "ring_nf", "simp_all", "nlinarith"]
+# The sweep keeps Lean's default limit; the search's emergency stop applies.
+heartbeats = 200000
+max_wall_clock_timeouts_per_tactic = 1
+max_heartbeat_timeouts_per_tactic = 1
+
+[priority]
+kind = "a_star"
+value_weight = 1.0
+# 0, as in run 4: A*'s depth term counts blocks, and a block without reasoning is about one tactic against two or
+# three, so 0.25 would push this search breadth-first.
+depth_weight = 0.0
+policy_prior_weight = 0.0
+automation_log_probability = -1.0
+
+[policy]
+model = "policy-merged"
+tokenizer = "Qwen/Qwen3.5-4B"
+server_urls = ["http://127.0.0.1:8100/v1", "http://127.0.0.1:8101/v1"]
+sample_count = 8
+temperature = 0.8
+top_p = 1.0
+max_tokens = 1024
+thinking = false
+visible_reasoning = false
+few_shot = false
+force_answer_on_truncation = true
+forced_answer_tokens = 256
+
+[value]
+model = "value-merged"
+tokenizer = "Qwen/Qwen3.5-2B"
+server_urls = ["http://127.0.0.1:8200/v1", "http://127.0.0.1:8201/v1"]
+
+[value.readout]
+eight_or_more_steps = 12.0
+dead_steps = 16.0

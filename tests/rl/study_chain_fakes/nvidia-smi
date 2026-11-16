@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# The stand-in for nvidia-smi's two queries: --query-gpu reads the scenario's gpu_memory (index, MiB used per line; 1 MiB
+# on four GPUs when absent), --query-compute-apps its gpu_holders (nothing when absent).
+case "$1" in
+    --query-gpu=*)
+        if [[ -f "${FAKE_SCENARIO}/gpu_memory" ]]; then
+            cat "${FAKE_SCENARIO}/gpu_memory"
+        else
+            printf '0, 1\n1, 1\n2, 1\n3, 1\n'
+        fi
+        ;;
+    --query-compute-apps=*)
+        cat "${FAKE_SCENARIO}/gpu_holders" 2>/dev/null
+        ;;
+    *)
+        exit 2
+        ;;
+esac
+exit 0
