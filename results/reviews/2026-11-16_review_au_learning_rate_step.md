@@ -156,3 +156,55 @@ is never used; either retry (exit 1) or drop the `attempt`.
    after; ~12 min per run.
 9. The report renders, and `supervisorctl status study_chain` shows EXITED (not BACKOFF/FATAL) after HOLD; servers'
    state at HOLD per B1.
+
+## Re-review (2026-11-16)
+
+Fixes `8c631b0..e91d7fa` (head `e91d7fa`), read against the same tools. WSL: `test_study_chain_script.py`,
+`test_learning_rate_step.py`, `test_study_commands.py`, `test_learning_rate_report.py` 196 passed;
+`test_followup_arms.py`, `test_rate_ranking.py` 72 passed.
+
+**Verdict: merge.** Every blocking and should-fix finding is fixed; what remains is nits and the node smoke checks.
+
+| Finding | Status | Where / note |
+|---|---|---|
+| B1 servers left on the last variant at HOLD | Fixed | `study_chain.sh:331-335`: `stop_model.sh --all` after S4 on every start that reaches it, refusal → STOPPED (a later start retries it, S4 being done); HOLD text, header and ops doc say the servers are stopped and why. Test checks it is the last step. |
+| S1 dropped held-out states marked done | Fixed | `study_chain.sh:158-164` + `learning_rate_step.py check-held-out` (reads `summary.json` through `EvaluationSummary`); exit 1, next start resumes under the name, bounded by the run's attempts. Two tests; ops doc updated. |
+| S2 slicing racing the finishing loop | Fixed | `study_chain.sh:120-127`: waits for `loop_alive` to end, 600 s, then exit 1. The fake loop now lives across its `finished.json` and the fake `slice_trees.py` refuses beside it. See N9 below. |
+| S3 GPU check blind in a container | Fixed (needs the smoke check) | `study_chain.sh:181-195`: free = every GPU under 100 MiB by `--query-gpu=index,memory.used`, four GPUs required, process list only shown, stderr no longer captured. The "idle reads 1 MiB" premise is listed as not yet seen on the node; keep smoke check 1 (run it once with the servers stopped). |
+| S4 report untested end to end | Fixed | `tests/rl/test_learning_rate_report.py`: the CLI over files written through the production dataclasses, including a disagreeing rank file and an unreadable earlier run. |
+| S5 untested driver paths | Fixed | Live loop, `arm_loop.sh` failing 2 and 3 times, a build alive across a restart, a failing build rebuilt before C, `grpo_loop.sh servers` failing, dropped states, all added. |
+| N1 pid files across reboots, unbounded build wait | Partly | `builds.pid` now holds pid and start time, excludes `$$`, wait bounded at 3 h → STOPPED. `loop_alive` still trusts `loop.pid` alone (low risk; PIDs on the node are ~275,000). |
+| N2 finished round retrained | Fixed | `study_chain.sh:265-271`: with an attempt recorded and every completion file present the output is kept. See N10. |
+| N3 changing the mode before sampling | Fixed (doc) | Install step 2 names `mode.recorded` and `mode.recorded.txt`. |
+| N4 groups an earlier instance started | Fixed (doc) | "Stopping safely" names `loop.pid`, `builds.pid` and how to stop each. |
+| N5 driver changes take effect at the next start | Fixed (doc) | Install step 3. |
+| N6 servers before every held-out run | Fixed (doc) | S3b row describes it, value servers included. |
+| N7 slicing's unused attempt | Fixed | `attempt s1_slices` removed. |
+
+The new code, checked: `check-held-out`; the memory check (`awk -F', *'` on `nounits` output, count of lines); the
+bounded waits; `process_start` (field 22 of `/proc/<pid>/stat`, as `server_pid.sh` reads it); `sampling.json` written
+beside every loop.toml by `followup_arm.py` and an arm refused unless its record equals the shared run's (search config
+path, expansions, sha256), with a fallback for configs written before the record existed; `training_search_refusal`
+(no per-search token cap) in both `check-mode` and `followup_arm.py`; the mode's search config sha256 in `mode.txt`,
+compared on every start with `mode.recorded.txt`; `modes/no_reasoning.toml` and
+`search/no_reasoning_student_v2.toml` (differs from `visible_student_v2.toml` only in `max_depth` 64, `depth_weight`
+0 and `visible_reasoning` false; no token cap, so `check-mode` accepts it); the second v0 run `step2_v0_end` as the
+last line of `held_out.tsv` (its own name, so its `checkpoint.json` cannot clash with `step2_v0`; ranking still pairs
+with `step2_v0`); `git_revision` no longer failing the report. Nothing broke; new nits only:
+
+**N8.** `study_chain.sh:79-84`: `mode.txt` captures stderr too (`2>&1`) and is now compared byte for byte with
+`mode.recorded.txt` on every start. Any non-deterministic line `check-mode` writes to stderr (a library warning with a
+path or time in it) would STOP the chain as "the mode differs". Compare stdout only (write stderr elsewhere).
+
+**N9.** `study_chain.sh:121-124`: the exit 1 after 600 s counts no attempt, so a loop process that never exits (hung
+shutdown, or a reused pid in `loop.pid`) makes supervisord restart the driver every ~11 minutes forever, with no
+STOPPED to tell anyone. Count an attempt (`attempt s1_loop_exit`) or stop the chain.
+
+**N10.** `study_chain.sh:265-271`: the kept output is judged by the completion files existing, not by the trainer's
+exit. That is sound because both trainers write them last, but `phase.json` is written with `write_text`, not
+atomically: a kill during that write leaves a truncated file that is accepted and only fails the report at S4. Writing
+it atomically in `training_phase.py`, or parsing it here, closes that.
+
+**N11.** `experiments/followup_arm.py:126-136` (pre-existing, slightly wider now with a third file): a directory left
+with only some files (killed between `mkdir` and the last write) is refused as "holds other" on every later start, so
+a shared-sampling restart would use up its three attempts and STOP. Write to a temporary directory and rename it.

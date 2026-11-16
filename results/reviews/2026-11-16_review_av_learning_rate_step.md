@@ -182,3 +182,92 @@ for one short line. Not worth changing alone.
 5. **The replay data under "no reasoning".** GRPO's NLL replay and C's 30% Lean replay stay
    `visible_student_v3_numbered` (with its explanations) whatever the mode. Fine if that set also holds v0's
    no-explanation examples. Otherwise the replay would pull a no-reasoning policy back toward explanations.
+
+## Re-review (2026-11-16)
+
+Fixes reviewed: 8c631b0..e91d7fa (head e91d7fa), five commits.
+
+Checks run:
+- In WSL, against the worktree's `src`: `test_learning_rate_step`, `test_learning_rate_report` (new),
+  `test_study_commands`, `test_study_chain_script` and `test_rate_ranking`. 207 passed.
+- `ruff check` and `ruff format --check` over `src`, `experiments` and the test files: clean.
+- On the node (read only): no `followup_configs` and no `study_chain` state exist yet, so the step starts clean.
+  The replay set `reasoning/visible_student_v3_numbered/train.jsonl` holds 15,114 `"visible": false` lines of
+  42,678 (35%).
+
+**Verdict: merge.** All five should-fix findings are fixed. N1-N5 are fixed; N6 and N7 are open and need not block. I
+found no regression. The new nits below are small.
+
+### Status per finding
+
+| Finding | Status | Notes |
+|---|---|---|
+| S1 report hides a chosen variant below v0 | fixed | Each measure now has its own column: "above v0", "below v0" or "within noise" (`side_of_v0`; the sign comes from `interval.lower > 0` once 0 is excluded). A bold line under the ranking and a "Look first" line above the values table name the measures on which the chosen variant is below v0, success or valid Lean. Tested both ways. |
+| S2 arms not bound to the step's mode | fixed | `followup_arm.py` writes `sampling.json` (search config path, expansions, the config's sha256) beside every loop.toml. It refuses an arm whose record differs from the shared run's. A differing path, expansions count or file content is refused (tested). Configs written without `sampling.json` fall back to path and expansions only; none exist on the node, so the fallback is unused. |
+| S3 no-reasoning mode not ready, any search config accepted | fixed (the probe-run question stays the owner's) | Details below. |
+| S4 no A/A or drift check for v0 | fixed | `step2_v0_end` is the last line of `held_out.tsv`, after the ten variants. The report pairs it with the first v0 run ("after minus before") and prints a bold drift line when either interval excludes 0. The variants stay paired with the first run, and the ranking does not use v0. |
+| S5 C's window decided silently by the tie | fixed | The tie rule now lives in `rate_ranking.tie_break`. Signal C's section says the window came from the tie rule whenever the tied set holds both windows (tested both ways). |
+| N1 docstring overclaim | fixed (reworded) | The seeds are still the template's, which is acceptable: the rates within a signal share them. |
+| N2 rounds too small for the loop | fixed | The report notes a round under 100 examples or under 5 planned steps. It notes only and does not stop, which fits a report. |
+| N3 earlier v0 run can fail the report | fixed | `earlier_run` catches SystemExit, OSError and ValueError and names the reason (tested). |
+| N4 no end-to-end test of `report` | fixed | `tests/rl/test_learning_rate_report.py` runs `report` over real-format files written through the production dataclasses. It includes a rank file that disagrees and an earlier run on other states. |
+| N5 rate printed two ways | fixed | The rate column uses the variant's rate string. |
+| N6 leakage counts not shown | open | The C builds' `held_out_statements` and `held_out_states` counts are still not in the report. Small, can follow. |
+| N7 no step size for C rounds | open | As before. Small, can follow. |
+| N8 docstring length | open | Not worth changing. |
+
+**S3 in detail:**
+- `search/no_reasoning_student_v2.toml` differs from run 4's `step1/token_capped_no_reasoning.toml` in three things
+  only: no `max_generated_tokens`, `max_expansions` 64 instead of 1,024 (the loop's mode value replaces it anyway),
+  and comments. Against `visible_student_v2.toml` it differs only in `visible_reasoning = false`, `depth_weight = 0`
+  and `max_depth = 64`, so harvesting, ε, n and the heartbeats are the visible training search's.
+- `max_depth = 64` is run 4's value. That is right.
+- The token-cap refusal (`training_search_refusal`: any `max_generated_tokens` set) is sound. A config still holding
+  the PLACEHOLDER already fails to load. Both `check-mode` and `followup_arm.py` apply it.
+- `mode.txt` now carries the search config's sha256. The driver compares it with `mode.recorded.txt` at every start,
+  so an edit or a deploy that changes the search config stops the chain (tested).
+- The mode still does not reach the arms' probe runs. That stays an owner question (question 3), not a code
+  defect.
+
+### Smaller points in the fixes
+
+All are fine as they are:
+- **GPU check by memory.** The GPUs count as free when each uses under 100 MiB; a check also stops the chain if
+  `nvidia-smi` does not read exactly 4 GPUs. More robust in a container than the process list.
+- **Builds pid with start time.** `builds.pid` now records the process start time (field 22 of `/proc/<pid>/stat`).
+  The `cut -f20` after stripping `pid (comm) ` picks the right field. The driver's own pid is excluded, so a reused pid
+  after a container restart no longer counts as the builds running.
+- **Dropped held-out states.** A held-out run that exits 0 but left states without a tree is now not marked done;
+  the next start resumes it under its attempt counter.
+- **Servers at HOLD.** Stopping the servers before HOLD is right. `arm_loop.sh` keeps any server that answers, and
+  these would hold the last variant's merge.
+- **Finished round kept.** A round whose completion files exist when its driver died before marking it is now kept,
+  not retrained. See R2.
+
+### New findings (nits)
+
+**R1. The wait for the loop to exit can retry forever.** `study_chain.sh`, S1, the wait after `finished.json`. It
+exits 1 after 600 s without an attempt counter. If the shared loop hangs in its shutdown, supervisord restarts the
+driver every ~11 minutes indefinitely. No STOPPED is ever written; only the watchdog would notice. Fix: count it
+(`attempt s1_loop_exit`), so the 4th try writes STOPPED.
+
+**R2. A finished output is kept even if its trainer exited non-zero.** `study_chain.sh`, `train_round`. The "kept"
+check also accepts an output whose trainer wrote its completion files and then exited non-zero, e.g. at the
+torchrun or NCCL teardown on an earlier attempt. That is probably the right call, since the files are written last.
+But the log line says only "the earlier attempt left a finished output". Add that attempt's exit status if it is
+known, or a pointer to `rounds/<label>.log`, so a teardown failure stays visible.
+
+**R3. The depth comment goes stale if expansions rise.** `search/no_reasoning_student_v2.toml`, `max_depth` comment.
+"Not binding at the loop's budget: 32 + 16 harvesting reaches depth 48" holds only while the mode's expansions are at
+most 48. The mode file invites raising them about 2.3 times (about 74). The cap of 64 could then bind on a pure chain.
+Fix: say "not binding up to 48 expansions". The value itself (run 4's) is fine.
+
+**R4. The multiple-comparisons note leaves out the A/A intervals.** `learning_rate_step.py:694`. It counts the 20
+variant intervals but not the two A/A intervals. The drift line can fire by chance about 5% of the time per measure.
+Add the 2, or say "by chance" in the drift line.
+
+### Owner question 5, answered on the node
+
+The replay set already mixes both forms: 35% of its examples are no-explanation. Under the no-reasoning mode, the
+GRPO and C replay would still be 65% examples with explanations. That is consistent with v0's own SFT mix, so I see no
+change needed. The question stays the owner's only if he wants the replay to match the mode.

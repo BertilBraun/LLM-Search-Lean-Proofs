@@ -265,9 +265,9 @@ runs the whole learning-rate step unattended and ends in a HOLD with a report. I
 
 | Step | What | Markers | Hours |
 |---|---|---|---|
-| mode | `learning_rate_step.py check-mode` on `mode.toml` (refuses a search config with a per-search token cap) → `mode.txt`: the mode's description and its search config's sha256. The first start copies both to `mode.recorded` and `mode.recorded.txt`; every later start compares both | `mode.recorded*` | - |
+| mode | `learning_rate_step.py check-mode` on `mode.toml` (refuses a search config with a per-search token cap) → `mode.txt` (standard output only; warnings go to `mode.err`): the mode's description, with a warning when the depth cap can bind, and its search config's sha256. The first start copies both to `mode.recorded` and `mode.recorded.txt`; every later start compares both | `mode.recorded*` | - |
 | configs | `learning_rate_step.py write-configs`: `configs/<label>.toml` (10 rounds), `rounds.tsv`, `builds.tsv`, `held_out.tsv` | `done_configs` | - |
-| S1 sampling | `stop_model.sh --all` (first start only: step 1's servers would otherwise be kept whatever they hold), then `arm_loop.sh --kind "shared sampling" --mode mode.toml followup/shared_sampling.toml`, polled every 60 s until `finished.json`; a loop found dead is started again through `arm_loop.sh`. After `finished.json` it waits (up to 10 minutes, then exit 1) until the loop's process is gone, since `slice_trees.py` refuses while it lives | `done_s1_sampling`, `attempts_s1_sampling_start` | 2-3 visible (about 25M tokens/h at 112 searches), more without reasoning |
+| S1 sampling | `stop_model.sh --all` (first start only: step 1's servers would otherwise be kept whatever they hold), then `arm_loop.sh --kind "shared sampling" --mode mode.toml followup/shared_sampling.toml`, polled every 60 s until `finished.json`; a loop found dead is started again through `arm_loop.sh`. After `finished.json` it waits (up to 10 minutes, then an attempt is counted and it exits 1; the 4th writes STOPPED) until the loop's process is gone, since `slice_trees.py` refuses while it lives | `done_s1_sampling`, `attempts_s1_sampling_start`, `attempts_s1_loop_exit` | 2-3 visible (about 25M tokens/h at 112 searches), more without reasoning |
 | S1 slices | `slice_trees.py --slices 4` into `followup_shared_sampling/slices/` (a partial one moved aside first); a failure stops the chain | `done_s1_slices` | minutes |
 | S3a | v0's held-out run `held_out_step2_v0`, on the servers the loop left on v0 | `done_held_out_step2_v0` | 0.2 |
 | S2 | `stop_model.sh --all`, GPUs checked free (every GPU under 100 MiB used, from `nvidia-smi --query-gpu=index,memory.used`; idle reads 1 MiB), the two expert-iteration builds started beside (`build --processes 16` on the Lean CPUs), then the rounds one at a time on the 4 GPUs (`torchrun`, training CPUs, `HF_HUB_OFFLINE=1`): `grpo_phase.py --part policy` with the loop's Lean and math replay for A and B2 at 2e-5, 5e-5, 1e-4 (slice 4); before C, `train --dry-run` on both windows (`dry_run_step2_C_w1.log`, `…_w4.log`), then `grpo_expert_iteration.py train` for C at 5e-5 and 1e-4 on window 1 (slice 4) and window 4 (slices 1-4) | `done_round_<label>`, `done_build_<build>`, `done_dry_run_<build>` | 3-5 (6 GRPO rounds of ~0.5 h, 4 rounds of 0.2-0.5 h) |
@@ -304,7 +304,7 @@ orchestrator's job (node-local edits recorded as in section 4, or committed and 
 
 **The modes.** `experiments/configs/grpo/followup/modes/visible.toml` (visible student v2, 32 expansions) and
 `modes/no_reasoning.toml` (`search/no_reasoning_student_v2.toml`: step 1's run 4 without its token cap, depth weight 0,
-depth cap 64, at 32 expansions; raising the expansions is that one number). `followup_arm.py` (so `arm_loop.sh`) writes
+depth cap 64, at 32 expansions; raising the expansions is that one number, and `check-mode` warns once expansions plus harvesting exceed the depth cap). `followup_arm.py` (so `arm_loop.sh`) writes
 `sampling.json` beside every loop.toml (search config, expansions, the search config's sha256) and refuses an arm whose
 sampling differs from the shared run's: the arms sample in the step's mode or not at all.
 
@@ -349,7 +349,7 @@ servers that kept dying in a held-out run (exit 4), background builds still runn
 report failures. A round whose job died is trained again into a fresh output: the interrupted `step2_<label>` is renamed
 `step2_<label>.interrupted_<time>`; a round is done only when its trainer exited 0 and left `phase.json` and
 `policy/adapter` (GRPO) or `training_summary.json` and `adapter` (C), so no half-trained adapter is evaluated (an output
-holding both, left by a trainer whose driver died before marking it, is kept). A held-out run resumes its states, also
+holding both whose outcome file reads back whole (`learning_rate_step.py check-round`), left by a trainer that exited non-zero at its teardown or whose driver died before marking it, is kept, with that attempt's exit status in `chain.log`). A held-out run resumes its states, also
 after an exit 0 that dropped some. After fixing a STOPPED cause: rename STOPPED (e.g. `STOPPED.<reason>`), delete the
 step's `attempts_<step>` if its tries were used up, `supervisorctl start study_chain`.
 
