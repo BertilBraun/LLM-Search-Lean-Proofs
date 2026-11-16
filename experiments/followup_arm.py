@@ -17,12 +17,15 @@ whose policy trains in expert-iteration rounds (C, D) also gets <output>/<name>/
 overlay that changes anything but its kind's settings (an arm: name, seed offset, credit mode, learning rate, the
 rounds' schedule, window and learning rate; the shared sampling: name, the phase and total token budgets), one that
 still holds a PLACEHOLDER, a mode that sets anything but the search config and the expansions or whose search config
-does not load, an arm whose loop config has no phase_generated_tokens or max_phases (its phases would end on minutes
-and groups), a shared sampling run whose phase would come due, and an existing <output>/<name> with other contents (the
-same contents are written again silently, so a restart can rerun it). deployment/arm_loop.sh starts the loop from it.
+does not load or caps each search's generated tokens, an arm whose sampling differs from step 2's shared run's (its
+sampling.json: the search config, the expansions and the search config's sha256, written beside every loop.toml), an
+arm whose loop config has no phase_generated_tokens or max_phases (its phases would end on minutes and groups), a
+shared sampling run whose phase would come due, and an existing <output>/<name> with other contents (the same contents
+are written again silently, so a restart can rerun it). deployment/arm_loop.sh starts the loop from it.
 """
 
 import argparse
+import json
 import sys
 import tomllib
 from pathlib import Path
@@ -30,14 +33,24 @@ from pathlib import Path
 from lean_search.expert_iteration.toml_text import toml_text
 from lean_search.rl.expert_iteration_data import parse_expert_iteration_config
 from lean_search.rl.loop_config import load_loop_config
-from lean_search.rl.study_configs import OverlayKind, overlay_configs, with_sampling_mode
+from lean_search.rl.study_configs import (
+    SAMPLING_RECORD_FILE,
+    OverlayKind,
+    SamplingRecord,
+    overlay_configs,
+    sampling_record,
+    sampling_refusal,
+    training_search_refusal,
+    with_sampling_mode,
+)
 from lean_search.rl.training_phase import TrainingPhaseConfig
 from lean_search.search import load_run_config
-from lean_search.search.records import from_json_object
+from lean_search.search.records import from_json_object, to_json
 
 REPOSITORY_DIRECTORY = Path(__file__).resolve().parents[1]
 BASE = "experiments/configs/grpo/followup/base.toml"
 EXPERT_ITERATION_RECIPE = "experiments/configs/grpo/followup/expert_iteration.toml"
+SHARED_SAMPLING = "experiments/configs/grpo/followup/shared_sampling.toml"
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -53,14 +66,42 @@ def read_toml(path: Path) -> dict:
     return tomllib.loads(path.read_text(encoding="utf-8"))
 
 
+def mode_base(mode: Path) -> dict:
+    """base.toml in the mode; SystemExit for a mode that changes more, or whose search config does not load or is
+    an evaluation's."""
+    try:
+        base = with_sampling_mode(read_toml(REPOSITORY_DIRECTORY / BASE), read_toml(mode))
+        refusal = training_search_refusal(load_run_config(REPOSITORY_DIRECTORY / base["sampling"]["search_config"]))
+    except (ValueError, OSError) as error:
+        raise SystemExit(f"{mode}: {error}") from error
+    if refusal is not None:
+        raise SystemExit(f"{mode}: {refusal}")
+    return base
+
+
+def shared_sampling_refusal(output: Path, record: SamplingRecord) -> str | None:
+    """Against step 2's shared run, once it has configs under `output`: its sampling record, or for configs written
+    without one its loop.toml's search config path and expansions."""
+    shared = output / read_toml(REPOSITORY_DIRECTORY / SHARED_SAMPLING)["loop"]["name"]
+    if not (shared / "loop.toml").exists():
+        return None
+    if (shared / SAMPLING_RECORD_FILE).exists():
+        recorded = json.loads((shared / SAMPLING_RECORD_FILE).read_text(encoding="utf-8"))
+        return sampling_refusal(record, from_json_object(SamplingRecord, recorded))
+    sampling = read_toml(shared / "loop.toml")["sampling"]
+    expected = SamplingRecord(sampling["search_config"], sampling["max_expansions"], record.search_config_sha256)
+    return sampling_refusal(record, expected)
+
+
 def main() -> None:
     arguments = parse_arguments()
     overlay = read_toml(arguments.arm)
-    try:
-        base = with_sampling_mode(read_toml(REPOSITORY_DIRECTORY / BASE), read_toml(arguments.mode))
-        load_run_config(REPOSITORY_DIRECTORY / base["sampling"]["search_config"])
-    except (ValueError, OSError) as error:
-        raise SystemExit(f"{arguments.mode}: {error}") from error
+    base = mode_base(arguments.mode)
+    record = sampling_record(base["sampling"], REPOSITORY_DIRECTORY)
+    if arguments.kind == OverlayKind.ARM:
+        refusal = shared_sampling_refusal(arguments.output.absolute(), record)
+        if refusal is not None:
+            raise SystemExit(f"{arguments.arm}: {refusal}.")
     phase_template = read_toml(REPOSITORY_DIRECTORY / base["training"]["phase_config"])
     directory = arguments.output.absolute() / overlay["loop"]["name"]
     try:
@@ -75,7 +116,11 @@ def main() -> None:
         )
     except ValueError as error:
         raise SystemExit(f"{arguments.arm}: {error}") from error
-    texts = {"phase.toml": toml_text(configs.phase), "loop.toml": toml_text(configs.loop)}
+    texts = {
+        "phase.toml": toml_text(configs.phase),
+        "loop.toml": toml_text(configs.loop),
+        SAMPLING_RECORD_FILE: to_json(record) + "\n",
+    }
     if configs.expert_iteration is not None:
         texts["expert_iteration.toml"] = toml_text(configs.expert_iteration)
     if directory.exists():

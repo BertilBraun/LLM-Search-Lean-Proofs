@@ -13,9 +13,11 @@ phases are not ended by generated tokens.
 
 The sampling mode (followup/modes/: with or without visible reasoning, the expansions per training search) is one file
 over base.toml's [sampling] that changes exactly `MODE_SETTINGS`, applied alike to the shared sampling run and every
-arm (`with_sampling_mode`), so the arms sample as the trees they took their learning rates from.
+arm (`with_sampling_mode`); an arm whose sampling (the search config's bytes included) differs from the shared run's
+is refused (`sampling_refusal`), so the arms sample as the trees they took their learning rates from.
 """
 
+import hashlib
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -23,6 +25,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from lean_search.rl.loop_config import PolicyUpdate
+from lean_search.search.config import RunConfig
 
 PLACEHOLDER = "PLACEHOLDER"
 BASE_KEY = "base"
@@ -80,6 +83,45 @@ def with_sampling_mode(base: Mapping[str, object], mode: Mapping[str, object]) -
     if not isinstance(expansions, int) or isinstance(expansions, bool) or expansions < 1:
         raise ValueError(f"The sampling mode's max_expansions must be a positive integer, not {expansions!r}.")
     return merged(base, mode)
+
+
+def training_search_refusal(run_config: RunConfig) -> str | None:
+    """Training searches are budgeted by [sampling] max_expansions; a per-search token cap belongs to evaluations
+    (step 1's token-capped configs)."""
+    cap = run_config.search.max_generated_tokens
+    if cap is None:
+        return None
+    return f"its search config caps each search at {cap:,} generated tokens: an evaluation config, not a training one"
+
+
+# Beside an arm's loop.toml: what it samples with, the search config's bytes included.
+SAMPLING_RECORD_FILE = "sampling.json"
+
+
+@dataclass(frozen=True)
+class SamplingRecord:
+    search_config: str
+    max_expansions: int
+    search_config_sha256: str
+
+
+def sampling_record(sampling: Mapping[str, object], repository: Path) -> SamplingRecord:
+    """`sampling`: a loop config's [sampling] table; its search config is read under `repository`."""
+    search_config = sampling["search_config"]
+    expansions = sampling["max_expansions"]
+    assert isinstance(search_config, str) and isinstance(expansions, int)
+    digest = hashlib.sha256((repository / search_config).read_bytes()).hexdigest()
+    return SamplingRecord(search_config, expansions, digest)
+
+
+def sampling_refusal(arm: SamplingRecord, shared: SamplingRecord) -> str | None:
+    """An arm must sample as step 2's shared run did: the rates were chosen on those trees."""
+    if arm == shared:
+        return None
+    return (
+        f"the arm would sample with {arm}, the shared sampling run sampled with {shared}: the arms must sample in the "
+        "mode their learning rates were chosen in"
+    )
 
 
 def overlay_settings(kind: OverlayKind) -> frozenset[str]:
