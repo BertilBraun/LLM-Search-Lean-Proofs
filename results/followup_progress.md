@@ -2,7 +2,7 @@
 
 Kept current by the orchestrator. Details live in the linked files.
 
-**Last update:** 2026-11-16, 00:10 UTC.
+**Last update:** 2026-11-16, 02:30 UTC.
 
 ## Where we are
 
@@ -19,8 +19,8 @@ two independent reviews and a re-review (`results/reviews/2026-11-14_review_aa_*
 | Step 1, anchor runs 1 and 2 (v0 with value v0, 2,000 statements) | done: 713 and 716 of 2,000 | `node_backup/2026-11-15/live/runs/step1_chain/` |
 | Step 1: token budget, calibration run | done: T = 26,804 generated tokens per statement; calibration run 65 of 200; constants -56.4 (completion), -5.35 (block sum), -0.142 (block mean) | |
 | Step 1: three value-free pilots (200 statements each) | done: 71, 68 and 65 of 200, against 70 and 75 with the value model | |
-| Step 1: reasoning at equal tokens (no-reasoning pilot, visible run, no-reasoning run) | running since 00:02 UTC | |
-| Step 1: the full value-free run; the old final value model with v0's policy | next, after the reasoning runs | |
+| Step 1: reasoning at equal tokens (no-reasoning pilot, visible run, no-reasoning run) | pilot rejected at exactly 1% wall-clock stops; waits for a raised wall cap | |
+| Step 1: the full value-free run (whole-completion order); then v0's policy with the old final value model; then the block-sum order | started about 02:30 UTC, through the night | |
 | Code: GPU power limits and Lean load (tactic timeouts, REPL failures) in every run record; quota reserve enforced on every start path | merged (reviews AO and AP, re-reviewed) and deployed, master 3309652 | |
 | Step 1, last: old final value model with v0's policy; the full value-free run | after a check-in on the pilots | |
 | Before any arm: time server stops and starts, one short phase on the restart-based serving path | during step 1 | |
@@ -84,6 +84,17 @@ finished 2026-11-16 00:02 UTC, all accepted):
   hint that the value model adds little at 16 expansions; the full 2,000-statement run decides.
 - By the pre-set rule (most solved) the full run uses the whole-completion order. The owner asked for block-only
   tokens; the two are 3 statements apart, so the block-sum order may be run in full as well.
+
+**Does visible reasoning pay at equal tokens? Pilot** (v0 without the explanation, the same generated-token budget
+T = 26,804 per statement, the first 200 probe statements; finished 2026-11-16 02:13 UTC):
+
+- 76 of 200 solved, against 70 and 75 for the anchors with visible reasoning on the same statements (the anchors use
+  the tuned depth weight, so this is only a hint; the proper pair is runs 3 and 4).
+- The pilot was **rejected** by the acceptance rule: 2 of 200 searches (exactly 1.00%) stopped on the 7,200-second wall
+  cap; the rule accepts only below 1%. Both spent nearly all their time in Lean (about 260 seconds per expansion, 28
+  expansions). Without reasoning the same tokens buy about 2.3 times the expansions (734 against 1,675 tokens each).
+- Per the design, the cap is raised for the pilot, run 3 and run 4 together and the pilot is repeated. That config
+  change is made in the morning; the reasoning runs wait until then.
 
 - Probe v2 is drawn and fixed: 2,000 statements, 33 near-identical pool statements held out of the curriculum
   (`node_backup/2026-11-14/probe_v2/`).
