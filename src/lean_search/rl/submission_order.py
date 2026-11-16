@@ -12,6 +12,7 @@ from lean_search.rl.evaluation import EvaluationProblem
 
 PROBE_SET_LINE = "# probe_set_sha256\t"
 RUN_LINE = "# run\t"
+MAX_UNCOVERED_SHARE = 0.01
 
 
 class SubmissionOrder(StrEnum):
@@ -99,6 +100,18 @@ def orders_note(orders: Sequence[tuple[StartOrder, ...]]) -> str:
     if len(set(orders)) == 1:
         return ""
     return "orders differ: load pattern differs; paired comparison assumes outcomes do not depend on start order"
+
+
+def uncovered_statements(problems: Sequence[EvaluationProblem], seconds: Mapping[str, float]) -> list[str]:
+    """The statements without expected seconds, in file order; ValueError above `MAX_UNCOVERED_SHARE` of them (a file
+    of another probe set's statements, or a broken one)."""
+    uncovered = [problem.problem.name for problem in problems if problem.problem.name not in seconds]
+    if len(uncovered) > MAX_UNCOVERED_SHARE * len(problems):
+        raise ValueError(
+            f"The expected-seconds file lacks {len(uncovered)} of the run's {len(problems)} statements (more than "
+            f"{MAX_UNCOVERED_SHARE:.0%}), e.g. {uncovered[:5]}"
+        )
+    return uncovered
 
 
 def longest_expected_search_first(

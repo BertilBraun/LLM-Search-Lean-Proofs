@@ -41,6 +41,7 @@ from lean_search.rl.submission_order import (
     longest_expected_search_first,
     orders_note,
     read_expected_search_seconds,
+    uncovered_statements,
 )
 from lean_search.search.records import from_json_object, to_json
 
@@ -83,6 +84,20 @@ def test_equal_expected_seconds_start_in_file_order() -> None:
 def test_statements_without_expected_seconds_start_in_file_order() -> None:
     unknown = [problem("s.c"), problem("s.a"), problem("s.b")]
     assert names(longest_expected_search_first(unknown, {})) == ["s.c", "s.a", "s.b"]
+
+
+HUNDRED = [problem(f"s.{index:03d}") for index in range(100)]
+
+
+def test_one_percent_of_statements_without_expected_seconds_is_tolerated() -> None:
+    seconds = {item.problem.name: 1.0 for item in HUNDRED[1:]}
+    assert uncovered_statements(HUNDRED, seconds) == ["s.000"]
+
+
+def test_more_than_one_percent_of_statements_without_expected_seconds_is_refused() -> None:
+    seconds = {item.problem.name: 1.0 for item in HUNDRED[2:]}
+    with pytest.raises(ValueError, match=r"lacks 2 of the run's 100 statements"):
+        uncovered_statements(HUNDRED, seconds)
 
 
 def test_the_order_changes_neither_which_statements_run_nor_how_many() -> None:

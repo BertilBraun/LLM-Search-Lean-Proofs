@@ -21,10 +21,10 @@ config's default file), every other run at the config's [probe] max_expansions.
 The searches start in the config's submission_order: "file" (the set's order, the default) or
 "longest_expected_search_first" (by the expected_search_seconds file, experiments/probe_runs.py
 expected-search-seconds: the longest first, statements it lacks before them, ties in the set's order; a file of
-another probe set is refused), after a pilot (--problems) took its statements as in file order. Only the start order
-changes, never a statement or its search, so it is not part of the run's identity; each session records it and the
-file's digest (sessions.jsonl, run.json). A session in another order or file than the run's first is refused unless
---allow-other-order (recorded).
+another probe set, or lacking more than 1% of the run's statements, is refused), after a pilot (--problems) took its
+statements as in file order. Only the start order changes, never a statement or its search, so it is not part of the
+run's identity; each session records it and the file's digest (sessions.jsonl, run.json). A session in another order
+or file than the run's first is refused unless --allow-other-order (recorded).
 
 It runs only pinned through deployment/background.sh (the node environment's BACKGROUND_CPU_LIST) and records each
 session's CPUs, layout and cgroup CPU counters in pinning.jsonl (run.json holds the counters at the end); a session on
@@ -146,6 +146,7 @@ from lean_search.rl.submission_order import (
     configured_start_order,
     longest_expected_search_first,
     read_expected_search_seconds,
+    uncovered_statements,
 )
 from lean_search.search import load_run_config, read_results
 from lean_search.search.records import from_json_object, to_json
@@ -311,9 +312,12 @@ async def evaluate(arguments: argparse.Namespace) -> int:
         case SubmissionOrder.FILE:
             started = problems
         case SubmissionOrder.LONGEST_EXPECTED_SEARCH_FIRST:
+            try:
+                uncovered = uncovered_statements(problems, expected_seconds)
+            except ValueError as error:
+                raise SystemExit(str(error)) from error
             started = longest_expected_search_first(problems, expected_seconds)
-            uncovered = sum(problem.problem.name not in expected_seconds for problem in problems)
-            log(f"{uncovered} of {len(problems)} statements have no expected seconds; they start first")
+            log(f"{len(uncovered)} of {len(problems)} statements have no expected seconds; they start first")
     weights_root = CHECKPOINTS_DIRECTORY / config.output / "weights"
     merges = checkpoint_merges(loop.serving, chosen, weights_root)
     log(f"{start.identity}: {start.max_expansions} expansions (the budget rule), {start.concurrency} REPLs")
