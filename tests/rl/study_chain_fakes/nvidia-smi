@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# The stand-in for nvidia-smi --query-compute-apps: the scenario's gpu_holders, nothing when the GPUs are free.
+cat "${FAKE_SCENARIO}/gpu_holders" 2>/dev/null
+exit 0
