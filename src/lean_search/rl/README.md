@@ -1068,6 +1068,40 @@ diverge, as expected, while the round's own samples should look like earlier pha
 the bare-have warnings should stay quiet. On the node only: the round's adapter has the current adapter's keys
 (`saved_adapter_weights` of both).
 
+## Expert iteration inside the loop (`expert_iteration_rounds.py`, `expert_iteration_training.py`)
+
+The follow-up study's arms C and D (DESIGN.md, "Arms") run rounds at the loop's pauses instead of by hand.
+`[training] policy_update` decides: `"grpo"` (the default; every config before the study), `"expert_iteration"` (C: a
+round, no GRPO update; the phase config sent to the trainer has no policy section) or `"grpo_and_expert_iteration"`
+(D: A's GRPO update every phase, a round after it). A round is due at phases N, 2N, ...
+(`expert_iteration_every_phases`), over the last `expert_iteration_window_phases` phases (fewer at the start: from
+phase 1, every version's samples from version 0 on), by the recipe in `expert_iteration_config`
+(`followup/expert_iteration.toml`: round 1's selection, replay, schedule and rate; an arm overlay sets its rate).
+
+At a due pause, once the servers stopped and the search REPLs were released, the loop writes the round's config
+(`<run>/expert_iteration/phase_<k>/round.toml`: the window ending at k, the published policy adapter to continue,
+per-phase seeds) and builds its data with the hand-run builder itself, `grpo_expert_iteration.py build` on 16
+processes as a recorded child job, into that directory: the same `round_trees` window, version rule, held-out filter
+and `CompletionSelector`. With fewer than `expert_iteration_min_examples` (100) training examples the round is skipped
+(logged, and recorded with its count): C publishes its policy unchanged, D its GRPO update alone. Otherwise the
+persistent trainer runs it inside the phase's `train`, after the GRPO update on the same resident policy (no second
+copy of the base in `/dev/shm`, no second job beside the parked one), continuing the GRPO update's adapter in D and the
+published one in C, as `grpo_expert_iteration.py train` trains (warmup, cosine, completion-token loss, replay at 30% and
+10%, validation at the start, halfway and the end) but with the ranks' gradient sums instead of DDP. The policy is
+merged once, the round's adapter, so the phase publishes one version, which the held-out states and `check_health`
+judge like any phase's; the KL reference stays `[initial] policy_adapter` (v0).
+
+Restarts: a stop during the build builds the round again (the build writes `summary.json` last; a finished build of
+the same window is reused); a stop during the round's training or between D's two updates trains the whole phase again
+from the published adapter (the trainer writes `phase.json` last), so nothing is trained on twice and nothing half
+updated is published. Seeds: the selection's and the replay's are the recipe's with `/phase-<k>` appended, the
+trainer's is k, and `seed_offset` moves all three. Records: an `expert_iteration` metric line per due round (window,
+minimum version, solved trees, examples, skipped; the round's optimizer steps, trained tokens, mean loss, LoRA change
+absolute and relative, mean gradient norm, replay-loss change; the phase's whole change, steps and tokens with D's GRPO
+update) and `Expert-iteration update of phase <k>: ...` in `loop.log` beside GRPO's `Policy update` line; a replay
+validation loss rising more than 3% over the round is an `Alert:` only. The KL and clip fraction health checks stay
+GRPO's (unmeasured in C; in D measured on the GRPO update before the round).
+
 ## Cheap tests
 
 - **Smoke cycle** (`grpo/loop_smoke.toml`, `phase_smoke.toml`; `deployment/README.md`, "GRPO loop" step 3): the loop on
