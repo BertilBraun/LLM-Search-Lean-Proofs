@@ -4,8 +4,8 @@
 # results/followup_node_operations.md, "The study driver"). Installed as a copy, /workspace/step1_chain_tools/
 # study_chain.sh, never run from the checkout: bash reads a running script lazily, and a deploy rewrites the checkout.
 #
-#   S1  the shared sampling run from v0 and value v0 (48M generated tokens, no training) in the sampling mode
-#       $state/mode.toml, then its four slices by finish order
+#   S1  the servers step 1 left up stopped; the shared sampling run from v0 and value v0 (48M generated tokens, no
+#       training) in the sampling mode $state/mode.toml, then its four slices by finish order
 #   S3a v0's held-out run, while the servers still hold v0
 #   S2  the servers stopped; ten training rounds from v0, one at a time on the 4 GPUs (GRPO A and B2 on slice 4 at
 #       2e-5, 5e-5, 1e-4; expert iteration C at 5e-5, 1e-4 on window 1 and window 4), the expert-iteration data built
@@ -89,7 +89,13 @@ fi
 loop_alive() { [[ -f "${shared_run}/loop.pid" ]] && kill -0 "$(cat "${shared_run}/loop.pid")" 2>/dev/null; }
 
 # S1. The shared sampling run, (re)started through arm_loop.sh whenever it is found neither running nor finished.
+# Before its first start the servers step 1 left up are stopped: grpo_loop.sh servers keeps any server that answers,
+# whatever weights it holds, and the run must sample with its own version 0.
 if ! done_step s1_sampling; then
+    if [[ ! -f "${state}/started_s1_sampling" ]]; then
+        deployment/stop_model.sh --all >> "${state}/servers.log" 2>&1 \
+            || stop_chain "stop_model.sh refused to stop a server (servers.log): look before stopping it by PID"
+    fi
     mark_start s1_sampling
     while [[ ! -f "${shared_run}/finished.json" ]]; do
         if [[ -f "${shared_run}/health_stop.json" ]]; then

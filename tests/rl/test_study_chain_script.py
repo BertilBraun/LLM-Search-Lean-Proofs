@@ -163,6 +163,7 @@ def expected_steps(node: Node) -> list[str]:
     steps = [
         "learning_rate_step.py check-mode",
         "learning_rate_step.py write-configs",
+        "stop_model.sh --all",
         f"arm_loop.sh --kind shared sampling --mode {mode} experiments/configs/grpo/followup/shared_sampling.toml",
         "slice_trees.py",
         "grpo_loop.sh servers",
