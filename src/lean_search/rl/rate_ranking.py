@@ -127,6 +127,12 @@ class RateChoice:
     probe_runs: tuple[tuple[str, str], ...]
 
 
+def tie_break(tied: Sequence[Variant]) -> Variant:
+    """DESIGN's rule for variants nothing separates (decided 2026-11-14, open to the owner): the lower rate; among
+    equal rates the first listed, which is how step 2 prefers C's window 1 (learning_rate_step.STEP_VARIANTS)."""
+    return min(tied, key=lambda variant: variant.learning_rate)
+
+
 def choose_rate(variants: Sequence[Variant], seed: int = 0) -> RateChoice:
     """`variants`: one signal's (or C's window's) learning rates."""
     check_same_states([variant.held_out for variant in variants])
@@ -156,14 +162,14 @@ def choose_rate(variants: Sequence[Variant], seed: int = 0) -> RateChoice:
         }
         gate = tuple(GateTie(label, found) for label, found in against_leader.items())
         gate_tied = [variant for variant in tied if variant is leader or includes_zero(against_leader[variant.label])]
-        chosen = min(gate_tied, key=lambda variant: variant.learning_rate)
+        chosen = tie_break(gate_tied)
         reason = (
             "tied on the held-out states; the gate set decides"
             if len(gate_tied) == 1
             else "tied on the held-out states and on the gate set; the lower rate"
         )
     else:
-        chosen = min(tied, key=lambda variant: variant.learning_rate)
+        chosen = tie_break(tied)
         reason = "tied on the held-out states, no gate runs; the lower rate"
     probe_runs = []
     for other in variants:
