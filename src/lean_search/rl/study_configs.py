@@ -18,6 +18,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
+from lean_search.rl.loop_config import PolicyUpdate
+
 PLACEHOLDER = "PLACEHOLDER"
 BASE_KEY = "base"
 
@@ -43,8 +45,6 @@ ARM_SETTINGS = frozenset(
         "expert_iteration.sft.optimization.learning_rate",
     }
 )
-# `LoopTrainingConfig.policy_update`'s value without rounds.
-GRPO_ONLY = "grpo"
 # Step 2's shared sampling: v0 sampling without training until a total token count, a phase never due.
 SHARED_SAMPLING_SETTINGS = frozenset(
     {
@@ -137,6 +137,18 @@ def budget_refusals(kind: OverlayKind, training: Mapping[str, object]) -> list[s
             return [] if phase_tokens > total else ["a phase would come due before the total: it would train"]
 
 
+def unused_settings(update: PolicyUpdate, overlay: Mapping[str, object]) -> list[str]:
+    """An overlay's settings its policy update ignores: the rounds' without rounds, GRPO's without GRPO."""
+    match update:
+        case PolicyUpdate.GRPO:
+            unused = ("expert_iteration.", "loop.training.expert_iteration_")
+        case PolicyUpdate.EXPERT_ITERATION:
+            unused = ("phase.policy.",)
+        case PolicyUpdate.GRPO_AND_EXPERT_ITERATION:
+            unused = ()
+    return [key for key in leaf_keys(overlay) if key.startswith(unused)]
+
+
 def overlay_configs(
     kind: OverlayKind,
     overlay: Mapping[str, object],
@@ -164,9 +176,10 @@ def overlay_configs(
         raise ValueError(f"The {kind}'s loop config: {'; '.join(refusals)}.")
     loop["training"] = {**training, "phase_config": phase_path}
     phase = merged(phase_template, overlay.get("phase", {}))
-    if training.get("policy_update", GRPO_ONLY) == GRPO_ONLY:
-        if "expert_iteration" in overlay:
-            raise ValueError(f"The {kind} trains no expert-iteration rounds: its [expert_iteration] table is unused.")
+    contradictions = unused_settings(PolicyUpdate(training.get("policy_update", PolicyUpdate.GRPO)), overlay)
+    if contradictions:
+        raise ValueError(f"The {kind} sets what its policy update never reads: {contradictions}.")
+    if training.get("policy_update", PolicyUpdate.GRPO) == PolicyUpdate.GRPO:
         return OverlayConfigs(loop, phase)
     assert expert_iteration_template is not None
     loop["training"] = {**loop["training"], "expert_iteration_config": expert_iteration_path}

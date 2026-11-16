@@ -423,7 +423,7 @@ def validation_metrics(
     exact = 0
     for indices in micro_batches:
         batch = micro_batch([examples[index] for index in indices], packing, pad_token_id, device)
-        with torch.autocast("cuda", dtype=torch.bfloat16):
+        with torch.autocast(device.type, dtype=torch.bfloat16):
             token_losses, correct, rows = loss_module(
                 batch.input_ids, batch.attention_mask, batch.labels, batch.position_ids, batch.sequence_starts
             )
@@ -539,10 +539,14 @@ def train(
     loss_module = CompletionLoss(causal_model)
     distributed_module: torch.nn.Module = loss_module
     if context.world_size > 1:
-        distributed_module = torch.nn.parallel.DistributedDataParallel(loss_module, device_ids=[context.device.index])
+        device_ids = None if context.device.type == "cpu" else [context.device.index]
+        distributed_module = torch.nn.parallel.DistributedDataParallel(loss_module, device_ids=device_ids)
     parameters = trainable_parameters(loss_module)
     optimizer = torch.optim.AdamW(
-        parameters, lr=optimization.learning_rate, weight_decay=optimization.weight_decay, fused=True
+        parameters,
+        lr=optimization.learning_rate,
+        weight_decay=optimization.weight_decay,
+        fused=context.device.type == "cuda",
     )
     steps = plan_steps(train_examples, optimization, context.world_size)
     warmup_steps = max(1, round(optimization.warmup_fraction * len(steps)))
@@ -574,7 +578,9 @@ def train(
             torch.distributed.barrier()
 
     evaluate_now(0)
-    torch.cuda.reset_peak_memory_stats(context.device)
+    # On the CPU only in tests: the loop's expert-iteration rounds are checked against this trainer there.
+    if context.device.type == "cuda":
+        torch.cuda.reset_peak_memory_stats(context.device)
     totals = torch.zeros(5, dtype=torch.float64, device=context.device)
     training_seconds = 0.0
     for step_index, step in enumerate(steps):
@@ -589,7 +595,7 @@ def train(
             synchronize = micro_index == len(local_batches) - 1 or context.world_size == 1
             with (
                 contextlib.nullcontext() if synchronize else distributed_module.no_sync(),
-                torch.autocast("cuda", dtype=torch.bfloat16),
+                torch.autocast(context.device.type, dtype=torch.bfloat16),
             ):
                 token_losses, _, _ = distributed_module(
                     batch.input_ids, batch.attention_mask, batch.labels, batch.position_ids, batch.sequence_starts
@@ -613,7 +619,8 @@ def train(
         optimizer.zero_grad(set_to_none=True)
         if context.world_size > 1:
             torch.distributed.all_reduce(step_totals)
-        torch.cuda.synchronize(context.device)
+        if context.device.type == "cuda":
+            torch.cuda.synchronize(context.device)
         training_seconds += time.perf_counter() - step_start
         totals += step_totals
         loss_sum, tokens, padded_tokens, completion_tokens, _ = step_totals.tolist()
@@ -640,6 +647,7 @@ def train(
     if context.world_size > 1:
         torch.distributed.barrier()
     _, tokens, padded_tokens, completion_tokens, examples = totals.tolist()
+    peak_memory_gib = torch.cuda.max_memory_allocated(context.device) / 2**30 if context.device.type == "cuda" else 0.0
     return TrainingResult(
         steps=len(steps),
         examples=int(examples),
@@ -648,7 +656,7 @@ def train(
         completion_tokens=int(completion_tokens),
         training_seconds=training_seconds,
         tokens_per_second=tokens / training_seconds,
-        peak_memory_gib=torch.cuda.max_memory_allocated(context.device) / 2**30,
+        peak_memory_gib=peak_memory_gib,
         trainable_parameters=sum(parameter.numel() for parameter in parameters),
         evaluations=tuple(evaluations),
     )

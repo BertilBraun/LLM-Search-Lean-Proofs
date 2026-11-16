@@ -7,13 +7,14 @@ captured on master 40c266d). The window reaching before phase 1 is the builder's
 
 import dataclasses
 import json
+import threading
 import tomllib
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
-from loop_fakes import PHASE_TEMPLATE, FakeExpertIterationBuilder, LoopWorld, run_until
+from loop_fakes import PHASE_TEMPLATE, FakeExpertIterationBuilder, LoopWorld, run_until, taking_over_handoff
 from test_loop_budget import (
     PHASE_TREES,
     REPOSITORY,
@@ -26,10 +27,12 @@ from test_loop_budget import (
 )
 
 from lean_search.expert_iteration.serving import ModelVersion, read_versions
+from lean_search.policy.adapters import handoff_directory
 from lean_search.rl.expert_iteration_data import ExpertIterationConfig, parse_expert_iteration_config
 from lean_search.rl.expert_iteration_rounds import round_config
 from lean_search.rl.loop import ExpertIterationSetup, PhaseStage, phase_config_text
 from lean_search.rl.loop_config import parse_loop_config
+from lean_search.training.resident import HostDirectories
 
 GOLDEN = Path(__file__).resolve().parent / "golden" / "grpo_only_loop.json"
 # Wall-clock, machine and per-query readings: they differ run to run.
@@ -262,7 +265,30 @@ async def test_arm_d_publishes_the_grpo_update_alone_after_a_round_too_small_to_
 async def test_a_round_too_small_to_train_is_recorded_as_skipped_with_its_count(tmp_path: Path) -> None:
     world = await ran(round_world(tmp_path, C_TOML, few_examples(1)), 1)
     line = round_lines(world)[0]
-    assert (line["skipped"], line["examples"], line["optimizer_steps"]) == (True, 99, 0)
+    assert (line["skipped"], line["skip"], line["examples"]) == (True, "too_few_examples", 99)
+
+
+async def stepless_first_round(root: Path) -> RoundWorld:
+    """Arm C whose first round has enough examples but fills no optimizer step in the trainer."""
+    world = round_world(root, C_TOML)
+    world.trainer.stepless_phases = {1}
+    return await ran(world, 1)
+
+
+async def test_a_round_that_fills_no_optimizer_step_is_recorded_as_skipped(tmp_path: Path) -> None:
+    line = round_lines(await stepless_first_round(tmp_path))[0]
+    assert (line["skipped"], line["skip"], line["examples"]) == (True, "no_optimizer_step", 500)
+
+
+async def test_arm_c_publishes_its_policy_unchanged_after_a_round_without_a_step(tmp_path: Path) -> None:
+    world = await stepless_first_round(tmp_path)
+    assert versions(world)[1].policy_adapter == versions(world)[0].policy_adapter
+
+
+def test_a_recipe_named_without_rounds_is_refused() -> None:
+    settings = 'phase_generated_tokens = 250\nexpert_iteration_config = "recipe.toml"\n'
+    with pytest.raises(ValueError, match="runs no rounds"):
+        parse_loop_config(TOKEN_TOML.replace("phase_generated_tokens = 250\n", settings))
 
 
 async def test_every_round_writes_its_record(tmp_path: Path) -> None:
@@ -450,3 +476,144 @@ def test_a_recipe_the_loop_would_overwrite_or_could_not_train_is_refused(
     world.expert_iteration = ExpertIterationSetup(change(world.expert_iteration.recipe), world.builder)
     with pytest.raises(ValueError, match="recipe"):
         world.loop()
+
+
+# Restarts in the publishing stage: phase 2's round merge served from host memory, the loop gone before the version
+# was recorded on disk (the copy of ~13 GB, the likeliest moment of a kill), against the same arm run without the stop.
+class HeldRecord:
+    """The take-over of the handed-off merges that the durable record of `version` runs: it waits there, then dies as
+    a killed loop's thread would, so that the version is never recorded."""
+
+    def __init__(self, inner: Callable[[str, str, Path], None], version: int) -> None:
+        self.inner = inner
+        self.directory = f"v{version:04d}"
+        self.reached = threading.Event()
+        self.released = threading.Event()
+
+    def __call__(self, base_model: str, adapter: str, output: Path) -> None:
+        if output.parent.name == self.directory:
+            self.reached.set()
+            self.released.wait()
+            raise RuntimeError("the loop was killed during the durable write")
+        self.inner(base_model, adapter, output)
+
+
+def handoff_round_world(root: Path, toml: str) -> RoundWorld:
+    host = (root / "host").as_posix()
+    world = round_world(root, toml.replace("persistent = true\n", f'persistent = true\nhost_directory = "{host}"\n'))
+    handoff = HostDirectories(world.config.host_directory()).handoff
+    world.trainer.handoff = handoff
+    world.merge = taking_over_handoff(handoff, world.searcher.events)
+    return world
+
+
+async def restarted_in_publishing(root: Path, toml: str) -> RoundWorld:
+    world = handoff_round_world(root, toml)
+    held = HeldRecord(world.merge, version=2)
+    world.merge = held
+    await run_while(world.loop(), lambda: not held.reached.is_set())
+    held.released.set()
+    world.merge = held.inner
+    world.searcher.open.set()
+    return await ran(world, 3)
+
+
+async def uninterrupted(root: Path, toml: str) -> RoundWorld:
+    return await ran(handoff_round_world(root, toml), 3)
+
+
+ARMS = [C_TOML, D_TOML]
+ARM_NAMES = ["arm C", "arm D"]
+
+
+@pytest.mark.parametrize("toml", ARMS, ids=ARM_NAMES)
+async def test_a_restart_in_publishing_publishes_each_phase_once(tmp_path: Path, toml: str) -> None:
+    world = await restarted_in_publishing(tmp_path, toml)
+    assert [version.trigger for version in versions(world)] == ["initial", "phase 1", "phase 2", "phase 3"]
+
+
+@pytest.mark.parametrize("toml", ARMS, ids=ARM_NAMES)
+async def test_a_restart_in_publishing_records_the_rounds_adapter(tmp_path: Path, toml: str) -> None:
+    world = await restarted_in_publishing(tmp_path, toml)
+    assert Path(versions(world)[2].policy_adapter).parent.name == "expert_iteration"
+
+
+@pytest.mark.parametrize("toml", ARMS, ids=ARM_NAMES)
+async def test_a_restart_in_publishing_serves_the_rounds_merge_from_host_memory(tmp_path: Path, toml: str) -> None:
+    world = await restarted_in_publishing(tmp_path, toml)
+    served = [
+        Path(weights)
+        for version, weights in zip(world.servers.served, world.servers.served_policy_weights, strict=True)
+        if version == 2
+    ]
+    handoff = HostDirectories(world.config.host_directory()).handoff
+    assert served[-1] == handoff_directory(handoff, versions(world)[2].policy_adapter)
+
+
+@pytest.mark.parametrize("toml", ARMS, ids=ARM_NAMES)
+async def test_a_restart_in_publishing_trains_nothing_again(tmp_path: Path, toml: str) -> None:
+    world = await restarted_in_publishing(tmp_path, toml)
+    assert [request.phase for request in world.trainer.requests] == [1, 2, 3]
+
+
+@pytest.mark.parametrize(("toml", "builds"), [(C_TOML, [1, 2, 3]), (D_TOML, [2])], ids=ARM_NAMES)
+async def test_a_restart_in_publishing_builds_nothing_again(tmp_path: Path, toml: str, builds: list[int]) -> None:
+    world = await restarted_in_publishing(tmp_path, toml)
+    assert round_phases(world) == builds
+
+
+@pytest.mark.parametrize("toml", ARMS, ids=ARM_NAMES)
+async def test_a_restart_in_publishing_publishes_the_versions_of_an_uninterrupted_run(
+    tmp_path: Path, toml: str
+) -> None:
+    restarted = await restarted_in_publishing(tmp_path / "restarted", toml)
+    reference = await uninterrupted(tmp_path / "reference", toml)
+    assert published_versions(restarted, tmp_path / "restarted") == published_versions(
+        reference, tmp_path / "reference"
+    )
+
+
+@pytest.mark.parametrize("toml", ARMS, ids=ARM_NAMES)
+async def test_a_restart_in_publishing_records_the_phases_of_an_uninterrupted_run(tmp_path: Path, toml: str) -> None:
+    restarted = await restarted_in_publishing(tmp_path / "restarted", toml)
+    reference = await uninterrupted(tmp_path / "reference", toml)
+    assert phase_outline(restarted) == phase_outline(reference)
+
+
+@pytest.mark.parametrize("toml", ARMS, ids=ARM_NAMES)
+async def test_a_restart_in_publishing_keeps_an_uninterrupted_runs_last_round_records(
+    tmp_path: Path, toml: str
+) -> None:
+    restarted = await restarted_in_publishing(tmp_path / "restarted", toml)
+    reference = await uninterrupted(tmp_path / "reference", toml)
+    assert last_round_lines(restarted) == last_round_lines(reference)
+
+
+@pytest.mark.parametrize(("toml", "lines"), [(C_TOML, [1, 2, 2, 3]), (D_TOML, [2, 2])], ids=ARM_NAMES)
+async def test_a_restart_in_publishing_writes_the_interrupted_rounds_record_again(
+    tmp_path: Path, toml: str, lines: list[int]
+) -> None:
+    world = await restarted_in_publishing(tmp_path, toml)
+    assert [line["last_phase"] for line in round_lines(world)] == lines
+
+
+def published_versions(world: LoopWorld, root: Path) -> object:
+    return stable(
+        [
+            {"trigger": version.trigger, "policy": version.policy_adapter, "value": version.value_adapter}
+            for version in versions(world)
+        ],
+        str(root),
+    )
+
+
+def phase_outline(world: LoopWorld) -> list[tuple[int, int, bool]]:
+    """What a phase record says of publishing; its trees differ by the searches the stop cut off after the early
+    resume."""
+    lines = [json.loads(line) for line in world.paths.phases.read_text(encoding="utf-8").splitlines()]
+    return [(line["phase"], line["policy_version"], line["value_published"]) for line in lines]
+
+
+def last_round_lines(world: LoopWorld) -> dict[int, dict]:
+    """Readers keep a phase's last line: a restart in publishing writes a round's line again, as GRPO's."""
+    return {line["last_phase"]: line for line in round_lines(world)}

@@ -361,6 +361,13 @@ class GrpoPhase:
     update: UpdateSize | None = None
 
 
+class RoundSkip(StrEnum):
+    # Fewer training examples than `expert_iteration_min_examples`: the loop sent no round.
+    TOO_FEW_EXAMPLES = "too_few_examples"
+    # Its examples and replay fill no optimizer step (the remainder of a step is dropped, as in the hand-run round).
+    NO_OPTIMIZER_STEP = "no_optimizer_step"
+
+
 @dataclass(frozen=True)
 class ExpertIterationPhase:
     """A phase's expert-iteration round (rl/README.md, "Expert iteration inside the loop"): its data, and how big its
@@ -375,7 +382,7 @@ class ExpertIterationPhase:
     # Selected training and validation examples (validation by statement).
     examples: int
     validation_examples: int
-    # Fewer examples than `expert_iteration_min_examples`: the round did not train.
+    # The round did not train, and why.
     skipped: bool
     lean_replay_examples: int = 0
     math_replay_examples: int = 0
@@ -400,6 +407,7 @@ class ExpertIterationPhase:
     training_seconds: float = 0.0
     # The round's peak GPU memory, the largest over the ranks (beside the parked models' CUDA contexts).
     peak_memory_gib: float = 0.0
+    skip: RoundSkip | None = None
 
 
 @dataclass(frozen=True)

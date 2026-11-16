@@ -308,7 +308,7 @@ class FakeTrainer:
     section, a round's adapter when the loop sent an expert-iteration round, and a value adapter when one trains; with a
     `handoff` root, also the merges of the new adapters, the policy's of the last update, there, as the persistent job
     leaves them in host memory. In `interrupted_phases` a round's phase stops between its two updates once: the GRPO
-    adapter written, the round never ending."""
+    adapter written, the round never ending. In `stepless_phases` a round's data fills no optimizer step: no round."""
 
     fail_phases: set[int] = field(default_factory=set)
     requests: list[TrainingRequest] = field(default_factory=list)
@@ -322,6 +322,7 @@ class FakeTrainer:
     value_base_model: str = "value-base"
     train_seconds: float = 0.0
     interrupted_phases: set[int] = field(default_factory=set)
+    stepless_phases: set[int] = field(default_factory=set)
 
     def earlier_jobs(self) -> str | None:
         return self.earlier_job
@@ -341,7 +342,7 @@ class FakeTrainer:
             policy = dataclasses.replace(zero(PolicyOutcome), adapter=str(request.output_directory / "policy/adapter"))
             Path(policy.adapter).mkdir(parents=True, exist_ok=True)
         expert_iteration = None
-        if request.expert_iteration is not None:
+        if request.expert_iteration is not None and request.phase not in self.stepless_phases:
             if request.phase in self.interrupted_phases:
                 self.interrupted_phases.discard(request.phase)
                 self.events.append(f"interrupted {request.phase}")

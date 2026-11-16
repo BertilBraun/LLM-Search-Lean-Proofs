@@ -268,10 +268,31 @@ def test_the_recipe_is_the_hand_run_rounds_but_for_its_seeds_and_what_the_loop_f
     assert shipped == expected
 
 
-def test_a_grpo_arm_with_a_recipe_table_is_refused() -> None:
-    arm = merged(filled(toml(GRPO_ARMS[0])), {"expert_iteration": {"sft": {"optimization": {"learning_rate": 1e-4}}}})
-    with pytest.raises(ValueError, match="no expert-iteration rounds"):
+@pytest.mark.parametrize(
+    ("name", "contradiction"),
+    [
+        ("A", {"expert_iteration": {"sft": {"optimization": {"learning_rate": 1e-4}}}}),
+        ("A", {"loop": {"training": {"expert_iteration_window_phases": 4}}}),
+        ("A", {"loop": {"training": {"expert_iteration_every_phases": 4}}}),
+        ("C", {"phase": {"policy": {"optimization": {"learning_rate": 5e-5}}}}),
+        ("C", {"phase": {"policy": {"data": {"credit": "sequence"}}}}),
+    ],
+    ids=[
+        "a recipe rate in a GRPO arm",
+        "a round window in a GRPO arm",
+        "a round period in a GRPO arm",
+        "a GRPO rate in arm C",
+        "a GRPO credit in arm C",
+    ],
+)
+def test_an_arm_setting_what_its_policy_update_never_reads_is_refused(name: str, contradiction: dict) -> None:
+    arm = merged(filled(toml(CONFIGS / f"followup/arms/{name}.toml")), contradiction)
+    with pytest.raises(ValueError, match="never reads"):
         arm_configs(arm)
+
+
+def test_arm_d_may_set_both_rates() -> None:
+    assert round_arm("D").expert_iteration is not None
 
 
 @pytest.mark.parametrize("path", GRPO_ARMS, ids=lambda path: path.stem)

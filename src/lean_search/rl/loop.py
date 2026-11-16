@@ -2001,7 +2001,7 @@ class GrpoLoop:
             return
         summary = read_build_summary(self.paths.expert_iteration_round(phase))
         assert summary is not None
-        record = round_record(summary, outcome)
+        record = round_record(summary, outcome, self.config.training.expert_iteration_min_examples)
         self.writer.write(record)
         self.log(round_update_text(phase, record))
         alert = replay_loss_alert(phase, record)

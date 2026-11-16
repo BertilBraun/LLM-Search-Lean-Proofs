@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from lean_search.expert_iteration.serving import ModelVersion
-from lean_search.monitoring.families import ExpertIterationPhase
+from lean_search.monitoring.families import ExpertIterationPhase, RoundSkip
 from lean_search.rl.expert_iteration_data import MAX_REPLAY_LOSS_RISE, BuildSummary, ExpertIterationConfig
 from lean_search.rl.loop_config import GrpoLoopConfig, PolicyUpdate, offset_number_seed, offset_seed
 from lean_search.rl.training_phase import PhaseOutcome, TrainingPhaseConfig
@@ -82,8 +82,8 @@ def round_text(phase: int, built: ExpertIterationRound, minimum_examples: int, g
     )
 
 
-def round_record(summary: BuildSummary, outcome: PhaseOutcome) -> ExpertIterationPhase:
-    """The round's line of the `expert_iteration` family: a skipped round's data alone."""
+def round_record(summary: BuildSummary, outcome: PhaseOutcome, minimum_examples: int) -> ExpertIterationPhase:
+    """The round's line of the `expert_iteration` family: a skipped round's data and why it did not train."""
     record = ExpertIterationPhase(
         first_phase=summary.first_phase,
         last_phase=summary.last_phase,
@@ -94,7 +94,8 @@ def round_record(summary: BuildSummary, outcome: PhaseOutcome) -> ExpertIteratio
         skipped=outcome.expert_iteration is None,
     )
     if outcome.expert_iteration is None:
-        return record
+        few = summary.data.train_examples < minimum_examples
+        return dataclasses.replace(record, skip=RoundSkip.TOO_FEW_EXAMPLES if few else RoundSkip.NO_OPTIMIZER_STEP)
     result = outcome.expert_iteration.result
     change = result.parameter_change
     phase_change = outcome.expert_iteration.phase_parameter_change
@@ -126,8 +127,8 @@ def optional(value: float | None, digits: str = ".4g") -> str:
 
 def round_update_text(phase: int, record: ExpertIterationPhase) -> str:
     """The round's step beside GRPO's `Policy update of phase <k>` line."""
-    if record.skipped:
-        return f"Expert-iteration update of phase {phase}: skipped, {record.examples} examples"
+    if record.skip is not None:
+        return f"Expert-iteration update of phase {phase}: skipped ({record.skip}), {record.examples} examples"
     return (
         f"Expert-iteration update of phase {phase}: {record.optimizer_steps} optimizer steps, "
         f"{record.trained_tokens:,} trained tokens, {record.examples} examples with {record.lean_replay_examples} Lean "

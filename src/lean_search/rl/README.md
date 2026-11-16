@@ -1087,8 +1087,11 @@ and `CompletionSelector`. With fewer than `expert_iteration_min_examples` (100) 
 persistent trainer runs it inside the phase's `train`, after the GRPO update on the same resident policy (no second
 copy of the base in `/dev/shm`, no second job beside the parked one), continuing the GRPO update's adapter in D and the
 published one in C, as `grpo_expert_iteration.py train` trains (warmup, cosine, completion-token loss, replay at 30% and
-10%, validation at the start, halfway and the end) but with the ranks' gradient sums instead of DDP. The policy is
-merged once, the round's adapter, so the phase publishes one version, which the held-out states and `check_health`
+10%, validation at the start, halfway and the end) but with the ranks' gradient sums instead of DDP: on the CPU, one
+rank or two, it trains the adapter `training/sft.train` trains (`test_expert_iteration_round.py`). Each round starts a
+fresh optimizer and schedule, as the hand-run round and every GRPO phase do. A round whose examples and replay fill no
+optimizer step (the remainder of a step is dropped, as in the hand-run `train`) is skipped too, recorded as
+`no_optimizer_step` beside `too_few_examples`. The policy is merged once, the round's adapter, so the phase publishes one version, which the held-out states and `check_health`
 judge like any phase's; the KL reference stays `[initial] policy_adapter` (v0).
 
 Restarts: a stop during the build builds the round again (the build writes `summary.json` last; a finished build of

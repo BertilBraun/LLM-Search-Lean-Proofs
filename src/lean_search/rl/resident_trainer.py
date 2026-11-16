@@ -61,7 +61,7 @@ from lean_search.search.records import from_json_object, to_json
 from lean_search.training.data_parallel import Ranks, broadcast_from_main, largest
 from lean_search.training.math_data import MathSolution
 from lean_search.training.resident import HostDirectories, ResidentModel, build_resident_model
-from lean_search.training.sft import LoraSettings, OptimizationConfig
+from lean_search.training.sft import LoraSettings, OptimizationConfig, plan_steps
 from lean_search.value.benchmark import LabelledTree
 from lean_search.value.graph_trainer import value_initial_adapter
 from lean_search.value.labels import ValueExample
@@ -408,6 +408,7 @@ class TrainerRank:
         if round_config is not None:
             start_adapter = round_config.sft.initial_adapter if grpo.policy is None else grpo.policy.adapter
             expert_iteration = self.train_expert_iteration(round_config, start_adapter, output / "expert_iteration")
+        if expert_iteration is not None:
             preparation_seconds += expert_iteration.data_seconds
             memory.append(released_memory(TrainingStage.EXPERT_ITERATION, self.device, self.ranks))
         merges = []
@@ -491,14 +492,18 @@ class TrainerRank:
 
     def train_expert_iteration(
         self, round_config: ExpertIterationConfig, start_adapter: str, directory: Path
-    ) -> ExpertIterationOutcome:
+    ) -> ExpertIterationOutcome | None:
         """The round on the resident policy, continuing `start_adapter` (the published adapter, or the phase's GRPO
-        update's); the main rank measures the whole phase's change from the published adapter."""
+        update's); the main rank measures the whole phase's change from the published adapter. None, as a round with
+        too few examples, when the data fills no optimizer step: the hand-run `train` drops a step's remainder too."""
         assert self.inputs.data_root is not None
         started = time.perf_counter()
         tokenizer = self.tokenizers[ModelKind.POLICY]
         data = round_training_data(tokenizer, round_config, self.inputs.data_root)
         data_seconds = time.perf_counter() - started
+        if not plan_steps(data.train, round_config.sft.optimization, self.ranks.world_size):
+            self.log(f"Expert-iteration round skipped: its {len(data.train)} examples fill no optimizer step")
+            return None
         steps_path = directory / "steps.jsonl"
         if self.ranks.is_main:
             steps_path.unlink(missing_ok=True)

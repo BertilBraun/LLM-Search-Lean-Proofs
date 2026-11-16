@@ -151,6 +151,8 @@ def train_expert_iteration(
     for step_index, step in enumerate(steps):
         step_started = time.perf_counter()
         step_totals = torch.zeros(5, dtype=torch.float64, device=device)
+        # As sft.train's world_size / completion_tokens, which DDP then divides by world_size.
+        scale = 1 / step.completion_tokens
         for indices in step.micro_batches[ranks.rank :: ranks.world_size]:
             examples = [train[index] for index in indices]
             batch = micro_batch(examples, optimization.packing, pad_token_id, device)
@@ -158,7 +160,7 @@ def train_expert_iteration(
                 token_losses, _, _ = loss_module(
                     batch.input_ids, batch.attention_mask, batch.labels, batch.position_ids, batch.sequence_starts
                 )
-                loss = token_losses.sum() / step.completion_tokens
+                loss = token_losses.sum() * scale
             loss.backward()
             step_totals[0] += token_losses.detach().sum()
             step_totals[1:] += torch.tensor(
