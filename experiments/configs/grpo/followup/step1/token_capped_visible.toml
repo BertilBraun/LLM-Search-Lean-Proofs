@@ -8,7 +8,8 @@
 [search]
 # Four times the expected ~160 expansions at T: the token cap ends the search, not this.
 max_expansions = 1024
-# Expansions are the budget; the wall cap only catches hung searches.
+# Tokens are the budget; the wall cap only catches hung searches. In a probe run the evaluation config's cap applies
+# (token_capped_evaluation.toml, the same 14,400 s), not this value.
 max_wall_seconds = 14400.0
 max_depth = 64
 # T = 16 x run 1's mean generated tokens per expansion (~27k): experiments/followup_step1.py token-budget

@@ -166,6 +166,11 @@ def test_run_4s_pilot_comes_before_runs_3_and_4() -> None:
     assert [run.problems for run in runs] == [200, 0, 0]
 
 
+def test_the_reasoning_runs_share_the_doubled_wall_cap() -> None:
+    runs = read_run_list(STEP1 / "runs_reasoning.toml").runs
+    assert {evaluation_config(run, REPOSITORY)["probe"]["max_wall_seconds"] for run in runs} == {14400.0}
+
+
 def test_the_value_free_pilots_try_every_step_log_probability_setting() -> None:
     runs = read_run_list(STEP1 / "runs_value_free_pilots.toml").runs
     settings = [evaluation_config(run, REPOSITORY)["value_free_priority"]["step_log_probability"] for run in runs]
@@ -190,10 +195,10 @@ def test_every_study_evaluation_config_resolves_to_the_one_probe_concurrency(pat
 
 
 @pytest.mark.parametrize("path", STUDY_EVALUATIONS[1:], ids=lambda path: path.name)
-def test_no_other_study_evaluation_config_sets_a_probe_table_of_its_own(path: Path) -> None:
-    assert (toml(path)["base"], "probe" in toml(path)) == (
+def test_no_other_study_evaluation_config_changes_the_probe_beyond_its_wall_cap(path: Path) -> None:
+    assert (toml(path)["base"], set(toml(path).get("probe", {})) - {"max_wall_seconds"}) == (
         "experiments/configs/grpo/followup/probe_evaluation.toml",
-        False,
+        set(),
     )
 
 

@@ -1,0 +1,10 @@
+# Step 1's token-capped runs (the no-reasoning pilot, runs 3 and 4; runs_reasoning.toml): probe_evaluation.toml with the
+# per-statement wall cap doubled. The first pilot at 7,200 s was rejected on 2026-11-16 with 2 of 200 searches (1.00%)
+# stopped on the wall clock: without reasoning the same tokens buy about 2.3 times the expansions, and two searches
+# spent about 260 s per expansion in Lean. DESIGN.md, "Evaluation": a rejected run is repeated with the cap doubled, and
+# runs 3 and 4 share one cap. At T = 26,804 tokens and about 734 tokens per expansion a search ends on the token cap
+# after about 36 expansions, about 9,400 s at that pace.
+base = "experiments/configs/grpo/followup/probe_evaluation.toml"
+
+[probe]
+max_wall_seconds = 14400.0
