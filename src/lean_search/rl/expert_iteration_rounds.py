@@ -18,11 +18,13 @@ ROUND_CONFIG_FILE = "round.toml"
 
 @dataclass(frozen=True)
 class ExpertIterationRound:
-    """A phase's round once its data is built: its config (sent to the trainer when it trains) and the build."""
+    """A phase's round once its data is built: its config (sent to the trainer when it trains), the build, and the
+    seconds the build took in this session (none when a restart found it built)."""
 
     config: Path
     summary: BuildSummary
     trains: bool
+    build_seconds: float
 
 
 def round_config(
@@ -72,7 +74,8 @@ def round_text(phase: int, built: ExpertIterationRound, minimum_examples: int, g
         )
     )
     return (
-        f"Expert-iteration round of phase {phase}: phases {summary.first_phase}-{summary.last_phase}, samples of "
+        f"Expert-iteration round of phase {phase}, built in {built.build_seconds:.0f} s: phases "
+        f"{summary.first_phase}-{summary.last_phase}, samples of "
         f"versions {summary.minimum_version} on without {list(summary.rejected_versions)}, {summary.trees:,} solved "
         f"trees, {summary.data.train_examples:,} training and {summary.data.validation_examples:,} validation "
         f"examples; {verdict}"

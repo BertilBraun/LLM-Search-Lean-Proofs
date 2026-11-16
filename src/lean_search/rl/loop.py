@@ -921,6 +921,8 @@ class GrpoLoop:
         self.handoff_root = HostDirectories(config.host_directory()).handoff
         # The loop's own labelling of the phase's trees for the search metrics, from the training on.
         self.search_metrics: asyncio.Task[None] | None = None
+        # This pause's expert-iteration build, the loop's own part of the training stage (not the trainer's start).
+        self.expert_iteration_build_seconds = 0.0
         self.phase_template = phase_template
         template = from_json_object(TrainingPhaseConfig, tomllib.loads(phase_template))
         # What the phase trigger counts trainable groups with.
@@ -1426,7 +1428,8 @@ class GrpoLoop:
             outcome = await self.train(phase)
             finished = self.clock()
             await self.log_host_memory("after training")
-            pause = with_trainer_timings(self.progress.pause, outcome.timings, finished - released)
+            job_seconds = finished - released - self.expert_iteration_build_seconds
+            pause = with_trainer_timings(self.progress.pause, outcome.timings, job_seconds)
             progress = self.progress
             # The evaluation clock includes this phase from here on, so that the evaluations due are known before
             # the searches may resume early.
@@ -1808,8 +1811,10 @@ class GrpoLoop:
         self.search_metrics = asyncio.create_task(
             asyncio.to_thread(self.write_search_metrics_or_log, phase, request.config_text)
         )
+        self.expert_iteration_build_seconds = 0.0
         if self.expert_iteration_due(phase):
             built = await self.build_expert_iteration(phase)
+            self.expert_iteration_build_seconds = built.build_seconds
             if built.trains:
                 request = dataclasses.replace(request, expert_iteration=built.config)
         outcome = await self.trainer.train(request)
@@ -1846,13 +1851,13 @@ class GrpoLoop:
         directory.mkdir(parents=True, exist_ok=True)
         path.write_text(toml_text(dataclasses.asdict(config)), encoding="utf-8")
         summary = read_build_summary(directory)
+        started = self.clock()
         if not built_for(summary, config):
             await self.expert_iteration.builder.build(path)
             summary = read_build_summary(directory)
         assert summary is not None
-        built = ExpertIterationRound(
-            path, summary, summary.data.train_examples >= training.expert_iteration_min_examples
-        )
+        trains = summary.data.train_examples >= training.expert_iteration_min_examples
+        built = ExpertIterationRound(path, summary, trains, self.clock() - started)
         grpo = training.policy_update == PolicyUpdate.GRPO_AND_EXPERT_ITERATION
         self.log(round_text(phase, built, training.expert_iteration_min_examples, grpo))
         return built
