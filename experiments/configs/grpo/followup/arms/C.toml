@@ -1,0 +1,19 @@
+# Arm C, expert iteration (DESIGN.md, "Follow-up study: controlled arms", "Arms"): at every pause, instead of a GRPO
+# update, a fine-tuning round continuing the published policy adapter on the verified proof-graph blocks of the last W
+# phases (followup/expert_iteration.toml's recipe: the hand-run round's selection, 30% Lean and 10% math replay by
+# completion tokens, 1 epoch, warmup 3% and cosine to 0.1x, no KL penalty, every round published). The follow-up base
+# and its phase template changed only in the lines below, the recipe only in its learning rate
+# (experiments/followup_arm.py writes the loop's configs; src/lean_search/rl/README.md, "Expert iteration inside the
+# loop").
+[loop]
+name = "followup_C"
+
+[loop.training]
+policy_update = "expert_iteration"
+expert_iteration_every_phases = 1
+# Step 2's choice of window, 1 or 4 phases, by the rule that ranks the rates (DESIGN.md, "Step 2").
+expert_iteration_window_phases = "PLACEHOLDER: step 2's window for C, 1 or 4 phases"
+
+[expert_iteration.sft.optimization]
+# Step 2's choice between 5e-5 and 1e-4.
+learning_rate = "PLACEHOLDER: step 2's learning rate for C"

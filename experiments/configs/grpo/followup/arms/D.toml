@@ -1,0 +1,22 @@
+# Arm D, interleaved (DESIGN.md, "Follow-up study: controlled arms", "Arms"): arm A's GRPO update at every pause, and
+# after it at every fourth pause an expert-iteration round over C's window (followup/expert_iteration.toml's recipe),
+# published together as the phase's one version; the KL reference stays v0. D takes A's and C's step-2 settings. The
+# follow-up base and its phase template changed only in the lines below, the recipe only in its learning rate
+# (experiments/followup_arm.py writes the loop's configs; src/lean_search/rl/README.md, "Expert iteration inside the
+# loop").
+[loop]
+name = "followup_D"
+
+[loop.training]
+policy_update = "grpo_and_expert_iteration"
+expert_iteration_every_phases = 4
+expert_iteration_window_phases = "PLACEHOLDER: C's window from step 2, 1 or 4 phases"
+
+[phase.policy.data]
+credit = "per_tactic"
+
+[phase.policy.optimization]
+learning_rate = "PLACEHOLDER: A's learning rate from step 2"
+
+[expert_iteration.sft.optimization]
+learning_rate = "PLACEHOLDER: C's learning rate from step 2"
