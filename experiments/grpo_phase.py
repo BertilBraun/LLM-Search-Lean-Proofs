@@ -12,7 +12,8 @@ loop's publisher takes over. The policy texts come from the tree records
 (`TreeRecord.expansions`). The value model trains on --value-trees (the loop's window of recent phases, --trees among
 them; default --trees), which only the main rank reads (without the other phases' texts) and turns into the value data
 it sends to the other ranks. The replay files are optional. With --metrics-run the policy
-outcome is appended to that run's dashboard metrics (the grpo family).
+outcome is appended to that run's dashboard metrics (the grpo family); never point it at a running loop's run, whose
+publish writes one grpo line per phase and skips its own for a phase that already has one.
 """
 
 import argparse

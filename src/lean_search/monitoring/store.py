@@ -98,12 +98,19 @@ class MetricsWriter:
         self.context = dataclasses.replace(self.context, **changes)
 
     def written_for_phase(self, family: str, phase: int) -> bool:
-        """Whether a line of the family carries this phase in its context."""
+        """Whether a line of the family carries this phase in its context. A final line without its newline, an append
+        cut off by a killed process or a lost host, is cut from the file first, so that the next line starts whole;
+        an unreadable line anywhere else raises."""
         path = family_path(self.run_directory, family)
         if not path.exists():
             return False
-        with path.open(encoding="utf-8") as lines:
-            return any(json.loads(line)["phase"] == phase for line in lines if line.strip())
+        content = path.read_bytes()
+        whole = content[: content.rfind(b"\n") + 1]
+        if len(whole) < len(content):
+            with path.open("r+b") as file:
+                file.truncate(len(whole))
+        lines = whole.decode("utf-8").splitlines()
+        return any(json.loads(line)["phase"] == phase for line in lines if line.strip())
 
     def write(self, record: MetricRecord, record_time: float | None = None) -> None:
         assert dataclasses.is_dataclass(record) and not isinstance(record, type)

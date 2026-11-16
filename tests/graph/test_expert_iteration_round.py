@@ -35,6 +35,7 @@ from lean_search.rl.expert_iteration_data import (  # noqa: E402
     ExpertIterationDataConfig,
     ProofGraphCompletion,
     ReplayConfig,
+    TrainingData,
     write_completions,
 )
 from lean_search.rl.expert_iteration_training import (  # noqa: E402
@@ -445,18 +446,31 @@ def test_the_loops_round_takes_the_hand_run_trainers_steps(against_hand_run: Aga
     assert [getattr(record, field) for record in against_hand_run.loop_steps] == hand_run
 
 
-def train_on_ranks(model: Path, root: Path, trainer: str, ranks: Ranks) -> None:
-    """One rank of a two-rank round on the CPU: the hand-run trainer's DDP or the loop's gradient sums."""
+def rank_round(model: Path, root: Path) -> tuple[ExpertIterationConfig, TrainingData]:
     config = round_config(model, root / "round", str(root / "start"))
-    data = round_training_data(CharacterTokenizer(), config, root)
-    output = root / trainer
-    if trainer == "hand_run":
-        context = DistributedContext(ranks.rank, ranks.world_size, CPU)
-        tokenizer = CharacterTokenizer()
-        steps: list[StepRecord] = []
-        sft_train(hand_run_config(config), tokenizer, data.train, (), context, output, steps.append, print)
-    else:
-        train_expert_iteration(config.sft, data, 0, CPU, output, lambda record: None, ranks)
+    return config, round_training_data(CharacterTokenizer(), config, root)
+
+
+def hand_run_on_ranks(model: Path, root: Path, ranks: Ranks) -> None:
+    """One rank of a two-rank round by the hand-run trainer, with DDP."""
+    config, data = rank_round(model, root)
+    context = DistributedContext(ranks.rank, ranks.world_size, CPU)
+    sft_train(
+        hand_run_config(config),
+        CharacterTokenizer(),
+        data.train,
+        (),
+        context,
+        root / "hand_run",
+        lambda record: None,
+        lambda record: None,
+    )
+
+
+def loop_round_on_ranks(model: Path, root: Path, ranks: Ranks) -> None:
+    """One rank of a two-rank round by the loop's trainer, with gradient sums."""
+    config, data = rank_round(model, root)
+    train_expert_iteration(config.sft, data, 0, CPU, root / "loop", lambda record: None, ranks)
 
 
 @pytest.fixture(scope="module")
@@ -465,8 +479,8 @@ def on_two_ranks(tmp_path_factory: pytest.TempPathFactory) -> Path:
     model = save_tiny_model(root / "model")
     create_zero_adapter(str(model), root / "start", LORA.rank)
     round_files(root)
-    for trainer in ("hand_run", "loop"):
-        on_ranks(2, functools.partial(train_on_ranks, model, root, trainer), root / f"rendezvous_{trainer}")
+    on_ranks(2, functools.partial(hand_run_on_ranks, model, root), root / "rendezvous_hand_run")
+    on_ranks(2, functools.partial(loop_round_on_ranks, model, root), root / "rendezvous_loop")
     return root
 
 

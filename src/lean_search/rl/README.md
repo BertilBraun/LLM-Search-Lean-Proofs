@@ -1091,13 +1091,16 @@ published one in C, as `grpo_expert_iteration.py train` trains (warmup, cosine, 
 rank or two, it trains the adapter `training/sft.train` trains (`test_expert_iteration_round.py`). Each round starts a
 fresh optimizer and schedule, as the hand-run round and every GRPO phase do. A round whose examples and replay fill no
 optimizer step (the remainder of a step is dropped, as in the hand-run `train`) is skipped too, recorded as
-`no_optimizer_step` beside `too_few_examples`. The policy is merged once, the round's adapter, so the phase publishes one version, which the held-out states and `check_health`
-judge like any phase's; the KL reference stays `[initial] policy_adapter` (v0).
+`no_optimizer_step` beside `too_few_examples`. The policy is merged once, the round's adapter, so the phase publishes
+one version, which the held-out states and `check_health` judge like any phase's; the KL reference stays `[initial]
+policy_adapter` (v0).
 
 Restarts: a stop during the build builds the round again (the build writes `summary.json` last; a finished build of
 the same window is reused); a stop during the round's training or between D's two updates trains the whole phase again
 from the published adapter (the trainer writes `phase.json` last), so nothing is trained on twice and nothing half
-updated is published. Seeds: the selection's and the replay's are the recipe's with `/phase-<k>` appended, the
+updated is published. A stop while publishing publishes the phase once, and its `grpo`, `value_training` and
+`expert_iteration` lines are written once per phase (`MetricsWriter.written_for_phase`; a torn last line, an append
+cut off, is cut and counts as not written), for every arm. Seeds: the selection's and the replay's are the recipe's with `/phase-<k>` appended, the
 trainer's is k, and `seed_offset` moves all three. Records: an `expert_iteration` metric line per due round (window,
 minimum version, solved trees, examples, skipped; the round's optimizer steps, trained tokens, mean loss, LoRA change
 absolute and relative, mean gradient norm, replay-loss change; the phase's whole change, steps and tokens with D's GRPO

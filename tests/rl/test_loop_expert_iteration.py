@@ -593,15 +593,6 @@ async def test_a_restart_in_publishing_records_the_phases_of_an_uninterrupted_ru
     assert phase_outline(restarted) == phase_outline(reference)
 
 
-@pytest.mark.parametrize("toml", ARMS, ids=ARM_NAMES)
-async def test_a_restart_in_publishing_keeps_an_uninterrupted_runs_last_round_records(
-    tmp_path: Path, toml: str
-) -> None:
-    restarted = await restarted_in_publishing(tmp_path / "restarted", toml)
-    reference = await uninterrupted(tmp_path / "reference", toml)
-    assert last_round_lines(restarted) == last_round_lines(reference)
-
-
 @pytest.mark.parametrize(("toml", "lines"), [(C_TOML, [1, 2, 3]), (D_TOML, [2])], ids=ARM_NAMES)
 async def test_a_restart_in_publishing_writes_the_interrupted_rounds_record_once(
     tmp_path: Path, toml: str, lines: list[int]
@@ -619,7 +610,8 @@ CRASHED_FAMILIES = ("grpo", "value_training", "expert_iteration")
 class CrashOnce:
     """A merge or a serve that fails once, at phase 2's version, as a crash there would."""
 
-    def __init__(self) -> None:
+    def __init__(self, message: str) -> None:
+        self.message = message
         self.crashed = False
 
     def due(self, version: int) -> bool:
@@ -632,7 +624,7 @@ class CrashOnce:
 def crashing_merge(inner: Callable[[str, str, Path], None], crash: CrashOnce) -> Callable[[str, str, Path], None]:
     def merge(base_model: str, adapter: str, output: Path) -> None:
         if crash.due(int(output.parent.name.removeprefix("v"))):
-            raise RuntimeError("crashed in the merge")
+            raise RuntimeError(crash.message)
         inner(base_model, adapter, output)
 
     return merge
@@ -643,7 +635,7 @@ def crashing_serve(world: LoopWorld, crash: CrashOnce) -> Callable[[ModelVersion
 
     async def crashing(version: ModelVersion) -> PhaseSeconds:
         if crash.due(version.version):
-            raise RuntimeError("crashed while the servers started")
+            raise RuntimeError(crash.message)
         return await serve(version)
 
     return crashing
@@ -658,8 +650,8 @@ class PublishCrash(StrEnum):
     SERVE = "the servers' start"
 
 
-def crashing_world(root: Path, toml: str, crash: PublishCrash) -> RoundWorld:
-    once = CrashOnce()
+def crashing_world(root: Path, toml: str, crash: PublishCrash) -> tuple[RoundWorld, CrashOnce]:
+    once = CrashOnce(f"crashed in {crash.value}")
     match crash:
         case PublishCrash.DISK_MERGE:
             world = round_world(root, toml)
@@ -670,13 +662,22 @@ def crashing_world(root: Path, toml: str, crash: PublishCrash) -> RoundWorld:
         case PublishCrash.SERVE:
             world = handoff_round_world(root, toml)
             world.servers.serve = crashing_serve(world, once)  # type: ignore[method-assign]
-    return world
+    return world, once
 
 
-async def crashed_in_publishing(root: Path, toml: str, crash: PublishCrash) -> RoundWorld:
-    world = crashing_world(root, toml, crash)
+async def crashed_in_publishing(
+    root: Path, toml: str, crash: PublishCrash, torn_family: str | None = None
+) -> RoundWorld:
+    """Run until the crash stops the loop, which must be the intended one; with `torn_family`, the host also lost
+    the end of an append to that family's records; then restarted to 3 phases."""
+    world, once = crashing_world(root, toml, crash)
+    loop = world.loop()
     with contextlib.suppress(RuntimeError):
-        await run_while(world.loop(), lambda: True)
+        await run_while(loop, lambda: True)
+    assert once.crashed and str(loop.failure) == once.message, loop.failure
+    if torn_family is not None:
+        with (world.paths.directory / "metrics" / f"{torn_family}.jsonl").open("a", encoding="utf-8") as file:
+            file.write('{"time": 1.0, "phase": 2, "fie')
     world.searcher.open.set()
     return await ran(world, 3)
 
@@ -727,6 +728,9 @@ def phase_outline(world: LoopWorld) -> list[tuple[int, int, bool]]:
     return [(line["phase"], line["policy_version"], line["value_published"]) for line in lines]
 
 
-def last_round_lines(world: LoopWorld) -> dict[int, dict]:
-    """Readers keep a phase's last line: a restart in publishing writes a round's line again, as GRPO's."""
-    return {line["last_phase"]: line for line in round_lines(world)}
+@pytest.mark.parametrize("family", ["grpo", "value_training", "expert_iteration"])
+async def test_a_torn_last_record_after_a_crash_while_publishing_leaves_one_whole_record_per_phase(
+    tmp_path: Path, family: str
+) -> None:
+    world = await crashed_in_publishing(tmp_path, D_TOML, PublishCrash.DURABLE_WRITE, torn_family=family)
+    assert phases_per_record(world) == {"grpo": [1, 2, 3], "value_training": [2], "expert_iteration": [2]}

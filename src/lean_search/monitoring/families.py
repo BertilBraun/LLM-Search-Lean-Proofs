@@ -382,7 +382,7 @@ class ExpertIterationPhase:
     # Selected training and validation examples (validation by statement).
     examples: int
     validation_examples: int
-    # The round did not train, and why.
+    # The round did not train (`skip` says why).
     skipped: bool
     lean_replay_examples: int = 0
     math_replay_examples: int = 0
