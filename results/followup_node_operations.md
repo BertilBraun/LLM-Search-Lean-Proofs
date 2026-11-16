@@ -258,52 +258,65 @@ The repository's `deployment/study_chain.sh` (supervisord program `study_chain`,
 runs the whole learning-rate step unattended and ends in a HOLD with a report. It replaces the S1-only
 `/workspace/step1_chain_tools/study_chain.sh` prepared on 2026-11-16, which never ran. State and logs are in
 `/workspace/runs/study_chain/` (log `chain.log`). The plan, the round configs and the report come from
-`experiments/learning_rate_step.py` (logic in `src/lean_search/rl/learning_rate_step.py`).
+`experiments/learning_rate_step.py` (logic in `src/lean_search/rl/learning_rate_step.py`). Reviews AU and AV
+(`results/reviews/2026-11-16_review_au_*`, `_av_*`) and their fixes are in.
 
 **What it runs, in this order** (node hours are estimates; the first real run sets them):
 
 | Step | What | Markers | Hours |
 |---|---|---|---|
-| mode | `learning_rate_step.py check-mode` on `mode.toml`; the first start copies it to `mode.recorded` | `mode.txt` | - |
+| mode | `learning_rate_step.py check-mode` on `mode.toml` (refuses a search config with a per-search token cap) → `mode.txt`: the mode's description and its search config's sha256. The first start copies both to `mode.recorded` and `mode.recorded.txt`; every later start compares both | `mode.recorded*` | - |
 | configs | `learning_rate_step.py write-configs`: `configs/<label>.toml` (10 rounds), `rounds.tsv`, `builds.tsv`, `held_out.tsv` | `done_configs` | - |
-| S1 sampling | `stop_model.sh --all` (first start only: step 1's servers would otherwise be kept whatever they hold), then `arm_loop.sh --kind "shared sampling" --mode mode.toml followup/shared_sampling.toml`, polled every 60 s until `finished.json`; a loop found dead is started again through `arm_loop.sh` | `done_s1_sampling`, `attempts_s1_sampling_start` | 2-3 visible (about 25M tokens/h at 112 searches), more without reasoning |
-| S1 slices | `slice_trees.py --slices 4` into `followup_shared_sampling/slices/` (a partial one moved aside first) | `done_s1_slices` | minutes |
+| S1 sampling | `stop_model.sh --all` (first start only: step 1's servers would otherwise be kept whatever they hold), then `arm_loop.sh --kind "shared sampling" --mode mode.toml followup/shared_sampling.toml`, polled every 60 s until `finished.json`; a loop found dead is started again through `arm_loop.sh`. After `finished.json` it waits (up to 10 minutes, then exit 1) until the loop's process is gone, since `slice_trees.py` refuses while it lives | `done_s1_sampling`, `attempts_s1_sampling_start` | 2-3 visible (about 25M tokens/h at 112 searches), more without reasoning |
+| S1 slices | `slice_trees.py --slices 4` into `followup_shared_sampling/slices/` (a partial one moved aside first); a failure stops the chain | `done_s1_slices` | minutes |
 | S3a | v0's held-out run `held_out_step2_v0`, on the servers the loop left on v0 | `done_held_out_step2_v0` | 0.2 |
-| S2 | `stop_model.sh --all`, GPUs checked free (`nvidia-smi`), the two expert-iteration builds started beside (`build --processes 16` on the Lean CPUs), then the rounds one at a time on the 4 GPUs (`torchrun`, training CPUs, `HF_HUB_OFFLINE=1`): `grpo_phase.py --part policy` with the loop's Lean and math replay for A and B2 at 2e-5, 5e-5, 1e-4 (slice 4); before C, `train --dry-run` on both windows (`dry_run_step2_C_w1.log`, `…_w4.log`), then `grpo_expert_iteration.py train` for C at 5e-5 and 1e-4 on window 1 (slice 4) and window 4 (slices 1-4) | `done_round_<label>`, `done_build_<build>`, `done_dry_run_<build>` | 3-5 (6 GRPO rounds of ~0.5 h, 4 rounds of 0.2-0.5 h) |
-| S3b | `grpo_loop.sh servers` (starts those not answering), then each variant's `held_out_evaluate.py --name step2_<label>` (merge, policy servers restarted onto it, 512 states at concurrency 56) | `done_held_out_step2_<label>` | about 2 (10 × ~12 min) |
+| S2 | `stop_model.sh --all`, GPUs checked free (every GPU under 100 MiB used, from `nvidia-smi --query-gpu=index,memory.used`; idle reads 1 MiB), the two expert-iteration builds started beside (`build --processes 16` on the Lean CPUs), then the rounds one at a time on the 4 GPUs (`torchrun`, training CPUs, `HF_HUB_OFFLINE=1`): `grpo_phase.py --part policy` with the loop's Lean and math replay for A and B2 at 2e-5, 5e-5, 1e-4 (slice 4); before C, `train --dry-run` on both windows (`dry_run_step2_C_w1.log`, `…_w4.log`), then `grpo_expert_iteration.py train` for C at 5e-5 and 1e-4 on window 1 (slice 4) and window 4 (slices 1-4) | `done_round_<label>`, `done_build_<build>`, `done_dry_run_<build>` | 3-5 (6 GRPO rounds of ~0.5 h, 4 rounds of 0.2-0.5 h) |
+| S3b | before each run `grpo_loop.sh servers` (starts the servers not answering, the value servers too, which held-out runs do not use; answering ones are kept), then each variant's `held_out_evaluate.py --name step2_<label>` (merge, policy servers restarted onto it, 512 states at concurrency 56), last v0 again as `held_out_step2_v0_end`. A run counts as done only if its `summary.json` names no dropped state (`learning_rate_step.py check-held-out`); otherwise the driver exits 1 and the next start resumes it under its name | `done_held_out_step2_<label>`, `done_held_out_step2_v0_end` | about 2.2 (11 × ~12 min) |
 | S4 | `rank_learning_rates.py` per signal without gate runs (`rank_A.txt`, `rank_B2.txt`, `rank_C.txt`; C over its four variants, so its window is chosen with its rate), then `learning_rate_step.py report` → `learning_rates_report.md` | `done_s4_report` | minutes |
-| HOLD | "step 2 done: …learning_rates_report.md holds the arms' values (not applied)"; the servers stay up | `HOLD` | |
+| HOLD | `stop_model.sh --all` (the policy servers hold the last held-out run's merge, and an arm's `arm_loop.sh` would keep them), then HOLD: "step 2 done: …learning_rates_report.md holds the arms' values (not applied); the servers are stopped" | `HOLD` | |
 
 Altogether about 8-11 hours with visible reasoning. Labels: `A_2e-5`, `A_5e-5`, `A_1e-4`, `B2_…`, `C_w1_5e-5`,
 `C_w4_5e-5`, `C_w1_1e-4`, `C_w4_1e-4`; run names and held-out names are `step2_<label>`, outputs in
 `$LEAN_SEARCH_CHECKPOINTS/step2_<label>/`, the expert-iteration data in `$LEAN_SEARCH_DATA/grpo_expert_iteration/
 step2_C_w1` and `step2_C_w4`. A GRPO round's phase config is the arm's own (`arms/A.toml`, `arms/B2.toml` through
 `followup_arm`'s overlay code) at the variant's rate, v0 as start and KL reference; a C round's recipe is arm C's at
-its rate with `[data] tree_directories` set to its slices.
+its rate with `[data] tree_directories` set to its slices. Seeds, trees and trainer differ from an arm's phase 1 (the
+templates' seeds, slices, `grpo_phase.py` and the hand-run `train`).
+
+**The tie rule** (`rate_ranking.tie_break`, DESIGN's, the owner may change it): among variants tied on the held-out
+states, the lower rate; among equal rates the first listed, so C's window 1 wins a tie with window 4.
 
 **v0's baseline is run again** (`held_out_step2_v0`), not taken from `held_out_v0` of 2026-11-15: that run used older
 code, the Lean side pinned to 48 CPUs (`BACKGROUND_CPUS=48`, `pinning.jsonl`) instead of today's 96, and visible
-reasoning whatever the arms' mode; the rerun costs about 10 minutes. The report shows the old run against the new one,
-paired per state, as a descriptive drift check.
+reasoning whatever the arms' mode; the rerun costs about 10 minutes. v0 runs a second time after the variants
+(`held_out_step2_v0_end`): the step's A/A and drift check. The report shows both against the first run, paired per
+state; the 2026-11-15 run descriptively, or why it could not be read.
 
 **The report** (`learning_rates_report.md`): first the values for the arms' PLACEHOLDERs (A's rate, B2's rate, C's
-window and rate, D's window, GRPO rate and round rate), then per signal every variant minus v0 in valid Lean and success
-with 95% intervals, the rule's choice and reason, a note when the chosen variant is within noise of v0; the rounds'
+window and rate, D's window, GRPO rate and round rate), with a "Look first" line for a signal whose chosen variant is
+below v0 in success or valid Lean; then per signal every variant minus v0 in valid Lean and success with 95% intervals
+and their side ("above v0", "below v0", "within noise"), the rule's choice and reason, a warning when the chosen variant
+is below v0, a note when it is within noise of v0, and for C whether its window came from the tie rule; the rounds'
 sizes (GRPO: trees, groups, sequences, steps, trained tokens, KL to v0, clip fraction, trainer and wall time; C:
-examples, replay examples, planned and real steps, tokens, replay-loss change, training and wall time); v0's baseline
-against the earlier run; wall-clock durations of the sampling, the slices, the held-out runs and the rounds. Filling
-the PLACEHOLDERs is the orchestrator's job (node-local edits recorded as in section 4, or committed and deployed).
+examples, replay examples, planned and real steps, tokens, replay-loss change, training and wall time, a note under 100
+examples or 5 planned steps); v0's two runs and the earlier run; wall-clock durations. Filling the PLACEHOLDERs is the
+orchestrator's job (node-local edits recorded as in section 4, or committed and deployed).
+
+**The modes.** `experiments/configs/grpo/followup/modes/visible.toml` (visible student v2, 32 expansions) and
+`modes/no_reasoning.toml` (`search/no_reasoning_student_v2.toml`: step 1's run 4 without its token cap, depth weight 0,
+depth cap 64, at 32 expansions; raising the expansions is that one number). `followup_arm.py` (so `arm_loop.sh`) writes
+`sampling.json` beside every loop.toml (search config, expansions, the search config's sha256) and refuses an arm whose
+sampling differs from the shared run's: the arms sample in the step's mode or not at all.
 
 **Install and start** (only on the owner's word, at step 1's HOLD, with nothing else running):
 
 1. Deploy a master that holds the driver, keeping the node-local edits (section 4; the driver needs `--mode` in
    `arm_loop.sh`, `experiments/learning_rate_step.py` and the expert-iteration code of 467d97c or later). Never deploy
-   while the driver runs: its steps must all use the same code.
-2. Put the mode in place. With visible reasoning:
-   `mkdir -p /workspace/runs/study_chain && cp experiments/configs/grpo/followup/modes/visible.toml /workspace/runs/study_chain/mode.toml`.
-   Without reasoning, a mode file with exactly `[sampling] search_config = "<a reviewed loop search config without
-   visible reasoning>"` and `max_expansions = <n>`; no such search config exists in the repository yet (the token-capped
-   step-1 configs are evaluation configs). The driver refuses to start without the file and stops if it changes later.
+   while the driver runs: its steps must all use the same code, and a changed search config stops it.
+2. Put the mode in place:
+   `mkdir -p /workspace/runs/study_chain && cp experiments/configs/grpo/followup/modes/<visible|no_reasoning>.toml /workspace/runs/study_chain/mode.toml`.
+   The driver refuses to start without the file. Changing the mode after a first start (even one that stopped before
+   sampling) needs `mode.recorded` and `mode.recorded.txt` deleted; once the sampling has begun it must not change.
 3. Install the driver as a copy, never editing a running file in place:
    ```bash
    cd /workspace/LLM-Search-Lean-Proofs
@@ -315,39 +328,48 @@ the PLACEHOLDERs is the orchestrator's job (node-local edits recorded as in sect
    cp deployment/study_chain.conf /etc/supervisor/conf.d/study_chain.conf
    supervisorctl reread && supervisorctl update        # autostart: it starts now
    ```
-   A later driver change is installed the same way (`.new`, then `mv`): the running bash keeps the old file.
+   A later driver change is installed the same way (`.new`, then `mv`): the running bash keeps the old file, and the
+   new one takes effect at the next start only. `supervisorctl restart study_chain` mid-step kills the running loop,
+   round, build or held-out run (in S1 it also uses up one of the three `s1_sampling_start` attempts).
 4. Watch the first minutes: `tail -f /workspace/runs/study_chain/chain.log`, then the loop's
    `/workspace/runs/followup_shared_sampling/loop.log`. Extend the PC pull to `runs/study_chain`,
    `runs/followup_shared_sampling` (without `trees`) and `runs/followup_configs` (section 7).
 
 **Markers in `/workspace/runs/study_chain/`**: `done_<step>` (step finished), `attempts_<step>` (tries; the 4th
 writes STOPPED), `started_<step>` (first attempt's start; with the end in `timings.tsv`), `STOPPED` (text says why),
-`HOLD`, `mode.recorded`, `builds.pid` (the background builds' bash). Logs: `chain.log`, `servers.log`, `slices.log`,
-`rounds/<label>.log`, `build_<build>.log`, `dry_run_<build>.log`, `held_out/<name>.log`, `rank_<signal>.txt`,
-`report.log`.
+`HOLD`, `mode.recorded`, `mode.recorded.txt`, `builds.pid` (the background builds' bash: pid and start time). Logs:
+`chain.log`, `servers.log`, `slices.log`, `rounds/<label>.log`, `build_<build>.log`, `dry_run_<build>.log`,
+`held_out/<name>.log`, `rank_<signal>.txt`, `report.log`.
 
 **Failures.** Any exit but 0 is retried by supervisord; a step's 4th attempt writes STOPPED and exits 0. STOPPED at
-once: no or a refused `mode.toml`, a changed one, a health stop of the shared sampling run, `stop_model.sh` refusing,
-GPUs still held by another process after five checks a minute apart (a dead round's torchrun workers live in sessions of
-their own: find them with `nvidia-smi`, stop them by PID), a dry run that would refuse or plans no step, servers that
-kept dying in a held-out run (exit 4), slicing, ranking or report failures. A round whose job died is trained again
-into a fresh output: the interrupted `step2_<label>` is renamed `step2_<label>.interrupted_<time>`; a round is done only
-when its trainer exited 0 and left `phase.json` and `policy/adapter` (GRPO) or `training_summary.json` and `adapter`
-(C), so no half-trained adapter is evaluated. A held-out run resumes its states. After fixing a STOPPED cause: rename
-STOPPED (e.g. `STOPPED.<reason>`), delete the step's `attempts_<step>` if its tries were used up, `supervisorctl start
-study_chain`.
+once: no or a refused `mode.toml`, a changed one or a changed search config, a health stop of the shared sampling run,
+`stop_model.sh` refusing, GPUs still in use after five checks a minute apart (a dead round's torchrun workers live in
+sessions of their own: find them with `nvidia-smi`, stop them by PID), a dry run that would refuse or plans no step,
+servers that kept dying in a held-out run (exit 4), background builds still running after 3 hours, slicing, ranking or
+report failures. A round whose job died is trained again into a fresh output: the interrupted `step2_<label>` is renamed
+`step2_<label>.interrupted_<time>`; a round is done only when its trainer exited 0 and left `phase.json` and
+`policy/adapter` (GRPO) or `training_summary.json` and `adapter` (C), so no half-trained adapter is evaluated (an output
+holding both, left by a trainer whose driver died before marking it, is kept). A held-out run resumes its states, also
+after an exit 0 that dropped some. After fixing a STOPPED cause: rename STOPPED (e.g. `STOPPED.<reason>`), delete the
+step's `attempts_<step>` if its tries were used up, `supervisorctl start study_chain`.
 
 **Stopping safely.** Best between steps (after a "step … done" line in `chain.log`): `supervisorctl stop study_chain`.
-It stops the driver's process group: the shared sampling loop (SIGTERM saves its state), a held-out run, a build. A
-round's torchrun workers may outlive it; check `nvidia-smi --query-compute-apps=pid,process_name --format=csv` and stop
-them by PID. Servers keep running (`deployment/stop_model.sh --all` stops them). `supervisorctl start study_chain`
-continues at the first step not done. A start after HOLD or STOPPED does nothing.
+It stops the current driver's process group: the shared sampling loop and the builds it started (SIGTERM saves the
+loop's state), a held-out run. A round's torchrun workers may outlive it; check
+`nvidia-smi --query-gpu=index,memory.used --format=csv` and `--query-compute-apps=pid,process_name`, stop them by PID.
+A loop or a build started by an earlier driver instance (before an exit 1) is not in that group: see
+`/workspace/runs/followup_shared_sampling/loop.pid` (stop it with `LOOP_CONFIG=/workspace/runs/followup_configs/followup_shared_sampling/loop.toml deployment/grpo_loop.sh stop`)
+and `builds.pid` (its pid, then stop that process and its children by PID). Servers keep running
+(`deployment/stop_model.sh --all` stops them). `supervisorctl start study_chain` continues at the first step not done. A
+start after HOLD or STOPPED does nothing.
 
 **Tested only locally** (`tests/rl/test_study_chain_script.py`: the driver against stand-ins for every command, a kill
-at each step, each stop, a start after HOLD; `tests/rl/test_learning_rate_step.py`, `tests/rl/test_study_commands.py`).
-Not yet seen on the node: the real tools' run times and memory, `nvidia-smi`'s empty output when no process holds a
-GPU, `grpo_expert_iteration.py train` accepting the finished sampling-only run as "stopped in its sampling stage",
-held-out runs restarting the policy servers onto each variant.
+at each step, each stop, a live loop across its finish, failing starts, a build alive across a restart and a failing
+one, dropped held-out states, a start after HOLD; `tests/rl/test_learning_rate_step.py`, `test_study_commands.py`,
+`test_learning_rate_report.py`: the report end to end from files in their real formats). Not yet seen on the node: the
+real tools' run times and memory, `nvidia-smi --query-gpu=index,memory.used` reading 1 MiB per idle GPU in this
+container (the threshold assumes it), `grpo_expert_iteration.py train` accepting the finished sampling-only run as
+"stopped in its sampling stage", held-out runs restarting the policy servers onto each variant.
 
 ## 4. Node-local edits and deploying master
 
