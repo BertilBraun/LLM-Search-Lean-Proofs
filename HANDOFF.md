@@ -4,16 +4,17 @@ Written 2026-11-16 by the orchestrating agent for the agent that takes over on a
 repository, same rented node; no conversation history and no running subagents carry over. Everything needed is in this
 file and the files it points to. Keep this file current while you work, or replace it with your own.
 
-**State at a glance (2026-11-16, about 18:00 UTC)**
+**State at a glance (2026-11-16, about 18:45 UTC)**
 
 - Step 1 of the study (evaluations) is done except for the reasoning comparison: six full runs have answered its
   value-model questions and measured the old run's gain on a clean probe (+26 points, policy and value gains additive).
-- The node is running by itself: the no-reasoning pilot, then the two full reasoning runs, then a check run of the new
-  start order, then it holds for the owner's decision.
-- The faster start order for probe runs is merged and used from the two full reasoning runs on. Expert iteration
-  inside the loop (needed for arms C and D only) is on a branch, in review. Section 8 has the exact state.
-- After the reasoning comparison the owner decides whether the arms sample with or without reasoning; then learning
-  rates are chosen and four closed-loop arms run.
+- The node is running by itself: the no-reasoning pilot (started 17:55 UTC), then the two full reasoning runs, then a
+  check run of the new start order, then it holds for the owner's decision. Roughly 10-14 hours of work are queued.
+- No code is in flight. Both features of 2026-11-16 are reviewed, merged and pushed (master `467d97c`): the start order
+  by measured search time, and expert iteration inside the loop (arms C and D). No subagent's work is unfinished.
+- Next decision is the owner's, after the reasoning comparison: do the arms sample with or without reasoning. Then
+  learning rates are chosen and four closed-loop arms run. The node automation for those steps is NOT written yet
+  (section 9).
 
 ## 1. First hour: what to do
 
@@ -23,7 +24,8 @@ file and the files it points to. Keep this file current while you work, or repla
    "Follow-up study: controlled arms (agreed 2026-11-14)".
 2. Check the node (section 6 has the command). Compare with what section 6 says it should be doing.
 3. Set up the 30-minute watchdog (section 6) and confirm the results pull on the PC is alive (section 7).
-4. Pick up the two branches in flight (section 8) and the next steps (section 9).
+4. No code is in flight (section 8). Read the reasoning comparison's report files when they exist (section 9, step
+   1) and prepare the node automation for the learning rates and the arms while the node works (section 9).
 5. Tell the owner in a few lines where things stand. He checks in about twice a day and wants short, concrete updates.
 
 ## 2. The project in brief
@@ -84,7 +86,7 @@ file and the files it points to. Keep this file current while you work, or repla
 | Node setup and operations | `results/followup_node_operations.md` |
 | Experiment design (arms, matching, evaluation rule, automatic rules, work packages) | `DESIGN.md`, section "Follow-up study: controlled arms (agreed 2026-11-14)" |
 | Step-0 analyses of the old run (compute, pool, noise floor, training signal) | `results/followup_step0/*.md`, scripts in `experiments/analysis/` |
-| All reviews of the study (design AA, AB; code AC to AR) | `results/reviews/2026-11-14_*`, `2026-11-15_*`, `2026-11-16_*` |
+| All reviews of the study (design AA, AB; code AC to AT) | `results/reviews/2026-11-14_*`, `2026-11-15_*`, `2026-11-16_*` |
 | Deployment and tools (launcher, serving scripts, node settings file, known limits) | `deployment/README.md`, `src/lean_search/rl/README.md`, `src/lean_search/policy/README.md` |
 | Study configs | `experiments/configs/grpo/followup/` (`base.toml`, `probe_evaluation.toml`, `step1/`, `arms/`, `shared_sampling.toml`) |
 | Study commands | `experiments/probe_evaluate.py`, `probe_runs.py`, `probe_compare.py`, `held_out_evaluate.py`, `followup_step1.py`, `followup_arm.py`, `slice_trees.py`, `rank_learning_rates.py`, `node_checks.py`; `deployment/probe_runs.sh`, `arm_loop.sh`, `grpo_loop.sh`, `serve_model.sh`, `stop_model.sh`, `background.sh` |
@@ -194,14 +196,17 @@ rebooted, or the PC's results pull is more than 25 minutes old. It dies with the
   `node_backup/2026-11-15/adapters/<arm>/`; later probe runs depend on them.
 - **Tests:** in WSL, as `deployment/README.md` ("Local development (WSL)") describes. From Git Bash:
   `MSYS_NO_PATHCONV=1 wsl -e bash -lc "source ~/lean-proofs/deployment/environment.sh; cd /mnt/c/Projects/Lean-Proofs && export PYTHONPATH=\$PWD/src && pytest -q -p no:cacheprovider tests/rl -W ignore | tail -3"`.
-  The whole suite takes about 7 minutes (about 4,500 tests). A worktree is tested by pointing `PYTHONPATH` at its `src`.
+  The whole suite (`tests` instead of `tests/rl`) takes 7-15 minutes (about 4,700 tests); run one at a time, two at
+  once have made the WSL service drop a run. One Lean panic test is flaky under load and passes alone. A worktree is
+  tested by pointing `PYTHONPATH` at its `src`.
 - **Worktrees:** subagents work in git worktrees under `.claude/worktrees/`; many old ones exist and can be ignored.
 - **Shell quirk:** long heredocs with quotes can fail in the Bash tool on this PC; write files with the file tool or
   a small Python script instead.
 
-## 8. Code: one feature just merged, one branch in review
+## 8. Code: two features merged on 2026-11-16, nothing in flight
 
-Master is `9834972` or later and pushed. Every merged package had two reviews and a re-review.
+Master is `467d97c` or later and pushed. The node runs `9a594b1` and deploys `9834972` by itself after the pilot; the
+expert-iteration merge is not on the node yet and is not needed there before arm C. Every merged package had two reviews and a re-review.
 
 **A. Start order by measured search time** — MERGED 2026-11-16 (master `f29df21`; reviews AQ and AR with re-reviews
 in `results/reviews/2026-11-16_review_aq_*` and `_ar_*`; full suite 4,590 passed).
@@ -234,49 +239,53 @@ in `results/reviews/2026-11-16_review_aq_*` and `_ar_*`; full suite 4,590 passed
   arms' probe runs stay in file order (`probe_evaluation.toml`); if both pass, switch the arms' probe runs to
   `step1/probe_evaluation_ordered.toml` (or an arms copy of it) and say so in the progress document.
 
-**B. Expert iteration inside the loop** — NOT merged; branch `worktree-agent-af77525dfc814e9c3`
-(worktree `.claude/worktrees/agent-af77525dfc814e9c3`), reviewed at `2db23ca`, fixes from `1b54f53` on.
+**B. Expert iteration inside the loop** — MERGED 2026-11-16 (master `467d97c`; branch head `041389e`, 11 commits;
+reviews AS and AT with re-reviews in `results/reviews/2026-11-16_review_as_*` and `_at_*`; full suite on the branch
+4,701 passed, 0 failed).
 
-- **What:** the loop's policy update can be an expert-iteration round (supervised fine-tuning continuing the current
-  adapter on the verified proof-graph blocks of the last W phases, with replay data) instead of, or in addition to,
-  the GRPO update; arm overlays `arms/C.toml` (a round every phase, no GRPO) and `arms/D.toml` (GRPO every phase plus
-  a round every 4 phases). The persistent trainer runs the round after the phase's GRPO update; a phase still
-  publishes exactly one policy version. It is the last missing code for arms C and D; arms A and B need none of it,
-  so they can run from master as it is.
-- **Reviews (2026-11-16):** AS, by reading against the design
-  (`results/reviews/2026-11-16_review_as_expert_iteration_loop_code.md`): merge after fixes. AT, by simulation with
-  the loop's fakes, 60 crash-and-restart scenarios (`..._at_expert_iteration_loop_code.md`): merge, nothing must-fix.
-  Both found no path that publishes a half-trained, stale, duplicate or missing version; arms A and B produce records
-  identical to master.
-- **Findings being fixed** (sent to the implementer; `1b54f53` covers the first four, the fifth was sent at about
-  18:05 UTC):
-  1. The design asks for restart tests while PUBLISHING (the likeliest kill on the node, during the large copy to
-     disk); they were missing (AS M1).
-  2. A round that passes the minimum-examples check but yields 0 optimizer steps published the unchanged adapter and
-     recorded it as trained (AS S1, AT S2).
-  3. No test that the in-loop round trains exactly like the hand-run trainer that picks C's learning rate (AS S2).
-  4. Contradictory keys load silently: GRPO-only keys in arm C, round keys in arms A and B (AS S3, AT S3).
-  5. After a crash while publishing and a restart, the phase's round record is written twice; master already does the
-     same with the GRPO and value-training records (AT S1). Fix for all arms: one record per phase and kind.
-- **To finish:** the implementer's final head and its full-suite counts; a re-review by both angles of the fix commits
-  (`git diff 2db23ca <head>`), appended to the two review files as "Re-review"; then merge with `--no-ff` and push.
-  If you arrive and the branch head is `1b54f53`, finding 5 is not fixed yet; if the two review files have no
-  "Re-review" section, the re-review has not happened. A new implementer can pick this up from the two review files
-  and the branch alone.
-- **Before arm C or D runs on the node** (neither review could test this; no GPU locally): a one-phase smoke run of
-  each with a small token budget — real training of a round by the persistent trainer on 4 GPUs, GPU memory after
-  GRPO plus a round in one trainer process (the round records its peak), the size and time of the weight handoff, the
-  in-loop data build on real trees, and one kill by PID during publishing followed by a restart. The lists are at the
-  end of both review files.
+- **What:** a phase's policy update can be an expert-iteration round (supervised fine-tuning continuing the published
+  adapter on the verified proof-graph blocks of the last W phases, 30% Lean and 10% math replay by completion tokens,
+  one epoch, no KL penalty) instead of the GRPO update, or after it. The persistent trainer runs the round on the same
+  resident policy; a phase publishes exactly one policy version. Description:
+  `src/lean_search/rl/README.md`, "Expert iteration inside the loop".
+- **Arm C** (`experiments/configs/grpo/followup/arms/C.toml`): `policy_update = "expert_iteration"`,
+  `expert_iteration_every_phases = 1`. **Arm D** (`arms/D.toml`): `policy_update = "grpo_and_expert_iteration"`,
+  `expert_iteration_every_phases = 4`, `credit = "per_tactic"`, KL reference stays v0. Both share the recipe
+  `followup/expert_iteration.toml`. Both still carry PLACEHOLDER values that the learning-rate step fills: C's window
+  (1 or 4 phases) and learning rate (5e-5 or 1e-4); D takes C's window and rate and A's GRPO rate. Contradictory keys
+  (GRPO-only keys in C, round keys in A or B) fail at load.
+- **Skipped rounds:** a round with too few examples, or whose data fills no optimizer step, is skipped and recorded
+  with its reason (`no_optimizer_step`); C then keeps its policy for that phase, D publishes the GRPO update alone.
+- **Restarts:** tested by simulation at every crash point (during the data build, the training, between D's two
+  updates, while publishing; 80 crash-and-restart cases for arms A, C and D): one version and one record per phase and
+  kind, nothing trained twice, a record line cut off by a crash is tolerated, a damaged complete line stops the loop.
+- **Changed for arms A and B too:** a phase's GRPO and value-training records are now written once across a crash
+  while publishing (master used to write them twice). Uninterrupted runs are byte-identical to before (pinned by
+  `tests/rl/golden/grpo_only_loop.json`, captured on the old master).
+- **Not testable locally, so smoke-test on the node before arm C or D runs** (one phase of each with a small token
+  budget; the lists are at the end of both review files): real training of a round by the persistent trainer on 4
+  GPUs and how long it takes; GPU memory after GRPO plus a round in one trainer process (the round's record holds peak
+  ALLOCATED memory only — watch `nvidia-smi` for reserved); recompiles of the compiled layers; `/dev/shm` use of the
+  weight handoff; the in-loop data build for a 4-phase window on real trees; one kill by PID during publishing
+  followed by a restart.
+- **Known small gaps, none blocking:** the round's selection and replay seeds change per phase, so replay-loss levels
+  are not comparable across rounds; expert-iteration records have no dashboard page (`ExpertIterationPhase` is not in
+  `monitoring/families.py`); the error for a damaged record line names no file or line, and cutting a torn line is not
+  logged (review AT, N7).
 
 ## 9. Next steps, in order
 
-1. **Reasoning comparison** (running or about to): the pilot, then `step1_run3_visible_T` and
-   `step1_run4_no_reasoning_T`. For each, the node agent was asked for bulk and tail readings (GPU use, tokens per
-   second, Lean CPUs in use) — the owner's worry is that without reasoning the search becomes CPU-bound and the GPUs
-   idle. When both full runs are accepted: `probe_compare.py pair --across-search-modes` of run 3 against run 4, at
-   equal tokens AND as "solved within 1/2/4/8/16 expansions" (the owner asked for both views; each search records the
-   expansion at which it found its proof), and `--descriptive-across-settings` of run 3 against the anchors.
+1. **Reasoning comparison** (running by itself): the pilot, then `step1_run3_visible_T` and
+   `step1_run4_no_reasoning_T`, then the start order's check run. The node writes these report files into
+   `/workspace/runs/step1_chain/` (pulled to `node_backup/2026-11-15/live/runs/step1_chain/` on the PC):
+   `run3_against_run4.txt` (the pair across search modes at equal tokens AND as "solved within 1/2/4/8/16
+   expansions" — the owner asked for both views), `anchors_against_run3.txt` (descriptive: what the token cap and
+   depth weight 0 cost the tuned visible search), `run3_load_against_file_order.txt`, `reasoning_readings.txt` (bulk
+   and tail GPU use, tokens per second, Lean CPUs — the owner's worry is that without reasoning the search becomes
+   CPU-bound and the GPUs idle), and for the check run `run9_against_step1_run1_v0_value_v0.txt`,
+   `run9_against_step1_run2_v0_value_v0.txt`, `run9_load_against_anchors.txt`. Put the results into
+   `results/followup_progress.md` and report to the owner. If the chain shows `STOPPED`, read the marker and
+   `chain.log` first; the operations document lists every marker.
 2. **Decision with the owner: do the arms sample with or without reasoning?** Proposed rule: switch to no reasoning if
    it is within noise of, or better than, visible reasoning at equal tokens and its bulk GPU use stays above about 90%.
    If no reasoning: also decide whether a search keeps 32 expansions (more statements per phase; recommended, because
@@ -288,13 +297,20 @@ in `results/reviews/2026-11-16_review_aq_*` and `_ar_*`; full suite 4,590 passed
    window 1 (slice 4) and window 4 (slices 1-4) (`experiments/grpo_expert_iteration.py` with `[data]
    tree_directories`); held-out states for v0 and each variant (`experiments/held_out_evaluate.py`), then
    `experiments/rank_learning_rates.py` without gate runs picks each signal's rate. No probe runs at this step. This is
-   the first real run of the token-budget loop: watch its first minutes.
+   the first real run of the token-budget loop: watch its first minutes. The node's second driver `study_chain.sh`
+   covers only the shared sampling (its step S1) and has never run; the slicing, the training rounds, the held-out
+   evaluations and the ranking (S2-S6) are NOT scripted yet. Writing and dry-checking that automation, in a subagent
+   with two reviews, is the most useful thing to do while the reasoning runs occupy the node; it must not start
+   anything on the node beside a running evaluation. The rates and C's window then go into the arms' PLACEHOLDER
+   values (as node-local edits, recorded like the others, or committed on the PC and deployed).
 4. **Arms**, one after another, each from v0 and value v0, 16 phases of 12M generated tokens, value model trained
    every 2 phases: A (per-tactic GRPO), B (pure proof success), C (expert iteration), D (GRPO plus a round every 4
    phases). After each arm ONE probe run of its final checkpoint with its own value model. An arm that collapses is
    stopped by the automatic rule: capture what happened, leave it stopped, assess, report to the owner. Watch arm A's
    first pause closely: it is the first real training pause on this code (trainer on the training CPUs, restart of
-   all servers onto the new version, held-out states, the phase record).
+   all servers onto the new version, held-out states, the phase record). Arms A and B can start as soon as their
+   rates are known. Before arm C: deploy master `467d97c` or later to the node at a boundary and do the smoke run of
+   section 8 B. Whether the arms' probe runs use the new start order depends on the check run (section 8 A).
 5. **Second pass**, arm by arm, only after all four have one probe run: the final checkpoint a second time, the
    phase-8 checkpoint, and v0's policy with the arm's final value model.
 6. **Later, on the owner's word:** second seeds of the interesting arms (`seed_offset`), miniF2F-valid for final

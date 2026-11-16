@@ -2,7 +2,7 @@
 
 Kept current by the orchestrator. Details live in the linked files.
 
-**Last update:** 2026-11-16, 17:55 UTC.
+**Last update:** 2026-11-16, 18:45 UTC.
 
 ## Where we are
 
@@ -30,7 +30,7 @@ repository's root; the node's setup and operation are in `results/followup_node_
 | Before any arm: time server stops and starts, one short phase on the restart-based serving path | during step 1 | |
 | Learning rates for the arms (shared v0 sampling, one round per signal, held-out states) | after the reasoning comparison and the decision on the arms' mode | |
 | Arms A, B, C, D with one probe run each | after the learning rates; see the plan below | |
-| Code: expert iteration inside the loop (for arms C and D) | implemented on a branch; first review: merge after fixes (one missing restart test, three smaller points); second review running | `results/reviews/2026-11-16_review_as_*`, `_at_*` |
+| Code: expert iteration inside the loop (for arms C and D) | merged (reviews AS and AT, re-reviewed), master 467d97c; 80 crash-and-restart cases simulated; needs a one-phase smoke run on the node before arm C | `results/reviews/2026-11-16_review_as_*`, `_at_*` |
 | Code: probe runs start the longest expected searches first (by the mean search time of v0's five runs) | merged (reviews AQ and AR, re-reviewed), master 9834972; used for the two full reasoning runs; a check run against the anchors follows them | `results/reviews/2026-11-16_review_aq_*`, `_ar_*` |
 | Results safety | small result files pulled to the PC every 10 minutes | `node_backup/2026-11-15/live/` |
 
@@ -230,7 +230,8 @@ default), safe server stops, results pulled to the PC as they are written.
 
 - Every arm: from v0 and value v0, 16 phases of 12M generated tokens, value model trained every 2 phases, stops at its
   first valid-Lean collapse (then assessed and reported).
-- Expert iteration inside the loop (needed for C and D) is implemented and in review; arms A and B do not need it.
+- Expert iteration inside the loop (needed for C and D) is merged; it needs a one-phase smoke run on the node before
+  arm C. Arms A and B do not need it.
 - While the owner decides on the arms' mode after the reasoning comparison, the node runs the start order's check
   (v0 with value v0 in the new order, about 2.5 hours).
 - Credit loaded: $190 on 2026-11-16; not a cap.
