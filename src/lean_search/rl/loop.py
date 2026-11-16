@@ -11,8 +11,11 @@ by the crash are lost and their statements fed again where the source allows):
 
 pause       every policy and value request waits at the gate; searches keep their trees and REPL states in place
 training    the paused searches' REPL processes stop to free host memory and the servers on the training GPUs sleep;
-            the training job (grpo_phase.py, data-parallel over those GPUs) labels the phase's trees, trains the
-            policy (GRPO) with the μ set for the run (`set_value_share`, 0 until set) and, every
+            when an expert-iteration round is due (`training.policy_update`), its data is built from the window's trees
+            (grpo_expert_iteration.py build, a job of its own; a restart builds a round again only when its build did
+            not finish); the training job (grpo_phase.py, data-parallel over those GPUs) labels the phase's trees,
+            trains the policy (GRPO, then the round when it has enough examples, in the persistent job) with the μ set
+            for the run (`set_value_share`, 0 until set) and, every
             `value_every_phases`, the value model on the window of recent phases' trees, and merges the new adapters on
             the main rank's GPU; meanwhile the loop labels the phase's trees for the search, curriculum and value
             metrics
@@ -109,6 +112,18 @@ from lean_search.rl.evaluation import (
     read_summary,
     value_arm_text,
 )
+from lean_search.rl.expert_iteration_data import ExpertIterationConfig, read_build_summary
+from lean_search.rl.expert_iteration_rounds import (
+    ROUND_CONFIG_FILE,
+    ExpertIterationRound,
+    built_for,
+    recipe_refusals,
+    replay_loss_alert,
+    round_config,
+    round_record,
+    round_text,
+    round_update_text,
+)
 from lean_search.rl.fixed_targets import baseline_concurrency, run_target, target_config
 from lean_search.rl.health_checks import (
     HeldOutRates,
@@ -140,6 +155,7 @@ from lean_search.rl.loop_config import (
     EvaluationTarget,
     EvaluationValueModel,
     GrpoLoopConfig,
+    PolicyUpdate,
     offset_number_seed,
     offset_seed,
 )
@@ -313,6 +329,9 @@ class TrainingRequest:
     train_value: bool
     # The value model's window: the tree directories of the last phases, this one's included.
     value_trees: tuple[Path, ...] = ()
+    # The phase's expert-iteration round (`expert_iteration_rounds.round_config`, written to a file): its data is built
+    # and it trains after the GRPO update, if any; None: no round.
+    expert_iteration: Path | None = None
 
 
 class TreeSearcher(Protocol):
@@ -359,6 +378,21 @@ class PhaseTrainer(Protocol):
     def earlier_jobs(self) -> str | None:
         """What still runs of the training and evaluation jobs of a loop that died without stopping them, if any."""
         ...
+
+
+class ExpertIterationBuilder(Protocol):
+    async def build(self, round_config: Path) -> None:
+        """Builds the round's data from its window's trees into its `sft.data` directory, as the hand-run round's
+        `grpo_expert_iteration.py build`, which writes the summary (`BUILD_SUMMARY_FILE`) last."""
+        ...
+
+
+@dataclass(frozen=True)
+class ExpertIterationSetup:
+    """The rounds' recipe (`training.expert_iteration_config`) and what builds a round's data."""
+
+    recipe: ExpertIterationConfig
+    builder: ExpertIterationBuilder
 
 
 class ModelServers(Protocol):
@@ -538,6 +572,11 @@ class GrpoLoopPaths:
     def phase_run_name(self, phase: int) -> str:
         return f"{self.name}_phase_{phase:04d}"
 
+    def expert_iteration_round(self, phase: int) -> Path:
+        """A phase's expert-iteration round: its config and the build's data, in the run, so that a rerun of the
+        run's name never finds another run's build."""
+        return self.directory / "expert_iteration" / f"phase_{phase:04d}"
+
     def phase_checkpoints(self, phase: int) -> Path:
         return self.checkpoints_root / self.phase_run_name(phase)
 
@@ -602,11 +641,12 @@ def phase_config_text(
     value_adapter: str | None,
     rejected_versions: tuple[int, ...] = (),
     seed_offset: int = 0,
+    grpo: bool = True,
 ) -> str:
     """The template with the published policy adapter to continue from (on the policy base), the KL reference's adapter
     (`GrpoLoopConfig.reference_policy_adapter`), μ, per-phase seeds (moved by `seed_offset`) and the rejected versions,
     whose samples the phase drops; `value_adapter` is the value adapter to continue (None: the value model does not
-    train)."""
+    train); without `grpo` no policy section: the policy trains only in an expert-iteration round."""
     table = tomllib.loads(template)
     table["excluded_policy_versions"] = list(rejected_versions)
     for section in ("reward", "value_targets"):
@@ -624,6 +664,8 @@ def phase_config_text(
         if value_adapter:
             value["initial_adapter"] = value_adapter
         value.setdefault("optimization", {})["seed"] = offset_number_seed(phase, seed_offset)
+    if not grpo:
+        table.pop("policy")
     return toml_text(table)
 
 
@@ -792,13 +834,15 @@ class GrpoLoop:
         gpu_memory: Callable[[], str] = not_measured,
         decoder: TokenDecoder | None = None,
         gpu_power: Callable[[], tuple[GpuPowerState, ...] | None] = no_gpu_states,
+        expert_iteration: ExpertIterationSetup | None = None,
     ) -> None:
         """`phase_template`: the text of the training phase config (config.training.phase_config); `host_memory`
         describes the node's memory for the log at the pause's stage boundaries, `gpu_memory` the training GPUs' free
         memory before their servers wake; `value_readout`: A*'s readout of the value bins, for the value metrics;
         `value_benchmark`: scored by every newly served value model; `decoder`: the policy's tokenizer, which counts
         the samples' explanation tokens in each tree's summary (none without it); `gpu_power`: each GPU's power limits
-        for the phase records (`monitoring.gpu_power`)."""
+        for the phase records (`monitoring.gpu_power`); `expert_iteration`: the rounds' recipe and builder, which a
+        `training.policy_update` with rounds needs."""
         self.config = config
         self.decoder = decoder
         self.value_readout = value_readout
@@ -882,6 +926,13 @@ class GrpoLoop:
         # What the phase trigger counts trainable groups with.
         self.reward_config = template.reward
         self.credit = CreditMode.PER_TACTIC if template.policy is None else template.policy.data.credit
+        self.expert_iteration = expert_iteration
+        if config.training.policy_update != PolicyUpdate.GRPO:
+            if expert_iteration is None:
+                raise ValueError(f"training.policy_update = {config.training.policy_update.value!r} needs its recipe.")
+            refusals = recipe_refusals(config, template, expert_iteration.recipe)
+            if refusals:
+                raise ValueError(f"{config.training.expert_iteration_config}: {'; '.join(refusals)}.")
         self.stop: asyncio.Event | None = None
         self.update_context()
 
@@ -1730,6 +1781,7 @@ class GrpoLoop:
             (self.progress.value_adapter or current.value_adapter) if value_trees else None,
             read_rejected_versions(self.paths.rejected_versions),
             self.config.seed_offset,
+            self.config.training.policy_update != PolicyUpdate.EXPERT_ITERATION,
         )
         return TrainingRequest(
             phase,
@@ -1756,14 +1808,54 @@ class GrpoLoop:
         self.search_metrics = asyncio.create_task(
             asyncio.to_thread(self.write_search_metrics_or_log, phase, request.config_text)
         )
+        if self.expert_iteration_due(phase):
+            built = await self.build_expert_iteration(phase)
+            if built.trains:
+                request = dataclasses.replace(request, expert_iteration=built.config)
         outcome = await self.trainer.train(request)
         if outcome.value is not None:
             self.save_progress(value_adapter=outcome.value.adapter)
         self.log(
             f"Phase {phase} trained with μ = {value_share}: {outcome.trees} trees, {outcome.groups} groups"
+            + ("" if outcome.expert_iteration is None else ", an expert-iteration round")
             + ("" if outcome.value is None else f", a value model on {outcome.value.trees} trees")
         )
         return outcome
+
+    def expert_iteration_due(self, phase: int) -> bool:
+        training = self.config.training
+        return training.policy_update != PolicyUpdate.GRPO and phase % training.expert_iteration_every_phases == 0
+
+    async def build_expert_iteration(self, phase: int) -> ExpertIterationRound:
+        """The phase's round from the recipe, continuing the published policy; its data built unless a build of the same
+        window finished before a restart (the build writes its summary last). It trains with enough examples."""
+        assert self.expert_iteration is not None
+        training = self.config.training
+        directory = self.paths.expert_iteration_round(phase)
+        config = round_config(
+            self.expert_iteration.recipe,
+            self.paths.name,
+            self.paths.phase_run_name(phase),
+            directory,
+            phase,
+            training.expert_iteration_window_phases,
+            read_current(self.paths.models),
+            self.config.seed_offset,
+        )
+        path = directory / ROUND_CONFIG_FILE
+        directory.mkdir(parents=True, exist_ok=True)
+        path.write_text(toml_text(dataclasses.asdict(config)), encoding="utf-8")
+        summary = read_build_summary(directory)
+        if not built_for(summary, config):
+            await self.expert_iteration.builder.build(path)
+            summary = read_build_summary(directory)
+        assert summary is not None
+        built = ExpertIterationRound(
+            path, summary, summary.data.train_examples >= training.expert_iteration_min_examples
+        )
+        grpo = training.policy_update == PolicyUpdate.GRPO_AND_EXPERT_ITERATION
+        self.log(round_text(phase, built, training.expert_iteration_min_examples, grpo))
+        return built
 
     def write_search_metrics_or_log(self, phase: int, config_text: str) -> None:
         """Metrics only: an error is logged, never stops the loop."""
@@ -1798,6 +1890,7 @@ class GrpoLoop:
         handed_off = None
         if current.trigger != phase_trigger(phase):
             self.write_training_metrics(outcome, current.version + 1)
+            self.write_expert_iteration_metrics(phase, outcome)
             candidate = next_version(current, outcome, phase_trigger(phase))
             handed_off = handed_off_version(candidate, current, self.handoff_root, self.config.serving)
             if handed_off is None:
@@ -1896,6 +1989,19 @@ class GrpoLoop:
                     replay_labels=value.replay_labels,
                 )
             )
+
+    def write_expert_iteration_metrics(self, phase: int, outcome: PhaseOutcome) -> None:
+        """The phase's round, trained or skipped, from its build and the phase's outcome."""
+        if not self.expert_iteration_due(phase):
+            return
+        summary = read_build_summary(self.paths.expert_iteration_round(phase))
+        assert summary is not None
+        record = round_record(summary, outcome)
+        self.writer.write(record)
+        self.log(round_update_text(phase, record))
+        alert = replay_loss_alert(phase, record)
+        if alert is not None:
+            self.log(alert)
 
     def due_evaluations(self, at_start: bool) -> list[EvaluationKind]:
         due = []

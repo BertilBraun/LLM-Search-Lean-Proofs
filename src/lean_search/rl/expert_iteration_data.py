@@ -703,6 +703,14 @@ class BuildSummary:
     data: DataSummary
 
 
+def read_build_summary(directory: Path) -> BuildSummary | None:
+    """The build's summary; None before a build finished in `directory`."""
+    path = directory / BUILD_SUMMARY_FILE
+    if not path.exists():
+        return None
+    return from_json_object(BuildSummary, json.loads(path.read_text(encoding="utf-8")))
+
+
 @dataclass(frozen=True)
 class ValidationPoint:
     step: int

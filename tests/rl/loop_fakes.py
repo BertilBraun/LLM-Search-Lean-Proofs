@@ -1,5 +1,5 @@
-"""The GRPO loop's outside world for tests: searches, training job, vLLM servers, evaluation jobs and the value
-benchmark's scoring as fakes."""
+"""The GRPO loop's outside world for tests: searches, training job, expert-iteration builds, vLLM servers, evaluation
+jobs and the value benchmark's scoring as fakes."""
 
 import asyncio
 import dataclasses
@@ -7,6 +7,7 @@ import enum
 import itertools
 import json
 import shutil
+import tomllib
 import types
 import typing
 from collections.abc import Callable, Sequence
@@ -31,9 +32,18 @@ from lean_search.monitoring.store import MetricsWriter
 from lean_search.policy.adapters import PREMERGED_MARKER, PremergedWeights, handed_off_weights, handoff_directory
 from lean_search.policy.server_control import PhaseSeconds
 from lean_search.rl.evaluation import EvaluationKind, EvaluationRun, EvaluationSummary
+from lean_search.rl.expert_iteration_data import (
+    BUILD_SUMMARY_FILE,
+    BuildSummary,
+    DataSummary,
+    ExpertIterationConfig,
+    parse_expert_iteration_config,
+)
+from lean_search.rl.expert_iteration_training import ExpertIterationOutcome, ExpertIterationResult
 from lean_search.rl.fixed_sets import HeldOutStatement, Stratum
 from lean_search.rl.loop import (
     PHASE_OUTCOME_FILE,
+    ExpertIterationSetup,
     GrpoLoop,
     GrpoLoopPaths,
     ReleasedLeanMemory,
@@ -294,8 +304,11 @@ class FakeSearcher:
 
 @dataclass
 class FakeTrainer:
-    """Writes phase.json as the training job does: a new policy adapter, and a value adapter when one trains; with a
-    `handoff` root, also the new adapters' merges there, as the persistent job leaves them in host memory."""
+    """Writes phase.json as the training job does: a GRPO update's policy adapter when the phase config has a policy
+    section, a round's adapter when the loop sent an expert-iteration round, and a value adapter when one trains; with a
+    `handoff` root, also the merges of the new adapters, the policy's of the last update, there, as the persistent job
+    leaves them in host memory. In `interrupted_phases` a round's phase stops between its two updates once: the GRPO
+    adapter written, the round never ending."""
 
     fail_phases: set[int] = field(default_factory=set)
     requests: list[TrainingRequest] = field(default_factory=list)
@@ -308,6 +321,7 @@ class FakeTrainer:
     policy_base_model: str = "start-policy"
     value_base_model: str = "value-base"
     train_seconds: float = 0.0
+    interrupted_phases: set[int] = field(default_factory=set)
 
     def earlier_jobs(self) -> str | None:
         return self.earlier_job
@@ -321,20 +335,75 @@ class FakeTrainer:
         if request.phase in self.fail_phases:
             raise RuntimeError(f"training of phase {request.phase} failed")
         await asyncio.sleep(self.train_seconds)
-        policy = dataclasses.replace(zero(PolicyOutcome), adapter=str(request.output_directory / "policy/adapter"))
+        request.output_directory.mkdir(parents=True, exist_ok=True)
+        policy = None
+        if "policy" in tomllib.loads(request.config_text):
+            policy = dataclasses.replace(zero(PolicyOutcome), adapter=str(request.output_directory / "policy/adapter"))
+            Path(policy.adapter).mkdir(parents=True, exist_ok=True)
+        expert_iteration = None
+        if request.expert_iteration is not None:
+            if request.phase in self.interrupted_phases:
+                self.interrupted_phases.discard(request.phase)
+                self.events.append(f"interrupted {request.phase}")
+                await asyncio.Event().wait()
+            adapter = request.output_directory / "expert_iteration/adapter"
+            adapter.mkdir(parents=True, exist_ok=True)
+            expert_iteration = ExpertIterationOutcome(str(adapter), zero(ExpertIterationResult), None)
         value = None
         if request.train_value:
             value = dataclasses.replace(zero(ValueOutcome), adapter=str(request.output_directory / "value/adapter"))
+            Path(value.adapter).mkdir(parents=True, exist_ok=True)
         trees = len(list(request.trees.glob("*.json.gz")))
-        outcome = PhaseOutcome(trees=trees, groups=1, policy=policy, value=value, timings=self.timings)
-        for adapter in (policy.adapter, *([] if value is None else [value.adapter])):
-            Path(adapter).mkdir(parents=True, exist_ok=True)
+        outcome = PhaseOutcome(
+            trees=trees,
+            groups=1,
+            policy=policy,
+            value=value,
+            timings=self.timings,
+            expert_iteration=expert_iteration,
+        )
         if self.handoff is not None:
-            hand_off(self.handoff, PremergedWeights(self.policy_base_model, policy.adapter))
+            trained_policy = outcome.policy_adapter()
+            if trained_policy is not None:
+                hand_off(self.handoff, PremergedWeights(self.policy_base_model, trained_policy))
             if value is not None:
                 hand_off(self.handoff, PremergedWeights(self.value_base_model, value.adapter))
         (request.output_directory / PHASE_OUTCOME_FILE).write_text(to_json(outcome), encoding="utf-8")
         return outcome
+
+
+@dataclass
+class FakeExpertIterationBuilder:
+    """Writes a round's build summary as `grpo_expert_iteration.py build` does, last, with `examples` training examples
+    (by phase, else `default_examples`); records each build's round config. In `stopped_phases` a build waits until the
+    loop stops it, once."""
+
+    examples: dict[int, int] = field(default_factory=dict)
+    default_examples: int = 500
+    builds: list[ExpertIterationConfig] = field(default_factory=list)
+    stopped_phases: set[int] = field(default_factory=set)
+    events: list[str] = field(default_factory=list)
+
+    async def build(self, round_config: Path) -> None:
+        config = parse_expert_iteration_config(round_config.read_text(encoding="utf-8"))
+        phase = config.data.last_phase
+        self.builds.append(config)
+        self.events.append(f"build {phase}")
+        if phase in self.stopped_phases:
+            self.stopped_phases.discard(phase)
+            await asyncio.Event().wait()
+        examples = self.examples.get(phase, self.default_examples)
+        summary = dataclasses.replace(
+            zero(BuildSummary),
+            loop=config.data.loop,
+            first_phase=max(1, phase - config.data.window_phases + 1),
+            last_phase=phase,
+            window_phases=config.data.window_phases,
+            data=dataclasses.replace(zero(DataSummary), train_examples=examples, validation_examples=examples // 20),
+        )
+        directory = Path(config.sft.data)
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / BUILD_SUMMARY_FILE).write_text(to_json(summary), encoding="utf-8")
 
 
 def hand_off(root: Path, weights: PremergedWeights) -> None:
@@ -595,6 +664,7 @@ class LoopWorld:
     merge: Callable[[str, str, Path], None] = merge_by_writing
     scorer: FakeValueScorer | None = None
     gpu_power: CountingGpuStates = field(default_factory=CountingGpuStates)
+    expert_iteration: ExpertIterationSetup | None = None
 
     def loop(self, statement_count: int = 6) -> GrpoLoop:
         return GrpoLoop(
@@ -612,6 +682,7 @@ class LoopWorld:
             SteppingClock(),
             value_benchmark=None if self.scorer is None else ValueBenchmarkScoring(scored_benchmark(), self.scorer),
             gpu_power=self.gpu_power,
+            expert_iteration=self.expert_iteration,
         )
 
     def phases_done(self) -> int:
