@@ -20,11 +20,20 @@ case "${script}" in
                     echo "$(option_value --mode "$@"): A sampling mode sets exactly [...]" >&2
                     exit 1
                 fi
+                # A library warning that differs from start to start, as the real one's may.
+                echo "warning at $(date +%s%N)" >&2
                 echo "visible reasoning, 32 expansions per training search"
                 if [[ -f "${FAKE_SCENARIO}/search_config_changed" ]]; then
                     echo "search config sha256 bbbb"
                 else
                     echo "search config sha256 aaaa"
+                fi
+                ;;
+            check-round)
+                label="$(option_value --label "$@")"
+                if [[ -f "${FAKE_SCENARIO}/truncated_${label}" ]]; then
+                    echo "phase.json does not read back: JSONDecodeError" >&2
+                    exit 1
                 fi
                 ;;
             check-held-out)
@@ -91,7 +100,7 @@ case "${script}" in
         mkdir -p "${LEAN_SEARCH_CHECKPOINTS}/${run}/policy/adapter"
         echo '{}' > "${LEAN_SEARCH_CHECKPOINTS}/${run}/phase.json"
         log_command "trained ${run}"
-        outcome "after_round_${run}"
+        outcome "after_round_${run}" || exit 1
         ;;
     experiments/grpo_expert_iteration.py)
         config="$(option_value --config "$@")"
@@ -119,7 +128,7 @@ case "${script}" in
                 mkdir -p "${LEAN_SEARCH_CHECKPOINTS}/${run}/adapter"
                 echo '{}' > "${LEAN_SEARCH_CHECKPOINTS}/${run}/training_summary.json"
                 log_command "trained ${run}"
-                outcome "after_round_${run}"
+                outcome "after_round_${run}" || exit 1
                 ;;
         esac
         ;;

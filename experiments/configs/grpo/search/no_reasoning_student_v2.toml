@@ -9,8 +9,8 @@
 max_expansions = 64
 # Expansions are the budget; the wall cap only catches hung searches (run 4's).
 max_wall_seconds = 14400.0
-# Run 4's cap. Not binding at the loop's budget: each expansion's children lie one block below the node expanded, so a
-# search of 32 expansions plus 16 harvesting reaches depth 48 at most.
+# Run 4's cap. Each expansion's children lie one block below the node expanded, so it does not bind while the mode's
+# expansions plus 16 harvesting stay at most 64 (the mode's 32: depth 48 at most); check-mode warns beyond that.
 max_depth = 64
 score_children_early = true
 # Policy steps stop at 50k heartbeats inside Lean, an ordinary error without a restart.

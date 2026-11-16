@@ -479,3 +479,38 @@ def test_a_start_after_stopped_runs_nothing(node: Node) -> None:
     supervise(node)
     before = node.lines()
     assert (start(node), node.lines()) == (0, before)
+
+
+def chain_log(node: Node) -> str:
+    return (node.state / "chain.log").read_text(encoding="utf-8")
+
+
+def test_a_loop_that_never_exits_after_finishing_stops_the_chain(node: Node) -> None:
+    node.set("stuck_loop")
+    codes = supervise(node, {"STUDY_CHAIN_LOOP_EXIT_SECONDS": "1"})
+    assert (codes, node.stopped().split(" ", 1)[1]) == ([1, 1, 1, 0], "step s1_loop_exit failed 3 times\n")
+
+
+def test_a_check_mode_warning_differing_between_starts_does_not_stop_the_chain(node: Node) -> None:
+    node.set("kill_slices")
+    assert supervise(node)[-1] == 0 and (node.state / "HOLD").exists()
+
+
+def test_a_finished_output_whose_outcome_file_was_cut_short_is_trained_again(node: Node) -> None:
+    node.set("kill_after_round_step2_A_5e-5")
+    node.set("truncated_A_5e-5")
+    supervise(node)
+    aside = list((node.workspace / "checkpoints").glob("step2_A_5e-5.interrupted_*"))
+    assert (node.lines().count("trained step2_A_5e-5"), len(aside)) == (2, 1)
+
+
+def test_a_finished_output_kept_after_a_failing_teardown_names_the_trainers_exit(node: Node) -> None:
+    node.set("fail_after_round_step2_A_5e-5", "1")
+    supervise(node)
+    assert "kept (that attempt's trainer exit status: 1;" in chain_log(node)
+
+
+def test_a_finished_output_kept_after_its_driver_died_says_the_exit_is_unknown(node: Node) -> None:
+    node.set("kill_after_round_step2_A_5e-5")
+    supervise(node)
+    assert "kept (that attempt's trainer exit status: unknown, the driver died first;" in chain_log(node)

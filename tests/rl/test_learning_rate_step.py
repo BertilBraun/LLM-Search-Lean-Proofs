@@ -10,7 +10,10 @@ pytest.importorskip("numpy")
 from loop_fakes import zero  # noqa: E402
 
 from lean_search.rl.evaluation import EvaluationSummary  # noqa: E402
-from lean_search.rl.expert_iteration_data import parse_expert_iteration_config  # noqa: E402
+from lean_search.rl.expert_iteration_data import (
+    TrainingSummary,  # noqa: E402
+    parse_expert_iteration_config,  # noqa: E402
+)
 from lean_search.rl.learning_rate_step import (  # noqa: E402
     NO_VALUE,
     STEP_VARIANTS,
@@ -39,7 +42,9 @@ from lean_search.rl.learning_rate_step import (  # noqa: E402
     rank_arguments,
     read_durations,
     report_markdown,
+    round_completion_files,
     round_config_text,
+    round_outcome_problem,
     run_rates,
     signal_variants,
 )
@@ -60,6 +65,7 @@ from lean_search.rl.study_configs import (  # noqa: E402
     training_search_refusal,
     with_sampling_mode,
 )
+from lean_search.rl.training_phase import PhaseOutcome  # noqa: E402
 from lean_search.search import load_run_config  # noqa: E402
 from lean_search.search.records import to_json  # noqa: E402
 
@@ -595,3 +601,41 @@ def test_an_arm_sampling_otherwise_than_the_shared_run_is_refused(change: dict) 
 def test_the_tie_rule_takes_the_lower_rate() -> None:
     variants = [Variant(label, rate, held_out(label)) for label, rate in (("high", 1e-4), ("low", 2e-5))]
     assert tie_break(variants).label == "low"
+
+
+@pytest.mark.parametrize(
+    ("mode", "expansions", "binds"),
+    [("no_reasoning", 32, False), ("no_reasoning", 48, False), ("no_reasoning", 74, True), ("visible", 32, True)],
+    ids=["no reasoning at 32", "no reasoning at 48", "no reasoning at 74", "visible at 32 (cap 16)"],
+)
+def test_the_mode_description_warns_when_the_depth_cap_can_bind(mode: str, expansions: int, binds: bool) -> None:
+    search_config = toml(CONFIGS / f"followup/modes/{mode}.toml")["sampling"]["search_config"]
+    description = mode_description(search_config, load_run_config(REPOSITORY / search_config), expansions)
+    assert ("the depth cap can bind" in description) == binds
+
+
+def test_the_multiple_comparisons_note_counts_v0s_two_a_a_intervals() -> None:
+    assert "22 95% intervals" in report_markdown(step_report())
+
+
+def write_round_outcome(checkpoints: Path, found: StepVariant, text: str) -> None:
+    path = round_completion_files(found, checkpoints)[0]
+    path.parent.mkdir(parents=True)
+    path.write_text(text, encoding="utf-8")
+
+
+@pytest.mark.parametrize("label", ["A_5e-5", "C_w4_1e-4"])
+def test_a_rounds_outcome_file_written_whole_reads_back(tmp_path: Path, label: str) -> None:
+    found = variant(label)
+    outcome = zero(PhaseOutcome) if found.kind == RoundKind.GRPO else zero(TrainingSummary)
+    text = to_json(dataclasses.replace(outcome, completion_token_shares=(0.6, 0.3, 0.1)) if found.window else outcome)
+    write_round_outcome(tmp_path, found, text)
+    assert round_outcome_problem(found, tmp_path) is None
+
+
+@pytest.mark.parametrize("label", ["A_5e-5", "C_w4_1e-4"])
+def test_a_rounds_outcome_file_cut_short_is_not_complete(tmp_path: Path, label: str) -> None:
+    found = variant(label)
+    outcome = zero(PhaseOutcome) if found.kind == RoundKind.GRPO else zero(TrainingSummary)
+    write_round_outcome(tmp_path, found, to_json(outcome)[:40])
+    assert "does not read back" in str(round_outcome_problem(found, tmp_path))

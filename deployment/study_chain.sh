@@ -76,8 +76,9 @@ finish() {
 # The sampling mode the arms will use (with or without visible reasoning, the expansions per search): the owner's
 # decision, put in place by hand; the step never starts without it and never changes it once begun.
 [[ -f "${mode}" ]] || stop_chain "no sampling mode: copy the chosen mode (e.g. ${followup}/modes/visible.toml) to ${mode}, move STOPPED aside and start study_chain"
-"${python}" experiments/learning_rate_step.py check-mode --mode "${mode}" > "${state}/mode.txt" 2>&1 \
-    || stop_chain "the sampling mode ${mode} is refused: $(tail -1 "${state}/mode.txt")"
+# Standard output only: a library warning on stderr must not make two starts' mode.txt differ.
+"${python}" experiments/learning_rate_step.py check-mode --mode "${mode}" > "${state}/mode.txt" 2> "${state}/mode.err" \
+    || stop_chain "the sampling mode ${mode} is refused: $(tail -1 "${state}/mode.err")"
 # mode.txt names the search config's sha256: an edit or a deploy changing that file is caught as well.
 if [[ -f "${state}/mode.recorded" ]]; then
     cmp -s "${mode}" "${state}/mode.recorded" && cmp -s "${state}/mode.txt" "${state}/mode.recorded.txt" \
@@ -120,8 +121,12 @@ if ! done_step s1_sampling; then
     # The loop writes finished.json before it shuts down; slice_trees.py refuses while its process lives.
     waited=0
     while loop_alive; do
-        (( waited < loop_exit_seconds )) \
-            || { say "the shared loop still runs ${loop_exit_seconds} s after finished.json; the driver exits for supervisord to retry"; exit 1; }
+        if (( waited >= loop_exit_seconds )); then
+            # Counted, so a loop that never exits (or a pid reused by another process) ends in STOPPED.
+            attempt s1_loop_exit
+            say "the shared loop still runs ${loop_exit_seconds} s after finished.json; the driver exits for supervisord to retry"
+            exit 1
+        fi
         sleep 1
         waited=$(( waited + 1 ))
     done
@@ -262,10 +267,13 @@ train_round() {
     local label="$1" kind="$2" config="$3" run_name="$4" output="$5" trees="$6" lean_replay="$7" math_replay="$8"
     local completion="$9" status=0
     done_step "round_${label}" && return 0
-    # A trainer that ended with its completion files written last, but whose driver died before marking it.
+    # A trainer that wrote its completion files last (and they parse: not cut by a kill mid-write), then exited non-zero
+    # at its teardown or lost its driver before the round was marked.
     # shellcheck disable=SC2086
-    if [[ -f "${state}/attempts_round_${label}" ]] && complete ${completion}; then
-        say "round ${label}: the earlier attempt left a finished output; kept"
+    if [[ -f "${state}/attempts_round_${label}" ]] && complete ${completion} \
+        && "${python}" experiments/learning_rate_step.py check-round --label "${label}" >> "${state}/rounds/${label}.log" 2>&1; then
+        say "round ${label}: the earlier attempt left a finished output; kept (that attempt's trainer exit status:" \
+            "$(cat "${state}/rounds/${label}.exit" 2>/dev/null || echo "unknown, the driver died first"); rounds/${label}.log)"
         finish "round_${label}"
         return 0
     fi
@@ -273,6 +281,7 @@ train_round() {
     mark_start "round_${label}"
     gpus_free
     [[ -e "${output}" ]] && aside "${output}"
+    rm -f "${state}/rounds/${label}.exit"
     local launcher=(env CUDA_VISIBLE_DEVICES=0,1,2,3 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
         taskset --cpu-list "${TRAINING_CPU_LIST}" "${python}" -m torch.distributed.run --standalone
         "--nproc-per-node=${gpus}")
@@ -288,6 +297,7 @@ train_round() {
             ;;
         *) stop_chain "rounds.tsv names an unknown kind ${kind}" ;;
     esac
+    echo "${status}" > "${state}/rounds/${label}.exit"
     (( status == 0 )) || { say "round ${label} exited ${status} (rounds/${label}.log); the driver exits for supervisord to retry"; exit 1; }
     # shellcheck disable=SC2086
     complete ${completion} || stop_chain "round ${label} exited 0 without its completion files (${completion})"

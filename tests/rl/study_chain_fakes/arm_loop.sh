@@ -13,6 +13,13 @@ if [[ -f "${FAKE_SCENARIO}/health_stop" ]]; then
     echo '{"phase": 1, "reason": "held-out valid Lean below 0.7 of v0"}' > "${run}/health_stop.json"
     exit 0
 fi
+if [[ -f "${FAKE_SCENARIO}/stuck_loop" ]]; then
+    # A loop that wrote finished.json but never exits (a hung shutdown).
+    echo "${finished}" > "${run}/finished.json"
+    sleep 30 &
+    echo $! > "${run}/loop.pid"
+    exit 0
+fi
 if [[ -f "${FAKE_SCENARIO}/live_loop" ]]; then
     rm "${FAKE_SCENARIO}/live_loop"
     (

@@ -6,6 +6,7 @@ learning_rate_step.py; DESIGN.md, "Follow-up study: controlled arms", "Step 2"; 
         --shared-run followup_shared_sampling
     python experiments/learning_rate_step.py check-dry-run --log /workspace/runs/study_chain/dry_run_step2_C_w1.log
     python experiments/learning_rate_step.py check-held-out --name step2_A_5e-5
+    python experiments/learning_rate_step.py check-round --label C_w4_1e-4
     python experiments/learning_rate_step.py rank-arguments --signal A
     python experiments/learning_rate_step.py report --state /workspace/runs/study_chain --mode .../mode.toml \
         --shared-run followup_shared_sampling --earlier-v0 v0 --output .../learning_rates_report.md
@@ -16,7 +17,8 @@ each round's config (<label>.toml: a GRPO round's phase config or an expert-iter
 variant's rate) and the driver's plan (rounds.tsv, builds.tsv, held_out.tsv), and refuses an output with other contents
 (the same contents are written again silently). check-dry-run prints the steps a `grpo_expert_iteration.py train
 --dry-run` planned and fails when it would refuse or plans none. check-held-out fails while a held-out run's
-summary.json names states it left without a tree (the run is resumed under its name). rank-arguments prints
+summary.json names states it left without a tree (the run is resumed under its name). check-round fails unless a
+round's outcome file (phase.json, training_summary.json) reads back whole. rank-arguments prints
 rank_learning_rates.py's arguments for one signal, one per line. report ranks every signal as rank_learning_rates.py
 does (and fails unless its choice is the one in the state directory's rank_<signal>.txt), reads the rounds' outcomes,
 v0's two runs of the step and the driver's timings, and writes the report the step ends with.
@@ -60,6 +62,7 @@ from lean_search.rl.learning_rate_step import (
     read_durations,
     report_markdown,
     round_config_text,
+    round_outcome_problem,
     run_rates,
     signal_variants,
 )
@@ -97,6 +100,8 @@ def parse_arguments() -> argparse.Namespace:
     check_dry_run.add_argument("--log", type=Path, required=True)
     check_held_out = commands.add_parser("check-held-out")
     check_held_out.add_argument("--name", required=True, help="held_out_evaluations/held_out_<name>")
+    check_round = commands.add_parser("check-round")
+    check_round.add_argument("--label", required=True, choices=[variant.label for variant in STEP_VARIANTS])
     arguments = commands.add_parser("rank-arguments")
     arguments.add_argument("--signal", type=Signal, choices=list(Signal), required=True)
     report = commands.add_parser("report")
@@ -179,6 +184,14 @@ def check_dry_run(log: Path) -> None:
     except ValueError as error:
         raise SystemExit(f"{log}: {error}") from error
     print(f"{steps} steps")
+
+
+def check_round(label: str) -> None:
+    variant = next(variant for variant in STEP_VARIANTS if variant.label == label)
+    problem = round_outcome_problem(variant, environment_path("LEAN_SEARCH_CHECKPOINTS"))
+    if problem is not None:
+        raise SystemExit(problem)
+    print(f"{label}: its outcome file reads back")
 
 
 def check_held_out(name: str) -> None:
@@ -277,6 +290,8 @@ def main() -> None:
             write_configs(arguments.output, arguments.shared_run)
         case "check-dry-run":
             check_dry_run(arguments.log)
+        case "check-round":
+            check_round(arguments.label)
         case "check-held-out":
             check_held_out(arguments.name)
         case "rank-arguments":

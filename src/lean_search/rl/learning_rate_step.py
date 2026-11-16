@@ -272,6 +272,18 @@ def dry_run_steps(text: str) -> int:
     return steps
 
 
+def round_outcome_problem(variant: StepVariant, checkpoints: Path) -> str | None:
+    """Why the round's outcome file (phase.json, training_summary.json) does not read back as its trainer wrote it,
+    e.g. cut short by a kill mid-write; None when it does."""
+    path = round_completion_files(variant, checkpoints)[0]
+    outcome_type = PhaseOutcome if variant.kind == RoundKind.GRPO else TrainingSummary
+    try:
+        from_json_object(outcome_type, json.loads(path.read_text(encoding="utf-8")))
+    except (OSError, ValueError, TypeError, KeyError) as error:
+        return f"{path} does not read back: {error!r}"
+    return None
+
+
 def dropped_states(summary_text: str) -> tuple[str, ...]:
     """The states a held-out run left without a tree (its summary.json); the run is complete only without any."""
     return from_json_object(EvaluationSummary, json.loads(summary_text)).dropped
@@ -404,10 +416,18 @@ def read_durations(text: str) -> dict[str, float]:
 
 
 def mode_description(search_config: str, run_config: RunConfig, max_expansions: int) -> str:
+    """With a warning when the depth cap can bind: each expansion's children lie one block deeper, so a search reaches
+    at most its expansions (harvesting's included) in depth. A warning, not a refusal: the visible loop search's cap of
+    16 binds by design at 32 + 16 expansions."""
     reasoning = "visible reasoning" if run_config.policy.visible_reasoning else "no visible reasoning"
+    search = run_config.search
+    reach = max_expansions + (search.harvest.max_expansions if search.harvest.enabled else 0)
+    binding = (
+        f"; the depth cap can bind: {reach} expansions can reach depth {reach}" if reach > search.max_depth else ""
+    )
     return (
         f"{reasoning}, {max_expansions} expansions per training search ({search_config}: depth weight "
-        f"{run_config.priority.depth_weight:g}, depth cap {run_config.search.max_depth})"
+        f"{run_config.priority.depth_weight:g}, depth cap {search.max_depth}{binding})"
     )
 
 
@@ -645,8 +665,9 @@ def baseline_section(baseline: V0Baseline) -> str:
     drifted = [name for name, interval in measures if not includes_zero(interval)]
     if drifted:
         lines.append(
-            f"**v0 moved during the step in {' and '.join(drifted)}**: every variant's difference to v0 may carry "
-            "that drift; the ranking compares the variants with each other and is less affected."
+            f"**v0 moved during the step in {' and '.join(drifted)}** (or by chance: each A/A interval excludes 0 "
+            "about one time in twenty): every variant's difference to v0 may carry that drift; the ranking compares "
+            "the variants with each other and is less affected."
         )
     match baseline.earlier:
         case PairedRun() as earlier:
@@ -691,7 +712,8 @@ def durations_section(report: StepReport) -> str:
 
 def report_markdown(report: StepReport) -> str:
     values = arm_values(report.rankings)
-    intervals = sum(2 * len(ranking.reports) for ranking in report.rankings)
+    # Each variant's two against v0, and v0's A/A pair (valid Lean, success).
+    intervals = sum(2 * len(ranking.reports) for ranking in report.rankings) + 2
     sections = [
         "# Step 2: learning rates",
         f"Code {report.revision}. Sampling mode: {report.mode}. Shared sampling: {report.sampled_tokens:,} generated "
