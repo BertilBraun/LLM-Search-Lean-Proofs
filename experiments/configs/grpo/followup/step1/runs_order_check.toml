@@ -1,0 +1,10 @@
+# v0 with value v0 in the new start order, paired against the two file-order anchors before any run is compared across orders.
+#   PROBE_CONCURRENCY=112 deployment/probe_runs.sh experiments/configs/grpo/followup/step1/runs_order_check.toml
+[[runs]]
+name = "step1_run9_v0_value_v0_ordered"
+arm = "v0"
+phase = 0
+policy_adapter = "/workspace/checkpoints/data_rewrite_sft_numbered/adapter"
+value = "v0"
+config = "experiments/configs/grpo/followup/step1/probe_evaluation_ordered.toml"
+purpose = "does the start order change outcomes: against runs 1 and 2, within their A/A difference"

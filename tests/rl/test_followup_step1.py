@@ -136,7 +136,7 @@ def test_every_step1_run_list_reads(path: Path) -> None:
     assert read_run_list(path).runs
 
 
-@pytest.mark.parametrize("name", ["runs_anchor.toml", "runs_calibration.toml"])
+@pytest.mark.parametrize("name", ["runs_anchor.toml", "runs_calibration.toml", "runs_order_check.toml"])
 def test_the_runs_that_need_nothing_measured_are_ready(name: str) -> None:
     runs = read_run_list(STEP1 / name).runs
     assert [refusal for run in runs for refusal in run_refusals(run, REPOSITORY, STUDY_CONCURRENCY)] == []
@@ -196,6 +196,24 @@ def test_only_runs_3_and_4_start_the_longest_expected_searches_first() -> None:
         "step1_run3_visible_T": "longest_expected_search_first",
         "step1_run4_no_reasoning_T": "longest_expected_search_first",
     }
+
+
+def test_the_order_check_differs_from_the_probe_evaluation_only_in_its_start_order() -> None:
+    (run,) = read_run_list(STEP1 / "runs_order_check.toml").runs
+    evaluation = evaluation_config(run, REPOSITORY)
+    assert {key: value for key, value in evaluation.items() if key not in ORDER_KEYS} == resolved_toml(
+        PROBE_EVALUATION, REPOSITORY
+    )
+
+
+def test_the_order_check_starts_the_longest_expected_searches_first() -> None:
+    (run,) = read_run_list(STEP1 / "runs_order_check.toml").runs
+    assert evaluation_config(run, REPOSITORY)["submission_order"] == "longest_expected_search_first"
+
+
+def test_the_order_check_is_not_the_ratings_anchor() -> None:
+    (run,) = read_run_list(STEP1 / "runs_order_check.toml").runs
+    assert not run.anchor
 
 
 def test_the_value_free_pilots_try_every_step_log_probability_setting() -> None:

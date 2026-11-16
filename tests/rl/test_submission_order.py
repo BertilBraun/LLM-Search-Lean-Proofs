@@ -114,9 +114,9 @@ def test_an_evaluation_config_without_the_setting_keeps_file_order() -> None:
     assert (config.submission_order, config.expected_search_seconds) == (SubmissionOrder.FILE, "")
 
 
-def test_only_the_reasoning_runs_ordered_config_turns_the_order_on() -> None:
+def test_only_the_configs_named_ordered_turn_the_order_on() -> None:
     ordered = [path.name for path in STUDY_EVALUATIONS if "submission_order" in resolved_toml(path, REPOSITORY)]
-    assert ordered == ["token_capped_evaluation_ordered.toml"]
+    assert ordered == ["probe_evaluation_ordered.toml", "token_capped_evaluation_ordered.toml"]
 
 
 @pytest.mark.parametrize(

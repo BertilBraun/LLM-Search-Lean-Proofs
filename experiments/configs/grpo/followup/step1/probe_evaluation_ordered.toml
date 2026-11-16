@@ -1,0 +1,4 @@
+# The probe evaluation with the searches started longest expected first; only the start order differs.
+base = "experiments/configs/grpo/followup/probe_evaluation.toml"
+submission_order = "longest_expected_search_first"
+expected_search_seconds = "experiments/configs/grpo/followup/probe_v2_expected_search_seconds.tsv"
