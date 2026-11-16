@@ -206,7 +206,9 @@ rebooted, or the PC's results pull is more than 25 minutes old. It dies with the
 ## 8. Code: two features merged on 2026-11-16, nothing in flight
 
 Master is `467d97c` or later and pushed. The node runs `9a594b1` and deploys `9834972` by itself after the pilot; the
-expert-iteration merge is not on the node yet and is not needed there before arm C. Every merged package had two reviews and a re-review.
+expert-iteration merge is not on the node yet and is not needed there before arm C. The full suite on the merged master (`467d97c`): 4,482 passed, 0 failed, 305
+skipped. The two branches' own runs skipped only 43 (4,590 and 4,701 passed); the difference was not investigated and
+is probably the Lean-dependent tests skipping under the plain command of section 7. Every merged package had two reviews and a re-review.
 
 **A. Start order by measured search time** — MERGED 2026-11-16 (master `f29df21`; reviews AQ and AR with re-reviews
 in `results/reviews/2026-11-16_review_aq_*` and `_ar_*`; full suite 4,590 passed).
