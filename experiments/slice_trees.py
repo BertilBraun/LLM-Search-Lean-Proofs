@@ -1,15 +1,16 @@
-"""Step 2's shared trees cut into slices of equal generated tokens by finish order (src/lean_search/rl/tree_slices.py;
+"""A run's trees cut into slices of equal generated tokens by finish order (src/lean_search/rl/tree_slices.py;
 DESIGN.md, "Follow-up study: controlled arms", "Step 2").
 
-    python experiments/slice_trees.py --trees $LEAN_SEARCH_RUNS/<shared run>/trees --slices 4 \
-        --output $LEAN_SEARCH_RUNS/<shared run>/slices
+    python experiments/slice_trees.py --trees $LEAN_SEARCH_RUNS/followup_shared_sampling/trees --slices 1 \
+        --output $LEAN_SEARCH_RUNS/followup_shared_sampling/slices
 
 Reads the run's tree index (trees/index.jsonl, every tree of every phase directory) and writes output/slice_k/ (links
 to the tree files and the slice's index.jsonl), one per slice, and output/manifest.json: per slice its trees, generated
 tokens, solved share, difficulty range, statements per character band, below-band share and statements seen in an
 earlier slice. A slice directory is what `grpo_phase.py --trees` and the expert-iteration builder's tree_directories
-take, e.g. slice_4 for one slice, or slice_1 ... slice_4 for four. Refuses while the run's loop is running, when the
-index changes while being read, and an existing output.
+take. Step 2 (deployment/study_chain.sh) uses --slices 1: its shared phase's trees, which the run keeps under a phase
+directory, linked into one directory, slice_1, that arm A's learning-rate rounds train on. Refuses while the run's loop
+is running, when the index changes while being read, and an existing output.
 """
 
 import argparse

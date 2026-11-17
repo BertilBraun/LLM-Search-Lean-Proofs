@@ -145,6 +145,9 @@ def write_slices(
     existing output, so the slices stay as first cut."""
     if output.exists():
         raise ValueError(f"{output} exists: the slices are cut once.")
+    # A slice links its trees by file name: trees of one name in two phase directories would collide.
+    names = [Path(entry.file).name for members in slices for entry in members]
+    assert len(set(names)) == len(names), "Trees of different phase directories share a file name."
     records = []
     seen: set[str] = set()
     for number, members in enumerate(slices, start=1):
