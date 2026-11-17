@@ -322,6 +322,18 @@ Run 4 (no reasoning): 575 Lean-hours, 41.2 s of Lean per expansion.
   with no proof lost.
 - Run 3 (visible) shows the same pattern at half the scale (restarts 4.2%, replays 3.6%, duplicates 8.2%).
 
+**Search efficiency package** (branch `worktree-agent-a884d29b93192b24f`, switches off by default, under reviews AY
+and AZ; measurements in `node_backup/2026-11-15/search_efficiency/`):
+- Result cache within a search, keyed by the tactic path: 6.1% of run 4's Lean time (5.7% net of re-run wall-clock
+  stops).
+- Skip a tactic text after its 2nd wall-clock stop in a search: 2.0%, no proof lost; labelled as a wall-clock timeout.
+- Warm spare processes: a kill costs 0.2 s instead of 6.2 s (median) when a spare is ready; 0.24 GiB private memory per
+  spare; 8-12 per pool recommended. Removes most of the 4.2% restart cost.
+- Bounded `nlinarith` (300 of run 4's calls rerun alone, five product rules): only the degree-bounded variant keeps
+  most successes (93%) while cutting nlinarith time by about 29% (about 20% of all Lean time); the cheaper ones lose
+  27-45% of successes. No default change; a search A/B would be needed.
+- The node's Lean tests at the package's head: 489 passed.
+
 ## Start-order check (run 9, 2026-11-17)
 
 `step1_run9_v0_value_v0_ordered` (v0 with value v0, the anchors' settings, longest expected search first): **708 of
