@@ -28,6 +28,7 @@ from lean_search.lean.identifiers import (
     name_scope,
     shared_name_repairer,
 )
+from lean_search.lean.memory import SearchMemory
 from lean_search.lean.plans import Rejection, TacticPlan, plain_plan, plan_block
 from lean_search.lean.repl import BlockFailure, BlockResult
 from lean_search.lean.text import TacticPiece, join_tactics
@@ -124,6 +125,9 @@ class SearchConfig:
     exploration: ExplorationConfig = field(default_factory=ExplorationConfig)
     # Needs the identifier check, whose environment names it searches.
     name_repair: NameRepairConfig = field(default_factory=NameRepairConfig)
+    # A tactic run again on the same tactic path with the same limit takes its first deterministic outcome (success,
+    # error, heartbeat limit) instead of running Lean; wall-clock stops and REPL failures run again.
+    result_cache: bool = False
 
 
 class StopReason(StrEnum):
@@ -163,6 +167,9 @@ class Accounting:
     # log-probability also covers the tokens of the failed tail.
     policy_children: int = 0
     partial_policy_children: int = 0
+    # Tactics the result cache answered, and the Lean seconds they took when they ran (search.result_cache).
+    cached_tactics: int = 0
+    cache_saved_seconds: float = 0.0
 
 
 @dataclass
@@ -326,6 +333,7 @@ class _Execution(NamedTuple):
     flattened: bool = False
     tactic_goals: tuple[tuple[str, ...], ...] = ()
     name_repairs: tuple[NameRepair, ...] = ()
+    cached_tactics: int = 0
 
 
 @dataclass
@@ -376,6 +384,7 @@ class _TheoremSearch:
         self.name_repairer: NameRepairer | None = None
         self.proofs: list[Node] = []
         self.exploration_random = random.Random(f"{config.exploration.seed}:{problem.name}")
+        self.memory = SearchMemory(config.result_cache) if config.result_cache else None
 
     def wall_seconds(self) -> float:
         return time.monotonic() - self.started
@@ -659,7 +668,8 @@ class _TheoremSearch:
         timeout_seconds = (
             candidate.timeout_seconds if candidate.timeout_seconds is not None else self.config.tactic_timeout_seconds
         )
-        return await self.repl.apply_block(node.state, self._plan(node, candidate), heartbeats, timeout_seconds)
+        plan = self._plan(node, candidate)
+        return await self.repl.apply_block(node.state, plan, heartbeats, timeout_seconds, memory=self.memory)
 
     async def _repaired(
         self, expansion: _Expansion, candidate: Candidate, failure: BlockFailure | None
@@ -705,6 +715,8 @@ class _TheoremSearch:
         )
         lean_seconds = result.elapsed_seconds + naming_seconds
         self.accounting.lean_seconds += lean_seconds
+        self.accounting.cached_tactics += result.cached_tactics
+        self.accounting.cache_saved_seconds += result.cached_seconds
         execution = _Execution(
             applied_tactics,
             result.total_tactics,
@@ -714,6 +726,7 @@ class _TheoremSearch:
             result.flattened,
             tuple(tactic_state.goals for tactic_state in result.tactic_states),
             name_repairs,
+            result.cached_tactics,
         )
         if not applied_tactics:
             return self._record(node, candidate, EdgeOutcome.FAILED, execution=execution), None
@@ -772,6 +785,7 @@ class _TheoremSearch:
             tactic_goals=execution.tactic_goals,
             feedback=candidate.feedback,
             name_repairs=execution.name_repairs,
+            cached_tactics=execution.cached_tactics,
         )
 
     async def _verify(self, node: Node) -> bool:

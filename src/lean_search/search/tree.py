@@ -143,6 +143,8 @@ class Edge:
     # A REPAIR edge's replaced names. Records before 2026-10-31 kept them on the policy edge, its `text` the repaired
     # block and its outcome the repaired run's.
     name_repairs: tuple[NameRepair, ...] = ()
+    # Executed tactics answered by the search's result cache instead of Lean (search.result_cache).
+    cached_tactics: int = 0
 
     @property
     def repaired(self) -> bool:
@@ -211,6 +213,7 @@ class SearchTree:
         tactic_goals: tuple[tuple[str, ...], ...] = (),
         feedback: bool = False,
         name_repairs: tuple[NameRepair, ...] = (),
+        cached_tactics: int = 0,
     ) -> Edge:
         assert parent.expansion_index is not None, parent.node_id
         edge = Edge(
@@ -236,6 +239,7 @@ class SearchTree:
             tactic_goals=tactic_goals,
             feedback=feedback,
             name_repairs=name_repairs,
+            cached_tactics=cached_tactics,
         )
         self.edges.append(edge)
         if failure is not None and failure.kind in (FailureKind.WALL_CLOCK_TIMEOUT, FailureKind.HEARTBEAT_TIMEOUT):

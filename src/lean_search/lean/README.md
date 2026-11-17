@@ -184,6 +184,23 @@ print `x✝` where the node prints `x_1`; intermediate states match nodes by `no
   definitions change (4 of 500 sampled traced proofs did when they last changed). `?m.N` numbers in goals shift too
   (13 of 267k traced steps show one).
 
+## Search memory
+
+`apply_block(..., memory=...)` takes an `OutcomeMemory` (`memory.py`, `SearchMemory`), owned by one search and never
+shared across searches or pools. It sees every tactic of the block before Lean runs it:
+
+- **Result cache** (`SearchConfig.result_cache`, off): a tactic whose exact Lean input ran before in the search (the
+  state's whole tactic path from the statement with each step's heartbeat limit, the tactic text, its limit) takes the
+  outcome of that run instead of running. The key is the path, not the goals: equal goals reached by different paths
+  can differ in what the goals do not print (the environment's step matchers, metavariables, fresh-name counters, which
+  change the run time and so the heartbeat outcome, see above); the path is what replay already relies on to be
+  deterministic. On the old run's trees a path key finds 87% of what a goal key would (11.6% against 13.3% of Lean
+  seconds). Cached: successes (the recorded `ProofState`; from a restarted process it is replayed when used, like any
+  state), errors including deterministic panics, heartbeat timeouts. Not cached: wall-clock stops (their outcome depends
+  on the machine's load: re-run alone, most end in an error or at the heartbeat limit within 30-100 s) and
+  `ReplFailure`s. `BlockResult.cached_tactics` / `cached_seconds` (the seconds the first run took), `Edge.cached_tactics`
+  and `Accounting.cached_tactics` / `cache_saved_seconds` record the hits.
+
 ## Verification
 
 `verify_state` and `verify_proof` re-elaborate the theorem from scratch in the base environment with three separate

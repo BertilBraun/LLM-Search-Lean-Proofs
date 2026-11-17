@@ -15,7 +15,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import NamedTuple
+from typing import NamedTuple, Protocol
 
 from lean_search.lean.plans import Proceed, Rejection, Stop, TacticPlan, plain_plan, segment_verdict
 from lean_search.lean.text import (
@@ -190,6 +190,22 @@ class BlockResult:
     flattened: bool = False
     # The state after each applied tactic; no-ops skipped after a nested proof closed early share the closing state.
     tactic_states: tuple[ProofState, ...] = ()
+    # Tactics the memory answered without Lean, and the seconds they took when they ran.
+    cached_tactics: int = 0
+    cached_seconds: float = 0.0
+
+
+class Remembered(NamedTuple):
+    outcome: Outcome
+    seconds: float
+
+
+class OutcomeMemory(Protocol):
+    """Outcomes of tactics already run, owned by one search (`lean_search.lean.memory`)."""
+
+    def recall(self, state: ProofState, tactic: str, heartbeats: int) -> Remembered | None: ...
+
+    def record(self, state: ProofState, tactic: str, heartbeats: int, outcome: Outcome, seconds: float) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -406,6 +422,11 @@ def _failure(message: str) -> LeanError | LeanTimeout:
     return LeanError(message)
 
 
+def normalized_tactic(text: str) -> str:
+    """The tactic text as the REPL runs it and as a state's tactic path records it."""
+    return textwrap.dedent(text).strip("\n").rstrip()
+
+
 def deterministic_panic(stderr_lines: Sequence[str], return_code: int | None) -> str | None:
     """The panic message if the process exited through one of `DETERMINISTIC_PANICS`, else None."""
     lines = [line.strip() for line in stderr_lines if line.strip()]
@@ -514,8 +535,10 @@ class LeanRepl:
         block: str | TacticPlan,
         heartbeats: int | None = None,
         timeout_seconds: float | None = None,
+        memory: OutcomeMemory | None = None,
     ) -> BlockResult:
-        """The longest valid prefix of the block's top-level tactics (a plan's flattened ones with their guards)."""
+        """The longest valid prefix of the block's top-level tactics (a plan's flattened ones with their guards).
+        `memory` answers tactics already run on the same input and records the others."""
         async with self._lock:
             started = time.monotonic()
             limits = self._limits(heartbeats, timeout_seconds)
@@ -525,10 +548,15 @@ class LeanRepl:
             tactic_states: list[ProofState] = []
             goals_before: dict[int, int] = {}
             failure: BlockFailure | None = None if plan.tactics else LeanError("Empty tactic block.")
+            cached_tactics = 0
+            cached_seconds = 0.0
             index = 0
             while index < plan.limit and not current.is_proved:
                 goals_before[index] = len(current.goals)
-                outcome = await self._guarded(self._apply_tactic, current, plan.tactics[index].text, limits)
+                outcome, remembered = await self._remembered_outcome(current, plan.tactics[index].text, limits, memory)
+                if remembered is not None:
+                    cached_tactics += 1
+                    cached_seconds += remembered.seconds
                 match outcome:
                     case ProofState():
                         match segment_verdict(plan, goals_before, index, len(outcome.goals)):
@@ -563,6 +591,8 @@ class LeanRepl:
                 plan.tactics,
                 plan.flattened,
                 tuple(tactic_states),
+                cached_tactics,
+                cached_seconds,
             )
 
     async def export_environment_names(self, header: str, command: str) -> tuple[str, ...]:
@@ -602,6 +632,20 @@ class LeanRepl:
                 time.monotonic() - started,
                 plain_verified=not plain.problems,
             )
+
+    async def _remembered_outcome(
+        self, state: ProofState, tactic: str, limits: TacticLimits, memory: OutcomeMemory | None
+    ) -> tuple[Outcome, Remembered | None]:
+        if memory is None:
+            return await self._guarded(self._apply_tactic, state, tactic, limits), None
+        tactic = normalized_tactic(tactic)
+        remembered = memory.recall(state, tactic, limits.heartbeats)
+        if remembered is not None:
+            return remembered.outcome, remembered
+        started = time.monotonic()
+        outcome = await self._guarded(self._apply_tactic, state, tactic, limits)
+        memory.record(state, tactic, limits.heartbeats, outcome, time.monotonic() - started)
+        return outcome, None
 
     async def _guarded[**Parameters](
         self,
@@ -722,7 +766,7 @@ class LeanRepl:
         )
 
     async def _apply_tactic(self, state: ProofState, tactic: str, limits: TacticLimits) -> Outcome:
-        tactic = textwrap.dedent(tactic).strip("\n").rstrip()
+        tactic = normalized_tactic(tactic)
         if not tactic.strip():
             return LeanError("Empty tactic.")
         forbidden = find_forbidden_tokens(tactic, self.config.forbidden_tokens)
