@@ -38,8 +38,7 @@ STATES_FILE = "phase5_eval_visible_student_v2_visible/states.jsonl"
 SHARED_RUN = "followup_shared_sampling"
 # Every variant samples alike, so the rule ties and takes the lowest rate.
 CHOSEN = "A_2e-5"
-O2_RANKING = "/workspace/runs/offline_chain/rank_matched.txt"
-O2_VALUE = f"from O2: the 'Chosen:' line of {O2_RANKING}"
+O2_CHOICE = "Chosen: matched_1e-4 (the held-out states decide, on the flattened success; tied: matched_1e-4)\n"
 
 
 def reasoning_state(index: int) -> ReasoningState:
@@ -102,10 +101,19 @@ class Workspace:
             "LEAN_SEARCH_CHECKPOINTS": str(self.root / "checkpoints"),
         }
 
+    @property
+    def o2_ranking(self) -> Path:
+        """Where the offline chain's ranking of the matched subset (O2) lies."""
+        return self.root / "offline_chain" / "rank_matched.txt"
 
-def make_workspace(root: Path, earlier_states_sha256: str | None = None) -> Workspace:
-    """`earlier_states_sha256`: the 2026-11-15 run's states digest (another file than today's), default today's."""
+
+def make_workspace(root: Path, earlier_states_sha256: str | None = None, o2_ranked: bool = True) -> Workspace:
+    """`earlier_states_sha256`: the 2026-11-15 run's states digest (another file than today's), default today's;
+    `o2_ranked`: whether the offline chain has ranked O2's rates."""
     workspace = Workspace(root)
+    if o2_ranked:
+        workspace.o2_ranking.parent.mkdir(parents=True)
+        workspace.o2_ranking.write_text(O2_CHOICE, encoding="utf-8")
     states = workspace.runs / STATES_FILE
     states.parent.mkdir(parents=True)
     states.write_text("".join(to_json(state) + "\n" for state in STATES), encoding="utf-8")
@@ -139,7 +147,7 @@ def report(workspace: Workspace) -> subprocess.CompletedProcess:
             "--earlier-v0",
             "v0",
             "--o2-ranking",
-            O2_RANKING,
+            str(workspace.o2_ranking),
             "--output",
             str(output),
         ],
@@ -160,16 +168,27 @@ def written(tmp_path_factory: pytest.TempPathFactory) -> str:
 
 
 @pytest.mark.parametrize(
-    "line",
+    "row",
     [
         "| arms/A.toml | phase.policy.optimization.learning_rate | 2e-5 |",
-        "| arms/C.toml | loop.training.expert_iteration_window_phases | 4 (owner, 2026-11-17) |",
-        f"| arms/C.toml | expert_iteration.sft.optimization.learning_rate | {O2_VALUE} |",
-        "| arms/D.toml | phase.policy.optimization.learning_rate | 2e-5 (A's) |",
+        "| arms/C.toml | expert_iteration.sft.optimization.learning_rate | 1e-4 |",
+        "| arms/D.toml | phase.policy.optimization.learning_rate | 2e-5 |",
+        "| arms/D.toml | expert_iteration.sft.optimization.learning_rate | 1e-4 |",
     ],
 )
-def test_the_report_from_real_files_states_the_arms_values(written: str, line: str) -> None:
-    assert line in written.splitlines()
+def test_the_report_from_real_files_states_the_arms_values(written: str, row: str) -> None:
+    assert any(line.startswith(row) for line in written.splitlines())
+
+
+def test_the_report_from_real_files_reads_cs_window_from_arm_c(written: str) -> None:
+    assert "C's and D's window, 4 phases" in written
+
+
+def test_the_report_without_o2s_ranking_says_o2_is_not_ranked_yet(tmp_path: Path) -> None:
+    workspace = make_workspace(tmp_path, o2_ranked=False)
+    report(workspace)
+    text = (workspace.state / "learning_rates_report.md").read_text(encoding="utf-8")
+    assert f"**O2 not ranked yet** ({workspace.o2_ranking}: no such file)" in text
 
 
 def test_the_report_from_real_files_pairs_every_variant_with_v0(written: str) -> None:

@@ -4,10 +4,10 @@ takes C's rate and window and A's rate), as the study driver (deployment/study_c
 experiments/learning_rate_step.py.
 
 One shared phase of sampling from v0 (12M generated tokens), then three per-tactic GRPO rounds from v0 on its trees at
-2e-5, 5e-5 and 1e-4. A round's phase config is what arm A's overlay gives at that rate (study_configs): the arm trains
-with its chosen variant's recipe, though not with its seeds (the template's, not the loop's per-phase ones) or its
-trainer (grpo_phase.py, not the persistent one). Each variant's held-out run is compared with v0's own run under the
-same code and mode, and v0 runs again after the variants as the step's A/A and drift check.
+2e-5, 5e-5 and 1e-4. A round's phase config is what arm A's overlay gives at that rate (study_configs) with the
+loop's phase-1 seeds: the arm's first update in all but its trainer (grpo_phase.py, not the persistent one). Each
+variant's held-out run is compared with v0's own run under the same code and mode, and v0 runs again after the variants
+as the step's A/A and drift check.
 """
 
 import json
@@ -19,6 +19,8 @@ from pathlib import Path
 from lean_search.expert_iteration.toml_text import toml_text
 from lean_search.rl.arm_comparison import multiple_comparisons_note
 from lean_search.rl.evaluation import EvaluationSummary
+from lean_search.rl.loop_config import offset_number_seed, offset_seed
+from lean_search.rl.offline_arm import Subset, run_label
 from lean_search.rl.probe_rating import DifferenceInterval
 from lean_search.rl.rate_ranking import HeldOutStates, RateChoice, VariantReport, includes_zero
 from lean_search.rl.study_configs import OverlayKind, merged, overlay_configs
@@ -33,8 +35,8 @@ V0_HELD_OUT = f"{RUN_PREFIX}v0"
 V0_END_HELD_OUT = f"{RUN_PREFIX}v0_end"
 # The shared phase's trees, as experiments/slice_trees.py --slices 1 links them: every tree of the run, finished order.
 TREES_SLICE = "slices/slice_1"
-# Arm C's window (owner, 2026-11-17); arm D takes it.
-C_WINDOW_PHASES = 4
+# The arm's first phase, whose seeds the rounds take (GrpoLoop's phase_config_text at seed offset 0).
+ROUND_PHASE = 1
 
 
 @dataclass(frozen=True)
@@ -73,10 +75,16 @@ class StudyTemplates:
 
 
 def grpo_phase_config(variant: StepVariant, templates: StudyTemplates) -> dict[str, object]:
-    """Arm A's phase config at the variant's rate: per-tactic credit, v0 as start and KL reference."""
+    """Arm A's phase config at the variant's rate with phase 1's seeds: per-tactic credit, v0 as start and KL
+    reference."""
     rate = {"phase": {"policy": {"optimization": {"learning_rate": variant.learning_rate}}}}
     overlay = merged(templates.arm, rate)
-    return overlay_configs(OverlayKind.ARM, overlay, templates.base, templates.phase_template, "phase.toml").phase
+    phase = overlay_configs(OverlayKind.ARM, overlay, templates.base, templates.phase_template, "phase.toml").phase
+    seeds = {
+        "policy": {"optimization": {"seed": offset_number_seed(ROUND_PHASE, 0)}},
+        "policy_replay": {"seed": offset_seed(f"grpo-replay/{ROUND_PHASE}", 0)},
+    }
+    return merged(phase, seeds)
 
 
 def round_config_text(variant: StepVariant, templates: StudyTemplates) -> str:
@@ -170,6 +178,25 @@ def dropped_states(summary_text: str) -> tuple[str, ...]:
 
 
 CHOSEN_LINE = re.compile(r"^Chosen: (\S+) \(", re.MULTILINE)
+
+
+@dataclass(frozen=True)
+class O2Choice:
+    """The offline run O2's rate choice, which arms C and D take: its ranking file, the rate or why there is none."""
+
+    ranking: str
+    rate: str | None
+    problem: str = ""
+
+
+def o2_rate(rank_text: str, rates: Sequence[str]) -> str:
+    """The rate offline_chain.sh's ranking of the matched subset chose, as offline_arm.py chosen-rate reads it;
+    ValueError when it chose none of `rates`."""
+    label = chosen_label(rank_text)
+    by_label = {run_label(Subset.MATCHED, rate): rate for rate in rates}
+    if label not in by_label:
+        raise ValueError(f"The ranking chose {label}, not one of {sorted(by_label)}.")
+    return by_label[label]
 
 
 def chosen_label(rank_text: str) -> str:
@@ -296,8 +323,9 @@ class StepReport:
     baseline: V0Baseline
     # Wall seconds by the driver's step names (timings.tsv).
     durations: Mapping[str, float]
-    # The offline run O2's rate choice (offline_chain.sh's rank_matched.txt), which arms C and D take.
-    o2_ranking: str
+    o2: O2Choice
+    # Arm C's window as arms/C.toml holds it (D's equals it: tests/rl/test_followup_arms.py).
+    c_window: int
 
 
 def points(interval: DifferenceInterval) -> str:
@@ -324,28 +352,30 @@ def chosen_report(ranking: Ranking) -> VariantReport:
     return next(report for report in ranking.reports if report.label == ranking.choice.chosen)
 
 
-def values_section(ranking: Ranking, o2_ranking: str) -> str:
+def values_section(ranking: Ranking, o2: O2Choice, c_window: int) -> str:
     a_rate = variant_of(ranking.choice.chosen).rate
-    o2 = f"from O2: the 'Chosen:' line of {o2_ranking}"
+    o2_value = "-" if o2.rate is None else o2.rate
+    o2_source = f"O2's choice ({o2.ranking})"
     rows = [
-        ["arms/A.toml", "phase.policy.optimization.learning_rate", a_rate],
-        ["arms/C.toml", "loop.training.expert_iteration_window_phases", f"{C_WINDOW_PHASES} (owner, 2026-11-17)"],
-        ["arms/C.toml", "expert_iteration.sft.optimization.learning_rate", o2],
-        ["arms/D.toml", "loop.training.expert_iteration_window_phases", f"{C_WINDOW_PHASES} (C's)"],
-        ["arms/D.toml", "phase.policy.optimization.learning_rate", f"{a_rate} (A's)"],
-        ["arms/D.toml", "expert_iteration.sft.optimization.learning_rate", f"C's, {o2}"],
+        ["arms/A.toml", "phase.policy.optimization.learning_rate", a_rate, "step 2: A's chosen variant"],
+        ["arms/C.toml", "expert_iteration.sft.optimization.learning_rate", o2_value, o2_source],
+        ["arms/D.toml", "phase.policy.optimization.learning_rate", a_rate, "A's"],
+        ["arms/D.toml", "expert_iteration.sft.optimization.learning_rate", o2_value, f"C's: {o2_source}"],
     ]
+    notes = []
+    if o2.rate is None:
+        notes.append(
+            f"**O2 not ranked yet** ({o2.ranking}: {o2.problem}): C's and D's expert-iteration rate stay open."
+        )
     worse = below_v0(chosen_report(ranking))
-    warnings = (
-        [
+    if worse:
+        notes.append(
             f"**Look first:** A's chosen variant {ranking.choice.chosen} is below v0 in {' and '.join(worse)}: the "
             "round made the policy worse on the held-out states."
-        ]
-        if worse
-        else []
-    )
+        )
     title = "## Values for the arms (not applied: the orchestrator fills the PLACEHOLDERs)"
-    return "\n\n".join([title, *warnings, markdown_table(["File", "Setting", "Value"], rows)])
+    window = f"C's and D's window, {c_window} phases (owner, 2026-11-17), is already in arms/C.toml and arms/D.toml."
+    return "\n\n".join([title, *notes, markdown_table(["File", "Setting", "Value", "Source"], rows), window])
 
 
 def ranking_section(ranking: Ranking) -> str:
@@ -486,7 +516,7 @@ def report_markdown(report: StepReport) -> str:
         f"tokens counted, {report.lost_tokens:,} lost. Every variant is one per-tactic GRPO round from v0; the 512 "
         "held-out states decide (no probe or gate-set runs; owner, 2026-11-16). Arm B is dropped; arm C takes O2's "
         "rate and a 4-phase window, D takes C's rate and window and A's rate (owner, 2026-11-17).",
-        values_section(report.ranking, report.o2_ranking),
+        values_section(report.ranking, report.o2, report.c_window),
         ranking_section(report.ranking),
         multiple_comparisons_note(intervals),
         rounds_section(report.rounds),

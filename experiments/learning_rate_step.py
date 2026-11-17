@@ -19,7 +19,8 @@ summary.json names states it left without a tree (the run is resumed under its n
 round's phase.json reads back whole. rank-arguments prints rank_learning_rates.py's arguments for A, one per line.
 report ranks A's variants as rank_learning_rates.py does (and fails unless its choice is the one in the state
 directory's rank_A.txt), reads the rounds' outcomes, v0's two runs of the step and the driver's timings, and writes the
-report the step ends with; arms C and D's rate is O2's (--o2-ranking), named there for the orchestrator to fill.
+report the step ends with; arms C and D's rate is O2's, read from --o2-ranking (offline_chain.sh's rank_matched.txt)
+as offline_arm.py chosen-rate reads it, or marked as not ranked yet.
 """
 
 import argparse
@@ -36,6 +37,7 @@ from lean_search.rl.learning_rate_step import (
     STEP_VARIANTS,
     V0_END_HELD_OUT,
     V0_HELD_OUT,
+    O2Choice,
     PairedRun,
     PlanPaths,
     Ranking,
@@ -48,6 +50,7 @@ from lean_search.rl.learning_rate_step import (
     dropped_states,
     grpo_round_size,
     mode_description,
+    o2_rate,
     plan_files,
     rank_arguments,
     read_durations,
@@ -59,6 +62,7 @@ from lean_search.rl.learning_rate_step import (
     variant_of,
 )
 from lean_search.rl.loop import RunFinished
+from lean_search.rl.offline_arm import load_offline_arm_config
 from lean_search.rl.rate_ranking import (
     HeldOutStates,
     Variant,
@@ -77,6 +81,8 @@ REPOSITORY_DIRECTORY = Path(__file__).resolve().parents[1]
 FOLLOWUP = REPOSITORY_DIRECTORY / "experiments/configs/grpo/followup"
 BASE = FOLLOWUP / "base.toml"
 ARM_A = FOLLOWUP / "arms" / "A.toml"
+ARM_C = FOLLOWUP / "arms" / "C.toml"
+OFFLINE_CONFIG = FOLLOWUP / "offline" / "offline_arm.toml"
 RANK_FILE = "rank_A.txt"
 
 
@@ -218,6 +224,16 @@ def v0_baseline(v0: HeldOutStates, earlier_name: str, states: States, visible_re
     return V0Baseline(run_rates(v0), paired_run(end, v0), earlier_run(v0, earlier_name, states), visible_reasoning)
 
 
+def o2_choice(ranking: Path) -> O2Choice:
+    if not ranking.exists():
+        return O2Choice(str(ranking), None, "no such file")
+    try:
+        rate = o2_rate(ranking.read_text(encoding="utf-8"), load_offline_arm_config(OFFLINE_CONFIG).learning_rates)
+    except ValueError as error:
+        return O2Choice(str(ranking), None, str(error))
+    return O2Choice(str(ranking), rate)
+
+
 def git_revision() -> str:
     found = subprocess.run(
         ["git", "rev-parse", "--short", "HEAD"], cwd=REPOSITORY_DIRECTORY, capture_output=True, text=True, check=False
@@ -242,7 +258,8 @@ def report(arguments: argparse.Namespace) -> None:
         tuple(round_record(variant, checkpoints, durations) for variant in STEP_VARIANTS),
         v0_baseline(v0, arguments.earlier_v0, states, mode.visible_reasoning),
         durations,
-        arguments.o2_ranking,
+        o2_choice(Path(arguments.o2_ranking)),
+        read_toml(ARM_C)["loop"]["training"]["expert_iteration_window_phases"],
     )
     arguments.output.write_text(report_markdown(step), encoding="utf-8", newline="\n")
     print(f"Wrote {arguments.output}")

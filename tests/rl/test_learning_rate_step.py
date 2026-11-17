@@ -13,6 +13,7 @@ from lean_search.rl.evaluation import EvaluationSummary  # noqa: E402
 from lean_search.rl.learning_rate_step import (  # noqa: E402
     STEP_VARIANTS,
     GrpoRoundSize,
+    O2Choice,
     PairedRun,
     PlanPaths,
     Ranking,
@@ -26,6 +27,7 @@ from lean_search.rl.learning_rate_step import (  # noqa: E402
     dropped_states,
     grpo_phase_config,
     mode_description,
+    o2_rate,
     plan_files,
     rank_arguments,
     read_durations,
@@ -88,12 +90,13 @@ def test_a_variants_run_name_is_its_label_under_step2(label: str, run_name: str)
 
 
 @pytest.mark.parametrize("label", ["A_2e-5", "A_5e-5", "A_1e-4"])
-def test_a_rounds_phase_config_is_the_shipped_per_tactic_phase_at_its_rate(label: str) -> None:
+def test_a_rounds_phase_config_is_the_shipped_per_tactic_phase_at_its_rate_and_phase_1s_seeds(label: str) -> None:
     found = variant(label)
-    expected = merged(
-        toml(CONFIGS / "phase.toml"), {"policy": {"optimization": {"learning_rate": found.learning_rate}}}
-    )
-    assert grpo_phase_config(found, TEMPLATES) == expected
+    changes = {
+        "policy": {"optimization": {"learning_rate": found.learning_rate, "seed": 1}},
+        "policy_replay": {"seed": "grpo-replay/1"},
+    }
+    assert grpo_phase_config(found, TEMPLATES) == merged(toml(CONFIGS / "phase.toml"), changes)
 
 
 def test_a_round_starts_from_v0_with_v0_as_its_kl_reference() -> None:
@@ -221,34 +224,63 @@ RATES = RunRates("v0", 2945, 0.587, 0.34)
 NO_DRIFT = PairedRun(RATES, interval(0.0, -0.01, 0.01), interval(0.0, -0.01, 0.01))
 BASELINE = V0Baseline(RATES, NO_DRIFT, NO_DRIFT, True)
 O2_RANKING = "/workspace/runs/offline_chain/rank_matched.txt"
-O2_VALUE = f"from O2: the 'Chosen:' line of {O2_RANKING}"
+O2_SOURCE = f"O2's choice ({O2_RANKING})"
+O2_CHOSE_1E_4 = O2Choice(O2_RANKING, "1e-4")
 CHOSEN_5E_5 = ranking("A_5e-5")
 
 
-def step_report(chosen: Ranking = CHOSEN_5E_5, baseline: V0Baseline = BASELINE) -> StepReport:
+def step_report(
+    chosen: Ranking = CHOSEN_5E_5, baseline: V0Baseline = BASELINE, o2: O2Choice = O2_CHOSE_1E_4
+) -> StepReport:
     rounds = tuple(
         RoundRecord(found, GrpoRoundSize(2400, 2300, 18000, 280, 9_000_000, 0.002, 0.01, 1500.0), 1800.0)
         for found in STEP_VARIANTS
     )
     durations = {"s1_sampling": 9000.0, **{f"round_{found.label}": 1800.0 for found in STEP_VARIANTS}}
-    return StepReport(
-        "abc1234", "visible reasoning", 12_100_000, 20_000, chosen, rounds, baseline, durations, O2_RANKING
-    )
+    return StepReport("abc1234", "visible reasoning", 12_100_000, 20_000, chosen, rounds, baseline, durations, o2, 4)
 
 
 @pytest.mark.parametrize(
     "line",
     [
-        "| arms/A.toml | phase.policy.optimization.learning_rate | 5e-5 |",
-        "| arms/C.toml | loop.training.expert_iteration_window_phases | 4 (owner, 2026-11-17) |",
-        f"| arms/C.toml | expert_iteration.sft.optimization.learning_rate | {O2_VALUE} |",
-        "| arms/D.toml | loop.training.expert_iteration_window_phases | 4 (C's) |",
-        "| arms/D.toml | phase.policy.optimization.learning_rate | 5e-5 (A's) |",
-        f"| arms/D.toml | expert_iteration.sft.optimization.learning_rate | C's, {O2_VALUE} |",
+        "| arms/A.toml | phase.policy.optimization.learning_rate | 5e-5 | step 2: A's chosen variant |",
+        f"| arms/C.toml | expert_iteration.sft.optimization.learning_rate | 1e-4 | {O2_SOURCE} |",
+        "| arms/D.toml | phase.policy.optimization.learning_rate | 5e-5 | A's |",
+        f"| arms/D.toml | expert_iteration.sft.optimization.learning_rate | 1e-4 | C's: {O2_SOURCE} |",
     ],
 )
 def test_the_report_states_every_placeholders_value(line: str) -> None:
     assert line in report_markdown(step_report()).splitlines()
+
+
+def test_the_report_says_cs_and_ds_window_is_already_set() -> None:
+    assert "C's and D's window, 4 phases (owner, 2026-11-17), is already in" in report_markdown(step_report())
+
+
+def test_the_report_leaves_cs_and_ds_rate_open_when_o2_has_not_ranked() -> None:
+    missing = O2Choice(O2_RANKING, None, "no such file")
+    text = report_markdown(step_report(o2=missing))
+    assert f"**O2 not ranked yet** ({O2_RANKING}: no such file)" in text
+
+
+def test_the_report_does_not_say_o2_is_missing_when_it_ranked() -> None:
+    assert "O2 not ranked yet" not in report_markdown(step_report())
+
+
+@pytest.mark.parametrize(("label", "rate"), [("matched_5e-5", "5e-5"), ("matched_1e-4", "1e-4")])
+def test_o2s_rate_is_read_from_its_rankings_choice(label: str, rate: str) -> None:
+    text = f"| table |\n\nChosen: {label} (the held-out states decide, on the flattened success; tied: {label})\n"
+    assert o2_rate(text, ["5e-5", "1e-4"]) == rate
+
+
+def test_a_ranking_choosing_another_subset_is_not_o2s_rate() -> None:
+    with pytest.raises(ValueError, match="not one of"):
+        o2_rate("Chosen: pool_5e-5 (the held-out states decide)\n", ["5e-5", "1e-4"])
+
+
+def test_a_round_takes_the_arms_phase_1_seeds() -> None:
+    config = grpo_phase_config(variant("A_5e-5"), TEMPLATES)
+    assert (config["policy"]["optimization"]["seed"], config["policy_replay"]["seed"]) == (1, "grpo-replay/1")
 
 
 def test_the_report_names_no_arm_b() -> None:
