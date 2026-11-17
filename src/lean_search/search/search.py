@@ -819,6 +819,8 @@ class _TheoremSearch:
         verification = await self.repl.verify_state(node.state)
         self.accounting.verification_seconds += verification.elapsed_seconds
         if verification.verified:
+            if self.config.nlinarith_variant is not None:
+                node.plain_verified = verification.plain_verified
             self.proofs.append(node)
             self.accounting.proofs += 1
             if self.solved_at is None:

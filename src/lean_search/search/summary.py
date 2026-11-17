@@ -181,6 +181,8 @@ class RunSummary:
     verification_failures: int
     plain_verified: int
     start_failures: int
+    # The search's nlinarith variant: the plain check then also runs Mathlib's own nlinarith.
+    nlinarith_variant: str | None = written_when_set(None)
 
 
 def category(problem_name: str) -> str:
@@ -271,6 +273,15 @@ def step_costs(results: Sequence[SearchResult]) -> tuple[StepCost, ...]:
     return tuple(sorted(costs, key=lambda cost: -cost.lean_seconds))
 
 
+def plain_check_label(nlinarith_variant: str | None) -> str:
+    if nlinarith_variant is None:
+        return "Proofs that also verify without the per-step heartbeat wrappers"
+    return (
+        "Proofs that also verify as written in plain Mathlib (without the heartbeat wrappers, with Mathlib's "
+        f"nlinarith where the search ran the {nlinarith_variant} variant; first proof of each solved statement)"
+    )
+
+
 def summarize(results: Sequence[SearchResult], metadata: RunMetadata, search_config: SearchConfig) -> RunSummary:
     if not results:
         raise ValueError("No results to summarize.")
@@ -318,6 +329,7 @@ def summarize(results: Sequence[SearchResult], metadata: RunMetadata, search_con
         multi_step_proofs=multi_step,
         verification_failures=sum(result.verification_failures for result in results),
         plain_verified=sum(result.plain_verified is True for result in results),
+        nlinarith_variant=search_config.nlinarith_variant,
         start_failures=sum(result.stop_reason == StopReason.START_FAILED for result in results),
     )
 
@@ -347,7 +359,7 @@ def render_markdown(summary: RunSummary, title: str) -> str:
         f"**Solved {summary.solved}/{summary.problems} ({summary.solve_rate:.1%}).** "
         f"Solved only with proofs of 2 or more steps: {summary.solved_at_depth_two_or_more}. "
         f"Verification failures (bugs): {summary.verification_failures}. "
-        f"Proofs that also verify without the per-step heartbeat wrappers: {summary.plain_verified}/{summary.solved}. "
+        f"{plain_check_label(summary.nlinarith_variant)}: {summary.plain_verified}/{summary.solved}. "
         f"Statements that failed to start: {summary.start_failures}.",
         "## By category",
         markdown_table(

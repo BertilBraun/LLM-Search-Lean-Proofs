@@ -246,7 +246,14 @@ sampling uses it (`rl/README.md`, "Search efficiency switches"), evaluations nev
   nlinarith's own time (seconds for most); for a proof whose step only the variant finds in time, up to the
   declaration's default 200k heartbeats or the 300 s command limit when the time goes into unmetered arithmetic. Such
   proofs (`plain_verified = False`) train the policy all the same (a search with the variant reproduces them); they
-  are not plain-Mathlib proofs and must be filtered out of anything published as such.
+  are not plain-Mathlib proofs and must be filtered out of anything published as such. With the variant on, every
+  verified proof of a search, harvested ones included, records its check (`Node.plain_verified`, written only then);
+  `SearchPhase` counts the proofs checked and failed and the solved trees with no proof passing it (the loop logs
+  them), and `experiments/analysis/plain_checks.py <trees directory>` reads the same counts from a finished run.
+- **Renaming:** `rl/renaming.py` re-verifies a renamed statement's proof against the original with `verify_proof` on
+  the written text, so with `[renaming] enabled` a proof only the variant finds would count as unsolved and its tree
+  be dropped. Renaming is off in the controls study (`followup/base.toml`); turn the two on together only after
+  making that check use the executed text.
 
 ## Verification
 

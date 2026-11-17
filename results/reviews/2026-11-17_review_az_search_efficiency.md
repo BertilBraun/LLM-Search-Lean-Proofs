@@ -304,3 +304,102 @@ New:
   process ever trains two recipes, `max(current, limit)` would be the safer form.
 
 Verdict: the training branch is ready to merge.
+
+## Re-review (2026-11-17), efficiency branch
+
+`worktree-agent-a884d29b93192b24f` at `ab1256d` (`git diff 3949496..ab1256d`). Tests in WSL, one suite at a time:
+`tests/lean tests/search tests/graph tests/monitoring` 1269 passed, 182 skipped; `tests/rl tests/expert_iteration tests/value` 2573 passed, 40 skipped, 0 failed;
+`ruff check` and `ruff format --check` clean over src, tests and experiments. The scratch
+digest check now gives `eee4c06b…` for run 9 on the branch, the value the node's runs recorded.
+
+### My findings
+
+- **B1: fixed.** `result_cache`, `timeout_skip`, `nlinarith_variant` and `spare_processes` default to None and drop out
+  of `run_config_text`; `run_config_sha256` also zeroes `spare_processes` before hashing, so spares never enter a run's
+  identity. New record fields use `written_when_set` (`record_fields.py`), so trees, results and metric lines of a run
+  without the switches keep their keys. Pinned by `tests/search/test_efficiency_switches.py`
+  (`test_the_step1_probe_config_keeps_its_digest` against the recorded digest; spares leave it unchanged; cache and
+  skip change it; edges, accounting and step statistics write the keys they had before).
+- **S1: fixed.** The switches live in `search/*_sampling.toml`, which the two sampling modes name; the student configs
+  that the probe and step-1 configs use are unchanged, and `evaluation_run_config` sets all four to None for every
+  fixed-target search (probe runs, held-out states, miniF2F, single-step variants), so a held-out run built from the
+  sampling config writes the plain config. `tests/rl/test_sampling_configs.py` pins: each sampling config equals its
+  student config but for the switches, the probe evaluation runs without them, evaluations from a sampling config run
+  without them, and `sampling_refusal` accepts an arm in the shared run's mode and refuses one with the plain student
+  config.
+- **S2: fixed.** `SearchPhase` sums `cached_tactics`, `cache_saved_seconds` and `skipped_timeouts`; `EdgeKindCounts`
+  has `skipped_timeout` (from the edge label's failure kind), shown as its own dashboard group; `lean_load` prints
+  "+ N skipped" after the real stops; the loop's host-memory line carries the pool's spare text (ready, swaps,
+  misses). Absent dashboard fields are treated as null, so old runs draw as before.
+- **S3: fixed** (refusals, TOML loading, the digest pin, records of searches without the switches; see B1).
+- **S4: fixed.** `rl/README.md` "Search efficiency switches"; DESIGN "Automatic rules" (the owner's decision, probe and
+  held-out runs without the switches, skip labels and load counting); `lean/README.md` (spares, search memory, bounded
+  nlinarith); the operations notes (spares' memory, CPUs, the log line). The host-memory formula still has no spare
+  term; the docs say the 8 spares (about 2 GiB) are measured with the other Lean processes. Acceptable.
+- **S5: fixed.** The summary now has bootstrap intervals (degree: 71% of the time, 57-85%; 92.7% of successes kept,
+  87-98%; gained 794 with 11-2,262), a table showing the gains rest on 1-4 jobs (88-100% from one), a limitations list
+  (the variant environment for the original too, plain forms only, 1,972 statements, run alone at 32 processes), and a
+  `--plain-environment` option.
+- **N1** fixed (documented: only wall-clock-independent outcomes are stored). **N2** fixed (closing tasks in their own
+  set, awaited, never cancelled). **N3** fixed (a failed start refills after `retry_seconds`). **N4** fixed (the README
+  names restarts after `stop_idle_processes` / `stop_processes`). **N5** fixed (the column appears only with skips).
+  **N6, N7** fixed (limitations list).
+- Also changed and checked: the skip now counts by (text, heartbeat limit), so the sweep's 200k-heartbeat stops no
+  longer skip the policy's 50k text; the cache's seconds time only the tactic, not a restart or replay before it.
+
+### The bounded-nlinarith switch (new)
+
+Checked and fine:
+
+- **Where it runs.** `LeanReplConfig.nlinarith_variant` comes from the search config (`search_repl_config`) for all
+  six pool constructions; `_run_tactic` rewrites the written text just before Lean, so steps, replays and re-runs go
+  the same way (states found with the variant replay with it); the base environment gets the definitions only with the
+  switch; spares share the pool's config. A search asserts that its pool runs the same variant where a block runs
+  (`ab1256d`). `lean_search_nlinarith` is a forbidden token, so the policy cannot call it directly.
+- **What is recorded.** States, edges, proofs and training data keep the written `nlinarith [...]`. The cache key, the
+  skip, de-duplication and the identifier check see the written text, which is sound because the rewrite is a fixed
+  function of the pool's config.
+- **Evaluations and identity.** Off in every evaluation (`evaluation_run_config`); absent from the digest at None and
+  in it when set, so a probe run cannot use it without changing its identity.
+- **Comparability.** Every arm and step 2's shared run sample through the same mode file, and `sampling_refusal`
+  compares the search config bytes, so no arm can sample with other switches. Probe runs and held-out states are
+  searched as the anchors were (same digest), and so are the offline arm's probe runs. Nothing makes the arms' probe
+  runs incomparable with the anchors or the offline runs.
+
+Should fix:
+
+- **S7. Proofs that only the variant finds are not marked per proof, nor counted anywhere the owner looks.**
+  `verify_state` accepts on the executed (variant) text; `plain_verified` re-checks the written text with Mathlib's
+  `nlinarith`, unwrapped (200k heartbeats, 300 s), but `_TheoremSearch` keeps it only for the first proof
+  (`search/search.py:824-826`, `SearchResult.plain_verified`). Harvested proofs, which also enter the proof graph, the
+  GRPO groups and the expert-iteration data, have no plain flag, and no phase record counts `plain_verified = False`.
+  So:
+  - the rule in `lean/README.md` that such proofs "must be filtered out of anything published" cannot be applied from
+    the records, only by re-verifying every proof;
+  - the train/evaluation mismatch is invisible. Arms train where some `nlinarith [...]` texts succeed only as `degree`
+    (the experiment's gained cases: 794 scaled, 11-2,262) and some plain successes fail (161, 53-293), and they are
+    evaluated with plain nlinarith. The environment is the same for every arm, so it does not by itself bias A against
+    B. But C and D imitate their own proof texts directly, so a variant-only proof costs them more at evaluation than
+    it costs a GRPO arm, whose signal is a relative advantage. That is a possible arm-by-environment interaction: small
+    if variant-only proofs are rare, and unmeasured.
+
+  Suggested fix: record the plain check per verified node (a `written_when_set` field), count solved trees and
+  proof-graph blocks whose plain check failed in `SearchPhase`, and read the share in step 2's shared sampling before
+  the arms start. If it exceeds a percent or two of proofs, ask the owner whether expert-iteration data should take
+  plain-verified blocks only.
+
+Nits:
+
+- N11. `rl/renaming.py` `search_problem` re-verifies a found proof against the original statement with
+  `verify_proof` on the written text (plain nlinarith). With `[renaming] enabled` and the variant on, a variant-only
+  proof would count as unsolved and its tree would be dropped. `[renaming]` is off in `followup/base.toml` (v0 is the
+  numbered arm), so this is latent; a load-time refusal of the combination, or a README line, would close it.
+- N12. `search/summary.py` still prints "Proofs that also verify without the per-step heartbeat wrappers"; with the
+  variant on, that count also leaves out proofs that need the variant. Reword it when the variant is on.
+- N13. A spare start that keeps failing now retries every `retry_seconds` with a full traceback each time; a
+  persistent failure (a bad header) would flood the log. Log the traceback once, then a one-line count.
+
+### Verdict
+
+Efficiency branch: ready to merge. B1 and S1-S5 are fixed. S7 should be done, or at least measured on step 2's shared
+sampling, before arm C or D trains on variant-found proofs; it does not affect comparability with the anchors.

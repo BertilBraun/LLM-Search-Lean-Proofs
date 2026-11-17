@@ -2,6 +2,7 @@
 verification checks. The process tests use the fake REPL; the last ones need Lean (they run on the node)."""
 
 import dataclasses
+import json
 import shutil
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from lean_search.lean.nlinarith import VARIANT_DEFINITIONS, NlinarithVariant, va
 from lean_search.lean.repl import BASE_ENVIRONMENT_DEFINITIONS, PROJECT_DIRECTORY, REPL_BINARY
 from lean_search.lean.text import executed_proof, theorem_with_proof
 from lean_search.rl.loop_config import EvaluationTarget
+from lean_search.rl.phase_metrics import PlainChecks, plain_checks
 from lean_search.rl.probe_evaluation import run_config_sha256
 from lean_search.rl.search_models import evaluation_run_config, run_config_text
 from lean_search.search import (
@@ -29,6 +31,9 @@ from lean_search.search import (
     search_theorem,
 )
 from lean_search.search.config import parse_run_config, search_repl_config
+from lean_search.search.records import to_json, tree_record
+from lean_search.search.search import HarvestConfig
+from lean_search.search.summary import plain_check_label
 
 DEGREE = NlinarithVariant.DEGREE
 HEARTBEATS = 200_000
@@ -248,3 +253,51 @@ async def test_the_variant_fails_where_its_products_are_missing() -> None:
         assert isinstance(start.outcome, ProofState)
         result = await repl.apply_block(start.outcome, "nlinarith", 50_000)
     assert isinstance(result.failure, LeanError)
+
+
+def harvesting_config(variant: NlinarithVariant | None) -> SearchConfig:
+    return dataclasses.replace(search_config(variant), harvest=HarvestConfig(enabled=True, max_expansions=0))
+
+
+async def two_proofs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, variant: NlinarithVariant | None) -> object:
+    """A variant-only proof first, then a plain one the harvest finishes the expansion with."""
+    project = variant_project(tmp_path, monkeypatch, variant)
+    blocks = Blocks("nlinarith [h]\ndone", "step\ndone")
+    async with LeanRepl(project.config) as repl:
+        return await search_theorem(PROBLEM, repl, blocks, DepthPlusGoals(), harvesting_config(variant))
+
+
+@needs_linux
+async def test_every_verified_proof_records_the_plain_check(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    completed = await two_proofs(tmp_path, monkeypatch, DEGREE)
+    proofs = [node for node in completed.tree.nodes if node.plain_verified is not None]
+    assert [(node.step, node.plain_verified) for node in proofs] == [
+        ("nlinarith [h]\ndone", False),
+        ("step\ndone", True),
+    ]
+
+
+@needs_linux
+async def test_the_trees_count_the_proofs_that_need_the_variant(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    completed = await two_proofs(tmp_path, monkeypatch, DEGREE)
+    record = tree_record(completed.tree, STATEMENT, completed.result)
+    assert plain_checks([record]) == PlainChecks(checked_proofs=2, failed_proofs=1, variant_only_trees=0)
+
+
+@needs_linux
+async def test_without_the_variant_no_node_records_a_plain_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    completed = await two_proofs(tmp_path, monkeypatch, None)
+    nodes = json.loads(to_json(tree_record(completed.tree, STATEMENT, completed.result)))["nodes"]
+    assert [node for node in nodes if "plain_verified" in node] == []
+
+
+def test_the_summary_names_the_variant_in_its_plain_check() -> None:
+    assert "Mathlib's nlinarith where the search ran the degree variant" in plain_check_label("degree")
+
+
+def test_the_summary_without_the_variant_reads_as_before() -> None:
+    assert plain_check_label(None) == "Proofs that also verify without the per-step heartbeat wrappers"

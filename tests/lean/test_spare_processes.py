@@ -197,3 +197,16 @@ async def test_the_pool_summary_counts_the_swaps(tmp_path: Path, monkeypatch: py
 
 def test_a_pool_without_spares_has_no_summary() -> None:
     assert LeanReplPool(1).spare_text() == ""
+
+
+async def test_a_failing_spare_start_logs_its_traceback_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    project = fake_repl_project(tmp_path, monkeypatch)
+    (project.config.project_directory / REPL_BINARY).unlink()
+    spares = SpareProcesses(1, project.config, lambda: [HEADER], retry_seconds=0.05)
+    spares.fill()
+    await asyncio.sleep(0.6)
+    await spares.close()
+    tracebacks = [record for record in caplog.records if record.exc_info]
+    assert (len(tracebacks), any("failed again" in record.message for record in caplog.records)) == (1, True)

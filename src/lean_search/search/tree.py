@@ -106,6 +106,9 @@ class Node:
     expansion_prompt_tokens: int | None = None
     expansion_generated_tokens: int | None = None
     verification_problems: tuple[str, ...] = ()
+    # A verified proof of a search with an nlinarith variant: whether the written text also verifies with Mathlib's
+    # own nlinarith, without the heartbeat wrappers. None otherwise.
+    plain_verified: bool | None = None
 
     @property
     def goals(self) -> tuple[str, ...]:

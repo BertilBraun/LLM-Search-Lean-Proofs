@@ -2,16 +2,19 @@
 
 Tactics (after the search's heartbeat wrapper): `hang` never answers, `fail` is a Lean error, `panic` ends the process
 in a deterministic Lean panic, `slow` takes FAKE_REPL_SLOW_SECONDS, `done` closes the goal, anything else reaches a new
-state with the goal unchanged. Imports take FAKE_REPL_IMPORT_SECONDS. Every request is
-appended to FAKE_REPL_LOG as `<pid>\t<cmd|tactic>\t<text>`.
+state with the goal unchanged. A theorem command whose proof uses plain `nlinarith` fails (not the variant's).
+Imports take FAKE_REPL_IMPORT_SECONDS. Every request is appended to FAKE_REPL_LOG as `<pid>\t<cmd|tactic>\t<text>`.
 """
 
 import json
 import os
+import re
 import sys
 import time
 
 GOAL = "⊢ True"
+# A theorem whose proof runs Mathlib's own nlinarith fails, the bounded variant passes.
+PLAIN_NLINARITH = re.compile(r"(?<!\w)nlinarith(?!\w)")
 
 
 def log(kind: str, text: str) -> None:
@@ -36,6 +39,8 @@ def answer(request: dict[str, object], counters: dict[str, int]) -> dict[str, ob
         if command.startswith("theorem") and "sorry" in command:
             counters["state"] += 1
             response["sorries"] = [{"goal": GOAL, "proofState": counters["state"]}]
+        if command.startswith("theorem") and PLAIN_NLINARITH.search(command):
+            response["messages"] = [{"severity": "error", "data": "linarith failed"}]
         if command.startswith("#print axioms _root_."):
             name = command.removeprefix("#print axioms _root_.")
             response["messages"] = [{"severity": "info", "data": f"'{name}' does not depend on any axioms"}]

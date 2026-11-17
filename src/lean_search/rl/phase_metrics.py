@@ -153,10 +153,37 @@ def mean_block_tactics(records: Sequence[TreeRecord]) -> float:
     return tactics / samples if samples else 0.0
 
 
+@dataclass(frozen=True)
+class PlainChecks:
+    """Verified proofs of searches with an nlinarith variant against Mathlib's own nlinarith: the proofs checked,
+    those whose written text failed (they need the variant), and the solved trees all of whose proofs failed."""
+
+    checked_proofs: int
+    failed_proofs: int
+    variant_only_trees: int
+
+    def text(self) -> str:
+        return (
+            f"{self.failed_proofs} of {self.checked_proofs} verified proofs fail the plain Mathlib check (their written "
+            f"text with Mathlib's nlinarith); {self.variant_only_trees} solved trees have no proof that passes it"
+        )
+
+
+def plain_checks(records: Sequence[TreeRecord]) -> PlainChecks:
+    checked = failed = variant_only = 0
+    for record in records:
+        flags = [node.plain_verified for node in record.nodes if node.plain_verified is not None]
+        checked += len(flags)
+        failed += flags.count(False)
+        variant_only += bool(flags) and not any(flags)
+    return PlainChecks(checked, failed, variant_only)
+
+
 def search_phase_record(records: Sequence[TreeRecord], statistics: GraphStatistics) -> SearchPhase:
     expansions = sum(record.result.accounting.expansions for record in records)
     lean_seconds = sum(record.result.accounting.lean_seconds for record in records)
     forced = forced_completions(records)
+    checks = plain_checks(records)
     return SearchPhase(
         graph=statistics,
         failure_tiers=failure_tiers(records),
@@ -169,4 +196,7 @@ def search_phase_record(records: Sequence[TreeRecord], statistics: GraphStatisti
         cached_tactics=sum(record.result.accounting.cached_tactics for record in records),
         cache_saved_seconds=sum(record.result.accounting.cache_saved_seconds for record in records),
         skipped_timeouts=sum(record.result.accounting.skipped_timeouts for record in records),
+        plain_checked_proofs=checks.checked_proofs,
+        plain_failed_proofs=checks.failed_proofs,
+        variant_only_trees=checks.variant_only_trees,
     )

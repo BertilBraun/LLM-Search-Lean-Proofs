@@ -162,7 +162,7 @@ from lean_search.rl.loop_config import (
     offset_seed,
 )
 from lean_search.rl.options_ab import arm_outcomes_text, options_arm_finished, options_look, options_look_text
-from lean_search.rl.phase_metrics import search_phase_record
+from lean_search.rl.phase_metrics import PlainChecks, search_phase_record
 from lean_search.rl.retention import kept_adapters, prune_phase_adapters
 from lean_search.rl.search_options import search_arm
 from lean_search.rl.statement_sources import FedStatement, StatementSource, origin_text
@@ -1888,7 +1888,13 @@ class GrpoLoop:
             return
         config = from_json_object(TrainingPhaseConfig, tomllib.loads(config_text))
         labelled = label_phase_data(records, config)
-        self.writer.write(search_phase_record(records, labelled.statistics))
+        phase_record = search_phase_record(records, labelled.statistics)
+        self.writer.write(phase_record)
+        if phase_record.plain_checked_proofs:
+            checks = PlainChecks(
+                phase_record.plain_checked_proofs, phase_record.plain_failed_proofs, phase_record.variant_only_trees
+            )
+            self.log(f"Phase {phase}, nlinarith variant: {checks.text()}")
         metrics = phase_value_metrics(labelled.trees, self.value_readout)
         self.writer.write(ValuePhase(config.reward.value_share, metrics))
 

@@ -517,6 +517,11 @@ class SearchPhase:
     cached_tactics: int = written_when_set(0)
     cache_saved_seconds: float = written_when_set(0.0)
     skipped_timeouts: int = written_when_set(0)
+    # With an nlinarith variant (`phase_metrics.plain_checks`): verified proofs whose written text was checked in plain
+    # Mathlib, those that failed it, and solved trees whose every proof failed it.
+    plain_checked_proofs: int = written_when_set(0)
+    plain_failed_proofs: int = written_when_set(0)
+    variant_only_trees: int = written_when_set(0)
 
 
 @dataclass(frozen=True)

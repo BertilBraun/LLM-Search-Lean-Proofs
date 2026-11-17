@@ -34,6 +34,7 @@ class SpareProcesses:
         # Dead spares being closed: not counted as starting, never cancelled.
         self._closing: set[asyncio.Task[None]] = set()
         self._closed = False
+        self._failed_starts = 0
 
     @property
     def ready(self) -> int:
@@ -81,7 +82,11 @@ class SpareProcesses:
             await spare.close()
             raise
         except Exception:
-            logger.exception("Starting a spare Lean REPL failed; trying again in %g s", self.retry_seconds)
+            self._failed_starts += 1
+            if self._failed_starts == 1:
+                logger.exception("Starting a spare Lean REPL failed; trying again in %g s", self.retry_seconds)
+            else:
+                logger.warning("Starting a spare Lean REPL failed again (%d failures so far)", self._failed_starts)
             await spare.close()
             await asyncio.sleep(self.retry_seconds)
             current = asyncio.current_task()

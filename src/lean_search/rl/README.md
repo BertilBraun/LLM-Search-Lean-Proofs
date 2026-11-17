@@ -724,7 +724,11 @@ as timing only), and the new record fields are written only when non-zero.
 What the loop shows: `SearchPhase.cached_tactics`, `cache_saved_seconds`, `skipped_timeouts` (the phase's trees);
 the dashboard's edge counts put tactics the skip did not run in their own group, apart from the wall-clock stops they
 are labelled as; `lean_load` adds "+ N skipped" after the real stops; the host-memory log lines name the sampling
-pool's spares (ready, swaps, misses). A skipped tactic is a wall-clock timeout for every label (GRPO, value, tiers):
+pool's spares (ready, swaps, misses); with the nlinarith variant, `SearchPhase.plain_checked_proofs`,
+`plain_failed_proofs` and `variant_only_trees` (also logged) count the verified proofs whose written text needs the
+variant, and `experiments/analysis/plain_checks.py` reads them from a run's trees (step 2's shared sampling phase,
+before the arms: if more than a percent or two of proofs need the variant, the owner decides whether expert-iteration
+data takes plain-verified blocks only). A skipped tactic is a wall-clock timeout for every label (GRPO, value, tiers):
 it is the text's expected outcome, not an infrastructure failure.
 
 ## Host memory

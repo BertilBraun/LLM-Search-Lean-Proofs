@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
-from lean_search.record_fields import record_dict
+from lean_search.record_fields import record_dict, written_when_set
 from lean_search.search.search import SearchResult
 from lean_search.search.texts import ExpansionTexts
 from lean_search.search.tree import Edge, NodeStatus, SearchTree, StepSource
@@ -42,6 +42,8 @@ class NodeRecord:
     expansion_generated_tokens: int | None = None
     # The value model's probabilities of the bins 1..7, 8+, dead (absent from records written before they were kept).
     value_distribution: tuple[float, ...] | None = None
+    # A verified proof of a search with an nlinarith variant: whether its written text verifies in plain Mathlib.
+    plain_verified: bool | None = written_when_set(None)
 
 
 @dataclass(frozen=True)
@@ -80,6 +82,7 @@ def tree_record(tree: SearchTree, statement: str, result: SearchResult) -> TreeR
             expansion_prompt_tokens=node.expansion_prompt_tokens,
             expansion_generated_tokens=node.expansion_generated_tokens,
             value_distribution=node.value_distribution,
+            plain_verified=node.plain_verified,
         )
         for node in tree.nodes
     )

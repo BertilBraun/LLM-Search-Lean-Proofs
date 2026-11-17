@@ -208,3 +208,142 @@ Training branch:
 Measurements read: `node_backup/2026-11-15/search_efficiency/{restart_cost,nlinarith}/summary.md` (median kill cost
 6.23 s -> 0.21 s with 8 spares, 56 of 80 kills swapped, p90 6.80 s when spares run out; a ready spare holds 0.24 GiB
 private), consistent with the code paths above.
+
+## Re-review (2026-11-17), training branch
+
+`offline-training-throughput` at 6ba3260 (fixes in 7f58dd7..6ba3260). Tests: TRAINING_TESTS_PLACEHOLDER
+
+- **S3 fixed.** The recompile limit is now the recipe field `[sft.optimization] compiled_shapes_limit` (0 leaves
+  torch's own limit untouched, `set_compiled_shapes_limit`), 64 only in `offline_arm.toml`;
+  `test_no_other_shipped_recipe_pads_packed_rows_or_raises_the_compiled_shapes` pins that no other shipped recipe sets
+  it (or the padding), and the recipe-equality test names both offline-only keys. Every trainer that loads through
+  `load_trainable_model` honours the field, so it means the same wherever it is set. Note: the dynamo setting is
+  process-global, so a process that loads a 64-limit model and later a 0-limit one keeps 64; no shipped process does
+  that (the offline arm trains in its own process).
+- **N7 fixed.** `evaluate` and `validation_metrics` take `packed_length_multiple`, `train` passes the recipe's. The
+  pad segment has no targets, so `rows`, `bincount(..., minlength=len(indices))` and the exact-match count are
+  unchanged; the validation loss moves only by kernel rounding.
+- **N8 fixed as documentation.** The field's comment and `results/followup_node_operations.md` say only
+  `training/sft.train` uses it, and the shipped-recipes test keeps it out of the other trainers' configs. A non-zero
+  value in another trainer's recipe would still be ignored silently; acceptable with the test.
+- **N9 fixed.** Two named rates, `median_step_tokens_per_second` and `sustained_tokens_per_second` (the old
+  aggregate), in `throughput.json` and the training summary; the docs say to plan wall time from the sustained one and
+  that O2's first trainings wrote `steady_tokens_per_second` with the sustained meaning. The pulled
+  `live/runs/offline_chain/chain.log` has one throughput line (5,752 tokens/s, `steady_tokens_per_second`) from the
+  driver before 7f58dd7, so that reading is right. Nothing reads these files back through `from_json_object`
+  (`offline_chain.sh` copies the line as text), so the rename breaks no reader; the study-chain fake was updated.
+- **New:** nothing found. Verdict: approve.
+
+## Re-review (2026-11-17), efficiency branch
+
+`worktree-agent-a884d29b93192b24f` at ab1256d (fix wave 3949496..ab1256d). Tests: EFFICIENCY_TESTS_PLACEHOLDER
+
+### Earlier findings
+
+- **S1 fixed.** `_apply_tactic` times only `_run_tactic`, after `_live_state` (`_tactic_seconds`, set in a `finally`);
+  `_remembered_outcome` resets and records it. A restart in `_ensure_healthy` or a replay failure leaves 0, and those
+  outcomes are not cached anyway. `test_cached_seconds_leave_out_the_replay_before_the_tactic` replays a 1 s step before
+  the cached one and checks the credit stays under 0.5 s.
+- **S2 addressed, not measured.** The script gained `--plain-environment` (the original text without the
+  definitions), bootstrap intervals, a "where the gained successes come from" table and a limitations section; N10 is
+  fixed (`SC_CLK_TCK`). The plain-environment rerun has not been run (the pulled summary has no such table), so the
+  "71% of the time" is still variant environment against variant environment. With the switch on, the sampling's
+  environment is that variant environment, so the figure is right for "nlinarith against degree inside the sampling";
+  it says nothing about what the switch costs or saves against the plain base definitions the anchors ran with (every
+  heavy step's run time moves with the definitions, lean README). The owner decided without it (DESIGN.md); fine as
+  long as no write-up quotes the 29% as a saving against step 1. Also, the "gained" column is not evidence of gains:
+  degree's 794 scaled gains come from 4 jobs, one of them 88%.
+- **N1 fixed.** `record_fields.written_when_set` / `record_dict` (used by `records.to_json`, so by trees, results,
+  phase records, `write_json_atomically`, and by the metrics writer) leave the new counters out at their defaults.
+  `record_dict` mirrors `dataclasses.asdict` (dataclasses, named tuples, lists, tuples, dicts, deep copies), so records
+  with the switches off are byte-identical to master's, and readers fill the defaults. Run config: the switches are
+  None when off and `without_none` drops them, so a plain config's text and digest are master's; `run_config_sha256`
+  also drops `spare_processes`. The step-cost table shows the skip column only after a skip.
+  `test_a_search_with_the_switches_off_writes_its_tree_as_before` checks a tree.
+- **N2 fixed.** The skip counter is keyed by (text, heartbeat limit); the README says so.
+- **N3 fixed.** Dead spares close in a separate `_closing` set that `fill()` does not count; a failed start removes
+  itself from `_starting` after the back-off and refills. Tests: a dead ready spare is skipped (a miss, not a swap), a
+  failed start is retried. New nit N13 below.
+- **N4 fixed.** README scope widened (a stopped REPL's first use), `stop_processes` named; `LeanReplPool.spare_text`
+  is logged with the loop's host-memory line (the evaluation and pool-search processes do not log it; fine).
+- **N5 fixed.** `close()` awaits `_closing` until it is empty.
+- **N6 fixed.** The verification test asserts the theorem command with both steps wrapped as executed; the refill test
+  checks a new spare pid; new tests for the proof-state limit taking a spare, a cached panic not run again, the pool
+  summary line.
+
+### New code: bounded nlinarith, digest rule, record fields, sampling configs
+
+Checked and sound:
+
+- **No wrong proof can be accepted.** `verify_state` re-elaborates `theorem ... := by <executed proof>` (every step
+  rewritten by `variant_tactic` and wrapped in its heartbeat limit) from scratch in the base environment with the
+  definitions, then `#print axioms` against the standard axioms, as for every proof. The variant is metaprogramming
+  only: it adds `sq_nonneg` / `mul_self_nonneg` facts and products built by `mkAppM` from Mathlib lemmas to
+  linarith's hypotheses, and the kernel checks the final term. `partial def leanSearchDegree` only chooses products
+  and never appears in a proof term. The forbidden-token check runs on the written text before the rewrite (steps in
+  `_apply_tactic`; verification with `user_text = state.proof`), and `lean_search_nlinarith` is itself forbidden, so a
+  policy cannot reach the variant or the wrapper directly; the rewrite emits only that keyword and a fixed variant name.
+- **Recorded and executed text stay in lockstep.** The rewrite happens in one place, `_run_tactic`, so steps, replays
+  (`_replay` -> `_run_tactic`) and re-runs agree. It is a pure function of (written text, pool config); the pool's
+  config cannot change under a search (spares are built from it and `_adopt` asserts equality), and `_run_block`
+  asserts that the search's variant is its REPL's (moved there in ab1256d, so REPL-less searches still build). The
+  cache, the skip counter, the identifier check, name repair, de-duplication, `_replayed_states` and the tree all key
+  on the written text, consistently. Rewrite coverage (tests): bare, hints, multi-line hints, after `<;>`, inside a
+  nested `by`, inside `first`; left as written: `only`, `(config := ...)`, `!`, names containing the word, `linarith`.
+- **Evaluations never see it.** `evaluation_run_config` sets `result_cache`, `timeout_skip`, `nlinarith_variant` and
+  `spare_processes` to None; every pool is built with `search_repl_config` of the config its searches use (loop,
+  evaluation, single step, pool search, search service, `run_search.py`, `search_variants.py`); fixed-target and probe
+  evaluations build their own pools from evaluation configs; the options arm derives its config from the loop's (same
+  variant). The sampling configs equal the student configs but for the switches
+  (`test_a_sampling_config_is_its_student_config_but_for_the_switches`), the probe config has none, and an arm whose
+  sampling record names another search config is refused against the shared run.
+- **Digest rule.** Off: absent (None, dropped from the TOML), master's digests hold; spares never in the digest; on:
+  the variant changes the digest (tested).
+
+Should fix:
+
+**S4. Variant-only proofs cannot be told apart in the records.** `search/search.py:826` keeps `plain_verified` for the
+search's first proof only; harvested proofs (the sampling configs harvest up to 16 more expansions) and the
+proof-graph nodes training reads carry no flag, although every `_verify` call computes it. The lean README says proofs
+with `plain_verified = False` train the policy all the same but "must be filtered out of anything published as" plain
+Mathlib; from the records that filter works for first proofs only, otherwise only by re-verifying every proof in plain
+Lean. Rare by the measurement (degree's gains come from 4 of 300 jobs), but anything exported from the arms' trees (a
+pool, a dataset, known proofs) would mix them in silently. Fix: keep `plain_verified` per proved node (`NodeRecord`,
+`written_when_set(None)`) and count `plain_verified is False` proofs in the phase record. Related and latent: with
+`[renaming]` on, `rl/renaming.search_problem` checks the proof against the original statement with `verify_proof` on
+the written text (no rewrite), so a variant-only proof there becomes unsolved and loses its tree, unlike the same proof
+without renaming. Renaming is off in the study (`followup/base.toml`); a README sentence, or refusing renaming together
+with a variant, would keep it from surprising anyone.
+
+**S5. The Lean-backed variant tests have not run since the variant was added.**
+`tests/lean/test_nlinarith_variant.py::test_a_variant_proof_verifies_with_its_definitions` and
+`::test_the_variant_fails_where_its_products_are_missing` need the REPL (skipped in WSL). The node's
+`search_efficiency/lean_tests.log` (489 passed) finished at 16:24 UTC; 9dec8e1 is from 17:22 UTC. The experiment
+showed that the definitions elaborate and the tactic runs in tactic mode, but not that the heartbeat-wrapped variant
+verifies inside a `theorem` (the path every accepted proof now takes) or replays after a kill. Run the Lean tests on
+the node before step 2's sampling uses the switch, and add one with the variant inside a nested
+`have h : ... := by nlinarith [...]` (flattened and not) verified as executed, and one replay after a wall-clock kill.
+
+Nits:
+
+**N11. The variant definitions need Mathlib's linarith in every header.** `repl.py` `_base_definitions` appends
+`VARIANT_DEFINITIONS` (`Linarith`, `sq_nonneg`, `mul_pos_of_neg_of_neg`) to the base command; a header that imports
+Lean but not that part of Mathlib now fails every start with the message at `repl.py:927` ("needs Lean itself
+(`import Mathlib` or `import Lean`)"), which is then wrong. The pools' headers import Mathlib, so only a future data
+source would hit it; name the real requirement in that message when the variant is on.
+
+**N12. Plain re-verification of a variant-only proof can stall the search's REPL.** `verify_state` always runs the plain
+check; for a step only the variant finishes in time, plain `nlinarith` may spend the declaration's 200k heartbeats or
+run into the 300 s command limit, which kills the process. The README states the cost; since the result is only a
+statistic in the sampling, a shorter limit for the plain check under the variant would cap it.
+
+**N13. A spare that can never start retries forever.** `pool.py` `_start_one`: a persistent failure (a broken project,
+the memory cap during import) now logs an exception every `retry_seconds` (5 s) per spare slot for the whole run.
+Back off exponentially or cap the attempts, and count the failures in the log line.
+
+Trade-off, not a defect (DESIGN.md, the owner's decision): with degree on, about 7% of the policy's successful plain
+`nlinarith` calls (161 scaled, 53-293) fail in the arms' sampling and become negative labels for texts that plain
+Mathlib, and the evaluations, accept; the reverse case is rare (S4).
+
+Verdicts: training branch, approve. Efficiency branch, approve once S5's node run passes (no code change needed unless
+it fails); S4 before anything is exported from the arms' trees.

@@ -55,3 +55,14 @@ def test_the_load_cell_names_skipped_tactics_beside_the_stops() -> None:
 
 def test_the_load_cell_without_skips_reads_as_before() -> None:
     assert load_cell(LOAD) == "4 (2) / 1 / 0.50"
+
+
+def test_the_phase_record_counts_the_proofs_that_need_the_variant() -> None:
+    result = SearchResult(PROBLEM.name, True, StopReason.PROVED, None, (), (), Accounting(), None, 0, 1)
+    record = tree_record(solved_tree(PROBLEM), PROBLEM.formal_statement, result)
+    proved = [node.node_id for node in record.nodes if node.goals == ()]
+    nodes = tuple(
+        dataclasses.replace(node, plain_verified=False) if node.node_id in proved else node for node in record.nodes
+    )
+    phase = search_phase_record([dataclasses.replace(record, nodes=nodes)], typing.cast(GraphStatistics, None))
+    assert (phase.plain_checked_proofs, phase.plain_failed_proofs, phase.variant_only_trees) == (1, 1, 1)
