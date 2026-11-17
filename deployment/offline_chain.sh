@@ -108,7 +108,7 @@ dry_run() {
 }
 
 train_rate() {
-    local subset="$1" rate="$2" status=0 trainer logged=0
+    local subset="$1" rate="$2" status=0 trainer logged=0 log_start line
     local label="${subset}_${rate}" output
     output="$(output_of "${subset}" "${rate}")"
     done_step "train_${label}" && return 0
@@ -124,6 +124,8 @@ train_rate() {
     gpus_free
     [[ -e "${output}" ]] && aside "${output}"
     rm -f "${state}/training/${label}.exit"
+    # The log is appended across attempts: only this attempt's part is searched for its throughput line.
+    log_start=$(( $(stat -c %s "${state}/training/${label}.log" 2>/dev/null || echo 0) + 1 ))
     env CUDA_VISIBLE_DEVICES=0,1,2,3 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
         taskset --cpu-list "${TRAINING_CPU_LIST}" "${python}" -m torch.distributed.run --standalone "--nproc-per-node=${gpus}" \
         experiments/offline_arm.py --config "${config}" train --subset "${subset}" --learning-rate "${rate}" \
@@ -131,9 +133,9 @@ train_rate() {
     trainer=$!
     # The first steps' throughput and peak memory, into chain.log as soon as the trainer prints them.
     while kill -0 "${trainer}" 2>/dev/null; do
-        if (( ! logged )) && grep -q '^throughput: ' "${state}/training/${label}.log" 2>/dev/null; then
-            say "training ${label}, $(grep -m1 '^throughput: ' "${state}/training/${label}.log")"
-            logged=1
+        if (( ! logged )); then
+            line="$(tail -c "+${log_start}" "${state}/training/${label}.log" 2>/dev/null | grep -m1 '^throughput: ')"
+            [[ -n "${line}" ]] && { say "training ${label}, ${line}"; logged=1; }
         fi
         sleep "${poll_seconds}"
     done

@@ -243,3 +243,143 @@ None.
     tokens as Python int tuples, roughly 20 GB per rank). Four times that must fit the free RAM once the servers are
     stopped (252 GiB total).
 12. **HOLD:** written, with `stop_model.sh` having stopped every server.
+
+## Re-review (2026-11-17)
+
+The fix wave `58454ab..de38cab` (commits `63ebdb8`, `519a5f9`, `de38cab`) against the findings above, and what the fixes
+introduced: the refusal while the detached data steps live, `walk.json` and `walk_record`, the O2-then-HOLD order with
+the `run_pool` switch, the dry run's memory check, the throughput logging, `flat-references`, the new report checks.
+
+Checks run, in WSL, one suite at a time:
+- `tests/rl/test_offline_chain_script.py`: 82 passed.
+- `test_study_chain_script.py`, `test_offline_configs.py`, `test_offline_arm.py`, `test_offline_build.py`,
+  `test_offline_report.py`, `test_offline_walk.py` and `test_expert_iteration_data.py` together: 237 passed.
+
+Node, read only:
+- `/proc/<data_steps.pid>/cmdline` reads `bash /workspace/offline_arm_code/offline_data_steps.sh`, so the driver's
+  refusal matches it. The walk was at 21,500 of 65,585 at 5.3 proofs/s at 11:59 UTC.
+- The eight `WALK_SOURCES` files in the node checkout carry no node-local edits (`git status` lists only step-1
+  configs). The checkout is still at `9834972`, without the arm, so `offline_walk.py` and `search.py` differ from the
+  copy until master is deployed.
+- `git diff 0d663a4..de38cab` touches none of `WALK_SOURCES`, nor `experiments/configs`.
+- The four reference probe runs of the report (runs 8, 4, 1 and 2) are accepted and hold 2,000 results each, so the
+  new all-2,000 check passes on them.
+- The cgroup memory limit is 182.6 GiB (cgroup v1 `memory.limit_in_bytes`), not the 252 GiB of RAM.
+- torchrun's training logs print rank 0's stdout without a `[rank0]:` prefix (`ei_train_expert_iteration_1_c.log`),
+  so `grep '^throughput: '` matches.
+
+**Verdict: merge.** Every finding is fixed or covered by the ops note. Nothing new blocks or needs fixing before
+install. The new items are nits.
+
+### Status of the findings
+
+- **S1, fixed.**
+  - `offline_chain.sh:35-40` writes STOPPED while `data_steps.pid` names a live process whose cmdline contains
+    `offline_data_steps.sh`. That also covers pid reuse.
+  - The ops note says when to install, and tests cover a live process, a foreign pid and the start that adopts the
+    data steps.
+  - Residual: if the data-steps bash dies while its walk child, a Python process, keeps running (orphaned), the check
+    passes. Unlikely; the install rule (`chain.log` says "CPU steps done") covers it.
+- **S2, fixed for changes after the walk; the adoption rests on the ops note's manual check.**
+  - `walk` records `walk.json`: a sha256 of the eight walk sources, the walk settings, the tokenizer and completion
+    cap, and `proofs.jsonl`'s sha256. `build` refuses walks recorded with anything different.
+  - The new `walk_record` step adopts the detached walks by writing the *installed checkout's* fingerprint when
+    `walk.json` is missing. It does not compare against what actually walked (the copy in
+    `/workspace/offline_arm_code`).
+  - The ops note makes that a manual rule: `git diff 0d663a4 <deployed>` over the eight files must be empty. I checked
+    it holds for `de38cab`.
+  - Optional hardening: let `walk_record` compare `WALK_SOURCES` with the copy's files when
+    `/workspace/offline_arm_code` exists.
+  - Coverage of the fingerprint:
+    - not covered: `lean/pool.py`, which affects restarts and not results;
+    - not covered: the Lean toolchain and Mathlib behind `lean/`;
+    - covered: the search config, through the walk settings.
+- **S3, fixed.** `experiments/offline_arm.py:262-264` counts the latest walks that raised over the whole file against
+  1% of all proofs. A resume is no longer judged on its own small set.
+- **N1, fixed** in both drivers: a missing helpers file writes STOPPED and exits 0, and a test covers it.
+- **N2, covered by the ops note:** replace the helpers only while both drivers are at HOLD or STOPPED.
+- **N3, fixed:** tests pin `arm`, `rates`, `v0_adapter` and `gate_run` to the config and the report.
+- **N4, fixed in the tools, partly in the procedure.**
+  - `probe-list --name/--evaluation-config`, `report --probe-name` and the ops note's "A rejected probe run" give the
+    manual path.
+  - The note does not say how to bring the driver past the stop. Following the procedure rewrites
+    `runs_<s>.toml` to the new name. A restarted driver would then run that run as `probe_<s>`, and
+    `evaluate_subset` would report the default name, which is the rejected run, and stop again.
+  - Add one line: after the manual run and report, write `report_<s>.md` and touch `done_probe_<s>` and
+    `done_report_<s>` before moving STOPPED aside.
+- **N5, fixed:** stderr goes to `.log` files beside the ranking, comparison, report and probe-list outputs.
+- **N6, fixed:** the comments in `study_chain.sh` and `study_chain.conf` mention the helpers.
+- **N7, fixed:**
+  - the fakes record `LOOP_CONFIG` and `--loop-config`;
+  - a test starts from the data steps' markers;
+  - every check failure is parametrized to its STOPPED reason;
+  - the probe list carries the chosen adapter.
+- **N8, fixed:** an assert after a pass that added no tokens.
+- **N9, covered by the ops note:** the watchdog checks the pid and `walk.log`, and the note gives a restart path.
+
+### Checked in the new code
+
+**O2, then HOLD, then O1 on `run_pool`**
+- O2's held-out runs, ranking, probe run and reports, then `hold`: `stop_model.sh` and HOLD.
+- A restart without `run_pool` exits at the HOLD marker. With `run_pool` and HOLD moved aside, the driver runs:
+  1. every O2 step is skipped, through its markers;
+  2. `chosen-rate` is read again, deterministically, from `rank_matched.txt`;
+  3. O1 runs: servers stopped, dry run, one training at that rate, its held-out run, its probe run, its reports, the
+     final HOLD.
+- The note gives the release commands, including `supervisorctl start`, which an exit-0 program needs.
+- Kill points in O1 resume to the final HOLD (tests).
+
+**The ranking and the probe list**
+- `rank` reads `held_out_offline_arm_matched_<rate>`, which matches the driver's held-out names.
+- Its `Chosen: matched_<rate> (` line parses with `chosen_label`.
+- `chosen-rate` refuses another subset's label.
+- `probe-list --rate` refuses a rate outside the config.
+
+**The training launch**
+- The trainer now runs in the background with a poll loop. It stays in the driver's process group, so
+  supervisord's stop still kills it.
+- `wait` returns its exit status, and the attempt, aside and teardown logic is unchanged.
+
+**The dry run**
+- It now runs after the servers are stopped.
+- Exit 3 (would not fit) and any other failure each write STOPPED with their own reason.
+
+**`flat-references`**
+- It runs once, on the Lean CPUs, and its output path is passed to `rank`.
+
+**The report**
+- It requires every run to have searched all 2,000 statements of one probe set, and adds the anchors' noise floor.
+- `hash_order` moved to `rl/fixed_sets` with its arguments swapped, but its bytes are unchanged
+  (`sha256(f"{seed}\n{name}")`). The walk's block draw is untouched (`offline_walk.py` is unchanged).
+
+**`study_chain.sh`**
+- Its only change is the helpers stop (N1) and a comment, and its suite passes.
+
+### New nits
+
+- **N10. A retried training can log the previous attempt's throughput.** `deployment/offline_chain.sh:133-137`.
+  `training/<label>.log` is appended across attempts, so on a retry `grep -m1 '^throughput: '` finds the previous
+  attempt's line at the first poll. `chain.log` then shows stale numbers for the new attempt. Fix: remember the log's
+  size before launching and grep only past it (`tail -c +<size+1>`), or start a log per attempt.
+- **N11. The memory check counts the data only.** `experiments/offline_arm.py` dry run. The dry run's `ru_maxrss` has
+  the tokenized data, but not a rank's model load, CUDA context or NCCL host buffers (several GiB per rank). The limit
+  is the cgroup's 182.6 GiB. 80% of it, 146 GiB, leaves about 36 GiB for 4 ranks' overhead, which should suffice. At
+  the pool dry run, compare 4 × peak + about 10 GiB per rank with 182.6 GiB, and watch `memory.usage_in_bytes` during
+  the first O1 steps.
+- **N12. The walk fingerprint covers all of `search.py`.** Any later deploy that touches `search.py` (often, and
+  usually unrelated) between `walk_record` and `build` makes `build` refuse, which forces a 3.6 h re-walk or a manual
+  override. The window is short, because `build` follows `walk_record` in the same driver start, so this only matters
+  if the driver stops in between.
+- **N13. The O1 dry run now runs with the servers stopped.** The pool dry run tokenizes about 900k examples before
+  training (tens of minutes). The servers are idle then anyway, so this costs nothing beyond the GPUs staying idle a
+  little longer. No change needed.
+
+### Smoke-check at first run (updates)
+
+- Item 1 now also covers `walk_record.log`: no difference refused, and the ERROR walks walked again.
+- Item 11: compare with the cgroup limit, 182.6 GiB, not the RAM (N11).
+- New: `flat_references.log`, the count of states with flattened references and of failures.
+- New: `rank_matched.txt`, both measures.
+- New: `report_matched.md`, the noise-floor section.
+- New: the `throughput:` line in `chain.log` after training step 20 of `matched_5e-5`.
+- New: the HOLD text says O1 waits for the owner's word.

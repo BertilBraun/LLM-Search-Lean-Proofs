@@ -456,8 +456,12 @@ again. `build` refuses walks whose `walk.json` differs from the code and setting
 `offline/probe_evaluation.toml` to one at the doubled cap (28,800 s), write the list with
 `offline_arm.py probe-list --subset <s> --rate <chosen> --name offline_arm_<s>_cap28800 --evaluation-config <copy>
 --output /workspace/runs/offline_chain/runs_<s>.toml`, run `PROBE_CONCURRENCY=112 deployment/probe_runs.sh <list>`, then
-`offline_arm.py report --subset <s> --probe-name offline_arm_<s>_cap28800`. The run it is compared with (run 8) ran at
-7,200 s, which the report states as a setting difference.
+`offline_arm.py report --subset <s> --probe-name offline_arm_<s>_cap28800 > /workspace/runs/offline_chain/report_<s>.md`
+(and `probe_compare.py pair --x offline_arm_<s>_cap28800 ... > <s>_against_run8.txt`). The run it is compared with
+(run 8) ran at 7,200 s, which the report states as a setting difference. So that a restarted driver continues past the
+subset: `touch done_probe_<s> done_report_<s>` in `/workspace/runs/offline_chain/` (`done_probe_list_<s>` exists
+already), move STOPPED aside, `supervisorctl start offline_chain`. It then goes on to the HOLD after the matched subset
+or the final HOLD.
 
 Smoke points for the first run: `walk_record.log` (no difference refused), `build.json` (walk statuses per band, prefix
 and dropped counts, matched completion tokens near 2M), `flat_references.log` (states with flattened references,

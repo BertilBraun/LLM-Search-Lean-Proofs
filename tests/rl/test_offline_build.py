@@ -22,6 +22,7 @@ from lean_search.rl.offline_arm import (  # noqa: E402
     OfflineArmConfig,
     SplitExamples,
     WalkFingerprint,
+    band_sizes,
     band_walks,
     fingerprint_differences,
     load_offline_arm_config,
@@ -263,3 +264,14 @@ def test_the_policy_emitting_an_examples_completion_yields_its_block() -> None:
     block_text = "have h : x = x\nrfl\nsimp"
     sample = Sample(f"{block_text}\n", 0.0, 10, "stop", stop_string=FENCE)
     assert parse_sample(sample, thinking=False, visible=False) == block_text
+
+
+def test_a_state_without_a_flattened_reference_keeps_the_standard_states() -> None:
+    problem = problem_with_reference((("⊢ after",), ()))
+    assert flattened_keys(problem, None) == problem.reference_keys
+
+
+def test_the_band_sizes_count_the_prefix_proofs() -> None:
+    failed = walked("p", WalkStatus.BLOCK_FAILED, (block("⊢ a"), block("⊢ b")))
+    sizes = band_sizes(list(split([failed, complete("q")]).train), (500, 1000, 1500, 2000, 3000, 4500))
+    assert (sizes[2].proofs, sizes[2].prefix_proofs) == (2, 1)

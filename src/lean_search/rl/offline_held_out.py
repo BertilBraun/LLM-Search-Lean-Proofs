@@ -21,7 +21,7 @@ MAX_FAILURE_CHARACTERS = 300
 @dataclass(frozen=True)
 class FlatReference:
     identifier: str
-    # The open states after each flattened tactic of the reference next step, before its end; empty when it failed.
+    # The open states after each flattened tactic of the reference next step (its end too); empty when it failed.
     goal_keys: tuple[GoalKey, ...]
     failure: str = ""
 
@@ -41,8 +41,9 @@ def read_flat_references(path: Path) -> dict[str, FlatReference]:
     return {reference.identifier: reference for reference in references}
 
 
-def flattened_keys(problem: StateProblem, reference: FlatReference) -> frozenset[GoalKey]:
-    return problem.reference_keys | frozenset(reference.goal_keys)
+def flattened_keys(problem: StateProblem, reference: FlatReference | None) -> frozenset[GoalKey]:
+    """The standard reference states alone for a state without a flattened reference."""
+    return problem.reference_keys | frozenset(reference.goal_keys if reference is not None else ())
 
 
 @dataclass(frozen=True)
@@ -60,5 +61,5 @@ def held_out_measures(
     for identifier, problem in problems.items():
         record = read_tree(state_tree_path(trees, problem))
         standard[problem.problem.name] = sample_success(record, problem.reference_keys)
-        flattened[problem.problem.name] = sample_success(record, flattened_keys(problem, references[identifier]))
+        flattened[problem.problem.name] = sample_success(record, flattened_keys(problem, references.get(identifier)))
     return HeldOutMeasures(HeldOutStates(label, standard), HeldOutStates(label, flattened))

@@ -205,3 +205,97 @@ require the full 2,000.
 6. **State-level leakage:** the exclusions are statement-level as decided. Should the build also drop (or at least
    count) training examples whose state nearly repeats one of the 512 held-out states (exhaustive MinHash at 0.7, a few
    minutes)?
+
+## Re-review (2026-11-17)
+
+**Verdict: no blocking defect. Every should-fix is fixed or fixed within a stated limit, and Q5 and Q6 are done.**
+Mergeable; the new points below are nits or caveats to state in the write-up. Wave 58454ab..de38cab.
+
+- Tests in WSL: 233 passed and 7 skipped (Lean, on the PC) across the offline, build, report, configs, chain-script and
+  expert-iteration-data tests. `ruff check` and `ruff format --check` are clean.
+- `git diff 0d663a4..de38cab` over the walk's sources (`offline_walk.py`, `search/`, `lean/`, `policy/`) is empty. The
+  walk running on the node (code 0d663a4, 21,500 of 65,585 at 11:59 UTC, 5.3/s) is therefore the walk this code would
+  make, and the `walk_record` step's stamping of `walk.json` onto it is truthful.
+
+### Per finding
+
+- **S1: fixed within a stated limit.**
+  - What changed: `rl/offline_held_out.flat_reference` runs the reference next step flattened in Lean from
+    `state_before` and adds the open states after each flattened tactic to the reference keys. `rank` reports both
+    measures, chooses on the flattened one, lower rate on a tie.
+  - This is what S1 asked, and it is sound. The extra keys are states on the reference's own flattened path. A
+    failed flattening falls back to the standard keys. v0 and both rates are judged by the same keys.
+  - Limits (all stated in DESIGN and in `rank`'s output):
+    - Only the *next* step is flattened, because the later steps' texts are not in the states file. A block that runs
+      past the next step and stops inside the following step's nested proof still counts as a failure.
+    - The measure is somewhat more lenient: a sample writing just the reference's `have h : X` header now succeeds.
+  - New, pre-existing and minor: 29 of the 512 states have inaccessible names in their goals. The held-out run names
+    them at the root, while both the standard and the flattened keys come from unnamed traced or replayed states, so
+    samples from those 29 states can rarely match a key. This affects every variant alike, so it does not bias the
+    choice.
+- **S2: fixed.**
+  - `band_walks` gives walk statuses per band in `build.json` and the README. DESIGN states the 2% to 26% gradient.
+  - Walks that fail at a block or at a forbidden step keep their prefix (`usable_blocks`, `PREFIX_STATUSES`);
+    revisits and goals left at the end still give nothing.
+  - Caveat for the write-up: the matched subset still draws equal *proofs* per band, and in the long bands about a
+    quarter of them are now prefixes, which contribute fewer transitions. The last kept transition of a prefix leads
+    toward a step the search cannot run at 50k heartbeats.
+- **S3: fixed.** New tests in `tests/rl/test_offline_build.py` pin three things:
+  - The walk config and the probe search agree on heartbeats, timeout, flatten, naming, identifier check, forbidden
+    steps, `max_tokens` and tokenizer.
+  - The probe search's prompt is bare: no few-shot, thinking, visible reasoning, failed automation or lemmas.
+  - An example's prompt tokens equal `render_prompt` under the probe policy's flags, and `parse_sample` of a stopped
+    completion returns the block.
+
+  The prompt test re-states the expander's `render_prompt` call rather than calling the expander. That is acceptable
+  now that the flags are pinned.
+- **S4: fixed.** `split_examples` is pure and tested: no validation statement in training, matched drawn from train
+  only, duplicates counted once, an over-cap prompt dropped while its proof stays, near-held-out states dropped,
+  prefix counts, kept-only block tactics, the depth count.
+- **S5: fixed.** `paired_difference` calls `check_comparable(..., across_settings=True)`, which checks the probe set and
+  one identity per arm, and refuses unless all 2,000 statements (`len(strata)`) are common. `report` turns that into
+  "Not evaluable". Tests cover another probe set and missing statements.
+- **S6: fixed.**
+  - The dry run prints its peak RSS times the number of ranks against the cgroup or physical limit and exits 3 above
+    80%; the chain stops on 3.
+  - Nit: the check compares against total memory, not what is free at the time. The servers and REPLs are stopped
+    before training, so this is fine as driven.
+- **N1: fixed.**
+- **N2: not changed.** Accepted; small.
+- **N3: partly fixed.**
+  - `hash_order` now reuses `fixed_sets.hash_order`. The argument order is right at both call sites.
+  - `MAX_FAILURE_CHARACTERS = 300` now exists three times (`offline_walk`, `offline_held_out`,
+    `experiments/offline_arm.py`).
+  - `first_line` still duplicates `known_proofs.first_line`.
+- **N4: not changed.** It is correct, as 100% recovered shows.
+- **N5: fixed**, with a test.
+- **N6: documented** in DESIGN.
+- **N7: fixed.** Nit: the depth count uses the index among recorded blocks. Blocks skipped for the completion cap still
+  add depth, so the count can slightly understate.
+- **N8: mostly fixed.** The docstrings are short now. `dropped: dict[str, int]` keyed by enum values and
+  `BandWalks.statuses: dict[str, int]` remain; minor.
+- **N9: fixed.** The operations note says to run the Lean test files on the node. `test_offline_held_out_lean.py` was
+  added for `flat_reference`.
+- **Q5: done.** The anchors' run 1 against run 2 is shown beside the gate as the noise floor. Both are visible-reasoning
+  runs, so it is the noise floor at the anchors' setting, not at O's. The report labels it as two runs of one checkpoint
+  at one setting.
+- **Q6: done.**
+  - Training states whose fingerprint reaches 0.7 with one of the 512 held-out states are dropped and counted. The
+    comparison is exhaustive, uses the probe's `exhaustive_duplicates`/`fingerprints`, and is tested through
+    `split_examples`.
+  - Cost: MinHash over the roughly 0.9M distinct walk states, single-process in `build`. Expect minutes to a few tens of
+    minutes and about 1 GB of signatures. That is acceptable, but add it to the build's time estimate.
+- **Q4 (v0 in O's settings):** declined by the owner and recorded in DESIGN. Fine.
+
+### New findings (nits only)
+
+- **N10.** `experiments/offline_arm.py flat_references` gathers all 512 `flat_reference` calls and catches nothing. A
+  replay mismatch or a dead REPL on one state (`apply_block` from `state_before` can raise) fails the whole step, and
+  the chain retries it and then stops. This is unlikely, because the held-out runs already replay these states, but
+  catching per state and recording the state as failed would match how `FlatReference.failure` already works.
+- **N11.** The `FlatReference.goal_keys` comment says "before its end", but the keys include the state after the whole
+  step. This is harmless, since that state equals the first standard key up to naming. Fix the comment.
+- **N12.** A prefix proof counts as a whole proof of its band in `matched_sample` while contributing only part of the
+  proof. Show prefix proofs per band in the README's matched table.
+
+No new should-fix or blocking items.

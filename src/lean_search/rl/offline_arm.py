@@ -299,6 +299,8 @@ class ProofExamples:
     proof_characters: int
     examples: tuple[SftExample, ...]
     tokens: tuple[ExampleTokens, ...]
+    # The valid prefix of a walk that failed later, not a whole proof.
+    prefix: bool = False
 
     @property
     def completion_tokens(self) -> int:
@@ -316,6 +318,8 @@ class BandSize:
     examples: int
     prompt_tokens: int
     completion_tokens: int
+    # Of `proofs`, those that are a failed walk's prefix.
+    prefix_proofs: int = 0
 
 
 def band_sizes(proofs: Sequence[ProofExamples], edges: Sequence[int]) -> tuple[BandSize, ...]:
@@ -331,6 +335,7 @@ def band_sizes(proofs: Sequence[ProofExamples], edges: Sequence[int]) -> tuple[B
             sum(len(member.examples) for member in members),
             sum(member.prompt_tokens for member in members),
             sum(member.completion_tokens for member in members),
+            sum(member.prefix for member in members),
         )
         for band, members in by_band.items()
     )
@@ -428,10 +433,11 @@ def split_examples(
             counts["beyond_search_depth"] += index >= max_search_depth
         if not examples:
             continue
-        if walked.walk.status != WalkStatus.COMPLETE:
+        prefix = walked.walk.status != WalkStatus.COMPLETE
+        if prefix:
             counts["prefix_examples"] += len(examples)
             counts["prefix_proofs"] += 1
-        proof = ProofExamples(walked.name, characters[walked.name], tuple(examples), tuple(tokens))
+        proof = ProofExamples(walked.name, characters[walked.name], tuple(examples), tuple(tokens), prefix)
         if is_held_out(walked.name, config.data.seed, config.data.validation_fraction):
             validation.append(proof)
         else:

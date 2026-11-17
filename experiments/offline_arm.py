@@ -631,6 +631,10 @@ def size_row(label: str, size: SubsetSize | BandSize) -> list[object]:
     return [label, f"{size.proofs:,}", f"{size.examples:,}", f"{size.prompt_tokens:,}", f"{size.completion_tokens:,}"]
 
 
+def band_row(size: BandSize) -> list[object]:
+    return [*size_row(size.band, size), f"{size.prefix_proofs:,}"]
+
+
 def build_markdown(config: OfflineArmConfig, summary: BuildSummary) -> str:
     headers = ["Proofs, examples, tokens", "Proofs", "Examples", "Prompt tokens", "Completion tokens"]
     statuses = sorted(summary.walks)
@@ -665,7 +669,9 @@ def build_markdown(config: OfflineArmConfig, summary: BuildSummary) -> str:
     for size in summary.subsets:
         sections += [
             f"By proof characters, `{size.subset}`:",
-            markdown_table(["Band", *headers[1:]], [size_row(band.band, band) for band in size.bands]),
+            markdown_table(
+                ["Band", *headers[1:], "Of them failed walks' prefixes"], [band_row(band) for band in size.bands]
+            ),
         ]
     sections.append(f"Built {summary.built_at}.")
     return "\n\n".join(sections) + "\n"
@@ -910,8 +916,12 @@ async def flat_references(processes: int, output: Path) -> None:
     async with LeanReplPool(processes, LeanReplConfig()) as pool:
 
         async def one(state: ReasoningState) -> FlatReference:
-            async with pool.acquire() as repl:
-                return await flat_reference(repl, state)
+            try:
+                async with pool.acquire() as repl:
+                    return await flat_reference(repl, state)
+            except Exception as error:
+                # The state keeps the standard reference states in the ranking.
+                return FlatReference(state.identifier, (), repr(error)[:MAX_FAILURE_CHARACTERS])
 
         references = await asyncio.gather(*(one(state) for state in states))
     write_text(output, "".join(to_json(reference) + "\n" for reference in references))
@@ -938,6 +948,11 @@ def held_out_directory(name: str, states_sha256: str) -> Path:
 def rank(config: OfflineArmConfig, subset: Subset, v0: str, references_path: Path, seed: int) -> None:
     problems, _, states_sha256 = held_out_problems()
     references = read_flat_references(references_path)
+    without = sum(identifier not in references or not references[identifier].goal_keys for identifier in problems)
+    print(
+        f"{without} of {len(problems)} held-out states have no flattened reference (failed or missing): their "
+        "flattened success counts the standard reference states only.\n"
+    )
 
     def measures(label: str, name: str) -> HeldOutMeasures:
         return held_out_measures(label, held_out_directory(name, states_sha256) / "trees", problems, references)

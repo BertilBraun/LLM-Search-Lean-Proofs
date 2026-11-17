@@ -417,3 +417,10 @@ def test_the_drivers_v0_adapter_is_the_configs_starting_adapter() -> None:
 def test_the_drivers_gate_run_is_the_reports() -> None:
     script = (REPOSITORY / "experiments" / "offline_arm.py").read_text(encoding="utf-8")
     assert f'GATE_RUN = "{assignment(SCRIPT.read_text(encoding="utf-8"), "gate_run")}"' in script
+
+
+def test_a_retried_training_logs_its_own_attempts_throughput(node: Node) -> None:
+    node.set("fail_train_matched_5e-5", "1")
+    supervise(node)
+    lines = [line for line in node.chain_log().splitlines() if "training matched_5e-5, throughput: " in line]
+    assert '"attempt": 2' in lines[-1]
