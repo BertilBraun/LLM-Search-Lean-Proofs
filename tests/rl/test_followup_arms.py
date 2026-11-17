@@ -27,14 +27,10 @@ SHARED_SAMPLING = CONFIGS / "followup/shared_sampling.toml"
 # Each GRPO arm's credit and the shipped phase config that carries it.
 CREDIT_PHASES = {"A": "phase.toml", "B1": "phase_sequence_credit.toml", "B2": "phase_proof_success.toml"}
 GRPO_ARMS = [path for path in ARMS if path.stem in CREDIT_PHASES]
-# The arms whose policy trains in expert-iteration rounds, and what each leaves to step 2.
+# The arms whose policy trains in expert-iteration rounds, and what each leaves to step 2 and the offline run O2.
 ROUND_ARMS = {
-    "C": ["loop.training.expert_iteration_window_phases", "expert_iteration.sft.optimization.learning_rate"],
-    "D": [
-        "loop.training.expert_iteration_window_phases",
-        "phase.policy.optimization.learning_rate",
-        "expert_iteration.sft.optimization.learning_rate",
-    ],
+    "C": ["expert_iteration.sft.optimization.learning_rate"],
+    "D": ["phase.policy.optimization.learning_rate", "expert_iteration.sft.optimization.learning_rate"],
 }
 RECIPE = CONFIGS / "followup/expert_iteration.toml"
 
@@ -98,7 +94,7 @@ def test_an_arms_learning_rate_waits_for_step_2(path: Path) -> None:
 
 
 @pytest.mark.parametrize("name", ROUND_ARMS)
-def test_a_round_arms_learning_rates_and_window_wait_for_step_2(name: str) -> None:
+def test_a_round_arms_learning_rates_wait_for_step_2_and_o2(name: str) -> None:
     assert sorted(placeholders(toml(CONFIGS / f"followup/arms/{name}.toml"))) == sorted(ROUND_ARMS[name])
 
 
@@ -161,10 +157,10 @@ def test_the_shared_sampling_run_changes_only_its_name_and_token_budgets() -> No
     assert set(leaf_keys(toml(SHARED_SAMPLING))) <= SHARED_SAMPLING_SETTINGS
 
 
-def test_the_shared_sampling_run_samples_48m_tokens_without_a_phase_coming_due() -> None:
+def test_the_shared_sampling_run_samples_one_phases_12m_tokens_without_a_phase_coming_due() -> None:
     configs = overlay_configs(OverlayKind.SHARED_SAMPLING, toml(SHARED_SAMPLING), BASE, PHASE, "phase.toml")
     training = configs.loop["training"]
-    assert (training["max_generated_tokens"], training["phase_generated_tokens"] > 48_000_000) == (48_000_000, True)
+    assert (training["max_generated_tokens"], training["phase_generated_tokens"] > 12_000_000) == (12_000_000, True)
 
 
 @pytest.mark.parametrize("path", ARMS, ids=lambda path: path.stem)
@@ -298,3 +294,8 @@ def test_arm_d_may_set_both_rates() -> None:
 @pytest.mark.parametrize("path", GRPO_ARMS, ids=lambda path: path.stem)
 def test_a_grpo_arm_gets_no_recipe(path: Path) -> None:
     assert arm_configs(filled(toml(path))).expert_iteration is None
+
+
+@pytest.mark.parametrize("name", ROUND_ARMS)
+def test_a_round_arm_trains_on_the_owners_4_phase_window(name: str) -> None:
+    assert toml(CONFIGS / f"followup/arms/{name}.toml")["loop"]["training"]["expert_iteration_window_phases"] == 4

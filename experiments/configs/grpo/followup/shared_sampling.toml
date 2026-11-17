@@ -1,13 +1,14 @@
-# Step 2's shared sampling (DESIGN.md, "Follow-up study: controlled arms", "Step 2"): one loop run from v0 and value
-# v0 with the study's base config, sampling 4 x B = 48M generated tokens without training, its trees then cut into four
-# slices (experiments/slice_trees.py). An overlay over followup/base.toml changing only its name and the budgets: a
-# phase budget above the total, which makes it a sampling-only run (LoopTrainingConfig.sampling_only: no phase comes
-# due, nothing trains, no pause), the total stop at 48M, and no phase count (base.toml's 16 never closes here).
-#   deployment/arm_loop.sh --kind "shared sampling" experiments/configs/grpo/followup/shared_sampling.toml
+# Step 2's shared sampling (DESIGN.md, "Follow-up study: controlled arms", "Step 2"; owner, 2026-11-17): one loop run
+# from v0 and value v0 with the study's base config, sampling one phase's B = 12M generated tokens without training,
+# which arm A's three learning-rate rounds train on (its trees linked into one directory by experiments/slice_trees.py
+# --slices 1). An overlay over followup/base.toml changing only its name and the budgets: a phase budget above the
+# total, which makes it a sampling-only run (LoopTrainingConfig.sampling_only: no phase comes due, nothing trains, no
+# pause), the total stop at 12M, and no phase count (base.toml's 16 never closes here).
+#   deployment/arm_loop.sh --kind "shared sampling" --mode <mode.toml> experiments/configs/grpo/followup/shared_sampling.toml
 [loop]
 name = "followup_shared_sampling"
 
 [loop.training]
 phase_generated_tokens = 1_000_000_000
-max_generated_tokens = 48_000_000
+max_generated_tokens = 12_000_000
 max_phases = 0
