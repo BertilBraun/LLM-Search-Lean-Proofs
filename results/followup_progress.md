@@ -355,6 +355,7 @@ reached HOLD at 09:30 UTC.
   picked on the held-out states, then one 2,000-statement probe run (no reasoning, value v0, 16 expansions, depth
   weight 0.1). **Gate:** if the offline policy beats v35 with value v0 (run 8, 1,083 of 2,000) with the paired 95%
   interval above 0, the arms run without reasoning; otherwise with reasoning. Offline runs go before the other arms.
+- **O1 runs last**, after the arms (owner, 2026-11-17).
 - **O2 first; O1 decided after O2's result** (O1 is about 565M training tokens, about 20 h per rate at the measured
   7.8k tokens/s; if it runs, at O2's chosen rate only, after checking training throughput).
 - **Search efficiency for the arms** (owner, 2026-11-17): result cache, timeout skip, warm spares and the
