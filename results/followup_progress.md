@@ -313,8 +313,19 @@ default), safe server stops, results pulled to the PC as they are written.
   and +11.8 [+9.4, +14.5] at 1e-4; success (reaching the reference's next state) -2.9 [-5.7, -0.5] and -2.7
   [-5.7, -0.4] on the flattened measure, -5.0 and -5.6 on the standard one. More valid steps, fewer that land exactly
   on the reference proof's next state; the probe run decides what that means for search.
-- Chosen: 5e-5 (the two rates tie; the lower rate). C and D take 5e-5. Probe run `offline_arm_matched` started
-  21:18 UTC (no reasoning, value v0, 16 expansions, depth weight 0.1); the gate against v35 follows.
+- Chosen: 5e-5 (the two rates tie; the lower rate). C and D take 5e-5.
+- **Probe run `offline_arm_matched`** (no reasoning, value v0, 16 expansions, depth weight 0.1, longest expected
+  search first; 2.0 h, 0 wall-clock stops): **545 of 2,000 (27.3%)**.
+  - **Gate: not passed.** Against run 8 (v35, value v0): -26.9 points (95% -29.1 to -24.7), behind in every band.
+  - Descriptive (settings differ): against v0 without reasoning (run 4, within 16 expansions) -7.2 points (-9.0 to
+    -5.2); against the v0 anchors -8.5 (-10.2 to -6.9); behind in every band. The anchors' noise floor is -0.1 (-1.8
+    to +1.6).
+  - So SFT on 2M tokens of known pool proofs, cut into 1-5-tactic blocks, made v0 WORSE at search, although its
+    held-out valid Lean rose by 10 points. Its searches spread over more distinct valid children (4.7 per expansion
+    against 2.5 for v0) and make less progress per expansion. The depth weight (0.1 against run 4's 0) is not
+    controlled; a v0 run at 0.1 would separate it (about 6 h).
+  - **Consequence (owner's rule of 2026-11-17): the arms sample WITH visible reasoning.** Report:
+    `node_backup/2026-11-15/live/runs/offline_chain/report_matched.md`.
 
 ## Lean overhead (measured 2026-11-17 at HOLD; files in `node_backup/2026-11-15/live/runs/lean_overhead/`)
 
