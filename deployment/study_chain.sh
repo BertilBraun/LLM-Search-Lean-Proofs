@@ -2,7 +2,8 @@
 # The follow-up study's step 2, the learning rates, unattended on the node (supervisord program study_chain;
 # DESIGN.md, "Follow-up study: controlled arms", "Step 2", with the owner's decisions of 2026-11-16;
 # results/followup_node_operations.md, "The study driver"). Installed as a copy, /workspace/step1_chain_tools/
-# study_chain.sh, never run from the checkout: bash reads a running script lazily, and a deploy rewrites the checkout.
+# study_chain.sh with deployment/chain_helpers.sh beside it, never run from the checkout: bash reads a running script
+# lazily, and a deploy rewrites the checkout.
 #
 #   S1  the servers step 1 left up stopped; the shared sampling run from v0 and value v0 (48M generated tokens, no
 #       training) in the sampling mode $state/mode.toml, then (once the loop process is gone) its four slices
@@ -30,7 +31,9 @@ loop_exit_seconds="${STUDY_CHAIN_LOOP_EXIT_SECONDS:-600}"
 builds_wait_seconds="${STUDY_CHAIN_BUILDS_WAIT_SECONDS:-10800}"
 mkdir -p "${state}/rounds" "${state}/held_out"
 exec >> "${state}/chain.log" 2>&1
-source "$(dirname "${BASH_SOURCE[0]}")/chain_helpers.sh" || { echo "$(date -u +%FT%TZ) no chain_helpers.sh beside the driver"; exit 1; }
+# Without the helpers, a STOPPED of its own: an exit 1 would make supervisord restart the driver at once, forever.
+source "$(dirname "${BASH_SOURCE[0]}")/chain_helpers.sh" \
+    || { echo "$(date -u +%FT%TZ) no chain_helpers.sh beside the driver: install it" | tee "${state}/STOPPED"; exit 0; }
 say "driver start (pid $$)"
 for marker in STOPPED HOLD; do
     if [[ -f "${state}/${marker}" ]]; then say "${marker} present ($(cat "${state}/${marker}")): nothing to do"; exit 0; fi
