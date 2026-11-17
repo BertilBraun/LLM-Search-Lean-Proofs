@@ -357,6 +357,9 @@ reached HOLD at 09:30 UTC.
   interval above 0, the arms run without reasoning; otherwise with reasoning. Offline runs go before the other arms.
 - **O2 first; O1 decided after O2's result** (O1 is about 565M training tokens, about 20 h per rate at the measured
   7.8k tokens/s; if it runs, at O2's chosen rate only, after checking training throughput).
+- **Search efficiency for the arms** (owner, 2026-11-17): result cache, timeout skip, warm spares and the
+  degree-bounded `nlinarith` are used in the arms' training sampling (no separate search A/B for `nlinarith`). Probe
+  runs and held-out evaluations keep today's settings, so they stay comparable with the anchors and the offline runs.
 - **Arm B (pure proof success) dropped**: it differs from A only in reward shaping (92-94% sign agreement on the old
   trees), which one seed cannot resolve.
 - **Leaning towards no reasoning** for the arms, but first the Lean overhead must come down without process kills
