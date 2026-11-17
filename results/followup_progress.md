@@ -20,7 +20,7 @@ repository's root; the node's setup and operation are in `results/followup_node_
 | Step 1, anchor runs 1 and 2 (v0 with value v0, 2,000 statements) | done: 713 and 716 of 2,000 | `node_backup/2026-11-15/live/runs/step1_chain/` |
 | Step 1: token budget, calibration run | done: T = 26,804 generated tokens per statement; calibration run 65 of 200; constants -56.4 (completion), -5.35 (block sum), -0.142 (block mean) | |
 | Step 1: three value-free pilots (200 statements each) | done: 71, 68 and 65 of 200, against 70 and 75 with the value model | |
-| Step 1: reasoning at equal tokens (no-reasoning pilot, visible run, no-reasoning run) | first pilot rejected at exactly 1% wall-clock stops; wall cap doubled to 14,400 s; the repeated pilot **accepted** (2026-11-16 20:2x UTC): 70 of 200, 0 wall-clock stops, 2.47 h. 9834972 deployed by the chain; run 3 (visible, new start order) started about 20:25 UTC, run 4 follows | |
+| Step 1: reasoning at equal tokens (no-reasoning pilot, visible run, no-reasoning run) | first pilot rejected at exactly 1% wall-clock stops; wall cap doubled to 14,400 s; the repeated pilot **accepted** (2026-11-16 20:2x UTC): 70 of 200, 0 wall-clock stops, 2.47 h. 9834972 deployed by the chain; run 3 (visible, token cap T, depth weight 0, new start order) **accepted**: 672 of 2,000 (33.6%), 0 wall-clock stops, 3.49 h (anchors at their tuned settings: 713 and 716). Run 4 (no reasoning) started 2026-11-17 00:00 UTC; its first minutes are Lean-bound (112 REPLs, about 96 cores, GPUs idle), as the start order predicts | |
 | Step 1: the full value-free run (whole-completion order) | done: 642 of 2,000 against 713 and 716 with the value model | |
 | Step 1: v0's policy with the old run's final value model | done: 875 of 2,000, +8.0 points over value v0; the restart-based serving path worked on real servers | |
 | Step 1: the full value-free run in the block-sum order | done: 633 of 2,000 (the whole-completion order: 642) | |
@@ -59,6 +59,38 @@ question was whether CPU contention causes this, which would make results depend
   file-order anchors, one v0 run in the new order is paired against them.
 
 ## Results so far
+
+**Reasoning at equal tokens: runs 3 and 4** (v0 with value v0, 2,000 statements, T = 26,804 generated tokens per
+statement, depth weight 0, 14,400 s wall cap, both started longest expected search first; both accepted
+2026-11-17):
+
+| | Run 3, visible reasoning | Run 4, no reasoning |
+|---|---|---|
+| Solved of 2,000 | 672 (33.6%) | **769 (38.5%)** |
+| Paired difference | | **+4.9 points** (95% +2.9 to +6.7; 139 against 236 solved by one run only, McNemar p = 6e-7) |
+| Solved within 1/2/4/8/16 expansions | 9.8/16.1/22.5/27.8/32.5% | 12.0/18.9/25.2/30.3/34.4% |
+| Generated tokens per statement | 20,561 | 18,126 |
+| Expansions per statement (mean / max) | 12.8 / 41 | 25.1 / 237 |
+| Wall-clock hours | **3.49** | **6.36** |
+| Bulk (≥ 100 searches running): GPU use | 85-88% | **70-72%** |
+| Bulk: generated tokens per second per GPU | about 870 | about 425 |
+| Bulk: Lean cores in use (of 96) / cgroup cores | 68.7 / 74.4 | 84.0 / 90.2 |
+| Tactic wall-clock timeouts (statements) | 3,845 (371) | 8,705 (426) |
+| Wall-clock stops | 0 | 4 (0.2%) |
+
+- **Per token, no reasoning wins in every band** (by 1 to 7.7 points; the interval excludes 0 in three of seven
+  bands, 1,000-1,499, 2,000-2,999 and 3,000-4,499). **Per node hour, visible reasoning wins**: 193 solved per hour against 121. Without reasoning the search is
+  Lean-bound: the GPUs idle about 30% in the bulk and generate half the tokens per second, so a run takes 1.8 times
+  as long for the same tokens. The proposed rule (switch if within noise or better AND bulk GPU use above about 90%)
+  is met on its first half and missed on its second; visible reasoning also misses 90% here (85-88%), because the
+  start order front-loads Lean.
+- What it means for the arms (matched on generated tokens): without reasoning each arm's sampling would take about
+  1.8 times as long (an arm about 30-36 h instead of about 20 h, about $10-13 more per arm), unless the Lean side is
+  made cheaper.
+- Run 3 against the anchors (descriptive; the token cap and depth weight 0 differ): -2.1 points (95% -0.6 to -3.7),
+  most of it under 500 characters (-10 points).
+- The node's `reasoning_readings.txt` failed for runs 3 and 4 (its log pattern does not match the ordered runs'
+  start line); the readings above come from a fixed copy run on the PC against the pulled files.
 
 **The baseline: v0 with value v0 on probe v2** (2,000 statements, 16 expansions; both anchors accepted):
 
