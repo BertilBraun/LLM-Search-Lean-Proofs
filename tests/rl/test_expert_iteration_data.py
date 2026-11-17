@@ -383,6 +383,12 @@ def test_replay_examples_with_repeat_take_every_example_before_any_twice() -> No
     assert sorted(example.example.proof_identifier for example in taken[:3]) == ["0", "1", "2"]
 
 
+def test_replay_examples_with_repeat_and_no_completion_tokens_stop_on_an_assertion() -> None:
+    examples = [TokenizedExample(SftExample("replay", str(number), 0, (), ""), (1,) * 10, 10) for number in range(3)]
+    with pytest.raises(AssertionError):
+        examples_within_completion_tokens(examples, lambda example: example, 40, "seed", repeat=True)
+
+
 def test_replay_examples_with_repeat_of_no_examples_are_none() -> None:
     assert examples_within_completion_tokens([], lambda example: example, 40, "seed", repeat=True) == []
 

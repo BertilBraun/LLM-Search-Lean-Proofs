@@ -1,20 +1,11 @@
-"""The offline arm (O): v0's adapter continued by supervised fine-tuning on the pool's known proofs, without visible
-reasoning (experiments/offline_arm.py; DESIGN.md, "Follow-up study: controlled arms", "The offline arm").
+"""The offline arm's data: pool selection, proof recovery, examples and subsets (DESIGN.md, "The offline arm")."""
 
-The pool keeps each statement's verified proof only as its source and length, so the proof's text is recovered from
-the source corpora as phase 2 normalized them (`recovered_candidates`): of a statement's distinct proofs in that source
-the three first in phase 2's hash order, those of the recorded tactic count and characters. Statements the evaluations
-hold out, and near-duplicates of them, are dropped first (`pool_selection`). Each proof is then walked in Lean the way
-the search runs policy blocks (rl/offline_walk.py) into examples: the state before a block of 1-5 tactics and the
-block, in v0's no-reasoning SFT format. Two training sets come from them: every walked proof ("pool", O1) and a
-stratified subsample of about an expert-iteration arm's completion tokens ("matched", O2, `matched_sample`).
-"""
-
+import dataclasses
 import hashlib
 import json
 import tomllib
 from collections import Counter, defaultdict
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -26,13 +17,15 @@ from lean_search.corpora.normalize import normalized_proof_text, short_hash
 from lean_search.corpora.pipeline import PROOFS_PER_STATEMENT
 from lean_search.corpora.records import StatementRecord
 from lean_search.expert_iteration.known_proofs import VerifiedStatement
+from lean_search.expert_iteration.mixing import is_held_out
 from lean_search.expert_iteration.near_duplicates import MinHasher, exhaustive_matches
 from lean_search.expert_iteration.pool import problem_name
 from lean_search.rl.expert_iteration_data import ReplayConfig
-from lean_search.rl.fixed_sets import character_stratum
+from lean_search.rl.fixed_sets import character_stratum, hash_order
+from lean_search.rl.offline_walk import WalkBlock, WalkedProof, WalkSettings, WalkStatus
 from lean_search.rl.training_overlap import exhaustive_duplicates, fingerprints
 from lean_search.search.records import from_json_object
-from lean_search.training.sft import SftConfig
+from lean_search.training.sft import SftConfig, StepRecord
 from lean_search.training.sft_data import SftExample
 
 EXAMPLE_SOURCE = "offline_arm"
@@ -64,8 +57,7 @@ class OfflineDataConfig:
 
 @dataclass(frozen=True)
 class WalkConfig:
-    # The search whose policy blocks the walk reproduces: its tactic limits, flattening, naming, identifier check,
-    # forbidden steps and the policy's completion cap.
+    # The search whose policy blocks the walk reproduces (limits, flattening, naming, checks, completion cap).
     search_config: str
     processes: int = 90
     max_block_tactics: int = 5
@@ -171,7 +163,7 @@ def held_out_references(
 @dataclass(frozen=True)
 class PoolSelection:
     kept: tuple[VerifiedStatement, ...]
-    # Per `Exclusion` value, the statements dropped for it.
+    # Per `Exclusion` value (preparation.json's keys), the statements dropped for it.
     dropped: dict[str, int]
 
 
@@ -185,8 +177,7 @@ def statement_signatures(statements: Sequence[str]) -> numpy.ndarray:
 
 
 def pool_selection(pool: Sequence[VerifiedStatement], references: HeldOutReferences, threshold: float) -> PoolSelection:
-    """The usable statements no exclusion drops, each counted under the first reason that applies; the near-duplicate
-    checks compare every pair (no LSH)."""
+    """The usable statements no exclusion drops (every pair compared), each drop under its first reason."""
     dropped: Counter[str] = Counter()
     remaining: list[VerifiedStatement] = []
     for record in pool:
@@ -245,10 +236,7 @@ class CorpusProof:
 def recovered_candidates(
     targets: Mapping[str, ProofTarget], proofs: Iterable[CorpusProof]
 ) -> dict[str, tuple[str, ...]]:
-    """Per target statement, the proofs that can be the verified one, in the order verification tried them: phase 2
-    kept, per source and statement, one proof per whitespace-normalized text (the first by identifier) and of those
-    the `PROOFS_PER_STATEMENT` first by the hash of statement and proof key; the pool verified the shortest first,
-    ties in identifier order. Statements without a candidate are missing."""
+    """Per statement, the matching proofs phase 2's per-source cap kept, in the pool's verification order."""
     distinct: dict[tuple[str, str, str], CorpusProof] = {}
     for proof in proofs:
         target = targets.get(proof.statement_key)
@@ -321,10 +309,6 @@ class ProofExamples:
         return sum(tokens.prompt for tokens in self.tokens)
 
 
-def hash_order(seed: str, name: str) -> bytes:
-    return hashlib.sha256(f"{seed}\n{name}".encode()).digest()
-
-
 @dataclass(frozen=True)
 class BandSize:
     band: str
@@ -353,15 +337,13 @@ def band_sizes(proofs: Sequence[ProofExamples], edges: Sequence[int]) -> tuple[B
 
 
 def matched_sample(proofs: Sequence[ProofExamples], config: MatchedConfig) -> list[ProofExamples]:
-    """Proofs drawn one per band in turn (each band in a seeded hash order; a band that runs out drops out of the
-    turns), so the bands hold equal numbers as far as the pool allows, until their examples' completion tokens reach
-    `completion_tokens`."""
+    """One proof per band in turn, each band in a seeded order, until the examples hold `completion_tokens`."""
     bands = [character_stratum(low, config.band_edges) for low in (0, *config.band_edges)]
     queues: dict[str, list[ProofExamples]] = {band: [] for band in bands}
     for proof in proofs:
         queues[character_stratum(proof.proof_characters, config.band_edges)].append(proof)
     for members in queues.values():
-        members.sort(key=lambda proof: hash_order(config.seed, proof.name), reverse=True)
+        members.sort(key=lambda proof: hash_order(proof.name, config.seed), reverse=True)
     chosen: list[ProofExamples] = []
     tokens = 0
     while tokens < config.completion_tokens and any(queues.values()):
@@ -373,3 +355,183 @@ def matched_sample(proofs: Sequence[ProofExamples], config: MatchedConfig) -> li
                 chosen.append(proof)
                 tokens += proof.completion_tokens
     return chosen
+
+
+# A walk that failed at a block, or at a forbidden step, keeps the blocks before it: steps of a verified proof that ran
+# as the search runs them. Other failed walks give nothing (a revisit, goals left at the end, no start).
+PREFIX_STATUSES = frozenset({WalkStatus.BLOCK_FAILED, WalkStatus.FORBIDDEN})
+
+
+def usable_blocks(walked: WalkedProof) -> tuple[WalkBlock, ...]:
+    if walked.walk.status == WalkStatus.COMPLETE or walked.walk.status in PREFIX_STATUSES:
+        return walked.walk.blocks
+    return ()
+
+
+@dataclass(frozen=True)
+class ExampleCounts:
+    # Examples dropped: a (state, block) pair an earlier proof gave, a prompt over the cap, a state near a held-out one.
+    duplicates: int
+    over_prompt_cap: int
+    near_held_out_state: int
+    # Kept examples at a block depth the probe's search never expands (its max_depth).
+    beyond_search_depth: int
+    # Kept examples from the prefix of a walk that failed later, and the proofs they came from.
+    prefix_examples: int
+    prefix_proofs: int
+
+
+@dataclass(frozen=True)
+class SplitExamples:
+    train: tuple[ProofExamples, ...]
+    validation: tuple[ProofExamples, ...]
+    counts: ExampleCounts
+    # Kept training examples by their block's tactics.
+    block_tactics: dict[int, int]
+
+
+def split_examples(
+    walks: Sequence[WalkedProof],
+    characters: Mapping[str, int],
+    tokenize: Callable[[SftExample], ExampleTokens],
+    near_held_out_states: frozenset[tuple[str, ...]],
+    config: OfflineArmConfig,
+    max_search_depth: int,
+) -> SplitExamples:
+    """The proofs' examples, in a seeded proof order, each statement in training or validation."""
+    seen: set[tuple[tuple[str, ...], str]] = set()
+    counts: Counter[str] = Counter()
+    lengths: Counter[int] = Counter()
+    train: list[ProofExamples] = []
+    validation: list[ProofExamples] = []
+    for walked in sorted(walks, key=lambda walked: hash_order(walked.name, config.walk.seed)):
+        blocks = usable_blocks(walked)
+        examples: list[SftExample] = []
+        tokens: list[ExampleTokens] = []
+        tactics: list[int] = []
+        for index, block in enumerate(blocks):
+            if (block.goals, block.block) in seen:
+                counts["duplicates"] += 1
+                continue
+            seen.add((block.goals, block.block))
+            if block.goals in near_held_out_states:
+                counts["near_held_out_state"] += 1
+                continue
+            example = SftExample(EXAMPLE_SOURCE, walked.name, index, block.goals, block.block)
+            found = tokenize(example)
+            if found.prompt > config.walk.max_prompt_tokens:
+                counts["over_prompt_cap"] += 1
+                continue
+            examples.append(example)
+            tokens.append(found)
+            tactics.append(block.tactics)
+            counts["beyond_search_depth"] += index >= max_search_depth
+        if not examples:
+            continue
+        if walked.walk.status != WalkStatus.COMPLETE:
+            counts["prefix_examples"] += len(examples)
+            counts["prefix_proofs"] += 1
+        proof = ProofExamples(walked.name, characters[walked.name], tuple(examples), tuple(tokens))
+        if is_held_out(walked.name, config.data.seed, config.data.validation_fraction):
+            validation.append(proof)
+        else:
+            train.append(proof)
+            lengths.update(tactics)
+    return SplitExamples(
+        tuple(train),
+        tuple(validation),
+        ExampleCounts(
+            duplicates=counts["duplicates"],
+            over_prompt_cap=counts["over_prompt_cap"],
+            near_held_out_state=counts["near_held_out_state"],
+            beyond_search_depth=counts["beyond_search_depth"],
+            prefix_examples=counts["prefix_examples"],
+            prefix_proofs=counts["prefix_proofs"],
+        ),
+        dict(sorted(lengths.items())),
+    )
+
+
+@dataclass(frozen=True)
+class BandWalks:
+    band: str
+    # Per walk status, the proofs.
+    statuses: dict[str, int]
+
+
+def band_walks(
+    walks: Sequence[WalkedProof], characters: Mapping[str, int], edges: Sequence[int]
+) -> tuple[BandWalks, ...]:
+    """Per band of proof characters, the walks' statuses: the walk's selection by proof length."""
+    by_band: dict[str, Counter[str]] = {character_stratum(low, edges): Counter() for low in (0, *edges)}
+    for walked in walks:
+        by_band[character_stratum(characters[walked.name], edges)][walked.walk.status] += 1
+    return tuple(BandWalks(band, dict(sorted(statuses.items()))) for band, statuses in by_band.items())
+
+
+# The share of the host's memory limit the training ranks' tokenized data may take together.
+MAX_HOST_MEMORY_SHARE = 0.8
+
+
+def ranks_fit(peak_bytes: int, ranks: int, limit_bytes: int) -> bool:
+    """Whether `ranks` processes of a dry run's peak memory fit the host (each rank tokenizes all the data)."""
+    return ranks * peak_bytes <= MAX_HOST_MEMORY_SHARE * limit_bytes
+
+
+def steady_tokens_per_second(records: Sequence[StepRecord], warmup_steps: int) -> float | None:
+    """Tokens per training second over the steps after the first `warmup_steps`; None before any."""
+    if len(records) <= warmup_steps:
+        return None
+    start = records[warmup_steps - 1].training_seconds if warmup_steps else 0.0
+    return sum(record.tokens for record in records[warmup_steps:]) / (records[-1].training_seconds - start)
+
+
+# Under src/lean_search: the walk and the search code it runs a block with (naming, planning, identifier check,
+# normalization, the REPL's block execution); a change to any of them can change a walk's output.
+WALK_SOURCES = (
+    "rl/offline_walk.py",
+    "search/search.py",
+    "lean/plans.py",
+    "lean/text.py",
+    "lean/hypotheses.py",
+    "lean/identifiers.py",
+    "lean/repl.py",
+    "policy/prompts.py",
+)
+
+
+@dataclass(frozen=True)
+class WalkFingerprint:
+    # Per source in WALK_SOURCES, its sha256.
+    sources: dict[str, str]
+    # The walk settings, the block draw and the completion cap, as canonical JSON.
+    settings: str
+    # proofs.jsonl's sha256: the proofs walked, after the exclusions.
+    proofs_sha256: str
+
+
+def walk_settings_text(settings: WalkSettings, config: WalkConfig, tokenizer: str, max_completion_tokens: int) -> str:
+    fields = dataclasses.asdict(settings) | {
+        "forbidden_tokens": sorted(settings.forbidden_tokens),
+        "seed": config.seed,
+        "max_block_tactics": config.max_block_tactics,
+        "tokenizer": tokenizer,
+        "max_completion_tokens": max_completion_tokens,
+    }
+    return json.dumps(fields, sort_keys=True)
+
+
+def walk_fingerprint(package: Path, settings_text: str, proofs_sha256: str) -> WalkFingerprint:
+    sources = {name: hashlib.sha256((package / name).read_bytes()).hexdigest() for name in WALK_SOURCES}
+    return WalkFingerprint(sources, settings_text, proofs_sha256)
+
+
+def fingerprint_differences(recorded: WalkFingerprint, current: WalkFingerprint) -> list[str]:
+    """What differs, by name: a source, the walk settings, the proofs."""
+    names = sorted({*recorded.sources, *current.sources})
+    differences = [name for name in names if recorded.sources.get(name) != current.sources.get(name)]
+    if recorded.settings != current.settings:
+        differences.append("the walk settings")
+    if recorded.proofs_sha256 != current.proofs_sha256:
+        differences.append("proofs.jsonl")
+    return differences

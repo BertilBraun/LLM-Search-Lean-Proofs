@@ -1,10 +1,5 @@
-"""The offline arm's probe run against other runs at equal expansions (experiments/offline_arm.py report).
-
-A run that searched with more expansions counts a statement solved only when its first proof took at most the budget
-(`within_budget`), so a token-capped run (step 1's run 4, up to 237 expansions) compares with a 16-expansion one. The
-owner's gate: the offline arm passes when the paired 95% interval of its solved share minus run 8's (v35 with value v0)
-lies above 0. Runs of different search settings (reasoning, depth weight, wall cap) compare descriptively only.
-"""
+"""The offline arm's probe run against other runs at equal expansions, and the owner's gate: the paired 95% interval of
+O minus run 8 (v35, value v0) lies above 0 (experiments/offline_arm.py report)."""
 
 import dataclasses
 from collections.abc import Sequence
@@ -16,6 +11,8 @@ from lean_search.rl.arm_comparison import (
     Arm,
     ArmRun,
     Difference,
+    SearchEnd,
+    check_comparable,
     common_problems,
     difference,
     pooled,
@@ -27,8 +24,8 @@ from lean_search.rl.fixed_sets import stratum_order
 def within_budget(run: ArmRun, budget: int) -> ArmRun:
     """The run as if every search had stopped after `budget` expansions."""
     outcomes = tuple(
-        dataclasses.replace(outcome, proved=False, expansions_to_proof=None)
-        if outcome.expansions_to_proof is None or outcome.expansions_to_proof > budget
+        dataclasses.replace(outcome, proved=False, expansions_to_proof=None, end=SearchEnd.EXPANSIONS)
+        if outcome.proved and (outcome.expansions_to_proof is None or outcome.expansions_to_proof > budget)
         else outcome
         for outcome in run.outcomes
     )
@@ -49,13 +46,14 @@ class PairedDifference:
     strata: tuple[tuple[str, Difference], ...]
 
 
-def paired_difference(x: Arm, y: Arm, budget: int, seed: int) -> PairedDifference:
-    """x minus y on the statements every run searched, each run cut at `budget` expansions, runs of one side pooled
-    per statement; the interval as `arm_comparison` stratifies it."""
+def paired_difference(x: Arm, y: Arm, budget: int, seed: int, statements: int) -> PairedDifference:
+    """x minus y per statement, each run cut at `budget` expansions and one side's runs pooled; ValueError unless the
+    runs share the probe set and every run searched all `statements`."""
+    check_comparable([x, y], across_search_modes=True, across_settings=True)
     x, y = arm_within_budget(x, budget), arm_within_budget(y, budget)
     problems = common_problems([x, y])
-    if not problems:
-        raise ValueError(f"{x.label} and {y.label} share no searched statement.")
+    if len(problems) != statements:
+        raise ValueError(f"{x.label} and {y.label} share {len(problems)} searched statements, not all {statements}.")
     strata = np.array([outcome.stratum for outcome in run_outcomes(x.runs[0], problems)])
     x_pooled, y_pooled = pooled(x, problems), pooled(y, problems)
     overall = difference(x_pooled, y_pooled, strata, seed)
@@ -91,7 +89,8 @@ def comparison_lines(found: PairedDifference) -> list[str]:
     return lines
 
 
-def gate_report(gate: PairedDifference, descriptive: Sequence[PairedDifference]) -> str:
+def gate_report(gate: PairedDifference, noise: PairedDifference, descriptive: Sequence[PairedDifference]) -> str:
+    """`noise`: two runs of one checkpoint (the anchors), the run-to-run spread the gate's interval does not cover."""
     verdict = "PASSES" if passes_gate(gate) else "does not pass"
     sections = [
         [
@@ -99,10 +98,18 @@ def gate_report(gate: PairedDifference, descriptive: Sequence[PairedDifference])
             "",
             f"The offline arm {verdict} the owner's gate (the paired 95% interval of {gate.x} minus {gate.y} lies "
             "above 0). The runs differ in their search settings (reasoning, depth weight, wall cap), so the "
-            "comparison rule of arm_comparison gives no verdict; the gate is the owner's.",
+            "comparison rule of arm_comparison gives no verdict; the gate is the owner's. Its interval covers the "
+            "statements' sampling only, each side being one run.",
             "",
             *comparison_lines(gate),
-        ]
+        ],
+        [
+            f"## Noise floor: {noise.x} against {noise.y}",
+            "",
+            "Two runs of one checkpoint at one setting: a difference this size arises from run to run alone.",
+            "",
+            *comparison_lines(noise),
+        ],
     ]
     for found in descriptive:
         sections.append(

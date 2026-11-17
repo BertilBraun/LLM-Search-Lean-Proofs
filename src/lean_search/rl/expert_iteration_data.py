@@ -96,8 +96,7 @@ class ReplayConfig:
     validation: str = ""
     validation_examples: int = 1000
     seed: str = "grpo-expert-iteration-1/replay"
-    # When a replay file holds fewer completion tokens than its share asks for: its examples again, in new seeded
-    # orders, until the share is met; false takes each example at most once and the share falls short.
+    # A replay file too small for its share is taken again (new seeded orders); false lets the share fall short.
     repeat: bool = False
 
 
@@ -607,6 +606,7 @@ def examples_within_completion_tokens[T](
     tokens = 0
     completed_passes = 0
     while True:
+        tokens_before_pass = tokens
         order = list(range(len(items)))
         random.Random(seed if completed_passes == 0 else f"{seed}/pass-{completed_passes}").shuffle(order)
         for index in order:
@@ -619,6 +619,7 @@ def examples_within_completion_tokens[T](
         completed_passes += 1
         if not repeat or not items:
             return examples
+        assert tokens > tokens_before_pass, "replay examples without completion tokens cannot fill a budget"
 
 
 def replay_token_budgets(expert_iteration_completion_tokens: int, config: ReplayConfig) -> tuple[int, int]:

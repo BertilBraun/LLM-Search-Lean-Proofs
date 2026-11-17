@@ -124,22 +124,16 @@ def test_the_held_out_loop_config_keeps_the_bases_held_out_states(tmp_path: Path
     assert load_loop_config(tmp_path / "loop.toml").evaluation == base.evaluation
 
 
-def test_the_probe_list_runs_the_chosen_rates_adapter(tmp_path: Path) -> None:
-    rank = tmp_path / "rank.txt"
-    rank.write_text("Chosen: matched_1e-4 (the held-out states decide; tied on the held-out states: matched_1e-4)\n")
+def test_the_probe_list_runs_the_rates_adapter(tmp_path: Path) -> None:
     offline_arm(
-        tmp_path, "probe-list", "--subset", "matched", "--rank", str(rank), "--output", str(tmp_path / "runs.toml")
+        tmp_path, "probe-list", "--subset", "matched", "--rate", "1e-4", "--output", str(tmp_path / "runs.toml")
     )
     run = from_json_object(PlannedRun, toml(tmp_path / "runs.toml")["runs"][0])
     assert run.policy_adapter == str(tmp_path / "checkpoints/offline_arm_matched_1e-4/adapter")
 
 
 def test_the_probe_list_searches_with_the_offline_configs_and_value_v0(tmp_path: Path) -> None:
-    rank = tmp_path / "rank.txt"
-    rank.write_text("Chosen: pool_5e-5 (the held-out states decide; tied on the held-out states: pool_5e-5)\n")
-    offline_arm(
-        tmp_path, "probe-list", "--subset", "pool", "--rank", str(rank), "--output", str(tmp_path / "runs.toml")
-    )
+    offline_arm(tmp_path, "probe-list", "--subset", "pool", "--rate", "5e-5", "--output", str(tmp_path / "runs.toml"))
     run = from_json_object(PlannedRun, toml(tmp_path / "runs.toml")["runs"][0])
     found = (run.name, run.value, run.config, run.search_config)
     expected = (
@@ -151,10 +145,31 @@ def test_the_probe_list_searches_with_the_offline_configs_and_value_v0(tmp_path:
     assert found == expected
 
 
-def test_the_probe_list_refuses_a_choice_of_another_subset(tmp_path: Path) -> None:
-    rank = tmp_path / "rank.txt"
-    rank.write_text("Chosen: pool_5e-5 (the held-out states decide; tied on the held-out states: pool_5e-5)\n")
+def test_the_probe_list_takes_another_name_and_evaluation_config(tmp_path: Path) -> None:
+    arguments = ("--name", "offline_arm_pool_cap28800", "--evaluation-config", "cap28800.toml")
+    offline_arm(
+        tmp_path, "probe-list", "--subset", "pool", "--rate", "5e-5", "--output", str(tmp_path / "r.toml"), *arguments
+    )
+    run = from_json_object(PlannedRun, toml(tmp_path / "r.toml")["runs"][0])
+    assert (run.name, run.config) == ("offline_arm_pool_cap28800", "cap28800.toml")
+
+
+def test_the_probe_list_refuses_a_rate_outside_the_config(tmp_path: Path) -> None:
     with pytest.raises(subprocess.CalledProcessError):
         offline_arm(
-            tmp_path, "probe-list", "--subset", "matched", "--rank", str(rank), "--output", str(tmp_path / "r.toml")
+            tmp_path, "probe-list", "--subset", "matched", "--rate", "3e-5", "--output", str(tmp_path / "r.toml")
         )
+
+
+def test_the_chosen_rate_is_read_from_the_ranking(tmp_path: Path) -> None:
+    rank = tmp_path / "rank.txt"
+    rank.write_text("Chosen: matched_1e-4 (the held-out states decide, on the flattened success; tied: matched_1e-4)\n")
+    found = offline_arm(tmp_path, "chosen-rate", "--subset", "matched", "--rank", str(rank))
+    assert found.stdout.strip() == "1e-4"
+
+
+def test_a_ranking_of_another_subset_is_refused(tmp_path: Path) -> None:
+    rank = tmp_path / "rank.txt"
+    rank.write_text("Chosen: pool_5e-5 (the held-out states decide, on the flattened success; tied: pool_5e-5)\n")
+    with pytest.raises(subprocess.CalledProcessError):
+        offline_arm(tmp_path, "chosen-rate", "--subset", "matched", "--rank", str(rank))
