@@ -145,6 +145,12 @@ def write_slices(
     existing output, so the slices stay as first cut."""
     if output.exists():
         raise ValueError(f"{output} exists: the slices are cut once.")
+    for number, members in enumerate(slices, start=1):
+        names = [Path(entry.file).name for entry in members]
+        if len(set(names)) != len(names):
+            raise ValueError(
+                f"Slice {number} links its trees by file name, and trees of two phase directories share one."
+            )
     records = []
     seen: set[str] = set()
     for number, members in enumerate(slices, start=1):

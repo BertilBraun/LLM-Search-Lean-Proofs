@@ -19,13 +19,10 @@ from test_single_step import REFERENCE_NEXT, ROOT, STATEMENT, single_step_tree  
 
 from lean_search.corpora.records import DataSplit, TracedStep  # noqa: E402
 from lean_search.reasoning.states import ReasoningState  # noqa: E402
-from lean_search.rl.expert_iteration_data import TrainingSummary  # noqa: E402
 from lean_search.rl.learning_rate_step import (  # noqa: E402
     STEP_VARIANTS,
     V0_END_HELD_OUT,
     V0_HELD_OUT,
-    RoundKind,
-    Signal,
 )
 from lean_search.rl.loop import RunFinished  # noqa: E402
 from lean_search.rl.probe_evaluation import ProbeCheckpoint  # noqa: E402
@@ -39,9 +36,9 @@ REPOSITORY = Path(__file__).resolve().parents[2]
 VISIBLE = REPOSITORY / "experiments/configs/grpo/followup/modes/visible.toml"
 STATES_FILE = "phase5_eval_visible_student_v2_visible/states.jsonl"
 SHARED_RUN = "followup_shared_sampling"
-# Every variant samples alike, so the rule ties within each signal and takes the lower rate, C's window 1 first.
-CHOSEN = {Signal.A: "A_2e-5", Signal.B2: "B2_2e-5", Signal.C: "C_w1_5e-5"}
-DRY_RUN = "Continuing v0's adapter /a: 800 expert-iteration examples, 9 steps on 4 GPUs\n"
+# Every variant samples alike, so the rule ties and takes the lowest rate.
+CHOSEN = "A_2e-5"
+O2_CHOICE = "Chosen: matched_1e-4 (the held-out states decide, on the flattened success; tied: matched_1e-4)\n"
 
 
 def reasoning_state(index: int) -> ReasoningState:
@@ -78,18 +75,11 @@ def write_held_out_run(runs: Path, name: str, states_sha256: str) -> None:
         write_tree(state_tree_path(directory / "trees", state_problem(state)), single_step_tree(closing=index % 2 == 0))
 
 
-def write_round(checkpoints: Path, run_name: str, kind: RoundKind) -> None:
+def write_round(checkpoints: Path, run_name: str) -> None:
     output = checkpoints / run_name
     output.mkdir(parents=True)
-    match kind:
-        case RoundKind.GRPO:
-            outcome = dataclasses.replace(zero(PhaseOutcome), trees=2400, policy=zero(PolicyOutcome))
-            (output / "phase.json").write_text(to_json(outcome), encoding="utf-8")
-        case RoundKind.EXPERT_ITERATION:
-            summary = dataclasses.replace(
-                zero(TrainingSummary), expert_iteration_examples=800, completion_token_shares=(0.6, 0.3, 0.1)
-            )
-            (output / "training_summary.json").write_text(to_json(summary), encoding="utf-8")
+    outcome = dataclasses.replace(zero(PhaseOutcome), trees=2400, policy=zero(PolicyOutcome))
+    (output / "phase.json").write_text(to_json(outcome), encoding="utf-8")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -111,10 +101,19 @@ class Workspace:
             "LEAN_SEARCH_CHECKPOINTS": str(self.root / "checkpoints"),
         }
 
+    @property
+    def o2_ranking(self) -> Path:
+        """Where the offline chain's ranking of the matched subset (O2) lies."""
+        return self.root / "offline_chain" / "rank_matched.txt"
 
-def make_workspace(root: Path, earlier_states_sha256: str | None = None) -> Workspace:
-    """`earlier_states_sha256`: the 2026-11-15 run's states digest (another file than today's), default today's."""
+
+def make_workspace(root: Path, earlier_states_sha256: str | None = None, o2_ranked: bool = True) -> Workspace:
+    """`earlier_states_sha256`: the 2026-11-15 run's states digest (another file than today's), default today's;
+    `o2_ranked`: whether the offline chain has ranked O2's rates."""
     workspace = Workspace(root)
+    if o2_ranked:
+        workspace.o2_ranking.parent.mkdir(parents=True)
+        workspace.o2_ranking.write_text(O2_CHOICE, encoding="utf-8")
     states = workspace.runs / STATES_FILE
     states.parent.mkdir(parents=True)
     states.write_text("".join(to_json(state) + "\n" for state in STATES), encoding="utf-8")
@@ -123,19 +122,16 @@ def make_workspace(root: Path, earlier_states_sha256: str | None = None) -> Work
         write_held_out_run(workspace.runs, name, digest)
     write_held_out_run(workspace.runs, "v0", earlier_states_sha256 or digest)
     for variant in STEP_VARIANTS:
-        write_round(root / "checkpoints", variant.run_name, variant.kind)
+        write_round(root / "checkpoints", variant.run_name)
     workspace.state.mkdir()
-    for signal, label in CHOSEN.items():
-        text = f"| table |\n\nChosen: {label} (tied on the held-out states, no gate runs; the lower rate)\n"
-        (workspace.state / f"rank_{signal}.txt").write_text(text, encoding="utf-8")
-    for build in ("step2_C_w1", "step2_C_w4"):
-        (workspace.state / f"dry_run_{build}.log").write_text(DRY_RUN, encoding="utf-8")
+    text = f"| table |\n\nChosen: {CHOSEN} (tied on the held-out states, no gate runs; the lower rate)\n"
+    (workspace.state / "rank_A.txt").write_text(text, encoding="utf-8")
     names = ["s1_sampling", f"held_out_{V0_HELD_OUT}", *(f"round_{variant.label}" for variant in STEP_VARIANTS)]
     timings = "".join(f"{name}\t1000\t{1000 + 3600 * (index + 1)}\n" for index, name in enumerate(names))
     (workspace.state / "timings.tsv").write_text(timings, encoding="utf-8")
     finished = workspace.runs / SHARED_RUN / "finished.json"
     finished.parent.mkdir(parents=True)
-    finished.write_text(to_json(RunFinished(0, 48_100_000, 20_000, "2026-11-17T08:00:00+00:00")), encoding="utf-8")
+    finished.write_text(to_json(RunFinished(0, 12_100_000, 20_000, "2026-11-17T08:00:00+00:00")), encoding="utf-8")
     return workspace
 
 
@@ -150,6 +146,8 @@ def report(workspace: Workspace) -> subprocess.CompletedProcess:
             *arguments,
             "--earlier-v0",
             "v0",
+            "--o2-ranking",
+            str(workspace.o2_ranking),
             "--output",
             str(output),
         ],
@@ -170,16 +168,27 @@ def written(tmp_path_factory: pytest.TempPathFactory) -> str:
 
 
 @pytest.mark.parametrize(
-    "line",
+    "row",
     [
         "| arms/A.toml | phase.policy.optimization.learning_rate | 2e-5 |",
-        "| arms/B2.toml | phase.policy.optimization.learning_rate | 2e-5 |",
-        "| arms/C.toml | loop.training.expert_iteration_window_phases | 1 |",
-        "| arms/C.toml | expert_iteration.sft.optimization.learning_rate | 5e-5 |",
+        "| arms/C.toml | expert_iteration.sft.optimization.learning_rate | 1e-4 |",
+        "| arms/D.toml | phase.policy.optimization.learning_rate | 2e-5 |",
+        "| arms/D.toml | expert_iteration.sft.optimization.learning_rate | 1e-4 |",
     ],
 )
-def test_the_report_from_real_files_states_the_arms_values(written: str, line: str) -> None:
-    assert line in written.splitlines()
+def test_the_report_from_real_files_states_the_arms_values(written: str, row: str) -> None:
+    assert any(line.startswith(row) for line in written.splitlines())
+
+
+def test_the_report_from_real_files_reads_cs_window_from_arm_c(written: str) -> None:
+    assert "C's and D's window, 4 phases" in written
+
+
+def test_the_report_without_o2s_ranking_says_o2_is_not_ranked_yet(tmp_path: Path) -> None:
+    workspace = make_workspace(tmp_path, o2_ranked=False)
+    report(workspace)
+    text = (workspace.state / "learning_rates_report.md").read_text(encoding="utf-8")
+    assert f"**O2 not ranked yet** ({workspace.o2_ranking}: no such file)" in text
 
 
 def test_the_report_from_real_files_pairs_every_variant_with_v0(written: str) -> None:
@@ -191,21 +200,17 @@ def test_the_report_from_real_files_compares_v0_after_the_variants_with_v0_befor
 
 
 def test_the_report_from_real_files_reads_the_rounds_sizes(written: str) -> None:
-    assert ("| A_2e-5 | 2400 |" in written, "| C_w4_1e-4 | 800 |" in written) == (True, True)
-
-
-def test_the_report_from_real_files_says_cs_window_came_from_the_tie_rule(written: str) -> None:
-    assert "C's window was chosen by the tie rule" in written
+    assert "| A_2e-5 | 2400 |" in written
 
 
 def test_the_report_from_real_files_reads_the_shared_runs_tokens(written: str) -> None:
-    assert "Shared sampling: 48,100,000 generated tokens counted, 20,000 lost." in written
+    assert "Shared sampling: 12,100,000 generated tokens counted, 20,000 lost." in written
 
 
 def test_a_ranking_file_disagreeing_with_the_report_fails_it(tmp_path: Path) -> None:
     workspace = make_workspace(tmp_path)
-    (workspace.state / "rank_B2.txt").write_text("Chosen: B2_1e-4 (the held-out states decide)\n", encoding="utf-8")
-    assert "rank_B2.txt chose B2_1e-4" in report(workspace).stderr
+    (workspace.state / "rank_A.txt").write_text("Chosen: A_1e-4 (the held-out states decide)\n", encoding="utf-8")
+    assert "rank_A.txt chose A_1e-4" in report(workspace).stderr
 
 
 def test_an_earlier_v0_run_of_other_states_is_named_not_a_failure(tmp_path: Path) -> None:

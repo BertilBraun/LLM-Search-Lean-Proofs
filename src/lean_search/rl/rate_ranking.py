@@ -129,7 +129,7 @@ class RateChoice:
 
 def tie_break(tied: Sequence[Variant]) -> Variant:
     """DESIGN's rule for variants nothing separates (decided 2026-11-14, open to the owner): the lower rate; among
-    equal rates the first listed, which is how step 2 prefers C's window 1 (learning_rate_step.STEP_VARIANTS)."""
+    equal rates the first listed (learning_rate_step.STEP_VARIANTS lists the rates in ranking order)."""
     return min(tied, key=lambda variant: variant.learning_rate)
 
 

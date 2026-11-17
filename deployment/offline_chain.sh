@@ -15,7 +15,8 @@
 # Steps done are marked under $state (done_<step>); a rerun (container restart, supervisord's retry) continues at the
 # first step not done. A training whose job died is trained again into a fresh output, the interrupted one moved aside.
 # A step's 4th attempt, a rejected probe run (exit 3), servers that kept dying (exit 4), GPUs held by another process,
-# the detached data steps still alive, or a failed check write $state/STOPPED and exit 0; other failures exit 1 for
+# the detached data steps still alive, step 2's chain started and neither at HOLD nor STOPPED (before the first server
+# or GPU action), or a failed check write $state/STOPPED and exit 0; other failures exit 1 for
 # supervisord to retry. HOLD and STOPPED make a start exit 0 at once.
 set -uo pipefail
 state="${OFFLINE_CHAIN_STATE:-/workspace/runs/offline_chain}"
@@ -27,6 +28,8 @@ exec >> "${state}/chain.log" 2>&1
 # Without the helpers, a STOPPED of its own: an exit 1 would make supervisord restart the driver at once, forever.
 source "$(dirname "${BASH_SOURCE[0]}")/chain_helpers.sh" \
     || { echo "$(date -u +%FT%TZ) no chain_helpers.sh beside the driver: install it" | tee "${state}/STOPPED"; exit 0; }
+# An older copy of the helpers lacks what this driver calls (bash would only print "command not found" and go on).
+declare -F other_chain_idle > /dev/null || stop_chain "chain_helpers.sh is older than the driver: install the current one"
 
 say "driver start (pid $$)"
 for marker in STOPPED HOLD; do
@@ -85,6 +88,9 @@ step build "${python}" experiments/offline_arm.py --config "${config}" build
 step flat_references deployment/background.sh "${python}" experiments/offline_arm.py --config "${config}" \
     flat-references --output "${flat_references}"
 step held_out_config "${python}" experiments/offline_arm.py --config "${config}" held-out-config --output "${held_out_loop_config}"
+
+# From here on servers and GPUs: never beside a running step 2.
+other_chain_idle "${STUDY_CHAIN_STATE:-/workspace/runs/study_chain}" study
 
 output_of() { echo "${LEAN_SEARCH_CHECKPOINTS}/${arm}_$1_$2"; }
 

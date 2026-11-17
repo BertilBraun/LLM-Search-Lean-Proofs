@@ -11,14 +11,14 @@ file and the files it points to. Keep this file current while you work, or repla
 - The repeated no-reasoning pilot was ACCEPTED (70 of 200, 0 wall-clock stops, 2.47 h). The chain deployed `9834972`
   and started run 3 (visible, longest expected search first) at about 20:25 UTC; run 4, the reports, the order check
   run and HOLD follow by themselves.
-- Step 2's node automation is written, reviewed (AU, AV, re-reviewed), merged and pushed (master `d500f85`):
-  `deployment/study_chain.sh` runs the shared sampling, slices, the 10 rounds, held-out runs and the ranking, then
-  HOLDs with the servers stopped. Never run on the node yet; install it at step 1's HOLD after deploying master
-  (`results/followup_node_operations.md` section 3, "The study driver: step 2"). Only the arms' later automation is
-  not written. No code is in flight.
-- Next decision is the owner's, after the reasoning comparison: the arms' mode (copy `followup/modes/visible.toml` or
-  `no_reasoning.toml` to `/workspace/runs/study_chain/mode.toml`), plus the open questions of review AV: the tie rule
-  (lower rate on a tie likely picks 2e-5 for GRPO), D's window if C picks window 1, probe runs under no reasoning.
+- Step 2's node automation (`deployment/study_chain.sh`) was shrunk on 2026-11-17 to arm A's rate (owner): one shared
+  phase of 12M tokens, A's three GRPO rounds, held-out runs, A's ranking, HOLD with the servers stopped; about 3-4 node
+  hours (branch `step2-a-only`, reviews BA and BB). Never run on the node yet. It runs only after O2's gate has chosen
+  the mode and the search-efficiency branch is deployed (`results/followup_node_operations.md` section 3, "The study
+  driver: step 2", "Install and start").
+- Superseded by the owner's decisions of 2026-11-17: the 48M sampling, slice 4, the ten rounds, arm B and C's window
+  test. C's window is 4 (in `arms/C.toml`, `arms/D.toml`); C's rate comes from O2. Still open from review AV: the tie
+  rule (lower rate on a tie likely picks 2e-5 for GRPO) and probe runs under no reasoning.
 
 ## 1. First hour: what to do
 
@@ -257,8 +257,8 @@ reviews AS and AT with re-reviews in `results/reviews/2026-11-16_review_as_*` an
 - **Arm C** (`experiments/configs/grpo/followup/arms/C.toml`): `policy_update = "expert_iteration"`,
   `expert_iteration_every_phases = 1`. **Arm D** (`arms/D.toml`): `policy_update = "grpo_and_expert_iteration"`,
   `expert_iteration_every_phases = 4`, `credit = "per_tactic"`, KL reference stays v0. Both share the recipe
-  `followup/expert_iteration.toml`. Both still carry PLACEHOLDER values that the learning-rate step fills: C's window
-  (1 or 4 phases) and learning rate (5e-5 or 1e-4); D takes C's window and rate and A's GRPO rate. Contradictory keys
+  `followup/expert_iteration.toml`. Both still carry PLACEHOLDER values: C's and D's expert-iteration rate (O2's choice,
+  5e-5 or 1e-4) and D's GRPO rate (A's, from step 2); the window is set to 4 (owner, 2026-11-17). Contradictory keys
   (GRPO-only keys in C, round keys in A or B) fail at load.
 - **Skipped rounds:** a round with too few examples, or whose data fills no optimizer step, is skipped and recorded
   with its reason (`no_optimizer_step`); C then keeps its policy for that phase, D publishes the GRPO update alone.
@@ -296,22 +296,17 @@ reviews AS and AT with re-reviews in `results/reviews/2026-11-16_review_as_*` an
    it is within noise of, or better than, visible reasoning at equal tokens and its bulk GPU use stays above about 90%.
    If no reasoning: also decide whether a search keeps 32 expansions (more statements per phase; recommended, because
    only solved trees train the policy) or gets about 2.3 times more.
-3. **Learning rates** (about $7, 8 hours): v0 samples 48M tokens once without training
-   (`deployment/arm_loop.sh --kind "shared sampling" experiments/configs/grpo/followup/shared_sampling.toml`); cut into
-   4 slices (`experiments/slice_trees.py`); one training round per signal from v0 — per-tactic GRPO and pure proof
-   success on slice 4 at 2e-5, 5e-5 and 1e-4 (`experiments/grpo_phase.py`), expert iteration at 5e-5 and 1e-4 with
-   window 1 (slice 4) and window 4 (slices 1-4) (`experiments/grpo_expert_iteration.py` with `[data]
-   tree_directories`); held-out states for v0 and each variant (`experiments/held_out_evaluate.py`), then
-   `experiments/rank_learning_rates.py` without gate runs picks each signal's rate. No probe runs at this step. This is
-   the first real run of the token-budget loop: watch its first minutes. All of it is automated in master `d500f85`
-   (`deployment/study_chain.sh`, `study_chain.conf`, `experiments/learning_rate_step.py`; reviews AU and AV): deploy
-   master at step 1's HOLD, put the chosen mode file at `/workspace/runs/study_chain/mode.toml`, install the conf
-   (copy, never run from the checkout). It ends in HOLD with `learning_rates_report.md` and the servers stopped. Smoke
-   points for its first run are at the end of review AU (e.g. idle GPUs reading under 100 MiB in
-   `nvidia-smi --query-gpu=index,memory.used`). The node's old `/workspace/step1_chain_tools/study_chain.sh` (S1
-   only) is superseded. Extend the PC pull to `runs/study_chain`, `runs/followup_*` and `runs/held_out_evaluations`
-   before it starts. The rates and C's window then go into the arms' PLACEHOLDER values (as node-local edits,
-   recorded like the others, or committed on the PC and deployed).
+3. **Learning rates, arm A only** (owner, 2026-11-17; about 3-4 node hours): v0 samples one phase of 12M tokens without
+   training in the arms' mode; A's three per-tactic GRPO rounds from v0 on its trees (2e-5, 5e-5, 1e-4); held-out states
+   for v0 (before and after) and each variant; `rank_learning_rates.py` for A. Arm B is dropped; C takes O2's rate and
+   a 4-phase window, D takes C's rate and window and A's rate. Automated by `deployment/study_chain.sh` (with
+   `chain_helpers.sh`, `study_chain.conf`, `experiments/learning_rate_step.py`): start it only after O2's gate has
+   chosen the mode and the search-efficiency branch is merged and deployed, with the offline chain at HOLD; put the
+   chosen mode file at `/workspace/runs/study_chain/mode.toml`, install as a copy (operations note, "The study driver:
+   step 2"). It ends in HOLD with `learning_rates_report.md` (A's rate, and C's and D's rate read from O2's ranking)
+   and the servers stopped. Superseded: the earlier plan of 48M tokens, four slices and ten rounds (A, B2, C with two
+   windows). The rates then go into the arms' PLACEHOLDER values (as node-local edits, recorded like the others, or
+   committed on the PC and deployed).
 4. **Arms**, one after another, each from v0 and value v0, 16 phases of 12M generated tokens, value model trained
    every 2 phases: A (per-tactic GRPO), B (pure proof success), C (expert iteration), D (GRPO plus a round every 4
    phases). After each arm ONE probe run of its final checkpoint with its own value model. An arm that collapses is

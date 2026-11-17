@@ -43,6 +43,11 @@ class Node:
         return self.root / "scenario"
 
     @property
+    def study_state(self) -> Path:
+        """Step 2's driver's state directory, which the offline driver must find idle."""
+        return self.root / "study_state"
+
+    @property
     def workspace(self) -> Path:
         return self.root / "workspace"
 
@@ -94,6 +99,7 @@ def make_node(root: Path) -> Node:
 def start(node: Node, script: Path = SCRIPT) -> int:
     environment = os.environ | {
         "OFFLINE_CHAIN_STATE": str(node.state),
+        "STUDY_CHAIN_STATE": str(node.study_state),
         "OFFLINE_CHAIN_REPOSITORY": str(node.root / "repository"),
         "OFFLINE_CHAIN_START_SECONDS": "0",
         "OFFLINE_CHAIN_POLL_SECONDS": "0",
@@ -362,6 +368,25 @@ def test_a_driver_without_its_helpers_stops_instead_of_restarting(node: Node, tm
     assert (start(node, lonely), "no chain_helpers.sh" in node.stopped()) == (0, True)
 
 
+def older_helpers(directory: Path) -> None:
+    """chain_helpers.sh as it was before other_chain_idle, beside a driver's copy."""
+    text = (REPOSITORY / "deployment" / "chain_helpers.sh").read_text(encoding="utf-8")
+    start = text.index("other_chain_idle() {")
+    end = text.index("\n}\n", start) + 3
+    (directory / "chain_helpers.sh").write_text(text[:start] + text[end:], encoding="utf-8")
+
+
+def test_a_driver_beside_older_helpers_stops_before_anything_runs(node: Node, tmp_path: Path) -> None:
+    driver = tmp_path / "older" / "offline_chain.sh"
+    executable(SCRIPT, driver)
+    older_helpers(driver.parent)
+    assert (start(node, driver), "chain_helpers.sh is older than the driver" in node.stopped(), node.lines()) == (
+        0,
+        True,
+        [],
+    )
+
+
 def test_a_failing_walk_is_retried_by_the_next_start(node: Node) -> None:
     node.set("fail_walk", "2")
     assert supervise(node) == [1, 1, 0]
@@ -430,3 +455,36 @@ def test_a_retried_training_logs_its_own_attempts_throughput(node: Node) -> None
     supervise(node)
     lines = [line for line in node.chain_log().splitlines() if "training matched_5e-5, throughput: " in line]
     assert '"attempt": 2' in lines[-1]
+
+
+def study_chain_running(node: Node, marker: str = "") -> None:
+    """Step 2's driver has started; `marker` (HOLD or STOPPED) where it stands."""
+    node.study_state.mkdir(exist_ok=True)
+    (node.study_state / "chain.log").write_text("driver start\n", encoding="utf-8")
+    if marker:
+        (node.study_state / marker).write_text("held\n", encoding="utf-8")
+
+
+def test_a_running_step_2_stops_the_offline_chain_before_any_server_or_gpu_action(node: Node) -> None:
+    study_chain_running(node)
+    supervise(node)
+    assert ("the study chain" in node.stopped(), node.steps()) == (True, DATA_STEPS)
+
+
+@pytest.mark.parametrize("marker", ["HOLD", "STOPPED"])
+def test_step_2_at_hold_or_stopped_lets_the_offline_chain_run(node: Node, marker: str) -> None:
+    study_chain_running(node, marker)
+    assert supervise(node) == [0] and node.steps() == [*DATA_STEPS, *MATCHED_STEPS]
+
+
+def test_a_prepared_but_unstarted_step_2_does_not_stop_the_offline_chain(node: Node) -> None:
+    node.study_state.mkdir()
+    (node.study_state / "mode.toml").write_text("", encoding="utf-8")
+    assert supervise(node) == [0] and node.steps() == [*DATA_STEPS, *MATCHED_STEPS]
+
+
+def test_the_o1_switch_while_step_2_runs_stops_the_offline_chain(finished: Node) -> None:
+    study_chain_running(finished)
+    finished.release_pool()
+    supervise(finished)
+    assert ("the study chain" in finished.stopped(), finished.steps()) == (True, [*DATA_STEPS, *MATCHED_STEPS])

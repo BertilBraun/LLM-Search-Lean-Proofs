@@ -11,9 +11,9 @@ name = "followup_C"
 [loop.training]
 policy_update = "expert_iteration"
 expert_iteration_every_phases = 1
-# Step 2's choice of window, 1 or 4 phases, by the rule that ranks the rates (DESIGN.md, "Step 2").
-expert_iteration_window_phases = "PLACEHOLDER: step 2's window for C, 1 or 4 phases"
+# The owner's choice of 2026-11-17 (DESIGN.md, "Step 2").
+expert_iteration_window_phases = 4
 
 [expert_iteration.sft.optimization]
-# Step 2's choice between 5e-5 and 1e-4.
-learning_rate = "PLACEHOLDER: step 2's learning rate for C"
+# The offline run O2's choice between 5e-5 and 1e-4 (the same recipe and trainer; owner, 2026-11-17).
+learning_rate = "PLACEHOLDER: O2's learning rate (the offline chain's rank_matched.txt)"

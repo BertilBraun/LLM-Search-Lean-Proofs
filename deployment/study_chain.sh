@@ -1,39 +1,42 @@
 #!/usr/bin/env bash
-# The follow-up study's step 2, the learning rates, unattended on the node (supervisord program study_chain;
-# DESIGN.md, "Follow-up study: controlled arms", "Step 2", with the owner's decisions of 2026-11-16;
+# The follow-up study's step 2, arm A's learning rate, unattended on the node (supervisord program study_chain;
+# DESIGN.md, "Follow-up study: controlled arms", "Step 2", with the owner's decisions of 2026-11-17: arm B dropped, C
+# takes the offline run O2's rate and a 4-phase window, D takes C's rate and window and A's rate;
 # results/followup_node_operations.md, "The study driver"). Installed as a copy, /workspace/step1_chain_tools/
 # study_chain.sh with deployment/chain_helpers.sh beside it, never run from the checkout: bash reads a running script
 # lazily, and a deploy rewrites the checkout.
 #
-#   S1  the servers step 1 left up stopped; the shared sampling run from v0 and value v0 (48M generated tokens, no
-#       training) in the sampling mode $state/mode.toml, then (once the loop process is gone) its four slices
+#   S1  the servers step 1 left up stopped; the shared sampling run from v0 and value v0 (one phase: 12M generated
+#       tokens, no training) in the sampling mode $state/mode.toml, then (once the loop process is gone) its trees
+#       linked into one directory (slice_trees.py --slices 1)
 #   S3a v0's held-out run, while the servers still hold v0
-#   S2  the servers stopped; ten training rounds from v0, one at a time on the 4 GPUs (GRPO A and B2 on slice 4 at
-#       2e-5, 5e-5, 1e-4; expert iteration C at 5e-5, 1e-4 on window 1 and window 4), the expert-iteration data built
-#       beside the GRPO rounds on the Lean CPUs and sized by `train --dry-run` before C trains
+#   S2  the servers stopped; A's three per-tactic GRPO rounds from v0 on the phase's trees (2e-5, 5e-5, 1e-4), one at a
+#       time on the 4 GPUs
 #   S3b the servers started; each variant's held-out run, then v0's again (the A/A and drift check)
-#   S4  rank_learning_rates.py per signal (C over its windows too), the report learning_rates_report.md, the servers
-#       stopped (an arm's launcher keeps any server that answers, whatever it holds), then HOLD
+#   S4  rank_learning_rates.py for A, the report learning_rates_report.md, the servers stopped (an arm's launcher keeps
+#       any server that answers, whatever it holds), then HOLD
 #
 # The plan (rounds, configs, held-out runs) comes from experiments/learning_rate_step.py. Steps done are marked under
 # $state (done_<step>); a rerun (container restart, supervisord's retry) continues at the first step not done. A round
-# whose job died is trained again into a fresh output, the interrupted one moved aside; only a round whose trainer
-# exited 0 and left its completion files is marked done and evaluated. A step's 4th attempt, a health stop, a refused
-# mode, servers that kept dying (held_out_evaluate.py exit 4), GPUs held by another process or a failed check write
-# $state/STOPPED and exit 0; other failures exit 1 for supervisord to retry. HOLD and STOPPED make a start exit 0 at once.
+# whose job died is trained again into a fresh output, the interrupted one moved aside; only a round whose trainer left
+# its completion files (phase.json reading back) is marked done and evaluated. A step's 4th attempt, a health stop, a
+# refused or changed mode, the offline chain started and neither at HOLD nor STOPPED, servers that kept dying
+# (held_out_evaluate.py exit 4), GPUs held by another process or a failed check write $state/STOPPED and exit 0; other failures exit 1 for supervisord to retry. HOLD and STOPPED make a
+# start exit 0 at once.
 set -uo pipefail
 state="${STUDY_CHAIN_STATE:-/workspace/runs/study_chain}"
 repository="${STUDY_CHAIN_REPOSITORY:-/workspace/LLM-Search-Lean-Proofs}"
 start_seconds="${STUDY_CHAIN_START_SECONDS:-60}"
 poll_seconds="${STUDY_CHAIN_POLL_SECONDS:-60}"
-# How long the shared loop may take to exit after finished.json, and the background builds to end, before giving up.
+# How long the shared loop may take to exit after finished.json before giving up.
 loop_exit_seconds="${STUDY_CHAIN_LOOP_EXIT_SECONDS:-600}"
-builds_wait_seconds="${STUDY_CHAIN_BUILDS_WAIT_SECONDS:-10800}"
 mkdir -p "${state}/rounds" "${state}/held_out"
 exec >> "${state}/chain.log" 2>&1
 # Without the helpers, a STOPPED of its own: an exit 1 would make supervisord restart the driver at once, forever.
 source "$(dirname "${BASH_SOURCE[0]}")/chain_helpers.sh" \
     || { echo "$(date -u +%FT%TZ) no chain_helpers.sh beside the driver: install it" | tee "${state}/STOPPED"; exit 0; }
+# An older copy of the helpers lacks what this driver calls (bash would only print "command not found" and go on).
+declare -F other_chain_idle > /dev/null || stop_chain "chain_helpers.sh is older than the driver: install the current one"
 say "driver start (pid $$)"
 for marker in STOPPED HOLD; do
     if [[ -f "${state}/${marker}" ]]; then say "${marker} present ($(cat "${state}/${marker}")): nothing to do"; exit 0; fi
@@ -81,6 +84,9 @@ if ! done_step configs; then
     touch "${state}/done_configs"
 fi
 
+# From here on servers and GPUs: never beside a running offline chain.
+other_chain_idle "${OFFLINE_CHAIN_STATE:-/workspace/runs/offline_chain}" offline
+
 loop_alive() { [[ -f "${shared_run}/loop.pid" ]] && kill -0 "$(cat "${shared_run}/loop.pid")" 2>/dev/null; }
 
 # S1. The shared sampling run, (re)started through arm_loop.sh whenever it is found neither running nor finished.
@@ -122,7 +128,7 @@ fi
 if ! done_step s1_slices; then
     mark_start s1_slices
     [[ -e "${shared_run}/slices" ]] && aside "${shared_run}/slices"
-    "${python}" experiments/slice_trees.py --trees "${shared_run}/trees" --slices 4 --output "${shared_run}/slices" \
+    "${python}" experiments/slice_trees.py --trees "${shared_run}/trees" --slices 1 --output "${shared_run}/slices" \
         > "${state}/slices.log" 2>&1 || stop_chain "slice_trees.py failed: $(tail -1 "${state}/slices.log")"
     cat "${state}/slices.log"
     finish s1_slices
@@ -139,69 +145,12 @@ all_rounds_done() {
     done < "${configs}/rounds.tsv"
 }
 
-# The expert-iteration data, built on the Lean CPUs; no attempt is counted here (ensure_builds counts them).
-build_data() {
-    local name="$1" config="$2"
-    done_step "build_${name}" && return 0
-    mark_start "build_${name}"
-    deployment/background.sh "${python}" experiments/grpo_expert_iteration.py --config "${config}" build --processes 16 \
-        >> "${state}/build_${name}.log" 2>&1 || return 1
-    finish "build_${name}"
-}
-
-# builds.pid holds the background builds' pid and start time (field 22 of /proc/<pid>/stat): after a container restart
-# the pid may name another process, this driver among them.
-process_start() { sed 's/.*) //' "/proc/$1/stat" 2>/dev/null | cut -d' ' -f20; }
-builds_pid_file="${state}/builds.pid"
-builds_running() {
-    [[ -f "${builds_pid_file}" ]] || return 1
-    local pid started
-    read -r pid started < "${builds_pid_file}"
-    [[ "${pid}" != "$$" && -n "${started}" && "$(process_start "${pid}")" == "${started}" ]]
-}
-
-start_builds() {
-    builds_running && { say "the expert-iteration builds still run (pid $(cut -d' ' -f1 "${builds_pid_file}"))"; return 0; }
-    (
-        while IFS=$'\t' read -r -u 3 name config; do
-            build_data "${name}" "${config}" || say "building ${name} failed (build_${name}.log); retried before C trains"
-        done 3< "${configs}/builds.tsv"
-    ) &
-    echo "$! $(process_start $!)" > "${builds_pid_file}"
-    say "expert-iteration builds started beside the GRPO rounds (pid $!)"
-}
-
-ensure_builds() {
-    local name config waited=0
-    while builds_running; do
-        (( waited < builds_wait_seconds )) \
-            || stop_chain "the background builds still run after ${builds_wait_seconds} s (builds.pid, build_*.log): look"
-        sleep 1
-        waited=$(( waited + 1 ))
-    done
-    while IFS=$'\t' read -r -u 3 name config; do
-        if ! done_step "build_${name}"; then
-            attempt "build_${name}"
-            build_data "${name}" "${config}" \
-                || { say "building ${name} failed (build_${name}.log); the driver exits for supervisord to retry"; exit 1; }
-        fi
-        if ! done_step "dry_run_${name}"; then
-            "${python}" experiments/grpo_expert_iteration.py --config "${config}" train --dry-run \
-                > "${state}/dry_run_${name}.log" 2>&1 || stop_chain "the dry run of ${name} failed: $(tail -1 "${state}/dry_run_${name}.log")"
-            "${python}" experiments/learning_rate_step.py check-dry-run --log "${state}/dry_run_${name}.log" \
-                > "${state}/dry_run_${name}.steps" 2>&1 || stop_chain "the dry run of ${name}: $(tail -1 "${state}/dry_run_${name}.steps")"
-            say "dry run of ${name}: $(cat "${state}/dry_run_${name}.steps"); $(grep -m1 'Continuing' "${state}/dry_run_${name}.log")"
-            touch "${state}/done_dry_run_${name}"
-        fi
-    done 3< "${configs}/builds.tsv"
-}
-
 train_round() {
-    local label="$1" kind="$2" config="$3" run_name="$4" output="$5" trees="$6" lean_replay="$7" math_replay="$8"
-    local completion="$9" status=0
+    local label="$1" config="$2" run_name="$3" output="$4" trees="$5" lean_replay="$6" math_replay="$7"
+    local completion="$8" status=0
     done_step "round_${label}" && return 0
-    # A trainer that wrote its completion files last (and they parse: not cut by a kill mid-write), then exited non-zero
-    # at its teardown or lost its driver before the round was marked.
+    # A trainer that wrote its completion files last (and phase.json parses: not cut by a kill mid-write), then exited
+    # non-zero at its teardown or lost its driver before the round was marked.
     # shellcheck disable=SC2086
     if [[ -f "${state}/attempts_round_${label}" ]] && complete ${completion} \
         && "${python}" experiments/learning_rate_step.py check-round --label "${label}" >> "${state}/rounds/${label}.log" 2>&1; then
@@ -215,21 +164,11 @@ train_round() {
     gpus_free
     [[ -e "${output}" ]] && aside "${output}"
     rm -f "${state}/rounds/${label}.exit"
-    local launcher=(env CUDA_VISIBLE_DEVICES=0,1,2,3 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-        taskset --cpu-list "${TRAINING_CPU_LIST}" "${python}" -m torch.distributed.run --standalone
-        "--nproc-per-node=${gpus}")
-    case "${kind}" in
-        grpo)
-            "${launcher[@]}" experiments/grpo_phase.py --config "${config}" --trees "${trees}" --run-name "${run_name}" \
-                --part policy --lean-replay "${lean_replay}" --math-replay "${math_replay}" \
-                >> "${state}/rounds/${label}.log" 2>&1 || status=$?
-            ;;
-        expert_iteration)
-            "${launcher[@]}" experiments/grpo_expert_iteration.py --config "${config}" train \
-                >> "${state}/rounds/${label}.log" 2>&1 || status=$?
-            ;;
-        *) stop_chain "rounds.tsv names an unknown kind ${kind}" ;;
-    esac
+    env CUDA_VISIBLE_DEVICES=0,1,2,3 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+        taskset --cpu-list "${TRAINING_CPU_LIST}" "${python}" -m torch.distributed.run --standalone \
+        "--nproc-per-node=${gpus}" experiments/grpo_phase.py --config "${config}" --trees "${trees}" \
+        --run-name "${run_name}" --part policy --lean-replay "${lean_replay}" --math-replay "${math_replay}" \
+        >> "${state}/rounds/${label}.log" 2>&1 || status=$?
     echo "${status}" > "${state}/rounds/${label}.exit"
     (( status == 0 )) || { say "round ${label} exited ${status} (rounds/${label}.log); the driver exits for supervisord to retry"; exit 1; }
     # shellcheck disable=SC2086
@@ -237,16 +176,14 @@ train_round() {
     finish "round_${label}"
 }
 
-# S2. The training rounds, the servers stopped (only through stop_model.sh).
+# S2. A's three rounds, the servers stopped (only through stop_model.sh).
 if ! all_rounds_done; then
     deployment/stop_model.sh --all >> "${state}/servers.log" 2>&1 \
         || stop_chain "stop_model.sh refused to stop a server (servers.log): look before stopping it by PID"
     gpus_free
-    start_builds
-    while IFS=$'\t' read -r -u 3 label kind config run_name output trees lean_replay math_replay completion; do
-        [[ "${kind}" == expert_iteration ]] && ensure_builds
-        train_round "${label}" "${kind}" "${config}" "${run_name}" "${output}" "${trees}" "${lean_replay}" \
-            "${math_replay}" "${completion}"
+    while IFS=$'\t' read -r -u 3 label config run_name output trees lean_replay math_replay completion; do
+        train_round "${label}" "${config}" "${run_name}" "${output}" "${trees}" "${lean_replay}" "${math_replay}" \
+            "${completion}"
     done 3< "${configs}/rounds.tsv"
 fi
 
@@ -255,18 +192,16 @@ while IFS=$'\t' read -r -u 3 name arm phase adapter; do
     held_out "${name}" "${arm}" "${phase}" "${adapter}"
 done 3< <(tail -n +2 "${configs}/held_out.tsv")
 
-# S4. The ranking per signal, then the report.
+# S4. A's ranking, then the report (C's and D's rate named there as O2's, from the offline chain's choice).
 if ! done_step s4_report; then
-    for signal in A B2 C; do
-        arguments_text="$("${python}" experiments/learning_rate_step.py rank-arguments --signal "${signal}")" \
-            || stop_chain "rank-arguments failed for ${signal}"
-        mapfile -t arguments <<< "${arguments_text}"
-        "${python}" experiments/rank_learning_rates.py "${arguments[@]}" > "${state}/rank_${signal}.txt" 2>&1 \
-            || stop_chain "rank_learning_rates.py failed for ${signal}: $(tail -1 "${state}/rank_${signal}.txt")"
-        say "signal ${signal}: $(grep -m1 '^Chosen:' "${state}/rank_${signal}.txt")"
-    done
+    arguments_text="$("${python}" experiments/learning_rate_step.py rank-arguments)" || stop_chain "rank-arguments failed"
+    mapfile -t arguments <<< "${arguments_text}"
+    "${python}" experiments/rank_learning_rates.py "${arguments[@]}" > "${state}/rank_A.txt" 2>&1 \
+        || stop_chain "rank_learning_rates.py failed: $(tail -1 "${state}/rank_A.txt")"
+    say "arm A: $(grep -m1 '^Chosen:' "${state}/rank_A.txt")"
     "${python}" experiments/learning_rate_step.py report --state "${state}" --mode "${mode}" --shared-run "${shared}" \
-        --earlier-v0 v0 --output "${state}/learning_rates_report.md" > "${state}/report.log" 2>&1 \
+        --earlier-v0 v0 --o2-ranking "${LEAN_SEARCH_RUNS}/offline_chain/rank_matched.txt" \
+        --output "${state}/learning_rates_report.md" > "${state}/report.log" 2>&1 \
         || stop_chain "the report failed: $(tail -1 "${state}/report.log")"
     touch "${state}/done_s4_report"
 fi

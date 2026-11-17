@@ -9,7 +9,6 @@ if [[ "$1" == -m ]]; then
 fi
 script="$1"
 shift
-config_value() { sed -n "s/^$1 = \"\(.*\)\"$/\1/p" "$2" | head -1; }
 
 case "${script}" in
     experiments/learning_rate_step.py)
@@ -48,15 +47,8 @@ case "${script}" in
                 mkdir -p "${output}"
                 cp "${FAKE_SCENARIO}"/configs/* "${output}/"
                 ;;
-            check-dry-run)
-                if grep -q ' 0 steps on' "$(option_value --log "$@")"; then
-                    echo "The dry run plans no optimizer step: the round would not train." >&2
-                    exit 1
-                fi
-                echo "9 steps"
-                ;;
             rank-arguments)
-                cat "${FAKE_SCENARIO}/rank_$(option_value --signal "$@").arguments"
+                cat "${FAKE_SCENARIO}/rank.arguments"
                 ;;
             report)
                 outcome report || exit 1
@@ -72,10 +64,11 @@ case "${script}" in
             exit 1
         fi
         output="$(option_value --output "$@")"
+        [[ "$(option_value --slices "$@")" == 1 ]] || { log_command "NOT ONE SLICE"; exit 2; }
         mkdir -p "${output}/slice_1"
         outcome slices || exit 1
-        mkdir -p "${output}"/slice_{2,3,4}
-        echo "4 slices"
+        echo '{}' > "${output}/manifest.json"
+        echo "1 slice"
         ;;
     experiments/held_out_evaluate.py)
         name="$(option_value --name "$@")"
@@ -103,42 +96,12 @@ case "${script}" in
         log_command "trained ${run}"
         outcome "after_round_${run}" || exit 1
         ;;
-    experiments/grpo_expert_iteration.py)
-        config="$(option_value --config "$@")"
-        command="${3:-}"
-        build="$(config_value data "${config}")"
-        run="$(config_value run_name "${config}")"
-        case "${command} ${4:-}" in
-            "build "*)
-                log_command "build ${build}"
-                sleep "$(cat "${FAKE_SCENARIO}/slow_build_${build}" 2>/dev/null || echo 0)"
-                outcome "build_${build}" || exit 1
-                mkdir -p "${LEAN_SEARCH_DATA}/grpo_expert_iteration/${build}"
-                ;;
-            "train --dry-run")
-                log_command "dry run ${build}"
-                outcome "dry_run_${build}" || exit 1
-                [[ -d "${LEAN_SEARCH_DATA}/grpo_expert_iteration/${build}" ]] || { log_command "MISSING build ${build}"; exit 1; }
-                echo "Continuing v0's adapter /adapter: 800 expert-iteration examples, $(cat "${FAKE_SCENARIO}/dry_run_steps" 2>/dev/null || echo 9) steps on 4 GPUs"
-                ;;
-            "train ")
-                log_command "train ${run}"
-                [[ -d "${LEAN_SEARCH_DATA}/grpo_expert_iteration/${build}" ]] || { log_command "MISSING build ${build}"; exit 1; }
-                mkdir -p "${LEAN_SEARCH_CHECKPOINTS}/${run}"
-                outcome "round_${run}" || exit 1
-                mkdir -p "${LEAN_SEARCH_CHECKPOINTS}/${run}/adapter"
-                echo '{}' > "${LEAN_SEARCH_CHECKPOINTS}/${run}/training_summary.json"
-                log_command "trained ${run}"
-                outcome "after_round_${run}" || exit 1
-                ;;
-        esac
-        ;;
     experiments/rank_learning_rates.py)
-        signal="$(option_value --variant "$@")"
-        signal="${signal%%_*}"
-        log_command "rank_learning_rates.py ${signal}"
-        outcome "rank_${signal}" || exit 1
-        echo "Chosen: ${signal}_5e-5 (the held-out states decide; tied on the held-out states: ${signal}_5e-5)"
+        arm="$(option_value --variant "$@")"
+        arm="${arm%%_*}"
+        log_command "rank_learning_rates.py ${arm}"
+        outcome "rank_${arm}" || exit 1
+        echo "Chosen: ${arm}_5e-5 (the held-out states decide; tied on the held-out states: ${arm}_5e-5)"
         ;;
     experiments/offline_arm.py)
         command="$3"

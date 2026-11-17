@@ -1,7 +1,8 @@
 # Helpers of the node's chain drivers (deployment/study_chain.sh, deployment/offline_chain.sh), sourced by a driver from
 # its own directory: installed as a copy beside it, never read from the checkout while a driver runs. A driver sets
 # before using them: state (its state directory, chain.log's), python, poll_seconds, gpus and gpu_free_mib (gpus_free),
-# held_out_loop_config (held_out); its working directory is the checkout.
+# held_out_loop_config (held_out); its working directory is the checkout. other_chain_idle takes the other driver's
+# state directory.
 
 say() { echo "$(date -u +%FT%TZ) $*"; }
 stop_chain() { say "STOPPED: $*"; echo "$(date -u +%FT%TZ) $*" > "${state}/STOPPED"; exit 0; }
@@ -20,6 +21,16 @@ finish() {
     printf '%s\t%s\t%s\n' "$1" "$(cat "${state}/started_$1")" "$(date +%s)" >> "${state}/timings.tsv"
     touch "${state}/done_$1"
     say "step $1 done"
+}
+
+# The node's two chain drivers (study_chain, offline_chain) share the GPUs and the servers: before its first server or
+# GPU action a driver stops while the other has started (its chain.log exists; an empty or prepared state directory
+# does not count) and stands neither at HOLD nor STOPPED.
+other_chain_idle() {
+    local other="$1" name="$2"
+    [[ -f "${other}/chain.log" ]] || return 0
+    [[ -f "${other}/HOLD" || -f "${other}/STOPPED" ]] && return 0
+    stop_chain "the ${name} chain (${other}) has started and stands neither at HOLD nor STOPPED: the two chains share the GPUs and servers; move STOPPED aside and start this one once the other holds"
 }
 
 aside() {

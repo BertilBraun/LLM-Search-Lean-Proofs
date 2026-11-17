@@ -54,7 +54,7 @@ def test_the_configs_are_written_again_unchanged_on_a_restart(tmp_path: Path) ->
     arguments = ("write-configs", "--output", str(tmp_path / "configs"), "--shared-run", "followup_shared_sampling")
     first = command(tmp_path, "learning_rate_step.py", *arguments)
     second = command(tmp_path, "learning_rate_step.py", *arguments)
-    assert (first.returncode, second.returncode, len(list((tmp_path / "configs").iterdir()))) == (0, 0, 13)
+    assert (first.returncode, second.returncode, len(list((tmp_path / "configs").iterdir()))) == (0, 0, 5)
 
 
 def test_configs_changed_since_the_step_began_are_refused(tmp_path: Path) -> None:
@@ -62,12 +62,6 @@ def test_configs_changed_since_the_step_began_are_refused(tmp_path: Path) -> Non
     command(tmp_path, "learning_rate_step.py", *arguments)
     (tmp_path / "configs" / "A_5e-5.toml").write_text("changed", encoding="utf-8")
     assert "written once" in command(tmp_path, "learning_rate_step.py", *arguments).stderr
-
-
-def test_a_dry_run_log_without_steps_is_refused(tmp_path: Path) -> None:
-    log = tmp_path / "dry_run.log"
-    log.write_text("Continuing v0's adapter /a: 0 expert-iteration examples, 0 steps on 4 GPUs\n", encoding="utf-8")
-    assert command(tmp_path, "learning_rate_step.py", "check-dry-run", "--log", str(log)).returncode == 1
 
 
 def test_the_shared_sampling_run_searches_as_its_mode_says(tmp_path: Path) -> None:

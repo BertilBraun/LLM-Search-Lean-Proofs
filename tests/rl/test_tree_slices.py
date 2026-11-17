@@ -140,3 +140,35 @@ def test_a_statement_searched_again_counts_as_seen_before(tmp_path: Path) -> Non
         (trees / tree.file).write_bytes(b"tree")
     manifest = write_slices(trees, slice_by_tokens(repeated, 2), tmp_path / "slices", len(repeated))
     assert [record.statements_seen_before for record in manifest.slices] == [0, 1]
+
+
+def test_one_slice_holds_every_tree_in_finish_order() -> None:
+    (members,) = slice_by_tokens(ENTRIES, 1)
+    assert list(members) == sorted(ENTRIES, key=lambda tree: tree.finished_time)
+
+
+def test_one_slice_links_every_tree_and_records_them_all(tmp_path: Path) -> None:
+    trees = tmp_path / "trees"
+    (trees / "phase_0001").mkdir(parents=True)
+    for tree in ENTRIES:
+        (trees / tree.file).write_bytes(b"tree")
+    manifest = write_slices(trees, slice_by_tokens(ENTRIES, 1), tmp_path / "slices", len(ENTRIES))
+    linked = len(list((tmp_path / "slices" / "slice_1").glob("*.json.gz")))
+    assert (linked, manifest.trees, manifest.generated_tokens) == (len(ENTRIES), len(ENTRIES), sum(TOKENS))
+
+
+CLASH = [ENTRIES[0], dataclasses.replace(ENTRIES[1], file=ENTRIES[0].file.replace("phase_0001", "phase_0002"))]
+
+
+def test_trees_of_one_name_in_one_slice_are_refused(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="share one"):
+        write_slices(tmp_path / "trees", slice_by_tokens(CLASH, 1), tmp_path / "slices", len(CLASH))
+
+
+def test_trees_of_one_name_in_different_slices_are_linked(tmp_path: Path) -> None:
+    trees = tmp_path / "trees"
+    for tree in CLASH:
+        (trees / tree.file).parent.mkdir(parents=True, exist_ok=True)
+        (trees / tree.file).write_bytes(b"tree")
+    manifest = write_slices(trees, slice_by_tokens(CLASH, 2), tmp_path / "slices", len(CLASH))
+    assert manifest.trees == 2
