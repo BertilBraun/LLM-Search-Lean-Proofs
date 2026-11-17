@@ -304,6 +304,18 @@ default), safe server stops, results pulled to the PC as they are written.
 | First node, 2026-11-14 11:20 UTC to its outage at about 23:35 UTC | about $11 at most; partly refunded by the provider (owner) |
 | Second node, from 2026-11-15 about 08:30 UTC | $0.83 per hour |
 
+## Offline run O2 (token-matched), 2026-11-17
+
+- Data: 2,091 pool proofs (about 299 per proof-length band), 30,632 blocks of 1-5 tactics, 2.0M completion and 17.3M
+  prompt tokens; 4 epochs from v0 without reasoning, 60/30/10% offline/Lean/math replay. Training at 12.1k tokens/s
+  sustained on 4 GPUs (2.2 h per rate).
+- Held-out states without reasoning, against v0 in the same mode (points, 95%): valid Lean +10.5 [+8.3, +13.1] at 5e-5
+  and +11.8 [+9.4, +14.5] at 1e-4; success (reaching the reference's next state) -2.9 [-5.7, -0.5] and -2.7
+  [-5.7, -0.4] on the flattened measure, -5.0 and -5.6 on the standard one. More valid steps, fewer that land exactly
+  on the reference proof's next state; the probe run decides what that means for search.
+- Chosen: 5e-5 (the two rates tie; the lower rate). C and D take 5e-5. Probe run `offline_arm_matched` started
+  21:18 UTC (no reasoning, value v0, 16 expansions, depth weight 0.1); the gate against v35 follows.
+
 ## Lean overhead (measured 2026-11-17 at HOLD; files in `node_backup/2026-11-15/live/runs/lean_overhead/`)
 
 Run 4 (no reasoning): 575 Lean-hours, 41.2 s of Lean per expansion.
