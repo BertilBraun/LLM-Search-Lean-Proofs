@@ -14,8 +14,9 @@ logger = logging.getLogger(__name__)
 
 class SpareProcesses:
     """Up to `count` started REPL processes with the pool's headers loaded, each handed to a REPL that must replace its
-    process mid-use (a wall-clock kill, a crash, a limit) and replaced in the background. They run on the CPUs of the
-    process that starts them, like the pool's own."""
+    process (a wall-clock kill, a crash, a limit, or its first use after the pool stopped it) and replaced in the
+    background. They run on the CPUs of the process that starts them, like the pool's own. A start that fails is tried
+    again after `retry_seconds`."""
 
     def __init__(
         self,
@@ -30,6 +31,8 @@ class SpareProcesses:
         self._headers = headers
         self._ready: collections.deque[LeanRepl] = collections.deque()
         self._starting: set[asyncio.Task[None]] = set()
+        # Dead spares being closed: not counted as starting, never cancelled.
+        self._closing: set[asyncio.Task[None]] = set()
         self._closed = False
 
     @property
@@ -64,6 +67,9 @@ class SpareProcesses:
         await asyncio.gather(*self._starting, return_exceptions=True)
         ready, self._ready = list(self._ready), collections.deque()
         await asyncio.gather(*(spare.close() for spare in ready))
+        # A REPL still in use while the pool closes can hand back a dead spare to close meanwhile.
+        while self._closing:
+            await asyncio.gather(*self._closing, return_exceptions=True)
 
     async def _start_one(self) -> None:
         spare = LeanRepl(self.config)
@@ -75,9 +81,13 @@ class SpareProcesses:
             await spare.close()
             raise
         except Exception:
-            logger.exception("Starting a spare Lean REPL failed")
+            logger.exception("Starting a spare Lean REPL failed; trying again in %g s", self.retry_seconds)
             await spare.close()
             await asyncio.sleep(self.retry_seconds)
+            current = asyncio.current_task()
+            assert current is not None
+            self._starting.discard(current)
+            self.fill()
             return
         if self._closed:
             await spare.close()
@@ -86,8 +96,8 @@ class SpareProcesses:
 
     def _close_later(self, spare: LeanRepl) -> None:
         closing = asyncio.create_task(spare.close())
-        self._starting.add(closing)
-        closing.add_done_callback(self._starting.discard)
+        self._closing.add(closing)
+        closing.add_done_callback(self._closing.discard)
 
 
 class LeanReplPool:
@@ -126,6 +136,17 @@ class LeanReplPool:
 
     async def __aexit__(self, *exception_information: object) -> None:
         await self.close()
+
+    def spare_text(self) -> str:
+        """How the spare processes served the pool's REPLs so far; empty without spares."""
+        if self.spares is None:
+            return ""
+        swaps = sum(repl.spare_swaps for repl in self.repls)
+        misses = sum(repl.spare_misses for repl in self.repls)
+        return (
+            f"spare REPL processes {self.spares.ready} of {self.spares.count} ready; {swaps} replacements took one, "
+            f"{misses} found none ready"
+        )
 
     async def start(self, headers: Sequence[str] = ()) -> None:
         self._headers = list(dict.fromkeys([*self._headers, *headers]))

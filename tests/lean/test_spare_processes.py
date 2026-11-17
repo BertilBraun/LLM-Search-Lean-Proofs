@@ -1,4 +1,7 @@
 import asyncio
+import dataclasses
+import os
+import signal
 from pathlib import Path
 
 import pytest
@@ -6,6 +9,7 @@ from fake_repl_project import HEADER, STATEMENT, FakeReplProject, fake_repl_proj
 
 from lean_search.lean import LeanReplPool, LeanTimeout, ProofState
 from lean_search.lean.pool import SpareProcesses
+from lean_search.lean.repl import REPL_BINARY
 
 pytestmark = needs_linux
 IMPORT_SECONDS = 1.5
@@ -97,8 +101,60 @@ async def test_a_taken_spare_is_replaced_in_the_background(tmp_path: Path, monke
     project = fake_repl_project(tmp_path, monkeypatch, timeout_seconds=TIMEOUT_SECONDS)
     pool, _ = await killed_once(project, spare_processes=1, wait_for_spare=True)
     await spares_ready(pool, 1)
+    assert pool.spares is not None
+    refilled = pool.spares.ready_process_ids()
+    in_use = pool.repls[0].process_id
     await pool.close()
-    assert pool.repls[0].spare_swaps == 1
+    assert len(refilled) == 1 and refilled[0] != in_use
+
+
+async def test_a_dead_ready_spare_is_not_handed_out(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    project = fake_repl_project(tmp_path, monkeypatch, timeout_seconds=TIMEOUT_SECONDS)
+    pool = LeanReplPool(1, project.config, spare_processes=1)
+    await pool.start([HEADER])
+    await spares_ready(pool, 1)
+    assert pool.spares is not None
+    os.kill(pool.spares.ready_process_ids()[0], signal.SIGKILL)
+    async with asyncio.timeout(30):
+        while pool.spares.ready_process_ids():
+            await asyncio.sleep(0.05)
+    async with pool.acquire() as repl:
+        start = await repl.start_proof(STATEMENT, HEADER)
+        assert isinstance(start.outcome, ProofState)
+        await repl.apply_block(start.outcome, "hang")
+        after = await repl.apply_block(start.outcome, "done")
+    await pool.close()
+    assert (repl.spare_swaps, repl.spare_misses, after.state.is_proved) == (0, 1, True)
+
+
+async def test_a_failed_spare_start_is_tried_again(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    project = fake_repl_project(tmp_path, monkeypatch)
+    binary = project.config.project_directory / REPL_BINARY
+    hidden = binary.with_name("repl.hidden")
+    binary.rename(hidden)
+    spares = SpareProcesses(1, project.config, lambda: [HEADER], retry_seconds=0.2)
+    spares.fill()
+    await asyncio.sleep(0.5)
+    hidden.rename(binary)
+    async with asyncio.timeout(30):
+        while spares.ready < 1:
+            await asyncio.sleep(0.05)
+    await spares.close()
+
+
+async def test_a_repl_past_its_proof_state_limit_takes_a_spare(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    project = fake_repl_project(tmp_path, monkeypatch)
+    config = dataclasses.replace(project.config, max_proof_states=4)
+    pool = LeanReplPool(1, config, spare_processes=1)
+    await pool.start([HEADER])
+    await spares_ready(pool, 1)
+    async with pool.acquire() as repl:
+        start = await repl.start_proof(STATEMENT, HEADER)
+        assert isinstance(start.outcome, ProofState)
+        for _ in range(4):
+            await repl.apply_block(start.outcome, "step")
+    await pool.close()
+    assert repl.spare_swaps >= 1
 
 
 async def test_the_spare_has_the_pools_headers_loaded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
