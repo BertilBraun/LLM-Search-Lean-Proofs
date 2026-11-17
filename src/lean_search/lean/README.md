@@ -216,6 +216,38 @@ arms' training sampling only (`rl/README.md`, "Search efficiency switches"), and
   Lean-load comparisons count only the stops that happened. The cache is consulted first: an exact input with a
   deterministic outcome takes it even when its text is skipped elsewhere.
 
+## Bounded nlinarith
+
+`LeanReplConfig.nlinarith_variant` (from `[search] nlinarith_variant`, None by default and then absent from the run
+config and its digest; `search_repl_config` gives a pool's REPLs the search's, and a search refuses a REPL with
+another) runs Mathlib's `nlinarith` as a bounded variant (`nlinarith.py`): linarith with nlinarith's squares and fewer
+of its pairwise products. On step 1's run 4 (`experiments/analysis/nlinarith_variants.py`, 300 calls, 95% intervals)
+`degree` took 71% (57-85%) of plain nlinarith's time and kept 92.7% (87-98%) of its successes; the arms' training
+sampling uses it (`rl/README.md`, "Search efficiency switches"), evaluations never do.
+
+- **Environment:** `VARIANT_DEFINITIONS` is appended to the base definitions of every process of the pool (spares
+  included), exactly the environment the measurement used. It moves the fresh-name counters, so heavy steps' run
+  times shift as after any change of the base definitions (above); never on without the switch.
+- **What runs:** `variant_tactic` rewrites, just before a tactic goes to Lean (`_run_tactic`, so steps, replays and
+  re-runs alike), every whole-word `nlinarith` with or without a hint list, also inside combinators, nested `by`
+  blocks and `first`, to `lean_search_nlinarith <variant>`. Forms with their own options (`nlinarith!`,
+  `nlinarith only`, `nlinarith (config := ...)`) and names containing the word run as written.
+- **What is recorded:** the text as written. States' tactic paths, edges, executed pieces, proofs and so the
+  training data hold the policy's (or the sweep's) `nlinarith [...]`: arms learn to write plain Mathlib. The result
+  cache, the timeout skip, the identifier check, the forbidden-token check and de-duplication all see the written
+  text; since the rewrite is a fixed function of the pool's config, equal written inputs are equal executed ones.
+  `lean_search_nlinarith` itself is a forbidden token, so a policy cannot call the variant directly.
+- **Verification:** `verify_state` accepts on the executed text (the variant, wrapped as executed) in the base
+  environment with the definitions; the kernel checks the term the variant built like any other, and the variant only
+  adds proofs of facts to linarith's input, so soundness is the kernel's as always. `plain_verified` still re-checks
+  the written text with Mathlib's own `nlinarith`, unwrapped, as for every proof. Nothing requires it: the variant's
+  products are a subset of nlinarith's, so plain nlinarith has a certificate too but may not find it within Lean's
+  default limits. Cost: one plain elaboration per found proof, which with the variant takes about the plain
+  nlinarith's own time (seconds for most); for a proof whose step only the variant finds in time, up to the
+  declaration's default 200k heartbeats or the 300 s command limit when the time goes into unmetered arithmetic. Such
+  proofs (`plain_verified = False`) train the policy all the same (a search with the variant reproduces them); they
+  are not plain-Mathlib proofs and must be filtered out of anything published as such.
+
 ## Verification
 
 `verify_state` and `verify_proof` re-elaborate the theorem from scratch in the base environment with three separate

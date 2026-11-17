@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from lean_search.lean.nlinarith import NlinarithVariant
 from lean_search.rl.loop_config import EvaluationTarget
 from lean_search.rl.search_models import evaluation_run_config
 from lean_search.rl.study_configs import sampling_record, sampling_refusal
@@ -29,7 +30,7 @@ def mode_search_config(mode: str) -> RunConfig:
 
 
 def without_switches(config: RunConfig) -> RunConfig:
-    search = dataclasses.replace(config.search, result_cache=None, timeout_skip=None)
+    search = dataclasses.replace(config.search, result_cache=None, timeout_skip=None, nlinarith_variant=None)
     return dataclasses.replace(config, search=search, lean=dataclasses.replace(config.lean, spare_processes=None))
 
 
@@ -41,6 +42,11 @@ def test_a_sampling_mode_searches_with_the_result_cache(mode: str) -> None:
 @pytest.mark.parametrize("mode", MODES)
 def test_a_sampling_mode_searches_with_the_timeout_skip_at_two_stops(mode: str) -> None:
     assert mode_search_config(mode).search.timeout_skip == TimeoutSkipConfig(True, 2)
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_a_sampling_mode_runs_nlinarith_as_the_degree_bounded_variant(mode: str) -> None:
+    assert mode_search_config(mode).search.nlinarith_variant == NlinarithVariant.DEGREE
 
 
 @pytest.mark.parametrize("mode", MODES)
@@ -57,13 +63,13 @@ def test_a_sampling_config_is_its_student_config_but_for_the_switches(mode: str)
 def test_the_probe_evaluation_searches_without_the_switches() -> None:
     probe = tomllib.loads((CONFIGS / "followup/probe_evaluation.toml").read_text(encoding="utf-8"))
     config = load_run_config(REPOSITORY / probe["search_config"])
-    assert (config.search.result_cache, config.search.timeout_skip, config.lean.spare_processes) == (None, None, None)
+    assert without_switches(config) == config
 
 
 @pytest.mark.parametrize("mode", MODES)
 def test_an_evaluation_from_a_sampling_config_turns_the_switches_off(mode: str) -> None:
     config = evaluation_run_config(mode_search_config(mode), EvaluationTarget(16, 3600.0, 56))
-    assert (config.search.result_cache, config.search.timeout_skip, config.lean.spare_processes) == (None, None, None)
+    assert without_switches(config) == config
 
 
 @pytest.mark.parametrize("mode", MODES)

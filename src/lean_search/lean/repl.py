@@ -17,6 +17,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import NamedTuple, Protocol
 
+from lean_search.lean.nlinarith import VARIANT_DEFINITIONS, NlinarithVariant, variant_tactic
 from lean_search.lean.plans import Proceed, Rejection, Stop, TacticPlan, plain_plan, segment_verdict
 from lean_search.lean.text import (
     FORBIDDEN_TOKENS,
@@ -111,6 +112,9 @@ class LeanReplConfig:
     # The REPL lowers its own priority (no privilege needed), so that a GPU feeder on its CPUs wins them; its caller
     # keeps its own (deployment/README.md, "CPU budget").
     niceness: int = 19
+    # Every plain `nlinarith` of a tactic runs as this bounded variant, defined in the base environment
+    # (nlinarith.py); states record the text as written. None: Mathlib's nlinarith, and the base environment as before.
+    nlinarith_variant: NlinarithVariant | None = None
 
 
 @dataclass(frozen=True)
@@ -639,7 +643,7 @@ class LeanRepl:
         async with self._lock:
             started = time.monotonic()
             executed = await self._guarded_verification(
-                state.statement, state.header, state.executed_proof, state.proof
+                state.statement, state.header, self._executed_proof(state), state.proof
             )
             plain = await self._guarded_verification(state.statement, state.header, state.proof, state.proof)
             await self._recover()
@@ -667,6 +671,19 @@ class LeanRepl:
         outcome = await self._guarded(self._apply_tactic, state, tactic, limits)
         memory.record(state, tactic, limits.heartbeats, outcome, self._tactic_seconds)
         return outcome, None
+
+    def _executed_text(self, tactic: str) -> str:
+        """The tactic as Lean runs it: written `nlinarith`s as the configured variant."""
+        variant = self.config.nlinarith_variant
+        return tactic if variant is None else variant_tactic(tactic, variant)
+
+    def _executed_proof(self, state: ProofState) -> str:
+        return executed_proof(tuple(map(self._executed_text, state.tactics)), state.tactic_heartbeats)
+
+    def _base_definitions(self) -> str:
+        if self.config.nlinarith_variant is None:
+            return BASE_ENVIRONMENT_DEFINITIONS
+        return BASE_ENVIRONMENT_DEFINITIONS + VARIANT_DEFINITIONS
 
     async def _guarded[**Parameters](
         self,
@@ -810,7 +827,7 @@ class LeanRepl:
         self, state: ProofState, tactic: str, limits: TacticLimits
     ) -> ProofState | LeanError | LeanTimeout:
         response = await self._tactic(
-            wrap_tactic(tactic, limits.heartbeats), state.repl_proof_state, limits.timeout_seconds
+            wrap_tactic(self._executed_text(tactic), limits.heartbeats), state.repl_proof_state, limits.timeout_seconds
         )
         match response:
             case ReplErrorResponse(message=message):
@@ -903,7 +920,7 @@ class LeanRepl:
             try:
                 environment = await self._header_environment(header)
                 response = await self._command(
-                    BASE_ENVIRONMENT_DEFINITIONS, environment, self.config.command_timeout_seconds
+                    self._base_definitions(), environment, self.config.command_timeout_seconds
                 )
                 if response.texts(Severity.ERROR):
                     raise ValueError(

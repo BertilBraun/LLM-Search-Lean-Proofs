@@ -705,15 +705,18 @@ records its own budget, so the signals stay comparable). In the visible run, exp
 
 ## Search efficiency switches
 
-Three switches cut Lean time per expansion (`lean/README.md`, "Search memory" and "Processes"; measured on step 1's
+Four switches cut Lean time per expansion (`lean/README.md`, "Search memory" and "Processes"; measured on step 1's
 run 4: the result cache about 5.7% of Lean time, the timeout skip 2.0% with no proof lost, spares most of the 4.2%
-spent restarting killed processes). Decided for the controls study (2026-11-17): they are on in the arms' **training
-sampling only**, through the sampling modes' search configs (`followup/modes/*.toml` name
+spent restarting killed processes; the degree-bounded nlinarith about 29% of the time of the policy's nlinarith
+calls, which were 68% of all Lean time, keeping 93% of their successes, `lean/README.md`, "Bounded nlinarith").
+Decided for the controls study (2026-11-17, the nlinarith variant by the owner without a search A/B): they are on in
+the arms' **training sampling only**, through the sampling modes' search configs (`followup/modes/*.toml` name
 `search/<student>_sampling.toml`, the student config plus `[search] result_cache = true`,
+`nlinarith_variant = "degree"`,
 `[search.timeout_skip] enabled = true`, `max_wall_clock_timeouts = 2`, `[lean] spare_processes = 8`;
 `tests/rl/test_sampling_configs.py` keeps the copies equal to the student configs otherwise). Step 2's shared sampling
 run uses the same modes, so `study_configs.sampling_refusal` still refuses an arm sampling otherwise. Probe runs and
-held-out evaluations keep the plain student configs, and `search_models.evaluation_run_config` turns all three off
+held-out evaluations keep the plain student configs, and `search_models.evaluation_run_config` turns all four off
 for every fixed-target search, so evaluations stay comparable with the anchors and the offline arm. Off, the switches
 are absent from the written config and its digest (`probe_evaluation.run_config_sha256`, which also leaves spares out
 as timing only), and the new record fields are written only when non-zero.

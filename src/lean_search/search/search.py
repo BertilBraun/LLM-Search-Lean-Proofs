@@ -29,6 +29,7 @@ from lean_search.lean.identifiers import (
     shared_name_repairer,
 )
 from lean_search.lean.memory import SearchMemory
+from lean_search.lean.nlinarith import NlinarithVariant
 from lean_search.lean.plans import Rejection, TacticPlan, plain_plan, plan_block
 from lean_search.lean.repl import BlockFailure, BlockResult
 from lean_search.lean.text import TacticPiece, join_tactics
@@ -140,6 +141,9 @@ class SearchConfig:
     # an absent timeout skip keep the written config, so its digest, as it was before these switches.
     result_cache: bool | None = None
     timeout_skip: TimeoutSkipConfig | None = None
+    # Every plain `nlinarith` the policy or the sweep writes runs as this bounded variant (lean/nlinarith.py); the tree
+    # and training keep the written text. Set on the pool's REPLs (`search_repl_config`), which must match.
+    nlinarith_variant: NlinarithVariant | None = None
 
 
 class StopReason(StrEnum):
@@ -405,6 +409,7 @@ class _TheoremSearch:
         skip_after = skip.max_wall_clock_timeouts if skip is not None and skip.enabled else None
         cache = bool(config.result_cache)
         self.memory = SearchMemory(cache, skip_after) if cache or skip_after is not None else None
+        assert repl.config.nlinarith_variant == config.nlinarith_variant, "the pool runs another nlinarith"
 
     def wall_seconds(self) -> float:
         return time.monotonic() - self.started

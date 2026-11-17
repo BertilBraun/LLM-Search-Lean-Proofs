@@ -22,7 +22,7 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 from lean_search.data import Problem, Split, load_minif2f
-from lean_search.lean import LeanReplConfig, LeanReplPool
+from lean_search.lean import LeanReplPool
 from lean_search.policy.expander import PolicyExpander, open_policy_expander
 from lean_search.policy.serving_lock import exit_while_served
 from lean_search.search import (
@@ -38,6 +38,7 @@ from lean_search.search import (
     tree_record,
     write_tree,
 )
+from lean_search.search.config import search_repl_config
 from lean_search.search.records import from_json_object, to_json
 from lean_search.search.summary import RunMetadata, render_markdown, summarize
 from lean_search.value.estimator import ValueModelEstimator, open_value_estimator
@@ -179,7 +180,7 @@ async def search_with_expander(
 
     async with LeanReplPool(
         config.lean.pool_size,
-        LeanReplConfig(),
+        search_repl_config(config),
         config.lean.restart_fraction,
         spare_processes=config.lean.spare_processes or 0,
     ) as pool:

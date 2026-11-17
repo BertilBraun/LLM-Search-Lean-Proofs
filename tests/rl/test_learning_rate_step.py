@@ -562,7 +562,7 @@ def test_the_no_reasoning_search_is_run_4s_without_its_token_cap_and_expansions(
     for setting in ("max_generated_tokens", "max_expansions"):
         del run_4["search"][setting]
     search = toml(NO_REASONING_SEARCH)
-    for setting in ("max_expansions", "result_cache", "timeout_skip"):
+    for setting in ("max_expansions", "result_cache", "timeout_skip", "nlinarith_variant"):
         del search["search"][setting]
     del search["lean"]
     assert search == run_4

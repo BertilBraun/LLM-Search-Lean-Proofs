@@ -77,6 +77,7 @@ def evaluation_run_config(config: RunConfig, target: EvaluationTarget) -> RunCon
         exploration=dataclasses.replace(config.search.exploration, enabled=False),
         result_cache=None,
         timeout_skip=None,
+        nlinarith_variant=None,
     )
     lean = dataclasses.replace(
         config.lean, pool_size=target.concurrency, concurrency=target.concurrency, spare_processes=None

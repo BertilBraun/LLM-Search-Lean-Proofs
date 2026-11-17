@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
+from lean_search.lean.repl import LeanReplConfig
 from lean_search.policy.config import PolicyConfig, policy_config_problem
 from lean_search.search.expanders import AutomationConfig, AutomationExpander, CompositeExpander, Expander
 from lean_search.search.priority import PriorityConfig, PriorityKind
@@ -89,6 +90,11 @@ def parse_run_config(text: str) -> RunConfig:
     if not config.value.server_urls or config.value.top_k < 1:
         raise ValueError("value.server_urls must not be empty and value.top_k must be positive.")
     return config
+
+
+def search_repl_config(config: RunConfig) -> LeanReplConfig:
+    """The REPLs of a pool for this config's searches (their nlinarith variant is the search's)."""
+    return LeanReplConfig(nlinarith_variant=config.search.nlinarith_variant)
 
 
 def load_run_config(path: Path) -> RunConfig:

@@ -28,7 +28,7 @@ from lean_search.expert_iteration.serving import (
     start_command,
     write_json_atomically,
 )
-from lean_search.lean import FORBIDDEN_TOKENS, LeanReplConfig, LeanReplPool
+from lean_search.lean import FORBIDDEN_TOKENS, LeanReplPool
 from lean_search.monitoring.cpu_layout import on_training_cpus, training_cpu_list
 from lean_search.monitoring.system_sampler import (
     CGROUP,
@@ -77,6 +77,7 @@ from lean_search.rl.search_options import CONTROL_ARM, OptionsArmConfig
 from lean_search.rl.trainer_channel import TrainerChannel, TrainerCommand, TrainerCommandKind
 from lean_search.rl.training_phase import PhaseOutcome
 from lean_search.search import CandidateBatches, CompletedSearch, Expander, Node, RunConfig, SearchConfig, SearchContext
+from lean_search.search.config import search_repl_config
 from lean_search.search.records import from_json_object
 from lean_search.training.resident import HostDirectories
 from lean_search.value.benchmark import BenchmarkScores, ValueBenchmark
@@ -212,7 +213,7 @@ async def open_tree_searcher(
         pool = await stack.enter_async_context(
             LeanReplPool(
                 config.lean.pool_size,
-                LeanReplConfig(),
+                search_repl_config(config),
                 config.lean.restart_fraction,
                 spare_processes=config.lean.spare_processes or 0,
             )

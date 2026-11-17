@@ -33,7 +33,7 @@ import time
 from pathlib import Path
 
 from lean_search.expert_iteration.serving import read_current, write_json_atomically
-from lean_search.lean import LeanReplConfig, LeanReplPool
+from lean_search.lean import LeanReplPool
 from lean_search.reasoning.records import read_records
 from lean_search.reasoning.states import ReasoningState
 from lean_search.rl.loop import GrpoLoopPaths, read_progress
@@ -54,6 +54,7 @@ from lean_search.rl.search_variants import (
 )
 from lean_search.rl.single_step import StateProblem, search_state, state_problem, state_tree_path
 from lean_search.search import RunConfig, load_run_config
+from lean_search.search.config import search_repl_config
 from lean_search.search.records import read_tree, write_tree
 
 REPOSITORY_DIRECTORY = Path(__file__).resolve().parents[1]
@@ -137,7 +138,10 @@ async def run_variants(
             models[variant.name] = await stack.enter_async_context(open_search_models(variant.config))
         pool = await stack.enter_async_context(
             LeanReplPool(
-                concurrency, LeanReplConfig(), lean.restart_fraction, spare_processes=lean.spare_processes or 0
+                concurrency,
+                search_repl_config(variants[0].config),
+                lean.restart_fraction,
+                spare_processes=lean.spare_processes or 0,
             )
         )
         await pool.start(sorted({state.problem.header for state in states}))

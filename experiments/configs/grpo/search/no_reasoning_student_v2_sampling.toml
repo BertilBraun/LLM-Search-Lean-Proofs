@@ -12,6 +12,9 @@
 [search]
 # A tactic run again on the same tactic path with the same limit takes its first deterministic outcome.
 result_cache = true
+# Every plain `nlinarith` (the policy's and the sweep's) runs as the degree-bounded variant (lean/nlinarith.py); the
+# trees keep the written text.
+nlinarith_variant = "degree"
 # The loop's [sampling] max_expansions (the mode's) replaces this.
 max_expansions = 64
 # Expansions are the budget; the wall cap only catches hung searches (run 4's).
