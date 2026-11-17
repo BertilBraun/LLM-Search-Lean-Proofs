@@ -187,7 +187,9 @@ print `x✝` where the node prints `x_1`; intermediate states match nodes by `no
 ## Search memory
 
 `apply_block(..., memory=...)` takes an `OutcomeMemory` (`memory.py`, `SearchMemory`), owned by one search and never
-shared across searches or pools. It sees every tactic of the block before Lean runs it:
+shared across searches or pools. It sees every tactic of the block before Lean runs it. Both switches are off (None)
+by default and then absent from the written run config, so a config without them keeps its digest; they are for the
+arms' training sampling only (`rl/README.md`, "Search efficiency switches"), and `evaluation_run_config` turns them off.
 
 - **Result cache** (`SearchConfig.result_cache`, off): a tactic whose exact Lean input ran before in the search (the
   state's whole tactic path from the statement with each step's heartbeat limit, the tactic text, its limit) takes the
@@ -198,11 +200,14 @@ shared across searches or pools. It sees every tactic of the block before Lean r
   seconds). Cached: successes (the recorded `ProofState`; from a restarted process it is replayed when used, like any
   state), errors including deterministic panics, heartbeat timeouts. Not cached: wall-clock stops (their outcome depends
   on the machine's load: re-run alone, most end in an error or at the heartbeat limit within 30-100 s) and
-  `ReplFailure`s. `BlockResult.cached_tactics` / `cached_seconds` (the seconds the first run took), `Edge.cached_tactics`
-  and `Accounting.cached_tactics` / `cache_saved_seconds` record the hits.
+  `ReplFailure`s. `BlockResult.cached_tactics` / `cached_seconds` (the seconds the first run's tactic itself took,
+  without a restart or the replay of its state before it), `Edge.cached_tactics` and `Accounting.cached_tactics` /
+  `cache_saved_seconds` record the hits (written to records only when non-zero). The wall-clock limit is not part of
+  the key: only outcomes that do not depend on it are kept.
 - **Timeout skip** (`SearchConfig.timeout_skip`, off; `max_wall_clock_timeouts = 2`): a tactic text (an executed
   tactic of a block, so the whole block for the usual single-tactic one) stopped by the wall clock that often in the
-  search, at any states, is not run again in it. `apply_block` fails at it with `LeanTimeout(wall_clock=True,
+  search at the same heartbeat limit, at any states, is not run again in it at that limit (the sweep's stops at 200k
+  do not skip the policy's text at 50k). `apply_block` fails at it with `LeanTimeout(wall_clock=True,
   skipped=True)`, keeping the block's valid prefix, without a kill or a replay. On run 4's trees: 528 timeouts and
   11.7 h (2.0% of Lean time) avoided, 25 successful steps lost, none on a proof path (after 1 stop: 3.8%, 2 proofs
   lost). The edge's failure is `FailureKind.SKIPPED_TIMEOUT`: labelled like a wall-clock timeout everywhere labels are
@@ -257,12 +262,17 @@ or the `lean_search_step.match_N` matchers of executed steps. A crash during ver
   (strictly: when the thread that started them exits, so start them from the event-loop thread).
 - **Spare processes** (`LeanReplPool(spare_processes=n)`, the run config's `[lean] spare_processes`, 0 by default): the
   pool keeps up to `n` started processes with its headers loaded (`pool.SpareProcesses`, filled after `start`). A REPL
-  that must replace its process while in use (a wall-clock kill, a crash or panic, the memory or proof-state limit:
-  `_recover` and `_ensure_healthy`) takes a ready spare's process and environments instead of starting and importing
-  in the caller's time, and the pool starts another in the background; with none ready it starts its own as before
-  (`LeanRepl.spare_swaps`, `spare_misses`). Its proof states replay on the new process like after any restart. Spares
-  are not counted by `stop_idle_processes` and hold a full import each; `pool.close()` cancels starting ones and closes
-  ready ones. Background restarts of released REPLs (`acquire`'s exit) do not use spares.
+  that must replace its process (a wall-clock kill, a crash or panic, the memory or proof-state limit, or its first
+  use after `stop_idle_processes` or `stop_processes` stopped it: `_recover` and `_ensure_healthy`) takes a ready
+  spare's process and environments instead of starting and importing in the caller's time, and the pool starts
+  another in the background; with none ready it starts its own as before (`LeanRepl.spare_swaps`, `spare_misses`,
+  summed by `LeanReplPool.spare_text`, which the loop logs with its host memory). Its proof states replay on the new
+  process like after any restart. A failed spare start is tried again after `retry_seconds`; a dead ready spare is
+  closed, never handed out. Spares are neither stopped by `stop_idle_processes` / `stop_processes` nor counted by
+  them; each holds about 0.24 GiB private memory (3.5 GiB resident, the rest the shared .olean mappings; measured on
+  the node, `experiments/analysis/restart_cost.py`), and a swap costs the caller about 0.2 s against about 6.2 s for a
+  restart. `pool.close()` cancels starting ones and closes ready ones. Background restarts of released REPLs
+  (`acquire`'s exit) do not use spares. Timing only, so `[lean] spare_processes` is not part of a run config's digest.
 - `lake env` runs once per project directory and Python process, shared by concurrent starts.
 - The pool restarts a process before reusing it if the `acquire` body raised (including cancellation), if the process
   needs a restart, or if it is past `restart_fraction` of its limits. Restarts run in the background with

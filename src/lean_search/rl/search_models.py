@@ -67,15 +67,20 @@ def training_run_config(config: RunConfig, sampling: SamplingConfig, seed_offset
 
 
 def evaluation_run_config(config: RunConfig, target: EvaluationTarget) -> RunConfig:
-    """A fixed-target search: the target's budget and REPLs, no harvesting, no ε-exploration."""
+    """A fixed-target search: the target's budget and REPLs, no harvesting, no ε-exploration, and none of the search
+    efficiency switches (they are the training sampling's: evaluations stay comparable with the anchors)."""
     search = dataclasses.replace(
         config.search,
         max_expansions=target.max_expansions,
         max_wall_seconds=target.max_wall_seconds,
         harvest=dataclasses.replace(config.search.harvest, enabled=False),
         exploration=dataclasses.replace(config.search.exploration, enabled=False),
+        result_cache=None,
+        timeout_skip=None,
     )
-    lean = dataclasses.replace(config.lean, pool_size=target.concurrency, concurrency=target.concurrency)
+    lean = dataclasses.replace(
+        config.lean, pool_size=target.concurrency, concurrency=target.concurrency, spare_processes=None
+    )
     return dataclasses.replace(config, search=search, lean=lean)
 
 

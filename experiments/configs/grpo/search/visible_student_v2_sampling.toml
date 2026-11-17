@@ -1,0 +1,100 @@
+# The arms' training sampling (followup/modes/visible.toml, step 2's shared sampling run and every arm alike):
+# visible_student_v2.toml with the search efficiency switches on (src/lean_search/lean/README.md, "Search memory" and
+# "Processes"; DESIGN.md, "Automatic rules"). Probe runs and held-out evaluations keep visible_student_v2.toml as it is
+# (evaluation_run_config turns the switches off), so they stay comparable with the anchors and the offline arm.
+# Apart from the switches this file must equal visible_student_v2.toml (tests/rl/test_sampling_configs.py).
+# The GRPO loop's searches (DESIGN.md "Lean execution and harness"): visible student v2, n = 8, heartbeat limits with
+# a wall clock only as an emergency stop, flattened nested proofs, renamed inaccessible hypotheses and the identifier
+# check before Lean. The heartbeat caps are provisional until the replay test on the new node
+# (experiments/heartbeat_replay.py) has measured 25k / 50k / 100k.
+[search]
+# A tactic run again on the same tactic path with the same limit takes its first deterministic outcome.
+result_cache = true
+max_expansions = 64
+# Expansions are the budget; the wall cap only catches hung searches.
+max_wall_seconds = 14400.0
+max_depth = 16
+score_children_early = true
+# Policy steps stop at 50k heartbeats inside Lean, an ordinary error without a restart.
+tactic_heartbeats = 50000
+# Emergency stop for hangs heartbeats do not count (kernel reduction, big-number arithmetic).
+tactic_timeout_seconds = 60.0
+flatten_blocks = true
+name_inaccessible_hypotheses = true
+check_identifiers = true
+forbidden_steps = [
+    "exact?",
+    "apply?",
+    "rw?",
+    "simp?",
+    "simp_all?",
+    "dsimp?",
+    "aesop?",
+    "hint",
+    "rw_search",
+    "library_search",
+]
+
+# DESIGN.md "The loop": after the first proof, finish the proving expansion, then expand states the value model puts
+# at most 2 tactics from done, for up to 16 more expansions. Off for evaluations.
+[search.harvest]
+enabled = true
+max_remaining_steps = 2.0
+max_expansions = 16
+
+# With probability 0.1 the next expansion is drawn uniformly from the 8 best frontier states. Off for evaluations.
+[search.exploration]
+enabled = true
+epsilon = 0.1
+top_k = 8
+seed = 0
+
+[expander]
+kind = "automation_then_policy"
+overlap = true
+
+[automation]
+tactics = ["omega", "constructor", "rfl", "field_simp", "ring_nf", "simp_all", "nlinarith"]
+# The sweep keeps Lean's default limit; the search's emergency stop applies.
+heartbeats = 200000
+max_wall_clock_timeouts_per_tactic = 1
+max_heartbeat_timeouts_per_tactic = 1
+
+[priority]
+kind = "a_star"
+value_weight = 1.0
+depth_weight = 0.25
+policy_prior_weight = 0.0
+automation_log_probability = -1.0
+
+[policy]
+model = "policy-merged"
+tokenizer = "Qwen/Qwen3.5-4B"
+server_urls = ["http://127.0.0.1:8100/v1", "http://127.0.0.1:8101/v1"]
+sample_count = 8
+temperature = 0.8
+top_p = 1.0
+max_tokens = 1024
+thinking = false
+visible_reasoning = true
+few_shot = false
+force_answer_on_truncation = true
+forced_answer_tokens = 256
+
+[value]
+model = "value-merged"
+tokenizer = "Qwen/Qwen3.5-2B"
+server_urls = ["http://127.0.0.1:8200/v1", "http://127.0.0.1:8201/v1"]
+
+[value.readout]
+eight_or_more_steps = 12.0
+dead_steps = 16.0
+
+# A tactic text stopped twice by the wall clock in a search (at its heartbeat limit) is not run again there.
+[search.timeout_skip]
+enabled = true
+max_wall_clock_timeouts = 2
+
+# Warm REPL processes swapped in for a killed one (0.24 GiB private each, measured 2026-11-17).
+[lean]
+spare_processes = 8
