@@ -20,8 +20,8 @@
 # $state (done_<step>); a rerun (container restart, supervisord's retry) continues at the first step not done. A round
 # whose job died is trained again into a fresh output, the interrupted one moved aside; only a round whose trainer left
 # its completion files (phase.json reading back) is marked done and evaluated. A step's 4th attempt, a health stop, a
-# refused or changed mode, servers that kept dying (held_out_evaluate.py exit 4), GPUs held by another process or a
-# failed check write $state/STOPPED and exit 0; other failures exit 1 for supervisord to retry. HOLD and STOPPED make a
+# refused or changed mode, the offline chain started and neither at HOLD nor STOPPED, servers that kept dying
+# (held_out_evaluate.py exit 4), GPUs held by another process or a failed check write $state/STOPPED and exit 0; other failures exit 1 for supervisord to retry. HOLD and STOPPED make a
 # start exit 0 at once.
 set -uo pipefail
 state="${STUDY_CHAIN_STATE:-/workspace/runs/study_chain}"
@@ -81,6 +81,9 @@ if ! done_step configs; then
         > "${state}/configs.log" 2>&1 || stop_chain "write-configs failed: $(tail -1 "${state}/configs.log")"
     touch "${state}/done_configs"
 fi
+
+# From here on servers and GPUs: never beside a running offline chain.
+other_chain_idle "${OFFLINE_CHAIN_STATE:-/workspace/runs/offline_chain}" offline
 
 loop_alive() { [[ -f "${shared_run}/loop.pid" ]] && kill -0 "$(cat "${shared_run}/loop.pid")" 2>/dev/null; }
 

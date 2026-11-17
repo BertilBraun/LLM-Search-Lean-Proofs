@@ -57,6 +57,11 @@ class Node:
         return self.root / "scenario"
 
     @property
+    def offline_state(self) -> Path:
+        """The offline driver's state directory, which step 2's driver must find idle."""
+        return self.root / "offline_state"
+
+    @property
     def workspace(self) -> Path:
         return self.root / "workspace"
 
@@ -123,6 +128,7 @@ def environment(node: Node, extra: dict[str, str] | None = None) -> dict[str, st
         os.environ
         | {
             "STUDY_CHAIN_STATE": str(node.state),
+            "OFFLINE_CHAIN_STATE": str(node.offline_state),
             "STUDY_CHAIN_REPOSITORY": str(node.root / "repository"),
             "STUDY_CHAIN_START_SECONDS": "0",
             "STUDY_CHAIN_POLL_SECONDS": "0",
@@ -466,3 +472,29 @@ def test_a_finished_output_kept_after_its_driver_died_says_the_exit_is_unknown(n
     node.set("kill_after_round_step2_A_5e-5")
     supervise(node)
     assert "kept (that attempt's trainer exit status: unknown, the driver died first;" in chain_log(node)
+
+
+def offline_chain_running(node: Node, marker: str = "") -> None:
+    """The offline driver has started; `marker` (HOLD or STOPPED) where it stands."""
+    node.offline_state.mkdir(exist_ok=True)
+    (node.offline_state / "chain.log").write_text("driver start\n", encoding="utf-8")
+    if marker:
+        (node.offline_state / marker).write_text("held\n", encoding="utf-8")
+
+
+def test_a_running_offline_chain_stops_step_2_before_any_server_or_gpu_action(node: Node) -> None:
+    offline_chain_running(node)
+    supervise(node)
+    expected = ["learning_rate_step.py check-mode", "learning_rate_step.py write-configs"]
+    assert ("the offline chain" in node.stopped(), node.steps()) == (True, expected)
+
+
+@pytest.mark.parametrize("marker", ["HOLD", "STOPPED"])
+def test_an_offline_chain_at_hold_or_stopped_lets_step_2_run(node: Node, marker: str) -> None:
+    offline_chain_running(node, marker)
+    assert supervise(node) == [0] and node.steps() == expected_steps(node)
+
+
+def test_a_prepared_but_unstarted_offline_state_does_not_stop_step_2(node: Node) -> None:
+    node.offline_state.mkdir()
+    assert supervise(node) == [0] and node.steps() == expected_steps(node)
