@@ -442,7 +442,13 @@ def rounds_section(rounds: Sequence[RoundRecord]) -> str:
         "Wall",
     ]
     return "\n\n".join(
-        ["## Rounds", "Per-tactic GRPO, one pass over the shared phase, from v0:", markdown_table(headers, rows)]
+        [
+            "## Rounds",
+            "Per-tactic GRPO, one pass over the shared phase, from v0:",
+            markdown_table(headers, rows),
+            "Only the seeds (phase 1's) and the trees (v0's, as arm A's phase 1 samples) match the arm's first update; "
+            "the trainer differs (grpo_phase.py here, the loop's persistent trainer in the arm).",
+        ]
     )
 
 

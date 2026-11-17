@@ -501,3 +501,9 @@ def test_a_rounds_phase_json_written_whole_reads_back(tmp_path: Path) -> None:
 def test_a_rounds_phase_json_cut_short_is_not_complete(tmp_path: Path) -> None:
     write_round_outcome(tmp_path, variant("A_5e-5"), to_json(zero(PhaseOutcome))[:40])
     assert "does not read back" in str(round_outcome_problem(variant("A_5e-5"), tmp_path))
+
+
+def test_the_report_says_only_the_trainer_differs_from_the_arms_first_update() -> None:
+    assert "the trainer differs (grpo_phase.py here, the loop's persistent trainer in the arm)" in report_markdown(
+        step_report()
+    )
