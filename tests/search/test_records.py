@@ -147,3 +147,41 @@ def test_whole_numbers_in_a_list_of_optional_floats_read_as_floats() -> None:
 def test_a_wrong_element_in_a_list_of_numbers_is_rejected(data: dict[str, object]) -> None:
     with pytest.raises(ValueError, match=r"SampledTokens\.\w+\[\d\]"):
         from_json_object(SampledTokens, data)
+
+
+type Key = tuple[str, ...]
+
+
+@dataclasses.dataclass(frozen=True)
+class Keys:
+    keys: tuple[Key, ...]
+
+
+def test_a_type_alias_round_trips_through_json() -> None:
+    keys = Keys((("a", "b"), ()))
+    assert from_json_object(Keys, json.loads(to_json(keys))) == keys
+
+
+@dataclasses.dataclass(frozen=True)
+class Tally:
+    counts: dict[str, int]
+    weights: dict[str, float] | None = None
+
+
+def test_a_dict_field_round_trips_through_json() -> None:
+    tally = Tally({"a": 1, "b": 2}, {"x": 0.5})
+    assert from_json_object(Tally, json.loads(to_json(tally))) == tally
+
+
+def test_a_dict_fields_values_are_converted_by_their_hint() -> None:
+    assert from_json_object(Tally, {"counts": {}, "weights": {"x": 1}}).weights == {"x": 1.0}
+
+
+def test_a_dict_field_with_a_wrong_value_is_refused() -> None:
+    with pytest.raises(ValueError, match="counts"):
+        from_json_object(Tally, {"counts": {"a": "one"}})
+
+
+def test_a_dict_field_given_a_list_is_refused() -> None:
+    with pytest.raises(ValueError, match="expected a table"):
+        from_json_object(Tally, {"counts": [1, 2]})

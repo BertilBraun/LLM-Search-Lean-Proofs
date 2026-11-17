@@ -35,7 +35,7 @@ done
 # The CPU steps run detached before the driver (offline_data_steps.sh, its pid in data_steps.pid) must be gone: a
 # second walk beside theirs would share the Lean CPUs and append to the same walks.jsonl.
 data_steps_pid="$(cat "${state}/data_steps.pid" 2>/dev/null)"
-if [[ -n "${data_steps_pid}" ]] && tr '\0' ' ' < "/proc/${data_steps_pid}/cmdline" 2>/dev/null | grep -q offline_data_steps.sh; then
+if [[ -n "${data_steps_pid}" ]] && { tr '\0' ' ' < "/proc/${data_steps_pid}/cmdline"; } 2>/dev/null | grep -q offline_data_steps.sh; then
     stop_chain "the detached data steps (pid ${data_steps_pid}) still run: install the driver only once they are gone, then move STOPPED aside"
 fi
 # Boot-time ordering: let the container's services and the GPUs settle.

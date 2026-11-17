@@ -350,6 +350,12 @@ def test_a_pid_file_naming_another_process_does_not_stop_the_driver(node: Node) 
     assert supervise(node) == [0] and (node.state / "HOLD").exists()
 
 
+def test_a_pid_file_naming_a_finished_process_leaves_no_error_in_the_log(node: Node) -> None:
+    (node.state / "data_steps.pid").write_text("999999999\n", encoding="utf-8")
+    supervise(node)
+    assert "No such file" not in node.chain_log()
+
+
 def test_a_driver_without_its_helpers_stops_instead_of_restarting(node: Node, tmp_path: Path) -> None:
     lonely = tmp_path / "lonely" / "offline_chain.sh"
     executable(SCRIPT, lonely)

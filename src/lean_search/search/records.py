@@ -117,6 +117,8 @@ def from_json_object[T](target: type[T], data: object) -> T:
 
 
 def _convert(type_hint: object, data: object, location: str) -> object:
+    if isinstance(type_hint, typing.TypeAliasType):
+        return _convert(type_hint.__value__, data, location)
     origin = typing.get_origin(type_hint)
     arguments = typing.get_args(type_hint)
     if origin is types.UnionType or origin is typing.Union:
@@ -132,6 +134,14 @@ def _convert(type_hint: object, data: object, location: str) -> object:
         if elements is None:
             elements = [_convert(element_type, element, f"{location}[{index}]") for index, element in enumerate(data)]
         return tuple(elements) if origin is tuple else elements
+    if origin is dict:
+        if not isinstance(data, dict):
+            raise ValueError(f"{location}: expected a table, got {data!r}")
+        key_type, value_type = arguments
+        return {
+            _convert(key_type, key, f"{location} key {key!r}"): _convert(value_type, value, f"{location}[{key!r}]")
+            for key, value in data.items()
+        }
     assert isinstance(type_hint, type), type_hint
     if dataclasses.is_dataclass(type_hint):
         return _convert_dataclass(type_hint, data, location)
