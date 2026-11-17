@@ -164,8 +164,8 @@ class PlainChecks:
 
     def text(self) -> str:
         return (
-            f"{self.failed_proofs} of {self.checked_proofs} verified proofs fail the plain Mathlib check (their written "
-            f"text with Mathlib's nlinarith); {self.variant_only_trees} solved trees have no proof that passes it"
+            f"{self.failed_proofs} of {self.checked_proofs} verified proofs fail the plain Mathlib check (their "
+            f"written text with Mathlib's nlinarith); {self.variant_only_trees} solved trees have no proof passing it"
         )
 
 
