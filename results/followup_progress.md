@@ -318,6 +318,14 @@ reached HOLD at 09:30 UTC.
   into blocks of 1-5 steps, with at least the loop's training tokens. Step-level GRPO along known trajectories is
   doubtful (it may push down nearly every sample, since samples rarely land on the known path); the arm's exact design
   is still to be discussed.
+- **Offline runs, revised:** two, both from the pool's known proofs only (no extra corpus): O1 on all usable pool
+  proofs, and O2 token-matched to an expert-iteration arm (about 2M completion tokens), sampled with an equal number of
+  proofs per proof-length band (so slightly towards longer proofs). Each: SFT from v0 without reasoning, two rates
+  picked on the held-out states, then one 2,000-statement probe run (no reasoning, value v0, 16 expansions, depth
+  weight 0.1). **Gate:** if the offline policy beats v35 with value v0 (run 8, 1,083 of 2,000) with the paired 95%
+  interval above 0, the arms run without reasoning; otherwise with reasoning. Offline runs go before the other arms.
+- **Arm B (pure proof success) dropped**: it differs from A only in reward shaping (92-94% sign agreement on the old
+  trees), which one seed cannot resolve.
 - **Leaning towards no reasoning** for the arms, but first the Lean overhead must come down without process kills
   (measurement of replays, restarts, duplicates and heartbeats per second of slow tactics, at step 1's HOLD).
 
