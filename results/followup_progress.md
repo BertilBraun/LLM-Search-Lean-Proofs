@@ -304,6 +304,24 @@ default), safe server stops, results pulled to the PC as they are written.
 | First node, 2026-11-14 11:20 UTC to its outage at about 23:35 UTC | about $11 at most; partly refunded by the provider (owner) |
 | Second node, from 2026-11-15 about 08:30 UTC | $0.83 per hour |
 
+## Lean overhead (measured 2026-11-17 at HOLD; files in `node_backup/2026-11-15/live/runs/lean_overhead/`)
+
+Run 4 (no reasoning): 575 Lean-hours, 41.2 s of Lean per expansion.
+
+- **`nlinarith` written by the policy is 68% of all Lean time** (393 h): 105k calls, 2,221 successes. Its cost grows
+  with the number of comparisons (hint terms + comparison hypotheses + negated goal): calls with 13 or more take 332 h
+  (58% of all Lean time) at 2-3% success, and hold 229 uses on proof paths.
+- **Kills:** 8,797 restarts (8,705 at the 60 s wall clock), about 8.3 s each: 24 h (4.2%); replays after them 21 h
+  (3.7%); the timed-out steps themselves 145 h (25%).
+- **Heartbeats do not separate slow failures from slow successes.** Replaying 200 timed-out and 200 slow successful
+  steps alone: at 20k heartbeats only 81 of the timed-out ones stop within 20 s, while 159 of the 200 slow successes
+  would be stopped; at 50k only 6 timed-out ones stop within 20 s. About a quarter of the timed-out steps run past
+  120 s even at 200k heartbeats, and about 18% crash the REPL.
+- **Work done twice:** duplicate children found after Lean 51 h (8.8%); a (state, tactic) result cache inside a search
+  would save about 39 h (6.8%); skipping a text after its second wall-clock timeout in the same search 12 h (2.0%)
+  with no proof lost.
+- Run 3 (visible) shows the same pattern at half the scale (restarts 4.2%, replays 3.6%, duplicates 8.2%).
+
 ## Start-order check (run 9, 2026-11-17)
 
 `step1_run9_v0_value_v0_ordered` (v0 with value v0, the anchors' settings, longest expected search first): **708 of
@@ -325,6 +343,8 @@ reached HOLD at 09:30 UTC.
   picked on the held-out states, then one 2,000-statement probe run (no reasoning, value v0, 16 expansions, depth
   weight 0.1). **Gate:** if the offline policy beats v35 with value v0 (run 8, 1,083 of 2,000) with the paired 95%
   interval above 0, the arms run without reasoning; otherwise with reasoning. Offline runs go before the other arms.
+- **O2 first; O1 decided after O2's result** (O1 is about 565M training tokens, about 20 h per rate at the measured
+  7.8k tokens/s; if it runs, at O2's chosen rate only, after checking training throughput).
 - **Arm B (pure proof success) dropped**: it differs from A only in reward shaping (92-94% sign agreement on the old
   trees), which one seed cannot resolve.
 - **Leaning towards no reasoning** for the arms, but first the Lean overhead must come down without process kills
