@@ -1165,7 +1165,9 @@ CPU quota (sampling expected Lean-bound), $0.89/h; the owner checks in about twi
 ### Arms
 
 All arms start from v0 (the SFT policy, `data_rewrite_sft_numbered`) and value v0, and train their value model inside
-the arm as in the old run (decided). Each enters step 3 with its own learning rate from step 2 (decided).
+the arm as in the old run (decided). Each enters step 3 with its own learning rate: A's (and D's GRPO rate) from step
+2, C's (and D's round rate) from the offline run O2, with a 4-phase window for C and D (owner, 2026-11-17; "Step 2").
+Arm B (B1 and B2 below) is dropped (owner, 2026-11-17); its rows stay for the record.
 
 | Arm | Policy update per phase | In the code today |
 |---|---|---|
@@ -1176,18 +1178,17 @@ the arm as in the old run (decided). Each enters step 3 with its own learning ra
 | D interleaved | exactly A, plus a C round every N = 4 phases (proposed) over C's window after that phase's GRPO update; the KL reference stays v0 | `policy_update = "grpo_and_expert_iteration"`, `expert_iteration_every_phases = 4` (WP4b, `arms/D.toml`) |
 | E unsolved-tree signal | open, owner decides (below) | missing |
 
-- **The closed-loop outcome-only control is B2** (a change to the owner's pick rule of 2026-11-14, "the one that differs
-  more from A, B2 on a tie"; to be confirmed at the next check-in). B1 and B2 both train at step 2 as decided; B1 is
-  reported as "graph credit spread over the sequence".
+- **The closed-loop outcome-only control was B2** (superseded: arm B is dropped, owner 2026-11-17; it differs from A
+  only in reward shaping, 92-94% sign agreement on the old trees, which one seed cannot resolve).
 - **No GRPO signal or C learns from unsolved trees**: `rl/grpo_groups.policy_groups` builds groups only at proof-graph
   nodes, and `require_policy_proof` drops groups without a policy sample on the graph (`training_signal.md`: 0 groups in
   all 6,550 unsolved trees). With μ = 0 an off-graph state's G is 0, so 85% of A's anchor reward is the 0/1 "reached the
   proof graph" B2 uses; A and B2 differ by δ = 0.2 per step, the 15% local term, the within-block costs and where the
   credit lands. The old write-up's "an unsolved statement still teaches which steps were valid"
   (`results/grpo_loop_v1/README.md`, "Concept") holds for the value model only.
-- **The expert-iteration window** (decided): fixed and sliding, never all phases. With W = 4 each phase's blocks are
-  trained in four consecutive rounds (~four epochs per block; round 1's 2 epochs forgot); step 2 can only test one round
-  on 1 slice against 4 slices: the data amount, not the repetition.
+- **The expert-iteration window** (decided): fixed and sliding, never all phases: W = 4 (owner, 2026-11-17; no longer
+  tested at step 2). Each phase's blocks are trained in four consecutive rounds (~four epochs per block; round 1's 2
+  epochs forgot), as O2's 4 epochs match.
 - **E, a signal that learns from unsolved trees** (open, owner decides): groups also at expanded nodes off the proof
   graph, in solved and unsolved trees, scored by local labels only. In `policy_groups`: admit `NodeClass` off-graph
   expanded nodes, skip `require_policy_proof` for them, and give them their own weight, since with G = 0 for every
@@ -1337,7 +1338,7 @@ the arm as in the old run (decided). Each enters step 3 with its own learning ra
   and group condition out of reach, stopped by hand). Its trees are cut by finish order into four slices of ~B; the stop
   drops in-flight (slower) searches from slice 4 and the band rises across slices. ~4–9 h.
 
-| Signal | Data | Learning rates (proposed) | Runs |
+| Signal (superseded plan) | Data | Learning rates (proposed) | Runs |
 |---|---|---|---|
 | A per-tactic | slice 4 | 2e-5, 5e-5, 1e-4 | 3 |
 | B1 sequence credit | slice 4 | 2e-5, 5e-5, 1e-4 | 3 |
@@ -1348,15 +1349,19 @@ the arm as in the old run (decided). Each enters step 3 with its own learning ra
   `--math-replay` (exists; B2 after WP3); C with `grpo_expert_iteration.py build` and `train` once it takes a phase
   window (WP4a). At round 1's density one slice gives C only ~8 optimizer steps, so the dry runs size C's rounds before
   its rates are fixed. GRPO's rates go upward from the old 2e-5–3e-5 because one pass moves little (< 0.1% per phase in
-  the old run). D needs several phases and takes A's and C's step-2 settings.
-- **Ranking the rates** (decided): primary, the 512 held-out states, paired per state; tie-breaker and sanity check,
+  the old run). D needs several phases and takes A's and C's step-2 settings. (Superseded with the table above: D
+  takes A's step-2 rate and C's O2 rate and window.)
+- **Ranking the rates** (decided; superseded where it names the gate set, probe runs and C: only A is ranked, on the
+  held-out states alone): primary, the 512 held-out states, paired per state; tie-breaker and sanity check,
   the old gate set's 402 statements (16 expansions, value v0), paired per statement. Among rates tied on the held-out
   states (95% interval of their difference including 0) the better gate-set point estimate wins, the lower rate only if
   that ties too. If the gate set shows the opposite sign with its interval excluding 0, both rates get a probe run.
-  C's window by the same rule. Every variant is reported against v0 with intervals on both sets. Probe v2 then runs
+  C's window by the same rule (superseded: no gate set, no probe runs, no C rounds; owner 2026-11-16 and -17). Every
+  variant is reported against v0 with intervals on both sets. Probe v2 then runs
   for each signal's chosen rate (A, B1, B2, C W = 1, C W = 4: 5 runs, value v0) against v0's two runs; a chosen rate
   that did not move ≥ 3 points from v0 on the probe counts as "step too small", never as "equal".
-- **Gate** (decided): if all signals at their chosen rates lie within about 3 points of each other on the probe, stop
+- **Gate** (decided; superseded, there are no step-2 probe runs): if all signals at their chosen rates lie within about
+  3 points of each other on the probe, stop
   and decide with the owner. Beside it, the offline agreement of A's and B2's advantages on the shared trees
   (`experiments/analysis/training_signal.py`): the share of trained tokens with the same advantage sign and the
   correlation of the sample advantages; at ≥ ~95% agreement a closed-loop A–B2 pair is unlikely to separate. WP3's B2
@@ -1369,7 +1374,8 @@ the arm as in the old run (decided). Each enters step 3 with its own learning ra
 - **Arm length** (proposed): 16 phases × B = 192M tokens, one seed first. Each arm's phase 1 is checked against the shared
   phase's trees (step 2) labelled offline with the arm's credit, no training (sequences, tokens, steps, groups with signal
   within ~±30%; else a config or credit bug).
-- **First two arms**: not fixed here; the owner chooses at the check-in after step 2. Candidates:
+- **First two arms** (superseded: B is dropped and the arms A, C, D run in the owner's order, after the offline runs;
+  `results/followup_progress.md`): not fixed here; the owner chooses at the check-in after step 2. Candidates:
   - A with B2: the question as posed; they share ~85% of their reward, so expect a small difference, likely under the
     ~5 points two seeds can confirm. Worth it if step 2 shows A and B2 apart, or the offline agreement well below 95%.
   - A with C: the largest expected contrast (recipe against recipe); needs WP4b. Worth it if C moved ≥ 3 points from

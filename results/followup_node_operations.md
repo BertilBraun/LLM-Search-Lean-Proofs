@@ -279,9 +279,9 @@ the offline driver are in `deployment/chain_helpers.sh`. Reviews AU and AV (`res
 
 Altogether about 3-4 hours. Labels `A_2e-5`, `A_5e-5`, `A_1e-4`; run names and held-out names are `step2_<label>`,
 outputs in `$LEAN_SEARCH_CHECKPOINTS/step2_<label>/`. A round's phase config is arm A's own (`arms/A.toml` through
-`followup_arm`'s overlay code) at the variant's rate, v0 as start and KL reference. Seeds and trainer differ from the
-arm's phase 1 (the template's seeds, `grpo_phase.py`); the trees are the shared phase's, sampled by v0 as the arm's
-phase 1 will be.
+`followup_arm`'s overlay code) at the variant's rate, v0 as start and KL reference, with the arm's phase-1 seeds (1
+and "grpo-replay/1"); the trees are the shared phase's, sampled by v0 as the arm's phase 1 will be. Only the trainer
+differs from the arm's first update (`grpo_phase.py`, not the persistent one).
 
 **The tie rule** (`rate_ranking.tie_break`, DESIGN's, the owner may change it): among variants tied on the held-out
 states, the lower rate.
@@ -292,25 +292,40 @@ reasoning whatever the arms' mode; the rerun costs about 10 minutes. v0 runs a s
 (`held_out_step2_v0_end`): the step's A/A and drift check. The report shows both against the first run, paired per
 state; the 2026-11-15 run descriptively, or why it could not be read.
 
-**The report** (`learning_rates_report.md`): first the values for the arms' PLACEHOLDERs (A's rate; C's window 4 and
-D's window, the owner's; C's and D's expert-iteration rate as "from O2: the 'Chosen:' line of
-`/workspace/runs/offline_chain/rank_matched.txt`", for the orchestrator to fill; D's GRPO rate, A's), with a "Look
-first" line when A's chosen variant is below v0 in success or valid Lean; then every variant minus v0 in valid Lean and
+**The report** (`learning_rates_report.md`): first the values for the arms' PLACEHOLDERs in a table of file,
+setting, value and source, so a value can be copied as it is: A's rate and D's GRPO rate (A's chosen variant), C's and
+D's expert-iteration rate (O2's, read from `/workspace/runs/offline_chain/rank_matched.txt` as `offline_arm.py
+chosen-rate` reads it; a bold "O2 not ranked yet" with the reason when that file is missing or chose another subset);
+a line that C's and D's window, read from `arms/C.toml`, is already set; a "Look first" line when A's chosen variant is
+below v0 in success or valid Lean; then every variant minus v0 in valid Lean and
 success with 95% intervals and their side ("above v0", "below v0", "within noise"), the rule's choice and reason, a
 warning when the chosen variant is below v0, a note when it is within noise of v0; the rounds' sizes (trees, groups,
 sequences, steps, trained tokens, KL to v0, clip fraction, trainer and wall time); v0's two runs and the earlier run;
 wall-clock durations. Filling the PLACEHOLDERs is the orchestrator's job (node-local edits recorded as in section 4, or
-committed and deployed). `arms/C.toml` and `arms/D.toml` already hold the window of 4.
+committed and deployed).
 
 **The modes.** `experiments/configs/grpo/followup/modes/visible.toml` and `modes/no_reasoning.toml`, each naming the
 search config the arms sample with and their expansions per training search (raising them is that one number, and
 `check-mode` warns once expansions plus harvesting exceed the depth cap). The driver takes whatever search config the
-mode file names; held-out evaluations use the shared run's loop config. `followup_arm.py` (so `arm_loop.sh`) writes
+mode file names; held-out evaluations use the shared run's loop config, so they read `loop.sampling.search_config`,
+the mode's. On the search-efficiency branch `evaluation_run_config` turns the efficiency switches (result cache,
+timeout skip, warm spares, the bounded `nlinarith`) off for every evaluation, held-out runs included, so held-out
+states stay on today's plain search, comparable with O2's held-out runs and the earlier v0 run. `followup_arm.py` (so `arm_loop.sh`) writes
 `sampling.json` beside every loop.toml (search config, expansions, the search config's sha256) and refuses an arm whose
 sampling differs from the shared run's: the arms sample in the step's mode or not at all.
 
 **Install and start** (only on the owner's word, at a HOLD of the node's other drivers, with nothing else running):
 
+0. The node's order. Step 2 samples in the arms' final mode and pins it (`mode.recorded.txt`, and `sampling.json`, which
+   every arm is checked against), so it runs only once both are settled:
+   - O2's gate has run and decided the mode (O2 against run 8: no reasoning if the offline policy beats it, otherwise
+     visible), and
+   - the search-efficiency branch is merged and deployed: the mode files then name `search/*_sampling.toml` (the
+     switches on, as the owner wants in the arms' training sampling). A step 2 sampled with the plain search configs
+     would leave every arm refused by the sampling binding, and would have to be sampled again.
+   The offline chain must be at HOLD (or STOPPED) for the whole step, and step 2 must be at HOLD before O1's switch:
+   each driver stops itself (STOPPED, "the … chain … stands neither at HOLD nor STOPPED") before its first server or
+   GPU action while the other has started and is neither (`other_chain_idle` in `chain_helpers.sh`).
 1. Deploy a master that holds the driver, keeping the node-local edits (section 4). Never deploy while the driver runs:
    its steps must all use the same code, and a changed search config stops it.
 2. Put the mode in place:
@@ -338,7 +353,8 @@ sampling differs from the shared run's: the arms sample in the step's mode or no
 
 **Markers in `/workspace/runs/study_chain/`**: `done_<step>` (step finished), `attempts_<step>` (tries; the 4th
 writes STOPPED), `started_<step>` (first attempt's start; with the end in `timings.tsv`), `STOPPED` (text says why),
-`HOLD`, `mode.recorded`, `mode.recorded.txt`. Logs: `chain.log`, `servers.log`, `slices.log`, `rounds/<label>.log` (and
+`HOLD`, `mode.recorded`, `mode.recorded.txt`. Logs: `chain.log`, `mode.err` (the mode check's standard error, which a
+refusal quotes), `servers.log`, `slices.log`, `rounds/<label>.log` (and
 `rounds/<label>.exit`, the trainer's exit status), `held_out/<name>.log`, `rank_A.txt`, `report.log`.
 
 **Failures.** Any exit but 0 is retried by supervisord; a step's 4th attempt writes STOPPED and exits 0. STOPPED at
@@ -380,7 +396,8 @@ PC).
 
 **The owner's order (2026-11-17):** O2 (matched) runs completely, then the driver writes HOLD with the servers
 stopped. O1 (pool) runs only on the owner's word and only at the rate O2's ranking chose: the switch is the file
-`/workspace/runs/offline_chain/run_pool` (any content). To give it: `touch /workspace/runs/offline_chain/run_pool`, move
+`/workspace/runs/offline_chain/run_pool` (any content), only while step 2's driver (`study_chain`) is at HOLD,
+STOPPED or not installed: otherwise the offline driver stops itself before its first server or GPU action. To give it: `touch /workspace/runs/offline_chain/run_pool`, move
 `HOLD` aside (`mv HOLD HOLD.after_matched`), `supervisorctl start offline_chain`.
 
 | Step | What | Markers | Node hours |
