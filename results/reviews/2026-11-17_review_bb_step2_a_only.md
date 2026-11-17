@@ -139,3 +139,41 @@ slice_4 and four slices. Add the `--slices 1` use.
 3. **The held-out states and the efficiency switches** (S1). Should the arms' in-loop held-out states and step 2's
    held-out runs be sampled with the efficiency switches, like the arm's training searches, or with today's plain
    search, like the probe runs? The latter keeps them comparable with O2's held-out runs and with v0's earlier runs.
+
+## Re-review (2026-11-17)
+
+Fixes reviewed: 4a0b192..6182609 (head 6182609), four commits.
+
+Checks run:
+- In WSL, against the worktree's `src`, these suites: `test_learning_rate_step`, `test_learning_rate_report`,
+  `test_study_commands`, `test_study_chain_script`, `test_offline_chain_script`, `test_tree_slices`,
+  `test_followup_arms`, `test_rate_ranking`. 366 passed.
+- `ruff check` and `ruff format --check` over `src`, `experiments` and `tests/rl`: clean.
+- No node access, as asked.
+
+**Verdict: merge.** S1 and S2 and all four nits are fixed. S3 is fixed except two stale lines in HANDOFF section 8 B,
+a nit below. I found nothing broken by the fixes.
+
+### Status per finding
+
+| Finding | Status | Notes |
+|---|---|---|
+| S1 node order and efficiency switches | fixed | The ops note's "Install and start" now begins with step 0, the node's order: O2's gate must have chosen the mode, the search-efficiency branch must be merged and deployed (the modes then name `*_sampling.toml`), and the offline chain must be at HOLD or STOPPED. Its claim about held-out runs is accurate: on the efficiency branch, `search_models.evaluation_run_config` sets `result_cache`, `timeout_skip` and `nlinarith_variant` to None and `spare_processes` to None, and `fixed_targets` applies it to the held-out states (line 122) as well as to probe runs. So held-out runs stay on today's plain search. A new guard, `other_chain_idle`, makes each driver stop itself before its first server or GPU action while the other has started and is neither at HOLD nor STOPPED. It is tested both ways, including O1's switch while step 2 runs. A simultaneous start of both drivers stops both, which is the safe outcome. |
+| S2 C's and D's rate not stated | fixed | `o2_choice` reads `rank_matched.txt` with `chosen_label` and maps `matched_<rate>` over the offline config's `learning_rates`, as `offline_arm.py chosen-rate` does. A missing file, a chosen line of another subset (`pool_…`), or no or several "Chosen:" lines (a `ValueError`) all give "-" and a bold "O2 not ranked yet" with the reason. The report still completes. Tested: both rates, another subset, the missing file end to end. |
+| S3 stale DESIGN and HANDOFF text | fixed, apart from N5 below | DESIGN's Arms intro, the B2-control bullet, the window bullet, the old Step 2 table, "Ranking the rates", "Gate" and "First two arms" are now marked superseded or rewritten. Each points at the 2026-11-17 decision, and the rewrites are accurate. HANDOFF's state lines and step 3 now describe the A-only step and the node order. The B2 rows of the Arms table stay under an explicit "for the record" line. The work-package "Order" paragraph (`DESIGN.md:1428-1433`) is history and fine as it is. |
+| N1 window a constant | fixed | The window is read from `arms/C.toml` (`expert_iteration_window_phases`). D's equality with it is pinned by `test_followup_arms`. The window now appears as a line that it is already set, not as a table row, which is right since nothing is left to fill. |
+| N2 seeds not phase 1's | fixed | `grpo_phase_config` merges `policy.optimization.seed = offset_number_seed(1, 0)` (that is, 1) and `policy_replay.seed = offset_seed("grpo-replay/1", 0)` (that is, `"grpo-replay/1"`). These are exactly `loop.phase_config_text` at phase 1 and seed offset 0. Tested. |
+| N3 notes in value cells | fixed | The table has a Source column; the Value cells are bare rates. |
+| N4 `slice_trees.py` docstring | fixed | The docstring now describes the `--slices 1` use. `--slices 1` has its own tests, and a name clash between phase directories is refused (see N6). |
+
+### New nits
+
+**N5. HANDOFF section 8 B still describes the old placeholders.** `HANDOFF.md:260-261` says "Both still carry
+PLACEHOLDER values that the learning-rate step fills: C's window (1 or 4 phases) and learning rate (5e-5 or 1e-4); D
+takes C's window and rate". The window is now set to 4, and C's rate comes from O2. Fix: change to "C's and D's
+expert-iteration rate (from O2) and D's GRPO rate (A's, step 2); the window is 4".
+
+**N6. The tree-name clash check is an `assert` on input data.** `tree_slices.write_slices` checks that two phase
+directories do not hold trees of the same file name with an `assert`. That clash can come from a real multi-phase
+run, so it is invalid input, not a broken invariant. The style rule asks for `ValueError` there, and an `assert`
+would vanish under `python -O`. It cannot occur for step 2's one-phase run.

@@ -95,3 +95,67 @@ among the logs.
 3. `nvidia-smi --query-gpu=index,memory.used` reads under 100 MiB per GPU after `stop_model.sh --all` (carried over
    from AU).
 4. `offline_chain` at HOLD, or not installed, for the whole of step 2 (S1).
+
+## Re-review (2026-11-17)
+
+Fixes `4a0b192..6182609`. WSL: `test_study_chain_script.py`, `test_offline_chain_script.py`, `test_tree_slices.py`,
+`test_learning_rate_step.py`, `test_learning_rate_report.py`, `test_study_commands.py`, `test_followup_arms.py`: 355
+passed.
+
+**Verdict: merge after one small fix** (S2 below: two lines in the driver plus a sentence in the doc). The guard is
+otherwise right.
+
+| Finding | Status | Note |
+|---|---|---|
+| S1 the two drivers share GPUs unguarded | Fixed in the code, with one gap on the node (S2) | `chain_helpers.sh:26-34` `other_chain_idle`; `study_chain.sh:86` and `offline_chain.sh:91` call it before their first server or GPU action. |
+| N1 report only names O2's file | Fixed | `o2_choice` reads the `Chosen:` line via `o2_rate` (labels from `offline_arm.run_label(MATCHED, rate)` and the offline config's rates). A missing or unreadable file prints "O2 not ranked yet" and does not fail the report. |
+| N2 no one-slice test | Fixed | `test_tree_slices.py`: one slice holds every tree in finish order; it links and records them all. |
+| N3 link name clash | Fixed | `tree_slices.py:148-150` refuses duplicate basenames before anything is written (see N5). |
+| N4 `mode.err` not listed | Fixed | Ops doc line 356. |
+
+The guard, checked:
+- **Placement.**
+  - Study chain: after the mode check and `write-configs` (no server or GPU action), before S1's first `stop_model.sh`.
+    It runs on every start, so a resume in S2 or S3 is guarded too.
+  - Offline chain: after its CPU data steps and `held_out_config`, before `stop_servers`. Its data steps may run while
+    step 2 runs, but step 2 refuses to start while the offline chain has a `chain.log` and no HOLD or STOPPED, so the
+    two never meet on the Lean CPUs either.
+- **What counts as started.** "Started" means the other directory holds a `chain.log`; an empty or prepared state
+  (`mode.toml` only) does not count. Both directions are tested, along with HOLD, STOPPED, a prepared state and the
+  O1 switch while step 2 runs.
+- **No restart loop.** `stop_chain` exits 0, so supervisord does not retry.
+- **Both started at once** (e.g. a container restart with neither at HOLD): each writes STOPPED, or the later one finds
+  the other's STOPPED and goes on. Either way they never overlap.
+- **Old offline chain on the node.** The node's installed offline chain sources the shared `chain_helpers.sh` at each
+  start. The only change to that file since its first version (`0d663a4`) is the added function, so the old driver
+  keeps working with the new copy and simply never calls it.
+
+### Should fix
+
+**S2. Until the offline chain is reinstalled, the guard works in one direction only, and an older helpers copy turns
+the study side off without a word.**
+`deployment/study_chain.sh:86`; ops doc lines 325-328 and 397-398.
+- The installed `offline_chain.sh` predates the guard. Until it is reinstalled from this master, nothing stops O1's
+  switch (`touch run_pool`, move HOLD aside, start) while step 2 runs. Yet the doc says "otherwise the offline driver
+  stops itself" (397-398) and "each driver stops itself" (325-328), both untrue on the node today.
+- The study driver calls `other_chain_idle` without checking that the sourced helpers define it. Under `set -uo
+  pipefail` without `-e`, an undefined function prints "command not found", returns 127 and the driver goes on (checked
+  in bash). If `study_chain.sh` were installed beside the older `chain_helpers.sh` (step 3's copy skipped, or the copy
+  deferred because the doc says to replace it only while both drivers are at HOLD), the guard would be off silently.
+- Fix:
+  - In `study_chain.sh` (and `offline_chain.sh`), right after sourcing:
+    `declare -F other_chain_idle > /dev/null || stop_chain "chain_helpers.sh beside the driver is older than the driver: install the current one"`.
+  - In the ops doc, make reinstalling `offline_chain.sh` (at its HOLD, with the new helpers) part of installing step 2,
+    or say plainly that until then O1's switch is unguarded and must wait for step 2's HOLD by hand.
+
+### Nits
+
+**N5.** `src/lean_search/rl/tree_slices.py:148-150`: the clash check spans all slices. A clash only matters within one
+slice directory, so a future multi-phase, multi-slice cut would be refused needlessly when two phases reuse a basename
+in different slices. Checking per slice would be exact. It is also an `assert` on input data: under the user's
+convention a `ValueError` fits better, and `slice_trees.py` would then print a message rather than a traceback. The
+driver's STOPPED text quotes only the last line either way.
+
+**N6.** `src/lean_search/rl/learning_rate_step.py:78-87` (phase-1 seeds, BB's fix): fine for the rounds. Note in the
+report that only the seeds and the trees match arm A's phase 1; the trainer (`grpo_phase.py` against the persistent
+one) still differs, as the docstring says.

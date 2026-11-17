@@ -257,8 +257,8 @@ reviews AS and AT with re-reviews in `results/reviews/2026-11-16_review_as_*` an
 - **Arm C** (`experiments/configs/grpo/followup/arms/C.toml`): `policy_update = "expert_iteration"`,
   `expert_iteration_every_phases = 1`. **Arm D** (`arms/D.toml`): `policy_update = "grpo_and_expert_iteration"`,
   `expert_iteration_every_phases = 4`, `credit = "per_tactic"`, KL reference stays v0. Both share the recipe
-  `followup/expert_iteration.toml`. Both still carry PLACEHOLDER values that the learning-rate step fills: C's window
-  (1 or 4 phases) and learning rate (5e-5 or 1e-4); D takes C's window and rate and A's GRPO rate. Contradictory keys
+  `followup/expert_iteration.toml`. Both still carry PLACEHOLDER values: C's and D's expert-iteration rate (O2's choice,
+  5e-5 or 1e-4) and D's GRPO rate (A's, from step 2); the window is set to 4 (owner, 2026-11-17). Contradictory keys
   (GRPO-only keys in C, round keys in A or B) fail at load.
 - **Skipped rounds:** a round with too few examples, or whose data fills no optimizer step, is skipped and recorded
   with its reason (`no_optimizer_step`); C then keeps its policy for that phase, D publishes the GRPO update alone.

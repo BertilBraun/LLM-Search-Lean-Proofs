@@ -323,9 +323,12 @@ sampling differs from the shared run's: the arms sample in the step's mode or no
    - the search-efficiency branch is merged and deployed: the mode files then name `search/*_sampling.toml` (the
      switches on, as the owner wants in the arms' training sampling). A step 2 sampled with the plain search configs
      would leave every arm refused by the sampling binding, and would have to be sampled again.
-   The offline chain must be at HOLD (or STOPPED) for the whole step, and step 2 must be at HOLD before O1's switch:
-   each driver stops itself (STOPPED, "the … chain … stands neither at HOLD nor STOPPED") before its first server or
-   GPU action while the other has started and is neither (`other_chain_idle` in `chain_helpers.sh`).
+   The offline chain must be at HOLD (or STOPPED) for the whole step, and step 2 must be at HOLD before O1's switch.
+   A driver of this master stops itself (STOPPED, "the … chain … stands neither at HOLD nor STOPPED") before its first
+   server or GPU action while the other has started and is neither (`other_chain_idle` in `chain_helpers.sh`). The
+   offline driver's copy installed before this master has no such check, so either reinstall it now, at its HOLD,
+   together with step 2's driver and the shared helpers (step 3 below), or give O1's switch only once step 2 is at HOLD,
+   by hand. A driver beside an older `chain_helpers.sh` stops at once ("chain_helpers.sh is older than the driver").
 1. Deploy a master that holds the driver, keeping the node-local edits (section 4). Never deploy while the driver runs:
    its steps must all use the same code, and a changed search config stops it.
 2. Put the mode in place:
@@ -340,6 +343,10 @@ sampling differs from the shared run's: the arms sample in the step's mode or no
    chmod +x /workspace/step1_chain_tools/study_chain.sh.new
    mv /workspace/step1_chain_tools/chain_helpers.sh.new /workspace/step1_chain_tools/chain_helpers.sh
    mv /workspace/step1_chain_tools/study_chain.sh.new /workspace/step1_chain_tools/study_chain.sh
+   # The offline driver's copy beside them, at its HOLD (it then checks step 2 too); skip only if O1's switch waits.
+   cp deployment/offline_chain.sh /workspace/step1_chain_tools/offline_chain.sh.new
+   chmod +x /workspace/step1_chain_tools/offline_chain.sh.new
+   mv /workspace/step1_chain_tools/offline_chain.sh.new /workspace/step1_chain_tools/offline_chain.sh
    cp deployment/study_chain.conf /workspace/step1_chain_tools/study_chain.conf
    cp deployment/study_chain.conf /etc/supervisor/conf.d/study_chain.conf
    supervisorctl reread && supervisorctl update        # autostart: it starts now
@@ -397,7 +404,9 @@ PC).
 **The owner's order (2026-11-17):** O2 (matched) runs completely, then the driver writes HOLD with the servers
 stopped. O1 (pool) runs only on the owner's word and only at the rate O2's ranking chose: the switch is the file
 `/workspace/runs/offline_chain/run_pool` (any content), only while step 2's driver (`study_chain`) is at HOLD,
-STOPPED or not installed: otherwise the offline driver stops itself before its first server or GPU action. To give it: `touch /workspace/runs/offline_chain/run_pool`, move
+STOPPED or not installed: an offline driver of a master with `other_chain_idle` stops itself otherwise, before its
+first server or GPU action; an older installed copy does not, so check by hand. To give it:
+`touch /workspace/runs/offline_chain/run_pool`, move
 `HOLD` aside (`mv HOLD HOLD.after_matched`), `supervisorctl start offline_chain`.
 
 | Step | What | Markers | Node hours |
