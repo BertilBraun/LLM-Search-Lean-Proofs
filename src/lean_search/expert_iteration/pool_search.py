@@ -254,7 +254,12 @@ async def search_pool(
             )
 
         try:
-            async with LeanReplPool(config.lean.pool_size, LeanReplConfig(), config.lean.restart_fraction) as pool:
+            async with LeanReplPool(
+                config.lean.pool_size,
+                LeanReplConfig(),
+                config.lean.restart_fraction,
+                spare_processes=config.lean.spare_processes,
+            ) as pool:
                 started = time.monotonic()
                 await pool.start(common_headers(problems, PRELOADED_HEADER_SHARE))
                 log(f"Pool of {config.lean.pool_size} ready in {time.monotonic() - started:.1f}s")

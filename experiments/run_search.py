@@ -177,7 +177,12 @@ async def search_with_expander(
             flush=True,
         )
 
-    async with LeanReplPool(config.lean.pool_size, LeanReplConfig(), config.lean.restart_fraction) as pool:
+    async with LeanReplPool(
+        config.lean.pool_size,
+        LeanReplConfig(),
+        config.lean.restart_fraction,
+        spare_processes=config.lean.spare_processes,
+    ) as pool:
         started = time.monotonic()
         await pool.start(sorted({problem.header for problem in problems}))
         print(f"Pool of {config.lean.pool_size} ready in {time.monotonic() - started:.1f}s", flush=True)

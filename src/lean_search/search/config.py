@@ -36,6 +36,9 @@ class LeanConfig:
     pool_size: int = 32
     concurrency: int = 32
     restart_fraction: float = 0.5
+    # Warm processes with the headers imported that replace a killed or crashed one mid-search, so the search does
+    # not wait for a new process and its import (lean/README.md, "Processes"); each holds a full import.
+    spare_processes: int = 0
 
 
 @dataclass(frozen=True)
@@ -53,6 +56,8 @@ def parse_run_config(text: str) -> RunConfig:
     config = from_json_object(RunConfig, tomllib.loads(text))
     if not 0 < config.lean.concurrency <= config.lean.pool_size:
         raise ValueError("lean.concurrency must be between 1 and lean.pool_size: each search holds one process.")
+    if config.lean.spare_processes < 0:
+        raise ValueError("lean.spare_processes must not be negative.")
     if config.search.max_expansions < 1 or config.search.max_depth < 1 or config.search.max_wall_seconds <= 0:
         raise ValueError("search budgets must be positive.")
     exploration = config.search.exploration

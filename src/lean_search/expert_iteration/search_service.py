@@ -384,7 +384,12 @@ class SearchService:
         async with contextlib.AsyncExitStack() as stack:
             models = await self.open_models(stack)
             pool = await stack.enter_async_context(
-                LeanReplPool(workers, LeanReplConfig(), self.template.lean.restart_fraction)
+                LeanReplPool(
+                    workers,
+                    LeanReplConfig(),
+                    self.template.lean.restart_fraction,
+                    spare_processes=self.template.lean.spare_processes,
+                )
             )
             await pool.start(headers)
             self.log(f"Pool of {workers} REPLs ready")

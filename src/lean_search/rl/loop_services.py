@@ -207,7 +207,12 @@ async def open_tree_searcher(
             arm_models = await stack.enter_async_context(open_search_models(arm_config, gate))
             arm = OptionsArmSearch(options_arm, arm_config.search, arm_models)
         pool = await stack.enter_async_context(
-            LeanReplPool(config.lean.pool_size, LeanReplConfig(), config.lean.restart_fraction)
+            LeanReplPool(
+                config.lean.pool_size,
+                LeanReplConfig(),
+                config.lean.restart_fraction,
+                spare_processes=config.lean.spare_processes,
+            )
         )
         await pool.start(headers)
         yield LeanTreeSearcher(config, pool, models, gate, renamings, arm)

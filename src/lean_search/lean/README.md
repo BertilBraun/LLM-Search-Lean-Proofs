@@ -255,6 +255,14 @@ or the `lean_search_step.match_N` matchers of executed steps. A crash during ver
   mappings, and a REPL holds about 0.25 GiB after `import Mathlib`), so a runaway tactic crashes its own process
   (`ReplFailure(CRASHED)`) instead of the node. `PR_SET_PDEATHSIG` kills REPLs when the orchestrating process dies
   (strictly: when the thread that started them exits, so start them from the event-loop thread).
+- **Spare processes** (`LeanReplPool(spare_processes=n)`, the run config's `[lean] spare_processes`, 0 by default): the
+  pool keeps up to `n` started processes with its headers loaded (`pool.SpareProcesses`, filled after `start`). A REPL
+  that must replace its process while in use (a wall-clock kill, a crash or panic, the memory or proof-state limit:
+  `_recover` and `_ensure_healthy`) takes a ready spare's process and environments instead of starting and importing
+  in the caller's time, and the pool starts another in the background; with none ready it starts its own as before
+  (`LeanRepl.spare_swaps`, `spare_misses`). Its proof states replay on the new process like after any restart. Spares
+  are not counted by `stop_idle_processes` and hold a full import each; `pool.close()` cancels starting ones and closes
+  ready ones. Background restarts of released REPLs (`acquire`'s exit) do not use spares.
 - `lake env` runs once per project directory and Python process, shared by concurrent starts.
 - The pool restarts a process before reusing it if the `acquire` body raised (including cancellation), if the process
   needs a restart, or if it is past `restart_fraction` of its limits. Restarts run in the background with

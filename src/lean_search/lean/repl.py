@@ -444,13 +444,25 @@ def _panic_error(panic: str) -> LeanError:
     return LeanError(f"Lean panic: {panic}", panic=True)
 
 
-class LeanRepl:
-    """One REPL process. Operations are serialized; proof states survive restarts by transparent replay."""
+class SpareSource(Protocol):
+    """Warm processes for REPLs whose process died or was killed (`pool.SpareProcesses`)."""
 
-    def __init__(self, config: LeanReplConfig | None = None) -> None:
+    def take(self) -> "LeanRepl | None": ...
+
+
+class LeanRepl:
+    """One REPL process. Operations are serialized; proof states survive restarts by transparent replay.
+    With `spares`, a process that must be replaced while the REPL is in use (a kill, a crash, a limit) is swapped for a
+    ready spare instead of started and imported in the caller's time; without a ready one it starts as usual."""
+
+    def __init__(self, config: LeanReplConfig | None = None, spares: SpareSource | None = None) -> None:
         self.config = config or LeanReplConfig()
+        self.spares = spares
         self.proof_state_count = 0
         self.restart_count = 0
+        # Replacements served by a ready spare process, and those that found none ready.
+        self.spare_swaps = 0
+        self.spare_misses = 0
         self._process: asyncio.subprocess.Process | None = None
         self._must_restart = True
         self._closed = False
@@ -925,7 +937,7 @@ class LeanRepl:
         if self._is_healthy() and not self.exceeds_limits():
             return
         try:
-            await self._replace_process()
+            await self._replace_process(use_spare=True)
         except ReplClosedError:
             raise
         except Exception as error:
@@ -939,7 +951,7 @@ class LeanRepl:
             return
         headers = list(self._base_environments)
         try:
-            await self._replace_process()
+            await self._replace_process(use_spare=True)
             for header in headers:
                 await self._base_environment(header)
         except Exception:
@@ -951,11 +963,36 @@ class LeanRepl:
     def _is_healthy(self) -> bool:
         return self._is_running() and not self._must_restart
 
-    async def _replace_process(self) -> None:
+    async def _replace_process(self, use_spare: bool = False) -> None:
         await self._stop_process()
         if self._closed:
             raise ReplClosedError("The Lean REPL was closed.")
+        spare = self.spares.take() if use_spare and self.spares is not None else None
+        if spare is not None:
+            self._adopt(spare)
+            return
+        if use_spare and self.spares is not None:
+            self.spare_misses += 1
         await self._start_process()
+
+    def _adopt(self, spare: "LeanRepl") -> None:
+        """Takes over the spare's running process with the environments it has elaborated; the spare is closed."""
+        assert spare._is_healthy() and spare.config == self.config
+        if self._process is not None:
+            self.restart_count += 1
+        self.spare_swaps += 1
+        self._process, spare._process = spare._process, None
+        self._session = new_session_id()
+        self.proof_state_count = spare.proof_state_count
+        self._import_environments = spare._import_environments
+        self._header_environments = spare._header_environments
+        self._base_environments = spare._base_environments
+        self._header_failures = spare._header_failures
+        self._replayed_states = {}
+        self._stderr_tail, self._stderr_task = spare._stderr_tail, spare._stderr_task
+        self._must_restart = False
+        spare._closed = True
+        spare._stderr_task = None
 
     async def _start_process(self) -> None:
         environment = {**os.environ, **await lake_environment(self.config.project_directory)}

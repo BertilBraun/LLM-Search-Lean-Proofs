@@ -710,7 +710,12 @@ async def search_problem_set(
         async with contextlib.AsyncExitStack() as stack:
             models = await stack.enter_async_context(open_search_models(config, None, request_failures))
             pool = await stack.enter_async_context(
-                LeanReplPool(config.lean.pool_size, LeanReplConfig(), config.lean.restart_fraction)
+                LeanReplPool(
+                    config.lean.pool_size,
+                    LeanReplConfig(),
+                    config.lean.restart_fraction,
+                    spare_processes=config.lean.spare_processes,
+                )
             )
             await pool.start(common_headers(pending, PRELOADED_HEADER_SHARE))
 
