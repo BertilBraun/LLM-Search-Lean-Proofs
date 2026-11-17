@@ -89,6 +89,15 @@ statement, depth weight 0, 14,400 s wall cap, both started longest expected sear
   made cheaper.
 - Run 3 against the anchors (descriptive; the token cap and depth weight 0 differ): -2.1 points (95% -0.6 to -3.7),
   most of it under 500 characters (-10 points).
+- **At equal expansions** (solved within N expansions, paired; analysis on the PC 2026-11-17): no reasoning at 16
+  expansions against the anchors (visible, tuned depth weight, 16 expansions): -1.2 and -1.4 points (95% -3.0 to
+  +0.6 and -3.2 to +0.5); against run 3 at 16: +2.0 (+0.1 to +3.9); at 8 against run 3: +2.5 (+0.7 to +4.4). So
+  visible reasoning buys at most about 1 point per expansion for 2.2 times the tokens per expansion (1,606-1,678
+  against 721), and no reasoning has not had its depth weight tuned.
+- **Where Lean time goes** (run 4, 575 Lean hours): 88% verifying the policy's blocks, 12% the automatic tactics
+  (`nlinarith` 4.6%, `simp_all` 2.5%, `field_simp` 2.1%, `omega` 1.2%, `ring_nf` 1.0%, `rfl` and `constructor` 0.3%).
+  The automatic tactics take part in 44% of proofs and close 10% of them alone. Policy blocks stopped at the
+  60-second tactic limit cost about 25% of all Lean time in every run (8,632 timeouts in run 4).
 - The node's `reasoning_readings.txt` failed for runs 3 and 4 (its log pattern does not match the ordered runs'
   start line); the readings above come from a fixed copy run on the PC against the pulled files.
 
