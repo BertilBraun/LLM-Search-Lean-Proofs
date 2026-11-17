@@ -17,8 +17,6 @@ pytest.importorskip("numpy")
 from lean_search.rl.learning_rate_step import (  # noqa: E402
     STEP_VARIANTS,
     PlanPaths,
-    RoundKind,
-    Signal,
     StudyTemplates,
     plan_files,
     rank_arguments,
@@ -31,8 +29,8 @@ FAKES = Path(__file__).resolve().parent / "study_chain_fakes"
 CONFIGS = REPOSITORY / "experiments/configs/grpo"
 SHARED_RUN = "followup_shared_sampling"
 DEPLOYMENT_FAKES = ("environment.sh", "fake_common.sh", "arm_loop.sh", "grpo_loop.sh", "stop_model.sh", "background.sh")
-# Lines the background builds and the trainers' wrappers add between the steps.
-SIDE_LINES = ("taskset ", "torchrun ", "build ", "trained ")
+# Lines the trainers' wrappers add between the steps.
+SIDE_LINES = ("taskset ", "torchrun ", "trained ")
 
 
 def toml(path: Path) -> dict:
@@ -40,10 +38,7 @@ def toml(path: Path) -> dict:
 
 
 TEMPLATES = StudyTemplates(
-    toml(CONFIGS / "followup/base.toml"),
-    toml(CONFIGS / "phase.toml"),
-    toml(CONFIGS / "followup/expert_iteration.toml"),
-    {signal: toml(CONFIGS / f"followup/arms/{signal}.toml") for signal in Signal},
+    toml(CONFIGS / "followup/base.toml"), toml(CONFIGS / "phase.toml"), toml(CONFIGS / "followup/arms/A.toml")
 )
 
 
@@ -111,13 +106,12 @@ def make_node(root: Path, mode: bool = True) -> Node:
         node.workspace / "data" / "math.jsonl",
     )
     plan = plan_files(paths)
-    for name, text in (("rounds.tsv", plan.rounds), ("builds.tsv", plan.builds), ("held_out.tsv", plan.held_out)):
+    for name, text in (("rounds.tsv", plan.rounds), ("held_out.tsv", plan.held_out)):
         (configs / name).write_text(text, encoding="utf-8")
     for variant in STEP_VARIANTS:
-        text = round_config_text(variant, TEMPLATES, SHARED_RUN)
+        text = round_config_text(variant, TEMPLATES)
         (configs / f"{variant.label}.toml").write_text(text, encoding="utf-8")
-    for signal in Signal:
-        node.set(f"rank_{signal}.arguments", "\n".join(rank_arguments(signal)) + "\n")
+    node.set("rank.arguments", "\n".join(rank_arguments()) + "\n")
     node.state.mkdir()
     if mode:
         shutil.copyfile(CONFIGS / "followup/modes/visible.toml", node.state / "mode.toml")
@@ -173,19 +167,11 @@ def expected_steps(node: Node) -> list[str]:
         *held_out_steps("step2_v0"),
         "stop_model.sh --all",
     ]
-    steps += [
-        f"grpo_phase.py {variant.run_name} part policy trees slice_4"
-        for variant in STEP_VARIANTS
-        if variant.kind == RoundKind.GRPO
-    ]
-    for build in ("step2_C_w1", "step2_C_w4"):
-        steps += [f"dry run {build}", "learning_rate_step.py check-dry-run"]
-    steps += [f"train {variant.run_name}" for variant in STEP_VARIANTS if variant.kind == RoundKind.EXPERT_ITERATION]
+    steps += [f"grpo_phase.py {variant.run_name} part policy trees slice_1" for variant in STEP_VARIANTS]
     for variant in STEP_VARIANTS:
         steps += held_out_steps(variant.run_name)
     steps += held_out_steps("step2_v0_end")
-    for signal in Signal:
-        steps += ["learning_rate_step.py rank-arguments", f"rank_learning_rates.py {signal}"]
+    steps += ["learning_rate_step.py rank-arguments", "rank_learning_rates.py A"]
     return [*steps, "learning_rate_step.py report", "stop_model.sh --all"]
 
 
@@ -218,12 +204,6 @@ def test_a_clean_run_writes_no_stopped(finished: Node) -> None:
     assert not (finished.state / "STOPPED").exists()
 
 
-def test_both_expert_iteration_builds_end_before_the_first_dry_run(finished: Node) -> None:
-    lines = finished.lines()
-    builds = [index for index, line in enumerate(lines) if line.startswith("build ")]
-    assert (len(builds), max(builds) < lines.index("dry run step2_C_w1")) == (2, True)
-
-
 def test_every_round_trains_on_the_four_gpus_offline(finished: Node) -> None:
     launches = {line for line in finished.lines() if line.startswith("torchrun ")}
     assert launches == {"torchrun on CUDA_VISIBLE_DEVICES=0,1,2,3 HF_HUB_OFFLINE=1"}
@@ -253,11 +233,9 @@ KILL_POINTS = [
     "slices",
     "held_out_step2_v0",
     "round_step2_A_5e-5",
-    "build_step2_C_w4",
-    "dry_run_step2_C_w1",
-    "round_step2_C_w1_1e-4",
-    "held_out_step2_B2_2e-5",
-    "rank_B2",
+    "held_out_step2_A_1e-4",
+    "held_out_step2_v0_end",
+    "rank_A",
     "report",
 ]
 
@@ -291,7 +269,7 @@ def test_a_kill_at_any_step_never_evaluates_a_missing_adapter_or_trains_on_missi
 
 
 @pytest.mark.parametrize(
-    ("point", "run"), [("round_step2_A_5e-5", "step2_A_5e-5"), ("round_step2_C_w1_1e-4", "step2_C_w1_1e-4")]
+    ("point", "run"), [("round_step2_A_2e-5", "step2_A_2e-5"), ("round_step2_A_1e-4", "step2_A_1e-4")]
 )
 def test_a_round_killed_mid_training_restarts_into_a_fresh_output(node: Node, point: str, run: str) -> None:
     killed(node, point)
@@ -411,23 +389,6 @@ def test_arm_loop_failing_twice_is_tried_again_by_the_driver(node: Node) -> None
     assert supervise(node) == [0] and (node.state / "HOLD").exists()
 
 
-def test_a_background_build_alive_across_a_restart_is_waited_for_not_started_again(node: Node) -> None:
-    node.set("slow_build_step2_C_w1", "3")
-    node.set("fail_round_step2_A_2e-5", "1")
-    codes = supervise(node)
-    assert (codes, node.lines().count("build step2_C_w1")) == ([1, 0], 1)
-
-
-def test_a_background_build_that_failed_is_built_again_before_c_trains(node: Node) -> None:
-    node.set("fail_build_step2_C_w1", "1")
-    supervise(node)
-    lines = node.lines()
-    assert (
-        lines.count("build step2_C_w1"),
-        lines.index("dry run step2_C_w1") > lines.index("failed at build_step2_C_w1"),
-    ) == (2, True)
-
-
 def test_servers_failing_to_start_before_a_held_out_run_are_retried(node: Node) -> None:
     node.set("fail_servers", "1")
     assert supervise(node) == [1, 0] and (node.state / "HOLD").exists()
@@ -452,15 +413,6 @@ def test_the_servers_left_up_at_the_end_are_stopped_before_hold(node: Node) -> N
     node.set("fail_stop", "0")
     supervise(node)
     assert node.steps()[-1] == "stop_model.sh --all"
-
-
-def test_a_dry_run_planning_no_step_stops_the_chain_before_c_trains(node: Node) -> None:
-    node.set("dry_run_steps", "0")
-    supervise(node)
-    assert ("dry run of step2_C_w1" in node.stopped(), any(line.startswith("train ") for line in node.lines())) == (
-        True,
-        False,
-    )
 
 
 def test_a_server_stop_refused_stops_the_chain(node: Node) -> None:

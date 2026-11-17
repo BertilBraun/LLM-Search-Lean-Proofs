@@ -1,33 +1,24 @@
-"""Step 2 of the follow-up study, the learning rates (DESIGN.md, "Follow-up study: controlled arms", "Step 2", with the
-owner's decisions of 2026-11-16: no probe or gate-set runs, the rates picked on the 512 held-out states alone, no B1),
-as the study driver (deployment/study_chain.sh) runs it through experiments/learning_rate_step.py.
+"""Step 2 of the follow-up study, arm A's learning rate (DESIGN.md, "Follow-up study: controlled arms", "Step 2",
+with the owner's decisions of 2026-11-17: arm B dropped, arm C takes the offline run O2's rate and a 4-phase window, D
+takes C's rate and window and A's rate), as the study driver (deployment/study_chain.sh) runs it through
+experiments/learning_rate_step.py.
 
-Ten training rounds, each from v0 on the shared sampling run's slices: per-tactic GRPO (A) and pure proof success (B2)
-on slice 4 at 2e-5, 5e-5 and 1e-4, expert iteration (C) at 5e-5 and 1e-4 on slice 4 (window 1) and slices 1-4 (window
-4). A GRPO round's phase config and a round's recipe are what the arm's overlay gives at that rate (study_configs): the
-arm trains with its chosen variant's recipe, though not with its seeds (the template's, not the loop's per-phase ones),
-its trees (slices, not the arm's phase 1) or its trainer (grpo_phase.py and the hand-run train, not the persistent
-one). Each variant's held-out run is compared with v0's own run under the same code and mode, and v0 runs again after
-the variants as the step's A/A and drift check; C's window is chosen with its rate, by the same rule over its four
-variants.
+One shared phase of sampling from v0 (12M generated tokens), then three per-tactic GRPO rounds from v0 on its trees at
+2e-5, 5e-5 and 1e-4. A round's phase config is what arm A's overlay gives at that rate (study_configs): the arm trains
+with its chosen variant's recipe, though not with its seeds (the template's, not the loop's per-phase ones) or its
+trainer (grpo_phase.py, not the persistent one). Each variant's held-out run is compared with v0's own run under the
+same code and mode, and v0 runs again after the variants as the step's A/A and drift check.
 """
 
-import dataclasses
 import json
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from enum import StrEnum
 from pathlib import Path
 
 from lean_search.expert_iteration.toml_text import toml_text
 from lean_search.rl.arm_comparison import multiple_comparisons_note
 from lean_search.rl.evaluation import EvaluationSummary
-from lean_search.rl.expert_iteration_data import (
-    ExpertIterationConfig,
-    TrainingSummary,
-    parse_expert_iteration_config,
-)
 from lean_search.rl.probe_rating import DifferenceInterval
 from lean_search.rl.rate_ranking import HeldOutStates, RateChoice, VariantReport, includes_zero
 from lean_search.rl.study_configs import OverlayKind, merged, overlay_configs
@@ -36,35 +27,20 @@ from lean_search.search.config import RunConfig
 from lean_search.search.records import from_json_object
 from lean_search.search.summary import markdown_table
 
-SLICES = 4
 RUN_PREFIX = "step2_"
 V0_HELD_OUT = f"{RUN_PREFIX}v0"
 # v0 again after the variants: the step's A/A and drift check.
 V0_END_HELD_OUT = f"{RUN_PREFIX}v0_end"
-# An in-loop round with fewer examples is skipped (LoopTrainingConfig.expert_iteration_min_examples); DESIGN expected
-# about 8 optimizer steps from one slice.
-MIN_ROUND_EXAMPLES = 100
-MIN_ROUND_STEPS = 5
-
-
-class Signal(StrEnum):
-    A = "A"
-    B2 = "B2"
-    C = "C"
-
-
-class RoundKind(StrEnum):
-    GRPO = "grpo"
-    EXPERT_ITERATION = "expert_iteration"
+# The shared phase's trees, as experiments/slice_trees.py --slices 1 links them: every tree of the run, finished order.
+TREES_SLICE = "slices/slice_1"
+# Arm C's window (owner, 2026-11-17); arm D takes it.
+C_WINDOW_PHASES = 4
 
 
 @dataclass(frozen=True)
 class StepVariant:
-    signal: Signal
-    # As written in the report and the run names, e.g. "5e-5".
+    # As written in the report, the run names and arms/A.toml, e.g. "5e-5".
     rate: str
-    # C's window in slices; 0 for a GRPO signal, which trains on the last slice.
-    window: int = 0
 
     @property
     def learning_rate(self) -> float:
@@ -72,131 +48,70 @@ class StepVariant:
 
     @property
     def label(self) -> str:
-        return f"{self.signal}_w{self.window}_{self.rate}" if self.window else f"{self.signal}_{self.rate}"
+        return f"A_{self.rate}"
 
     @property
     def run_name(self) -> str:
         return f"{RUN_PREFIX}{self.label}"
 
-    @property
-    def kind(self) -> RoundKind:
-        match self.signal:
-            case Signal.A | Signal.B2:
-                return RoundKind.GRPO
-            case Signal.C:
-                return RoundKind.EXPERT_ITERATION
 
-    @property
-    def slices(self) -> tuple[int, ...]:
-        return tuple(range(SLICES - max(self.window, 1) + 1, SLICES + 1))
-
-    @property
-    def build_name(self) -> str:
-        """The expert-iteration data both rates of a window train on, under $LEAN_SEARCH_DATA/grpo_expert_iteration."""
-        assert self.kind == RoundKind.EXPERT_ITERATION
-        return f"{RUN_PREFIX}{self.signal}_w{self.window}"
+# In ranking order: on a tie the rule (rate_ranking.tie_break) takes the lower rate.
+STEP_VARIANTS = (StepVariant("2e-5"), StepVariant("5e-5"), StepVariant("1e-4"))
 
 
-# In ranking order within a signal: the tie rule (rate_ranking.tie_break) takes the lower rate, the first listed among
-# equal rates, so C's window 1 wins a tie with window 4 at the same rate.
-STEP_VARIANTS = (
-    StepVariant(Signal.A, "2e-5"),
-    StepVariant(Signal.A, "5e-5"),
-    StepVariant(Signal.A, "1e-4"),
-    StepVariant(Signal.B2, "2e-5"),
-    StepVariant(Signal.B2, "5e-5"),
-    StepVariant(Signal.B2, "1e-4"),
-    StepVariant(Signal.C, "5e-5", window=1),
-    StepVariant(Signal.C, "5e-5", window=4),
-    StepVariant(Signal.C, "1e-4", window=1),
-    StepVariant(Signal.C, "1e-4", window=4),
-)
-
-
-def signal_variants(signal: Signal) -> tuple[StepVariant, ...]:
-    return tuple(variant for variant in STEP_VARIANTS if variant.signal == signal)
-
-
-def slice_directory(shared_run: str, slice_number: int) -> str:
-    """Relative to $LEAN_SEARCH_RUNS: where experiments/slice_trees.py put the slice."""
-    return f"{shared_run}/slices/slice_{slice_number}"
+def variant_of(label: str) -> StepVariant:
+    return next(variant for variant in STEP_VARIANTS if variant.label == label)
 
 
 @dataclass(frozen=True)
 class StudyTemplates:
-    """The parsed files a round's config comes from: the follow-up base, its phase template, the rounds' recipe and
-    the arms' overlays by signal."""
+    """The parsed files a round's config comes from: the follow-up base, its phase template and arm A's overlay."""
 
     base: Mapping[str, object]
     phase_template: Mapping[str, object]
-    recipe: Mapping[str, object]
-    arms: Mapping[Signal, Mapping[str, object]]
+    arm: Mapping[str, object]
 
 
 def grpo_phase_config(variant: StepVariant, templates: StudyTemplates) -> dict[str, object]:
-    """The arm's phase config at the variant's rate: the shipped phase of its credit, v0 as start and KL reference."""
-    assert variant.kind == RoundKind.GRPO
+    """Arm A's phase config at the variant's rate: per-tactic credit, v0 as start and KL reference."""
     rate = {"phase": {"policy": {"optimization": {"learning_rate": variant.learning_rate}}}}
-    overlay = merged(templates.arms[variant.signal], rate)
+    overlay = merged(templates.arm, rate)
     return overlay_configs(OverlayKind.ARM, overlay, templates.base, templates.phase_template, "phase.toml").phase
 
 
-def expert_iteration_round(variant: StepVariant, templates: StudyTemplates, shared_run: str) -> ExpertIterationConfig:
-    """Arm C's recipe at the variant's rate, on the variant's slices of the shared run (every tree, all sampled by v0),
-    continuing the shared run's current policy (v0), with the recipe's own seeds."""
-    assert variant.kind == RoundKind.EXPERT_ITERATION
-    choices = {
-        "loop": {"training": {"expert_iteration_window_phases": variant.window}},
-        "expert_iteration": {"sft": {"optimization": {"learning_rate": variant.learning_rate}}},
-    }
-    configs = overlay_configs(
-        OverlayKind.ARM,
-        merged(templates.arms[variant.signal], choices),
-        templates.base,
-        templates.phase_template,
-        "phase.toml",
-        templates.recipe,
-        "expert_iteration.toml",
-    )
-    assert configs.expert_iteration is not None
-    recipe = parse_expert_iteration_config(toml_text(configs.expert_iteration))
-    directories = tuple(slice_directory(shared_run, number) for number in variant.slices)
-    data = dataclasses.replace(recipe.data, loop=shared_run, tree_directories=directories)
-    sft = dataclasses.replace(recipe.sft, data=variant.build_name)
-    return dataclasses.replace(recipe, run_name=variant.run_name, data=data, sft=sft)
-
-
-def round_config_text(variant: StepVariant, templates: StudyTemplates, shared_run: str) -> str:
-    match variant.kind:
-        case RoundKind.GRPO:
-            return toml_text(grpo_phase_config(variant, templates))
-        case RoundKind.EXPERT_ITERATION:
-            return toml_text(dataclasses.asdict(expert_iteration_round(variant, templates, shared_run)))
+def round_config_text(variant: StepVariant, templates: StudyTemplates) -> str:
+    return toml_text(grpo_phase_config(variant, templates))
 
 
 def round_adapter(variant: StepVariant, checkpoints: Path) -> Path:
-    match variant.kind:
-        case RoundKind.GRPO:
-            return checkpoints / variant.run_name / "policy" / "adapter"
-        case RoundKind.EXPERT_ITERATION:
-            return checkpoints / variant.run_name / "adapter"
+    return checkpoints / variant.run_name / "policy" / "adapter"
+
+
+def round_outcome_file(variant: StepVariant, checkpoints: Path) -> Path:
+    return checkpoints / variant.run_name / "phase.json"
 
 
 def round_completion_files(variant: StepVariant, checkpoints: Path) -> tuple[Path, ...]:
-    """What a finished round leaves, written last by the trainer: without them the output is a half-trained one."""
-    match variant.kind:
-        case RoundKind.GRPO:
-            return (checkpoints / variant.run_name / "phase.json", round_adapter(variant, checkpoints))
-        case RoundKind.EXPERT_ITERATION:
-            return (checkpoints / variant.run_name / "training_summary.json", round_adapter(variant, checkpoints))
+    """What a finished round leaves, phase.json written last: without them the output is a half-trained one."""
+    return (round_outcome_file(variant, checkpoints), round_adapter(variant, checkpoints))
+
+
+def round_outcome_problem(variant: StepVariant, checkpoints: Path) -> str | None:
+    """Why the round's phase.json does not read back as its trainer wrote it, e.g. cut short by a kill mid-write;
+    None when it does."""
+    path = round_outcome_file(variant, checkpoints)
+    try:
+        from_json_object(PhaseOutcome, json.loads(path.read_text(encoding="utf-8")))
+    except (OSError, ValueError, TypeError, KeyError) as error:
+        return f"{path} does not read back: {error!r}"
+    return None
 
 
 @dataclass(frozen=True)
 class PlanFiles:
-    """The driver's tab-separated plan: one line per round, per expert-iteration build, per held-out run."""
+    """The driver's tab-separated plan: one line per round, per held-out run."""
 
     rounds: str
-    builds: str
     held_out: str
 
 
@@ -212,76 +127,41 @@ class PlanPaths:
     math_replay: Path
 
 
-# bash's read joins adjacent tabs (a tab is IFS white space), so an empty field would shift the ones after it.
-NO_VALUE = "-"
-
-
 def tsv_lines(rows: Sequence[Sequence[object]]) -> str:
     return "".join("\t".join(str(field) for field in row) + "\n" for row in rows)
 
 
 def plan_files(paths: PlanPaths) -> PlanFiles:
-    """rounds.tsv: label, kind, config, run name, output directory, then for GRPO the trees and the two replay files
-    (`NO_VALUE` otherwise), last the completion files, space separated; builds.tsv: build name, a config of it;
-    held_out.tsv: name, arm, phase, policy adapter, v0 first and last."""
-    rounds = []
-    builds: dict[str, Path] = {}
-    for variant in STEP_VARIANTS:
-        config = paths.configs / f"{variant.label}.toml"
-        match variant.kind:
-            case RoundKind.GRPO:
-                inputs = [paths.runs / slice_directory(paths.shared_run, SLICES), paths.lean_replay, paths.math_replay]
-            case RoundKind.EXPERT_ITERATION:
-                inputs = [NO_VALUE] * 3
-                builds.setdefault(variant.build_name, config)
-        completion = " ".join(str(path) for path in round_completion_files(variant, paths.checkpoints))
-        output = paths.checkpoints / variant.run_name
-        rounds.append([variant.label, variant.kind, config, variant.run_name, output, *inputs, completion])
+    """rounds.tsv: label, config, run name, output directory, the trees, the two replay files, the completion files
+    (space separated); held_out.tsv: name, arm, phase, policy adapter, v0 first and last."""
+    trees = paths.runs / paths.shared_run / TREES_SLICE
+    rounds = [
+        [
+            variant.label,
+            paths.configs / f"{variant.label}.toml",
+            variant.run_name,
+            paths.checkpoints / variant.run_name,
+            trees,
+            paths.lean_replay,
+            paths.math_replay,
+            " ".join(str(path) for path in round_completion_files(variant, paths.checkpoints)),
+        ]
+        for variant in STEP_VARIANTS
+    ]
     held_out = [[V0_HELD_OUT, "v0", 0, paths.v0_adapter]]
     held_out += [
         [variant.run_name, variant.label, 1, round_adapter(variant, paths.checkpoints)] for variant in STEP_VARIANTS
     ]
     held_out.append([V0_END_HELD_OUT, "v0", 0, paths.v0_adapter])
-    return PlanFiles(tsv_lines(rounds), tsv_lines(list(builds.items())), tsv_lines(held_out))
+    return PlanFiles(tsv_lines(rounds), tsv_lines(held_out))
 
 
-def rank_arguments(signal: Signal) -> list[str]:
-    """experiments/rank_learning_rates.py's arguments for the signal's variants against v0, without gate runs."""
+def rank_arguments() -> list[str]:
+    """experiments/rank_learning_rates.py's arguments for A's variants against v0, without gate runs."""
     arguments = ["--v0", V0_HELD_OUT]
-    for variant in signal_variants(signal):
+    for variant in STEP_VARIANTS:
         arguments += ["--variant", variant.label, variant.rate, variant.run_name]
     return arguments
-
-
-DRY_RUN_STEPS = re.compile(r"(\d+) steps on (\d+) GPUs")
-DRY_RUN_REFUSAL = "train would refuse: "
-
-
-def dry_run_steps(text: str) -> int:
-    """The optimizer steps grpo_expert_iteration.py train --dry-run planned; ValueError when it would refuse or plans
-    none, since the real round would then fail or not train."""
-    refusals = [line for line in text.splitlines() if line.startswith(DRY_RUN_REFUSAL)]
-    if refusals:
-        raise ValueError("; ".join(line.removeprefix(DRY_RUN_REFUSAL) for line in refusals))
-    found = DRY_RUN_STEPS.findall(text)
-    if not found:
-        raise ValueError("The dry run printed no step count.")
-    steps = int(found[-1][0])
-    if steps == 0:
-        raise ValueError("The dry run plans no optimizer step: the round would not train.")
-    return steps
-
-
-def round_outcome_problem(variant: StepVariant, checkpoints: Path) -> str | None:
-    """Why the round's outcome file (phase.json, training_summary.json) does not read back as its trainer wrote it,
-    e.g. cut short by a kill mid-write; None when it does."""
-    path = round_completion_files(variant, checkpoints)[0]
-    outcome_type = PhaseOutcome if variant.kind == RoundKind.GRPO else TrainingSummary
-    try:
-        from_json_object(outcome_type, json.loads(path.read_text(encoding="utf-8")))
-    except (OSError, ValueError, TypeError, KeyError) as error:
-        return f"{path} does not read back: {error!r}"
-    return None
 
 
 def dropped_states(summary_text: str) -> tuple[str, ...]:
@@ -301,30 +181,9 @@ def chosen_label(rank_text: str) -> str:
 
 
 @dataclass(frozen=True)
-class SignalRanking:
-    signal: Signal
+class Ranking:
     reports: tuple[VariantReport, ...]
     choice: RateChoice
-
-
-@dataclass(frozen=True)
-class ArmValues:
-    """What the arms' PLACEHOLDERs take (arms/A.toml, B2.toml, C.toml, D.toml)."""
-
-    a_rate: str
-    b2_rate: str
-    c_rate: str
-    c_window: int
-
-
-def chosen_variant(ranking: SignalRanking) -> StepVariant:
-    return next(variant for variant in signal_variants(ranking.signal) if variant.label == ranking.choice.chosen)
-
-
-def arm_values(rankings: Sequence[SignalRanking]) -> ArmValues:
-    chosen = {ranking.signal: chosen_variant(ranking) for ranking in rankings}
-    assert set(chosen) == set(Signal), chosen
-    return ArmValues(chosen[Signal.A].rate, chosen[Signal.B2].rate, chosen[Signal.C].rate, chosen[Signal.C].window)
 
 
 @dataclass(frozen=True)
@@ -337,18 +196,6 @@ class GrpoRoundSize:
     kl_to_reference: float
     clip_fraction: float
     trainer_seconds: float
-
-
-@dataclass(frozen=True)
-class ExpertIterationRoundSize:
-    expert_iteration_examples: int
-    lean_replay_examples: int
-    math_replay_examples: int
-    dry_run_steps: int
-    steps: int
-    tokens: int
-    training_seconds: float
-    replay_loss_change: float | None
 
 
 def grpo_round_size(outcome: PhaseOutcome) -> GrpoRoundSize:
@@ -366,23 +213,10 @@ def grpo_round_size(outcome: PhaseOutcome) -> GrpoRoundSize:
     )
 
 
-def expert_iteration_round_size(summary: TrainingSummary, planned_steps: int) -> ExpertIterationRoundSize:
-    return ExpertIterationRoundSize(
-        summary.expert_iteration_examples,
-        summary.lean_replay_examples,
-        summary.math_replay_examples,
-        planned_steps,
-        summary.steps,
-        summary.tokens,
-        summary.training_seconds,
-        summary.replay_loss_change,
-    )
-
-
 @dataclass(frozen=True)
 class RoundRecord:
     variant: StepVariant
-    size: GrpoRoundSize | ExpertIterationRoundSize
+    size: GrpoRoundSize
     # The driver's wall clock for the round's training job (load, compile, train, save).
     wall_seconds: float
 
@@ -457,11 +291,13 @@ class StepReport:
     mode: str
     sampled_tokens: int
     lost_tokens: int
-    rankings: tuple[SignalRanking, ...]
+    ranking: Ranking
     rounds: tuple[RoundRecord, ...]
     baseline: V0Baseline
     # Wall seconds by the driver's step names (timings.tsv).
     durations: Mapping[str, float]
+    # The offline run O2's rate choice (offline_chain.sh's rank_matched.txt), which arms C and D take.
+    o2_ranking: str
 
 
 def points(interval: DifferenceInterval) -> str:
@@ -484,35 +320,35 @@ def below_v0(report: VariantReport) -> list[str]:
     return [name for name, interval in measures if side_of_v0(interval) == "below v0"]
 
 
-def chosen_report(ranking: SignalRanking) -> VariantReport:
+def chosen_report(ranking: Ranking) -> VariantReport:
     return next(report for report in ranking.reports if report.label == ranking.choice.chosen)
 
 
-def values_section(values: ArmValues, rankings: Sequence[SignalRanking]) -> str:
-    warnings = [
-        f"**Look first:** signal {ranking.signal}'s chosen variant {ranking.choice.chosen} is below v0 in "
-        f"{' and '.join(below_v0(chosen_report(ranking)))}: the round made the policy worse on the held-out states."
-        for ranking in rankings
-        if below_v0(chosen_report(ranking))
-    ]
+def values_section(ranking: Ranking, o2_ranking: str) -> str:
+    a_rate = variant_of(ranking.choice.chosen).rate
+    o2 = f"from O2: the 'Chosen:' line of {o2_ranking}"
     rows = [
-        ["arms/A.toml", "phase.policy.optimization.learning_rate", values.a_rate],
-        ["arms/B2.toml", "phase.policy.optimization.learning_rate", values.b2_rate],
-        ["arms/C.toml", "loop.training.expert_iteration_window_phases", values.c_window],
-        ["arms/C.toml", "expert_iteration.sft.optimization.learning_rate", values.c_rate],
-        ["arms/D.toml", "loop.training.expert_iteration_window_phases", values.c_window],
-        ["arms/D.toml", "phase.policy.optimization.learning_rate", values.a_rate],
-        ["arms/D.toml", "expert_iteration.sft.optimization.learning_rate", values.c_rate],
+        ["arms/A.toml", "phase.policy.optimization.learning_rate", a_rate],
+        ["arms/C.toml", "loop.training.expert_iteration_window_phases", f"{C_WINDOW_PHASES} (owner, 2026-11-17)"],
+        ["arms/C.toml", "expert_iteration.sft.optimization.learning_rate", o2],
+        ["arms/D.toml", "loop.training.expert_iteration_window_phases", f"{C_WINDOW_PHASES} (C's)"],
+        ["arms/D.toml", "phase.policy.optimization.learning_rate", f"{a_rate} (A's)"],
+        ["arms/D.toml", "expert_iteration.sft.optimization.learning_rate", f"C's, {o2}"],
     ]
+    worse = below_v0(chosen_report(ranking))
+    warnings = (
+        [
+            f"**Look first:** A's chosen variant {ranking.choice.chosen} is below v0 in {' and '.join(worse)}: the "
+            "round made the policy worse on the held-out states."
+        ]
+        if worse
+        else []
+    )
     title = "## Values for the arms (not applied: the orchestrator fills the PLACEHOLDERs)"
     return "\n\n".join([title, *warnings, markdown_table(["File", "Setting", "Value"], rows)])
 
 
-def variant_of(label: str) -> StepVariant:
-    return next(variant for variant in STEP_VARIANTS if variant.label == label)
-
-
-def ranking_section(ranking: SignalRanking) -> str:
+def ranking_section(ranking: Ranking) -> str:
     rows = [
         [
             report.label,
@@ -527,7 +363,7 @@ def ranking_section(ranking: SignalRanking) -> str:
     headers = ["Variant", "Rate", "Valid Lean, points [95%]", "Valid Lean", "Success, points [95%]", "Success"]
     choice = ranking.choice
     lines = [
-        f"## Signal {ranking.signal}: chosen {choice.chosen}",
+        f"## Arm A: chosen {choice.chosen}",
         f"Each variant minus v0, paired per held-out state. Rule: {choice.reason}; tied with the best: "
         f"{', '.join(choice.tied)}.",
         markdown_table(headers, rows),
@@ -537,79 +373,33 @@ def ranking_section(ranking: SignalRanking) -> str:
     if worse:
         lines.append(
             f"**The chosen variant is below v0 in {' and '.join(worse)}.** The rule ranks the variants against each "
-            "other, not against v0: every rate of this signal may have hurt. Look before filling its value."
+            "other, not against v0: every rate may have hurt. Look before filling its value."
         )
     elif includes_zero(chosen.success):
         lines.append(
             "The chosen variant's success is within noise of v0's on the held-out states: one round at this rate may "
             "be a step too small to see here, not evidence that the signal does nothing."
         )
-    if len({variant_of(label).window for label in choice.tied}) > 1:
-        lines.append(
-            "C's window was chosen by the tie rule (the lower rate, window 1 first among equal rates; "
-            "rate_ranking.tie_break), not measured apart: the tied variants hold both windows."
-        )
     return "\n\n".join(lines)
 
 
-def round_rows(rounds: Sequence[RoundRecord]) -> tuple[list[list[object]], list[list[object]]]:
-    grpo_rows: list[list[object]] = []
-    expert_iteration_rows: list[list[object]] = []
-    for record in rounds:
-        match record.size:
-            case GrpoRoundSize() as size:
-                grpo_rows.append(
-                    [
-                        record.variant.label,
-                        size.trees,
-                        size.groups,
-                        size.sequences,
-                        size.steps,
-                        f"{size.trained_tokens:,}",
-                        f"{size.kl_to_reference:.4f}",
-                        f"{size.clip_fraction:.3f}",
-                        hours(size.trainer_seconds),
-                        hours(record.wall_seconds),
-                    ]
-                )
-            case ExpertIterationRoundSize() as size:
-                change = "-" if size.replay_loss_change is None else f"{size.replay_loss_change:+.1%}"
-                expert_iteration_rows.append(
-                    [
-                        record.variant.label,
-                        f"{size.expert_iteration_examples:,}",
-                        f"{size.lean_replay_examples:,} / {size.math_replay_examples:,}",
-                        size.dry_run_steps,
-                        size.steps,
-                        f"{size.tokens:,}",
-                        change,
-                        hours(size.training_seconds),
-                        hours(record.wall_seconds),
-                    ]
-                )
-    return grpo_rows, expert_iteration_rows
-
-
-def small_round_notes(rounds: Sequence[RoundRecord]) -> list[str]:
-    notes = []
-    for record in rounds:
-        match record.size:
-            case ExpertIterationRoundSize() as size if size.expert_iteration_examples < MIN_ROUND_EXAMPLES:
-                notes.append(
-                    f"{record.variant.label} trained on {size.expert_iteration_examples} examples: the loop skips a "
-                    f"round under {MIN_ROUND_EXAMPLES}, so arm C would not train on data this small."
-                )
-            case ExpertIterationRoundSize() as size if size.dry_run_steps < MIN_ROUND_STEPS:
-                notes.append(
-                    f"{record.variant.label} planned {size.dry_run_steps} optimizer steps (under {MIN_ROUND_STEPS}): "
-                    "too few to tell its rates apart."
-                )
-    return notes
-
-
 def rounds_section(rounds: Sequence[RoundRecord]) -> str:
-    grpo_rows, expert_iteration_rows = round_rows(rounds)
-    grpo_headers = [
+    rows = [
+        [
+            record.variant.label,
+            record.size.trees,
+            record.size.groups,
+            record.size.sequences,
+            record.size.steps,
+            f"{record.size.trained_tokens:,}",
+            f"{record.size.kl_to_reference:.4f}",
+            f"{record.size.clip_fraction:.3f}",
+            hours(record.size.trainer_seconds),
+            hours(record.wall_seconds),
+        ]
+        for record in rounds
+    ]
+    headers = [
         "Round",
         "Trees",
         "Groups",
@@ -621,26 +411,8 @@ def rounds_section(rounds: Sequence[RoundRecord]) -> str:
         "Trainer",
         "Wall",
     ]
-    expert_iteration_headers = [
-        "Round",
-        "Examples",
-        "Lean / math replay",
-        "Steps (dry run)",
-        "Steps",
-        "Tokens",
-        "Replay loss change",
-        "Training",
-        "Wall",
-    ]
     return "\n\n".join(
-        [
-            "## Rounds",
-            "GRPO, slice 4, one pass, from v0:",
-            markdown_table(grpo_headers, grpo_rows),
-            "Expert iteration, from v0 (window 1: slice 4; window 4: slices 1-4):",
-            markdown_table(expert_iteration_headers, expert_iteration_rows),
-            *small_round_notes(rounds),
-        ]
+        ["## Rounds", "Per-tactic GRPO, one pass over the shared phase, from v0:", markdown_table(headers, rows)]
     )
 
 
@@ -687,8 +459,8 @@ def baseline_section(baseline: V0Baseline) -> str:
 
 
 DURATION_STEPS = (
-    ("s1_sampling", "Shared sampling (48M tokens)"),
-    ("s1_slices", "Slices"),
+    ("s1_sampling", "Shared sampling (one phase, 12M tokens)"),
+    ("s1_slices", "The phase's trees linked"),
     (f"held_out_{V0_HELD_OUT}", "v0's held-out run"),
     (f"held_out_{V0_END_HELD_OUT}", "v0's held-out run after the variants"),
 )
@@ -698,11 +470,6 @@ def durations_section(report: StepReport) -> str:
     rows = [[title, hours(report.durations.get(name))] for name, title in DURATION_STEPS]
     rounds = [report.durations.get(f"round_{variant.label}") for variant in STEP_VARIANTS]
     held_out = [report.durations.get(f"held_out_{variant.run_name}") for variant in STEP_VARIANTS]
-    builds = sorted(name for name in report.durations if name.startswith("build_"))
-    rows += [
-        [f"Expert-iteration data {name.removeprefix('build_')} (beside the GRPO rounds)", hours(report.durations[name])]
-        for name in builds
-    ]
     rows.append(["Training rounds, together", hours(sum(seconds for seconds in rounds if seconds is not None))])
     rows.append(
         ["Variants' held-out runs, together", hours(sum(seconds for seconds in held_out if seconds is not None))]
@@ -711,16 +478,16 @@ def durations_section(report: StepReport) -> str:
 
 
 def report_markdown(report: StepReport) -> str:
-    values = arm_values(report.rankings)
     # Each variant's two against v0, and v0's A/A pair (valid Lean, success).
-    intervals = sum(2 * len(ranking.reports) for ranking in report.rankings) + 2
+    intervals = 2 * len(report.ranking.reports) + 2
     sections = [
-        "# Step 2: learning rates",
+        "# Step 2: arm A's learning rate",
         f"Code {report.revision}. Sampling mode: {report.mode}. Shared sampling: {report.sampled_tokens:,} generated "
-        f"tokens counted, {report.lost_tokens:,} lost. Every variant is one round from v0; the 512 held-out states "
-        "decide (no probe or gate-set runs; owner, 2026-11-16).",
-        values_section(values, report.rankings),
-        *(ranking_section(ranking) for ranking in report.rankings),
+        f"tokens counted, {report.lost_tokens:,} lost. Every variant is one per-tactic GRPO round from v0; the 512 "
+        "held-out states decide (no probe or gate-set runs; owner, 2026-11-16). Arm B is dropped; arm C takes O2's "
+        "rate and a 4-phase window, D takes C's rate and window and A's rate (owner, 2026-11-17).",
+        values_section(report.ranking, report.o2_ranking),
+        ranking_section(report.ranking),
         multiple_comparisons_note(intervals),
         rounds_section(report.rounds),
         baseline_section(report.baseline),
