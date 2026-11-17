@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar, Protocol
 
+from lean_search.record_fields import record_dict
+
 METRICS_DIRECTORY = "metrics"
 TENSORBOARD_DIRECTORY = "tensorboard"
 
@@ -115,7 +117,7 @@ class MetricsWriter:
     def write(self, record: MetricRecord, record_time: float | None = None) -> None:
         assert dataclasses.is_dataclass(record) and not isinstance(record, type)
         moment = time.time() if record_time is None else record_time
-        fields = dataclasses.asdict(record)
+        fields = record_dict(record)
         line = {"time": moment, **dataclasses.asdict(self.context), "fields": fields}
         # One write per line, so concurrent appenders never interleave inside a line.
         with family_path(self.run_directory, record.family).open("a", encoding="utf-8") as file:

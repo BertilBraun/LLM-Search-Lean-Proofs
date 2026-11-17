@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
+from lean_search.record_fields import record_dict
 from lean_search.search.search import SearchResult
 from lean_search.search.texts import ExpansionTexts
 from lean_search.search.tree import Edge, NodeStatus, SearchTree, StepSource
@@ -87,7 +88,7 @@ def tree_record(tree: SearchTree, statement: str, result: SearchResult) -> TreeR
 
 def to_json(value: object) -> str:
     assert dataclasses.is_dataclass(value) and not isinstance(value, type)
-    return json.dumps(dataclasses.asdict(value), ensure_ascii=False)
+    return json.dumps(record_dict(value), ensure_ascii=False)
 
 
 def write_tree(path: Path, record: TreeRecord) -> None:

@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
+from lean_search.record_fields import written_when_set
 from lean_search.search.search import Accounting, SearchConfig, SearchResult, StepStatistics, StopReason
 
 CATEGORIES = (
@@ -135,7 +136,7 @@ class StepCost:
     rejected: int
     closing: int
     on_proof_paths: int
-    skipped_timeouts: int = 0
+    skipped_timeouts: int = written_when_set(0)
 
 
 @dataclass(frozen=True)
@@ -393,6 +394,8 @@ def render_markdown(summary: RunSummary, title: str) -> str:
         "closing = the step produced a proof that verified or not; on proof paths = steps of found proofs; "
         "REPL failures (crash, failed replay) are infrastructure, not the step's fault."
     )
+    # A run without the timeout skip keeps the table it had before the skip existed.
+    skips = any(cost.skipped_timeouts for cost in summary.steps)
     sections.append(
         markdown_table(
             [
@@ -407,7 +410,7 @@ def render_markdown(summary: RunSummary, title: str) -> str:
                 "errors",
                 "heartbeat timeouts",
                 "wall-clock timeouts",
-                "skipped timeouts",
+                *(["skipped timeouts"] if skips else []),
                 "REPL failures",
                 "closing",
                 "on proof paths",
@@ -425,7 +428,7 @@ def render_markdown(summary: RunSummary, title: str) -> str:
                     cost.errors,
                     cost.heartbeat_timeouts,
                     cost.wall_clock_timeouts,
-                    cost.skipped_timeouts,
+                    *([cost.skipped_timeouts] if skips else []),
                     cost.repl_failures,
                     cost.closing,
                     cost.on_proof_paths,

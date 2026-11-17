@@ -211,7 +211,7 @@ async def open_tree_searcher(
                 config.lean.pool_size,
                 LeanReplConfig(),
                 config.lean.restart_fraction,
-                spare_processes=config.lean.spare_processes,
+                spare_processes=config.lean.spare_processes or 0,
             )
         )
         await pool.start(headers)

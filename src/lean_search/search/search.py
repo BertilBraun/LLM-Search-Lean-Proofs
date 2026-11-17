@@ -32,6 +32,7 @@ from lean_search.lean.memory import SearchMemory
 from lean_search.lean.plans import Rejection, TacticPlan, plain_plan, plan_block
 from lean_search.lean.repl import BlockFailure, BlockResult
 from lean_search.lean.text import TacticPiece, join_tactics
+from lean_search.record_fields import written_when_set
 from lean_search.search.expanders import Candidate, CandidateBatch, Expander, SearchContext
 from lean_search.search.frontier import Frontier
 from lean_search.search.priority import PriorityFunction, Scores
@@ -135,9 +136,10 @@ class SearchConfig:
     # Needs the identifier check, whose environment names it searches.
     name_repair: NameRepairConfig = field(default_factory=NameRepairConfig)
     # A tactic run again on the same tactic path with the same limit takes its first deterministic outcome (success,
-    # error, heartbeat limit) instead of running Lean; wall-clock stops and REPL failures run again.
-    result_cache: bool = False
-    timeout_skip: TimeoutSkipConfig = field(default_factory=TimeoutSkipConfig)
+    # error, heartbeat limit) instead of running Lean; wall-clock stops and REPL failures run again. None (off) and
+    # an absent timeout skip keep the written config, so its digest, as it was before these switches.
+    result_cache: bool | None = None
+    timeout_skip: TimeoutSkipConfig | None = None
 
 
 class StopReason(StrEnum):
@@ -178,10 +180,10 @@ class Accounting:
     policy_children: int = 0
     partial_policy_children: int = 0
     # Tactics the result cache answered, and the Lean seconds they took when they ran (search.result_cache).
-    cached_tactics: int = 0
-    cache_saved_seconds: float = 0.0
+    cached_tactics: int = written_when_set(0)
+    cache_saved_seconds: float = written_when_set(0.0)
     # Edges ending at a tactic not run after its text's wall-clock stops (search.timeout_skip; not in `timeouts`).
-    skipped_timeouts: int = 0
+    skipped_timeouts: int = written_when_set(0)
 
 
 @dataclass
@@ -194,7 +196,7 @@ class StepStatistics:
     errors: int = 0
     heartbeat_timeouts: int = 0
     wall_clock_timeouts: int = 0
-    skipped_timeouts: int = 0
+    skipped_timeouts: int = written_when_set(0)
     repl_failures: int = 0
     rejected: int = 0
     repeated: int = 0
@@ -399,9 +401,10 @@ class _TheoremSearch:
         self.name_repairer: NameRepairer | None = None
         self.proofs: list[Node] = []
         self.exploration_random = random.Random(f"{config.exploration.seed}:{problem.name}")
-        skip_after = config.timeout_skip.max_wall_clock_timeouts if config.timeout_skip.enabled else None
-        uses_memory = config.result_cache or config.timeout_skip.enabled
-        self.memory = SearchMemory(config.result_cache, skip_after) if uses_memory else None
+        skip = config.timeout_skip
+        skip_after = skip.max_wall_clock_timeouts if skip is not None and skip.enabled else None
+        cache = bool(config.result_cache)
+        self.memory = SearchMemory(cache, skip_after) if cache or skip_after is not None else None
 
     def wall_seconds(self) -> float:
         return time.monotonic() - self.started

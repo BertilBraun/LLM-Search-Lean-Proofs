@@ -37,8 +37,9 @@ class LeanConfig:
     concurrency: int = 32
     restart_fraction: float = 0.5
     # Warm processes with the headers imported that replace a killed or crashed one mid-search, so the search does
-    # not wait for a new process and its import (lean/README.md, "Processes"); each holds a full import.
-    spare_processes: int = 0
+    # not wait for a new process and its import (lean/README.md, "Processes"). None: none. Timing only, so not part
+    # of a run config's digest (probe_evaluation.run_config_sha256).
+    spare_processes: int | None = None
 
 
 @dataclass(frozen=True)
@@ -56,7 +57,7 @@ def parse_run_config(text: str) -> RunConfig:
     config = from_json_object(RunConfig, tomllib.loads(text))
     if not 0 < config.lean.concurrency <= config.lean.pool_size:
         raise ValueError("lean.concurrency must be between 1 and lean.pool_size: each search holds one process.")
-    if config.lean.spare_processes < 0:
+    if config.lean.spare_processes is not None and config.lean.spare_processes < 0:
         raise ValueError("lean.spare_processes must not be negative.")
     if config.search.max_expansions < 1 or config.search.max_depth < 1 or config.search.max_wall_seconds <= 0:
         raise ValueError("search budgets must be positive.")
@@ -78,7 +79,7 @@ def parse_run_config(text: str) -> RunConfig:
             'policy.failed_automation_in_prompt needs expander.kind = "automation_then_policy" and expander.overlap = '
             "false: the prompt names the sweep's failures, so the sweep must finish before the request."
         )
-    if config.search.timeout_skip.max_wall_clock_timeouts < 1:
+    if config.search.timeout_skip is not None and config.search.timeout_skip.max_wall_clock_timeouts < 1:
         raise ValueError("search.timeout_skip.max_wall_clock_timeouts must be at least 1.")
     name_repair = config.search.name_repair
     if name_repair.enabled and not (config.search.check_identifiers and 0 < name_repair.min_similarity <= 1):

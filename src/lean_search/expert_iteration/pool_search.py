@@ -258,7 +258,7 @@ async def search_pool(
                 config.lean.pool_size,
                 LeanReplConfig(),
                 config.lean.restart_fraction,
-                spare_processes=config.lean.spare_processes,
+                spare_processes=config.lean.spare_processes or 0,
             ) as pool:
                 started = time.monotonic()
                 await pool.start(common_headers(problems, PRELOADED_HEADER_SHARE))

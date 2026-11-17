@@ -8,6 +8,7 @@ from lean_search.lean.identifiers import NameRepair
 from lean_search.lean.plans import Rejection
 from lean_search.lean.repl import BlockFailure
 from lean_search.lean.text import TacticPiece
+from lean_search.record_fields import written_when_set
 from lean_search.search.texts import ExpansionTexts
 
 MAX_FAILURE_MESSAGE_CHARACTERS = 1000
@@ -149,7 +150,7 @@ class Edge:
     # block and its outcome the repaired run's.
     name_repairs: tuple[NameRepair, ...] = ()
     # Executed tactics answered by the search's result cache instead of Lean (search.result_cache).
-    cached_tactics: int = 0
+    cached_tactics: int = written_when_set(0)
 
     @property
     def repaired(self) -> bool:

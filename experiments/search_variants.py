@@ -136,7 +136,9 @@ async def run_variants(
         for variant in variants:
             models[variant.name] = await stack.enter_async_context(open_search_models(variant.config))
         pool = await stack.enter_async_context(
-            LeanReplPool(concurrency, LeanReplConfig(), lean.restart_fraction, spare_processes=lean.spare_processes)
+            LeanReplPool(
+                concurrency, LeanReplConfig(), lean.restart_fraction, spare_processes=lean.spare_processes or 0
+            )
         )
         await pool.start(sorted({state.problem.header for state in states}))
         semaphore = asyncio.Semaphore(concurrency)

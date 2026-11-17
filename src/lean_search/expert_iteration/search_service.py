@@ -388,7 +388,7 @@ class SearchService:
                     workers,
                     LeanReplConfig(),
                     self.template.lean.restart_fraction,
-                    spare_processes=self.template.lean.spare_processes,
+                    spare_processes=self.template.lean.spare_processes or 0,
                 )
             )
             await pool.start(headers)
