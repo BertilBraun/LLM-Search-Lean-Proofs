@@ -304,6 +304,15 @@ default), safe server stops, results pulled to the PC as they are written.
 | First node, 2026-11-14 11:20 UTC to its outage at about 23:35 UTC | about $11 at most; partly refunded by the provider (owner) |
 | Second node, from 2026-11-15 about 08:30 UTC | $0.83 per hour |
 
+## Decisions and open points (owner, 2026-11-17)
+
+- **Offline arm: agreed in principle.** From v0, SFT on known proofs of the pool statements a loop arm would see, cut
+  into blocks of 1-5 steps, with at least the loop's training tokens. Step-level GRPO along known trajectories is
+  doubtful (it may push down nearly every sample, since samples rarely land on the known path); the arm's exact design
+  is still to be discussed.
+- **Leaning towards no reasoning** for the arms, but first the Lean overhead must come down without process kills
+  (measurement of replays, restarts, duplicates and heartbeats per second of slow tactics, at step 1's HOLD).
+
 ## Decisions (owner, 2026-11-16)
 
 - **Arms.** A, B (pure proof success), C and D all run. Dropped: an arm that learns from unsolved trees (no positive
