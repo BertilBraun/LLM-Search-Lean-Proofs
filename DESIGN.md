@@ -1322,7 +1322,17 @@ the arm as in the old run (decided). Each enters step 3 with its own learning ra
 
 ### Step 2: one training round per signal from shared trees
 
-- **Shared sampling** (proposed): one loop run from v0 and value v0 with the study's base config samples 4 × B = 48M
+- **Shrunk to arm A's rate** (decided, owner, 2026-11-17; it replaces the plan below, kept for the record): arm B is
+  dropped from the study (it differs from A only in reward shaping, 92-94% sign agreement on the old trees, which one
+  seed cannot resolve); arm C takes the learning rate the offline run O2 picks on the held-out states (the same
+  expert-iteration recipe and trainer, 5e-5 against 1e-4) and a 4-phase window; D takes C's rate and window and A's
+  rate. Step 2 is therefore one shared phase of B = 12M generated tokens from v0 and value v0 in the arms' sampling
+  mode, A's three per-tactic GRPO rounds from v0 on that phase's trees (2e-5, 5e-5, 1e-4, `grpo_phase.py --part
+  policy` with the loop's replay), held-out states for v0 (before and after the variants) and each variant, and
+  `rank_learning_rates.py` for A without gate or probe runs: about 3-4 node hours instead of 8-16.
+  `deployment/study_chain.sh` runs it (`results/followup_node_operations.md`, "The study driver"); its report names
+  C's and D's expert-iteration rate as O2's for the orchestrator to fill.
+- **Shared sampling** (proposed, superseded): one loop run from v0 and value v0 with the study's base config samples 4 × B = 48M
   tokens without training (WP1's total-token stop; with existing code a loop whose phase never comes due, every minute
   and group condition out of reach, stopped by hand). Its trees are cut by finish order into four slices of ~B; the stop
   drops in-flight (slower) searches from slice 4 and the band rises across slices. ~4–9 h.
@@ -1356,8 +1366,8 @@ the arm as in the old run (decided). Each enters step 3 with its own learning ra
 
 ### Step 3: closed-loop arms
 
-- **Arm length** (proposed): 16 phases × B = 192M tokens, one seed first. Each arm's phase 1 is checked against slice 1
-  of the shared trees labelled offline with the arm's credit, no training (sequences, tokens, steps, groups with signal
+- **Arm length** (proposed): 16 phases × B = 192M tokens, one seed first. Each arm's phase 1 is checked against the shared
+  phase's trees (step 2) labelled offline with the arm's credit, no training (sequences, tokens, steps, groups with signal
   within ~±30%; else a config or credit bug).
 - **First two arms**: not fixed here; the owner chooses at the check-in after step 2. Candidates:
   - A with B2: the question as posed; they share ~85% of their reward, so expect a small difference, likely under the
