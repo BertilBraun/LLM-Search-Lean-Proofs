@@ -304,6 +304,14 @@ default), safe server stops, results pulled to the PC as they are written.
 | First node, 2026-11-14 11:20 UTC to its outage at about 23:35 UTC | about $11 at most; partly refunded by the provider (owner) |
 | Second node, from 2026-11-15 about 08:30 UTC | $0.83 per hour |
 
+## Start-order check (run 9, 2026-11-17)
+
+`step1_run9_v0_value_v0_ordered` (v0 with value v0, the anchors' settings, longest expected search first): **708 of
+2,000** (35.4%), 0 wall-clock stops, 3.06 h (anchors 3.17 and 3.58 h). Against the anchors: -0.2 and -0.4 points
+(95% -2.0 to +1.5 and -2.1 to +1.4), inside their A/A difference; Lean load 3,498 timeouts in 368 statements against
+2,856-3,209 in 367-375. The check passes: the arms' probe runs may start longest expected search first. The node
+reached HOLD at 09:30 UTC.
+
 ## Decisions and open points (owner, 2026-11-17)
 
 - **Offline arm: agreed in principle.** From v0, SFT on known proofs of the pool statements a loop arm would see, cut
