@@ -142,10 +142,10 @@ def environment(node: Node, extra: dict[str, str] | None = None) -> dict[str, st
     )
 
 
-def start(node: Node, extra: dict[str, str] | None = None) -> int:
+def start(node: Node, extra: dict[str, str] | None = None, script: Path = SCRIPT) -> int:
     """One start of the driver, in a process group of its own (a fake's kill takes the whole group)."""
     result = subprocess.run(  # noqa: S603
-        ["bash", str(SCRIPT)], env=environment(node, extra), start_new_session=True, timeout=300, check=False
+        ["bash", str(script)], env=environment(node, extra), start_new_session=True, timeout=300, check=False
     )
     return result.returncode
 
@@ -498,3 +498,20 @@ def test_an_offline_chain_at_hold_or_stopped_lets_step_2_run(node: Node, marker:
 def test_a_prepared_but_unstarted_offline_state_does_not_stop_step_2(node: Node) -> None:
     node.offline_state.mkdir()
     assert supervise(node) == [0] and node.steps() == expected_steps(node)
+
+
+def test_a_driver_beside_older_helpers_stops_before_anything_runs(node: Node, tmp_path: Path) -> None:
+    driver = tmp_path / "older" / "study_chain.sh"
+    executable(SCRIPT, driver)
+    text = (REPOSITORY / "deployment" / "chain_helpers.sh").read_text(encoding="utf-8")
+    begin = text.index("other_chain_idle() {")
+    (driver.parent / "chain_helpers.sh").write_text(text[:begin] + text[text.index("\n}\n", begin) + 3 :], "utf-8")
+    assert (
+        start(node, script=driver),
+        "chain_helpers.sh is older than the driver" in node.stopped(),
+        node.lines(),
+    ) == (
+        0,
+        True,
+        [],
+    )

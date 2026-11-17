@@ -35,6 +35,8 @@ exec >> "${state}/chain.log" 2>&1
 # Without the helpers, a STOPPED of its own: an exit 1 would make supervisord restart the driver at once, forever.
 source "$(dirname "${BASH_SOURCE[0]}")/chain_helpers.sh" \
     || { echo "$(date -u +%FT%TZ) no chain_helpers.sh beside the driver: install it" | tee "${state}/STOPPED"; exit 0; }
+# An older copy of the helpers lacks what this driver calls (bash would only print "command not found" and go on).
+declare -F other_chain_idle > /dev/null || stop_chain "chain_helpers.sh is older than the driver: install the current one"
 say "driver start (pid $$)"
 for marker in STOPPED HOLD; do
     if [[ -f "${state}/${marker}" ]]; then say "${marker} present ($(cat "${state}/${marker}")): nothing to do"; exit 0; fi

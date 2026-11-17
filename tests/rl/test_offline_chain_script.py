@@ -368,6 +368,25 @@ def test_a_driver_without_its_helpers_stops_instead_of_restarting(node: Node, tm
     assert (start(node, lonely), "no chain_helpers.sh" in node.stopped()) == (0, True)
 
 
+def older_helpers(directory: Path) -> None:
+    """chain_helpers.sh as it was before other_chain_idle, beside a driver's copy."""
+    text = (REPOSITORY / "deployment" / "chain_helpers.sh").read_text(encoding="utf-8")
+    start = text.index("other_chain_idle() {")
+    end = text.index("\n}\n", start) + 3
+    (directory / "chain_helpers.sh").write_text(text[:start] + text[end:], encoding="utf-8")
+
+
+def test_a_driver_beside_older_helpers_stops_before_anything_runs(node: Node, tmp_path: Path) -> None:
+    driver = tmp_path / "older" / "offline_chain.sh"
+    executable(SCRIPT, driver)
+    older_helpers(driver.parent)
+    assert (start(node, driver), "chain_helpers.sh is older than the driver" in node.stopped(), node.lines()) == (
+        0,
+        True,
+        [],
+    )
+
+
 def test_a_failing_walk_is_retried_by_the_next_start(node: Node) -> None:
     node.set("fail_walk", "2")
     assert supervise(node) == [1, 1, 0]
