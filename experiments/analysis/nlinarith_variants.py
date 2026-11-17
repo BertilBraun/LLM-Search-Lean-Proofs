@@ -33,6 +33,7 @@ import collections
 import dataclasses
 import gzip
 import json
+import os
 import random
 import re
 import time
@@ -51,6 +52,9 @@ POLICY_HEARTBEATS = 50_000
 BUILD_HEARTBEATS = 200_000
 BUILD_TIMEOUT_SECONDS = 120.0
 SAMPLE_INTERVAL_SECONDS = 0.25
+CLOCK_TICKS = os.sysconf("SC_CLK_TCK")
+BOOTSTRAP_SAMPLES = 2000
+BOOTSTRAP_SEED = 20261117
 BUCKETS = ((0, 6), (7, 12), (13, 16), (17, 1_000_000))
 OUTCOMES = ("success", "error", "heartbeat_timeout", "wall_clock_timeout")
 VARIANTS = ("full", "linear", "goal_hints", "degree", "cap8")
@@ -211,6 +215,15 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--cap-seconds", type=float, default=60.0)
     parser.add_argument("--seed", type=int, default=20261117)
     parser.add_argument("--summary-only", action="store_true")
+    parser.add_argument("--variants", default=",".join([ORIGINAL, *VARIANTS]), help="which texts each job runs")
+    parser.add_argument(
+        "--plain-environment",
+        action="store_true",
+        help="the production base environment, without the variant definitions (with --variants original)",
+    )
+    parser.add_argument(
+        "--plain-records", type=Path, help="records.jsonl of a --plain-environment run, for the summary"
+    )
     return parser.parse_args()
 
 
@@ -307,7 +320,7 @@ def process_cpu_seconds(process_id: int) -> float | None:
         fields = Path(f"/proc/{process_id}/stat").read_text().rsplit(")", 1)[1].split()
     except OSError:
         return None
-    return (int(fields[11]) + int(fields[12])) / 100
+    return (int(fields[11]) + int(fields[12])) / CLOCK_TICKS
 
 
 def same_goals(state: ProofState, goals: Sequence[str]) -> bool:
@@ -413,8 +426,10 @@ async def timed_run(repl: LeanRepl, state: ProofState, variant: str, text: str, 
     return Run(variant, outcome_name(result.outcome), wall, last_cpu - cpu_before, first_line(result.outcome))
 
 
-async def measure(job: Job, record: TreeRecord, header: str, config: LeanReplConfig, seed: int) -> Measurement:
-    order = [ORIGINAL, *VARIANTS]
+async def measure(
+    job: Job, record: TreeRecord, header: str, config: LeanReplConfig, seed: int, variants: Sequence[str]
+) -> Measurement:
+    order = list(variants)
     random.Random(f"{seed}:{job.problem_name}:{job.edge_id}").shuffle(order)
     async with LeanRepl(config) as repl:
         state = await tactic_state(repl, record, header, job)
@@ -432,7 +447,11 @@ def job_key(job: Job) -> tuple[str, int, int]:
 
 
 async def run_all(
-    jobs: list[Job], trees: dict[str, TreeRecord], headers: dict[str, str], arguments: argparse.Namespace
+    jobs: list[Job],
+    trees: dict[str, TreeRecord],
+    headers: dict[str, str],
+    arguments: argparse.Namespace,
+    variants: Sequence[str],
 ) -> None:
     config = LeanReplConfig(
         tactic_timeout_seconds=arguments.cap_seconds,
@@ -449,7 +468,7 @@ async def run_all(
         async with semaphore:
             try:
                 measurement = await measure(
-                    job, trees[job.problem_name], headers[job.problem_name], config, arguments.seed
+                    job, trees[job.problem_name], headers[job.problem_name], config, arguments.seed, variants
                 )
             except Exception as error:  # noqa: BLE001 - a measurement records what broke and goes on
                 measurement = Measurement(job, False, (Run("exception", "exception", 0.0, 0.0, repr(error)[:200]),))
@@ -503,25 +522,33 @@ def tallies(measurements: Sequence[Measurement]) -> dict[tuple[str, str], dict[s
     return result
 
 
-def summary(measurements: Sequence[Measurement], population: Population | None) -> str:
+def stratum_order(key: tuple[str, str]) -> tuple[int, int]:
+    return ([bucket_name(low) for low, _ in BUCKETS].index(key[0]), OUTCOMES.index(key[1]))
+
+
+def summary(
+    measurements: Sequence[Measurement], population: Population | None, plain: Sequence[Measurement] = ()
+) -> str:
     built = [measurement for measurement in measurements if measurement.state_built]
+    variants = [
+        variant for variant in [ORIGINAL, *VARIANTS] if any(run.variant == variant for m in built for run in m.runs)
+    ]
     lines = [
         "# Bounded nlinarith variants",
         "",
         f"{len(measurements)} jobs, {len(built)} with their state rebuilt. Each cell: successes (kept / lost / gained "
         "against the original text re-run here) and mean wall seconds per call (a wall-clock stop includes its "
-        "restart).",
+        "restart). A success is a step that closed its goal, with or without other goals left open.",
+        "",
+        *LIMITATIONS,
         "",
     ]
     table = tallies(measurements)
-    variants = [ORIGINAL, *VARIANTS]
     lines += [
         "| comparisons | recorded | n | " + " | ".join(variants) + " |",
         "|---|---|---|" + "---|" * len(variants),
     ]
-    for key in sorted(
-        table, key=lambda key: ([bucket_name(low) for low, _ in BUCKETS].index(key[0]), OUTCOMES.index(key[1]))
-    ):
+    for key in sorted(table, key=stratum_order):
         cells = []
         for variant in variants:
             tally = table[key][variant]
@@ -532,40 +559,107 @@ def summary(measurements: Sequence[Measurement], population: Population | None) 
                 cells.append(f"{tally.successes} ({tally.kept}/{tally.lost}/{tally.gained}) / {mean:.1f}s")
         lines.append(f"| {key[0]} | {key[1]} | {table[key][ORIGINAL].jobs} | " + " | ".join(cells) + " |")
     if population is not None:
-        lines += ["", *weighted_lines(table, population, variants)]
+        lines += ["", *weighted_lines(built, population, variants)]
+        lines += ["", *gained_lines(built, population, variants)]
+    if plain:
+        lines += ["", *plain_environment_lines(built, plain)]
     return "\n".join(lines) + "\n"
 
 
-def weighted_lines(
-    table: dict[tuple[str, str], dict[str, Tally]], population: Population, variants: list[str]
-) -> list[str]:
-    """Scaled to the run's policy nlinarith calls: each stratum's mean seconds and success rate times its count."""
+LIMITATIONS = [
+    "Limitations:",
+    "",
+    "- Every run here, the original text's too, ran in a base environment with the variant definitions appended, the "
+    "environment a search with `[search] nlinarith_variant` has. Appending definitions moves the fresh-name counters, "
+    "which reshuffles heavy steps' run times (lean/README.md, 'Proof states and replay'), so the original column is "
+    "not exactly the production nlinarith; `--plain-environment` re-runs the original text without the definitions "
+    "(the table at the end, when given with `--plain-records`).",
+    "- The jobs are plain `nlinarith [...]` forms; the population (the scaling) counts every policy step named "
+    "nlinarith, `nlinarith!`, `only` and config forms included, and the jobs come from the 1,972 probe statements with "
+    "a header against the population's 2,000.",
+    "- Each call ran alone at 32 concurrent processes, not under 112 searches; strata of 12-13 jobs stand for "
+    "thousands of calls, so the scaled figures carry the bootstrap intervals below.",
+]
+
+
+def stratum_tallies(measurements: Sequence[Measurement]) -> dict[tuple[str, str], list[Measurement]]:
+    by_stratum: dict[tuple[str, str], list[Measurement]] = collections.defaultdict(list)
+    for measurement in measurements:
+        by_stratum[(measurement.job.bucket, measurement.job.recorded_outcome)].append(measurement)
+    return by_stratum
+
+
+@dataclass(frozen=True)
+class Scaled:
+    seconds: float
+    successes: float
+    kept: float
+    lost: float
+    gained: float
+
+
+def scaled_totals(
+    by_stratum: dict[tuple[str, str], list[Measurement]], population: Population, variants: Sequence[str]
+) -> dict[str, Scaled]:
+    """Each stratum's jobs stand for its count of the run's calls."""
+    totals = {variant: [0.0] * 5 for variant in variants}
+    for key, jobs in by_stratum.items():
+        weight = population.counts.get(key, 0) / len(jobs)
+        for variant, tally in tallies(jobs)[key].items():
+            if variant not in totals:
+                continue
+            values = totals[variant]
+            for index, value in enumerate((tally.seconds, tally.successes, tally.kept, tally.lost, tally.gained)):
+                values[index] += value * weight
+    return {variant: Scaled(*values) for variant, values in totals.items()}
+
+
+def bootstrap(
+    by_stratum: dict[tuple[str, str], list[Measurement]], population: Population, variants: Sequence[str]
+) -> dict[str, list[Scaled]]:
+    """Totals of BOOTSTRAP_SAMPLES resamples of the jobs within each stratum (seeded)."""
+    generator = random.Random(BOOTSTRAP_SEED)
+    samples: dict[str, list[Scaled]] = {variant: [] for variant in variants}
+    for _ in range(BOOTSTRAP_SAMPLES):
+        resampled = {key: generator.choices(jobs, k=len(jobs)) for key, jobs in by_stratum.items()}
+        for variant, total in scaled_totals(resampled, population, variants).items():
+            samples[variant].append(total)
+    return samples
+
+
+def interval(values: Sequence[float], share: bool = False) -> str:
+    ordered = sorted(values)
+    low = ordered[int(0.025 * (len(ordered) - 1))]
+    high = ordered[int(0.975 * (len(ordered) - 1))]
+    return f"{low:.0%} to {high:.0%}" if share else f"{low:,.0f} to {high:,.0f}"
+
+
+def weighted_lines(built: Sequence[Measurement], population: Population, variants: list[str]) -> list[str]:
+    by_stratum = stratum_tallies(built)
+    totals = scaled_totals(by_stratum, population, variants)
+    samples = bootstrap(by_stratum, population, variants)
+    original = samples[ORIGINAL]
     lines = [
         "## Scaled to the run's policy nlinarith calls (strata weighted by their counts)",
         "",
-        "| variant | hours | of the original's | successes | kept | lost | gained |",
-        "|---|---|---|---|---|---|---|",
+        f"95% intervals from {BOOTSTRAP_SAMPLES:,} resamples of the jobs within each stratum. Kept: the share of the "
+        "original's successes the variant also has; lost: those it does not have.",
+        "",
+        "| variant | hours | of the original's (95%) | kept share (95%) | lost (95%) | gained (95%) |",
+        "|---|---|---|---|---|---|",
     ]
-    totals: dict[str, list[float]] = {variant: [0.0, 0.0, 0.0, 0.0, 0.0] for variant in variants}
-    for key, by_variant in table.items():
-        count = population.counts.get(key, 0)
-        for variant in variants:
-            tally = by_variant[variant]
-            if not tally.jobs:
-                continue
-            weight = count / tally.jobs
-            values = totals[variant]
-            values[0] += tally.seconds * weight
-            values[1] += tally.successes * weight
-            values[2] += tally.kept * weight
-            values[3] += tally.lost * weight
-            values[4] += tally.gained * weight
-    original_seconds = totals[ORIGINAL][0] or 1.0
     for variant in variants:
-        seconds, successes, kept, lost, gained = totals[variant]
+        total, resampled = totals[variant], samples[variant]
+        ratios = [sample.seconds / max(base.seconds, 1e-9) for sample, base in zip(resampled, original, strict=True)]
+        kept = [sample.kept / max(base.successes, 1e-9) for sample, base in zip(resampled, original, strict=True)]
+        ratio = total.seconds / max(totals[ORIGINAL].seconds, 1e-9)
+        kept_share = total.kept / max(totals[ORIGINAL].successes, 1e-9)
+        lost = interval([sample.lost for sample in resampled])
+        gained = interval([sample.gained for sample in resampled])
         lines.append(
-            f"| {variant} | {seconds / 3600:.1f} | {seconds / original_seconds:.0%} | {successes:,.0f} | {kept:,.0f} | "
-            f"{lost:,.0f} | {gained:,.0f} |"
+            f"| {variant} | {total.seconds / 3600:.1f} | {ratio:.0%} ({interval(ratios, share=True)}) | "
+            f"{kept_share:.1%} ({interval(kept, share=True)}) | {total.lost:,.0f} ({lost}) | "
+            f"{total.gained:,.0f} ({gained}) |"
         )
     recorded = sum(population.seconds.values()) / 3600
     lines += [
@@ -575,12 +669,58 @@ def weighted_lines(
     return lines
 
 
+def gained_lines(built: Sequence[Measurement], population: Population, variants: list[str]) -> list[str]:
+    """Where "gained" comes from: the jobs behind it, their trees, and the largest single job's share."""
+    by_stratum = stratum_tallies(built)
+    lines = [
+        "## Where the gained successes come from",
+        "",
+        "| variant | gained (scaled) | jobs | trees | largest single job's share |",
+        "|---|---|---|---|---|",
+    ]
+    for variant in variants[1:]:
+        weights: list[tuple[float, str]] = []
+        for key, jobs in by_stratum.items():
+            weight = population.counts.get(key, 0) / len(jobs)
+            for measurement in jobs:
+                runs = {run.variant: run for run in measurement.runs}
+                if runs[variant].outcome in SUCCESSES and runs[ORIGINAL].outcome not in SUCCESSES:
+                    weights.append((weight, measurement.job.problem_name))
+        total = sum(weight for weight, _ in weights)
+        largest = max((weight for weight, _ in weights), default=0.0)
+        trees = len({name for _, name in weights})
+        share = f"{largest / total:.0%}" if total else "-"
+        lines.append(f"| {variant} | {total:,.0f} | {len(weights)} | {trees} | {share} |")
+    return lines
+
+
+def plain_environment_lines(built: Sequence[Measurement], plain: Sequence[Measurement]) -> list[str]:
+    """The original text in the production base environment against its run beside the variant definitions."""
+    by_job = {job_key(measurement.job): measurement for measurement in plain if measurement.state_built}
+    pairs = [
+        (measurement, by_job[job_key(measurement.job)]) for measurement in built if job_key(measurement.job) in by_job
+    ]
+    same = sum((first.runs[0].outcome in SUCCESSES) == (second.runs[0].outcome in SUCCESSES) for first, second in pairs)
+    seconds = [(first.runs[0].wall_seconds, second.runs[0].wall_seconds) for first, second in pairs]
+    ratio = sum(first for first, _ in seconds) / max(sum(second for _, second in seconds), 1e-9)
+    return [
+        "## The original text without the variant definitions",
+        "",
+        f"{len(pairs)} jobs re-run in the production base environment: the same success or failure in {same}; the "
+        f"runs beside the definitions took {ratio:.0%} of the production runs' wall seconds.",
+    ]
+
+
 def main() -> None:
     arguments = parse_arguments()
     arguments.output.mkdir(parents=True, exist_ok=True)
     population, rows = read_population(arguments.steps)
+    variants = tuple(arguments.variants.split(","))
     if not arguments.summary_only:
-        repl_module.BASE_ENVIRONMENT_DEFINITIONS += VARIANT_DEFINITIONS
+        if arguments.plain_environment and variants != (ORIGINAL,):
+            raise SystemExit("--plain-environment runs the original text only (--variants original).")
+        if not arguments.plain_environment:
+            repl_module.BASE_ENVIRONMENT_DEFINITIONS += VARIANT_DEFINITIONS
         entries = [json.loads(line) for line in arguments.probe_set.read_text(encoding="utf-8").splitlines()]
         statements = {f"{entry['statement']['source']}.{entry['statement']['identifier']}": entry for entry in entries}
         headers = {name: entry["statement"]["header"] for name, entry in statements.items()}
@@ -588,8 +728,9 @@ def main() -> None:
         (arguments.output / "jobs.jsonl").write_text(
             "".join(json.dumps(dataclasses.asdict(job), ensure_ascii=False) + "\n" for job in jobs), encoding="utf-8"
         )
-        asyncio.run(run_all(jobs, trees, headers, arguments))
-    text = summary(read_measurements(arguments.output / "records.jsonl"), population)
+        asyncio.run(run_all(jobs, trees, headers, arguments, variants))
+    plain = read_measurements(arguments.plain_records) if arguments.plain_records else []
+    text = summary(read_measurements(arguments.output / "records.jsonl"), population, plain)
     (arguments.output / "summary.md").write_text(text, encoding="utf-8")
     print(text)
 
