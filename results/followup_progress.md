@@ -320,7 +320,8 @@ reached HOLD at 09:30 UTC.
   is still to be discussed.
 - **Offline runs, revised:** two, both from the pool's known proofs only (no extra corpus): O1 on all usable pool
   proofs, and O2 token-matched to an expert-iteration arm (about 2M completion tokens), sampled with an equal number of
-  proofs per proof-length band (so slightly towards longer proofs). Each: SFT from v0 without reasoning, two rates
+  proofs per proof-length band (so slightly towards longer proofs), trained 4 epochs (as a 4-phase expert-iteration
+  window sees each block about 4 times; O1 one epoch). Each: SFT from v0 without reasoning, two rates
   picked on the held-out states, then one 2,000-statement probe run (no reasoning, value v0, 16 expansions, depth
   weight 0.1). **Gate:** if the offline policy beats v35 with value v0 (run 8, 1,083 of 2,000) with the paired 95%
   interval above 0, the arms run without reasoning; otherwise with reasoning. Offline runs go before the other arms.
