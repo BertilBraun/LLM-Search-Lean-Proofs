@@ -150,3 +150,25 @@ def test_pack_records_where_examples_start() -> None:
 
 def test_no_packed_target_crosses_an_example_boundary() -> None:
     assert PACKED.labels[0, 3].item() == IGNORE_INDEX
+
+
+PADDED = pack([tokenized((5, 6, 7), 2), tokenized((5, 6, 7, 8, 9), 3)], device=CPU, length_multiple=4, pad_token_id=0)
+
+
+def test_a_padded_pack_has_a_length_of_the_multiple() -> None:
+    assert PADDED.input_ids.tolist() == [[5, 6, 7, 5, 6, 7, 8, 9]]
+
+
+def test_a_padded_pack_adds_an_ignored_segment_of_its_own() -> None:
+    padded = pack([tokenized((5, 6, 7), 2)], device=CPU, length_multiple=8, pad_token_id=0)
+    found = (padded.input_ids.tolist(), padded.labels[0, 3:].tolist(), padded.sequence_starts)
+    assert found == ([[5, 6, 7, 0, 0, 0, 0, 0]], [IGNORE_INDEX] * 5, (0, 3, 8))
+
+
+def test_a_padded_packs_padding_restarts_its_positions() -> None:
+    padded = pack([tokenized((5, 6, 7), 2)], device=CPU, length_multiple=8, pad_token_id=0)
+    assert padded.position_ids is not None and padded.position_ids.tolist() == [[0, 1, 2, 0, 1, 2, 3, 4]]
+
+
+def test_a_pack_without_a_multiple_is_not_padded() -> None:
+    assert pack([tokenized((5, 6, 7), 2)], device=CPU).input_ids.tolist() == [[5, 6, 7]]

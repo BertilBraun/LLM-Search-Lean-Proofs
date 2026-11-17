@@ -697,7 +697,7 @@ class OfflineTrainingSummary:
     prompt_tokens: int
     completion_tokens: int
     training_seconds: float
-    # Over the steps after the first WARMUP_STEPS (compilation and autotuning left out); the main rank's peak.
+    # The median step after the first WARMUP_STEPS (compilation and autotuning left out); the main rank's peak.
     steady_tokens_per_second: float | None
     peak_memory_gib: float
     curve: tuple[ValidationPoint, ...]

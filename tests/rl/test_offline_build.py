@@ -195,6 +195,11 @@ def test_steady_throughput_leaves_out_the_warmup_steps() -> None:
     assert steady_tokens_per_second(records, 1) == 1000.0
 
 
+def test_steady_throughput_is_not_set_by_a_stalled_step() -> None:
+    records = [step(1, 100.0), step(2, 101.0), step(3, 141.0), step(4, 142.0)]
+    assert steady_tokens_per_second(records, 1) == 1000.0
+
+
 def test_steady_throughput_needs_a_step_after_the_warmup() -> None:
     assert steady_tokens_per_second([step(1, 100.0)], 1) is None
 

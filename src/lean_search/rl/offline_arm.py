@@ -3,6 +3,7 @@
 import dataclasses
 import hashlib
 import json
+import statistics
 import tomllib
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -485,11 +486,17 @@ def ranks_fit(peak_bytes: int, ranks: int, limit_bytes: int) -> bool:
 
 
 def steady_tokens_per_second(records: Sequence[StepRecord], warmup_steps: int) -> float | None:
-    """Tokens per training second over the steps after the first `warmup_steps`; None before any."""
+    """The median step's tokens per second after the first `warmup_steps`, so that a step stalled by a compilation does
+    not set it; None before any."""
     if len(records) <= warmup_steps:
         return None
-    start = records[warmup_steps - 1].training_seconds if warmup_steps else 0.0
-    return sum(record.tokens for record in records[warmup_steps:]) / (records[-1].training_seconds - start)
+    seconds = [record.training_seconds for record in records]
+    rates = [
+        record.tokens / (seconds[index] - (seconds[index - 1] if index else 0.0))
+        for index, record in enumerate(records)
+        if index >= warmup_steps
+    ]
+    return statistics.median(rates)
 
 
 # Under src/lean_search: the walk and the search code it runs a block with (naming, planning, identifier check,

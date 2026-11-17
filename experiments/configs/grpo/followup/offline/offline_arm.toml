@@ -78,6 +78,10 @@ micro_batch_tokens = 16384
 micro_batches_per_step = 1
 gradient_checkpointing = true
 packing = true
+# Packed rows padded to a multiple of 64: every row then runs the same Triton kernel specialization. Unpadded, each
+# rank compiled kernels again (20-45 s) the first time a row's length was divisible by 16 (O2's first training,
+# 2026-11-17: 8 such steps among the first 32).
+packed_length_multiple = 64
 compile_layers = true
 seed = 0
 

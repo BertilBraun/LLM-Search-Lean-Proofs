@@ -68,8 +68,15 @@ def test_the_probe_evaluation_is_the_studys_but_for_cap_and_order() -> None:
     assert offline == changed
 
 
-def test_the_fine_tuning_is_the_expert_iteration_recipes() -> None:
-    assert toml(CONFIG)["sft"] == toml(FOLLOWUP / "expert_iteration.toml")["sft"]
+def test_the_fine_tuning_is_the_expert_iteration_recipes_but_for_padded_packed_rows() -> None:
+    offline = toml(CONFIG)["sft"]
+    recipe = toml(FOLLOWUP / "expert_iteration.toml")["sft"]
+    optimization = {key: value for key, value in offline["optimization"].items() if key != "packed_length_multiple"}
+    assert {**offline, "optimization": optimization} == recipe
+
+
+def test_the_offline_packed_rows_are_padded_to_a_multiple_of_64() -> None:
+    assert load_offline_arm_config(CONFIG).sft.optimization.packed_length_multiple == 64
 
 
 def test_the_replay_is_the_expert_iteration_recipes_but_for_seed_and_repetition() -> None:
