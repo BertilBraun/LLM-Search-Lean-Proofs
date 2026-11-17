@@ -21,6 +21,7 @@ const SAMPLES = "graph.policy_samples.";
 const EDGE_GROUPS = (prefix) => [
   { label: "Lean error", fields: [`${prefix}lean_error`, `${prefix}forbidden`, `${prefix}infrastructure_failure`, `${prefix}unverified_proof`] },
   { label: "Timeout", fields: [`${prefix}heartbeat_timeout`, `${prefix}wall_clock_timeout`] },
+  { label: "Skipped after timeouts", field: `${prefix}skipped_timeout` },
   { label: "New state", field: `${prefix}new_state` },
   { label: "No progress", fields: [`${prefix}no_progress`, `${prefix}back_to_ancestor`] },
   { label: "Sibling state", field: `${prefix}sibling_state` },

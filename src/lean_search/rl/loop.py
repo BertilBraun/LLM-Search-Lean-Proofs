@@ -366,6 +366,10 @@ class TreeSearcher(Protocol):
         """Stops REPL processes no search uses until at most `keep_running` run; they start again on next use."""
         ...
 
+    def spare_text(self) -> str:
+        """How the search pool's spare processes served its REPLs so far; empty without spares."""
+        ...
+
 
 class PhaseTrainer(Protocol):
     async def prepare(self, request: TrainingRequest) -> None:
@@ -1567,7 +1571,9 @@ class GrpoLoop:
         )
 
     async def log_host_memory(self, moment: str) -> None:
-        self.log(f"Host memory {moment}: {await asyncio.to_thread(self.host_memory)}")
+        spares = self.searcher.spare_text()
+        memory = await asyncio.to_thread(self.host_memory)
+        self.log(f"Host memory {moment}: {memory}" + (f"; {spares}" if spares else ""))
 
     def check_health(self, phase: int) -> PhaseHealth:
         """Writes the phase's budget and health lines and logs the alerts. The held-out rates are those of the version

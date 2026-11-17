@@ -188,6 +188,9 @@ class LeanTreeSearcher:
         stopped = await self.pool.stop_idle_processes(keep_running)
         return ReleasedLeanMemory(len(stopped), sum(usage.anonymous_bytes for usage in stopped))
 
+    def spare_text(self) -> str:
+        return self.pool.spare_text()
+
 
 @contextlib.asynccontextmanager
 async def open_tree_searcher(

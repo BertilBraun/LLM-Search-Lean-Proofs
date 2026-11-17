@@ -83,8 +83,9 @@ def test_edge_kind_counts(kind: EdgeKind, count: int) -> None:
     assert getattr(statistics().edges, kind.value) == count
 
 
-def test_edge_kind_counts_cover_every_kind() -> None:
-    assert {field.name for field in dataclasses.fields(EdgeKindCounts)} == {kind.value for kind in EdgeKind}
+def test_edge_kind_counts_cover_every_kind_and_the_skipped_timeouts() -> None:
+    expected = {kind.value for kind in EdgeKind} | {"skipped_timeout"}
+    assert {field.name for field in dataclasses.fields(EdgeKindCounts)} == expected
 
 
 @pytest.mark.parametrize(

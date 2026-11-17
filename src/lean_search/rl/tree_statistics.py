@@ -5,12 +5,13 @@ from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
+from lean_search.record_fields import written_when_set
 from lean_search.rl.advantages import CreditMode, group_advantages
 from lean_search.rl.grpo_groups import TreeGroups
 from lean_search.search.graph_labels import EdgeKind, EdgeLabel, GraphLabels, NodeClass, is_verified_proof
 from lean_search.search.records import NodeRecord, TreeRecord
 from lean_search.search.tactic_labels import TacticLabel, TacticLabelCounts, TacticOutcome
-from lean_search.search.tree import NodeStatus, StepSource
+from lean_search.search.tree import FailureKind, NodeStatus, StepSource
 from lean_search.value.graph_targets import TargetSource, ValueTarget
 
 # Upper bounds of the size buckets 1, 2-3, 4-7, 8-15, 16-31, 32+.
@@ -33,15 +34,23 @@ class EdgeKindCounts:
     sibling_state: int = 0
     transposition: int = 0
     repeat: int = 0
+    # Labelled as wall-clock timeouts, counted apart: not run after the text's stops (search.timeout_skip).
+    skipped_timeout: int = written_when_set(0)
 
     @staticmethod
-    def of(kinds: Iterable[EdgeKind]) -> "EdgeKindCounts":
-        counts = Counter(kind.value for kind in kinds)
+    def of(labels: Iterable[EdgeLabel]) -> "EdgeKindCounts":
+        counts = Counter(counted_kind(label) for label in labels)
         return EdgeKindCounts(**counts)
 
     @property
     def total(self) -> int:
         return sum(dataclasses.astuple(self))
+
+
+def counted_kind(label: EdgeLabel) -> str:
+    if label.kind == EdgeKind.WALL_CLOCK_TIMEOUT and label.failure_kind == FailureKind.SKIPPED_TIMEOUT:
+        return "skipped_timeout"
+    return label.kind.value
 
 
 @dataclass(frozen=True)
@@ -233,10 +242,10 @@ def graph_statistics(
         nodes=len(record.nodes),
         expanded_nodes=sum(labels.expanded),
         never_expanded_nodes=class_count(labels, NodeClass.NEVER_EXPANDED),
-        edges=EdgeKindCounts.of(edge.kind for edge in labels.edges),
-        policy_edges=EdgeKindCounts.of(edge.kind for edge in policy),
-        automation_edges=EdgeKindCounts.of(edge.kind for edge in labels.edges if edge.source == StepSource.AUTOMATION),
-        policy_samples=EdgeKindCounts.of(edge.kind for edge in policy for _ in range(edge.sample_count)),
+        edges=EdgeKindCounts.of(labels.edges),
+        policy_edges=EdgeKindCounts.of(policy),
+        automation_edges=EdgeKindCounts.of(edge for edge in labels.edges if edge.source == StepSource.AUTOMATION),
+        policy_samples=EdgeKindCounts.of(edge for edge in policy for _ in range(edge.sample_count)),
         partial_failures=sum(edge.partial and edge.kind != EdgeKind.REPEAT for edge in labels.edges),
         repeats_of_failed_automation=sum(edge.repeats_failed_automation for edge in labels.edges),
         forced_edges=sum(edge.forced for edge in record.edges),

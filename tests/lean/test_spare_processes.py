@@ -185,3 +185,15 @@ async def test_closing_the_pool_while_spares_start_leaves_no_task(
     await pool.start([HEADER])
     await pool.close()
     assert asyncio.all_tasks() == {asyncio.current_task()}
+
+
+async def test_the_pool_summary_counts_the_swaps(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    project = fake_repl_project(tmp_path, monkeypatch, timeout_seconds=TIMEOUT_SECONDS)
+    pool, _ = await killed_once(project, spare_processes=1, wait_for_spare=True)
+    text = pool.spare_text()
+    await pool.close()
+    assert "1 replacements took one, 0 found none ready" in text
+
+
+def test_a_pool_without_spares_has_no_summary() -> None:
+    assert LeanReplPool(1).spare_text() == ""

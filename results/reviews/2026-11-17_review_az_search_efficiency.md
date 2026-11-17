@@ -275,3 +275,32 @@ the commit/README wording.
    apart (as the branch does)? Apart is better for load, together for "what the policy tried".
 4. The bounded-nlinarith A/B: should a successful bounded call record the policy's `nlinarith [...]` text (what the
    policy learns to write) and must every recorded proof then re-verify with plain Mathlib within the limits?
+
+## Re-review (2026-11-17), training branch
+
+`offline-training-throughput` at `6ba3260` (`git diff 7f58dd7..6ba3260`). Tests in WSL: `tests/training`,
+`tests/rl/test_offline_build.py`, `test_offline_configs.py`, `test_offline_chain_script.py`: 243 passed, 9 skipped;
+`ruff check` clean on the changed files.
+
+- **S6: fixed.** The raise is now a recipe field, `OptimizationConfig.compiled_shapes_limit` (default 0 = torch's own
+  limit, `set_compiled_shapes_limit` does nothing at 0), set only in `offline/offline_arm.toml` (64). A parametrized
+  test checks that no other shipped TOML under `experiments/configs` sets it or `packed_length_multiple`, and another
+  that both default to 0. The GRPO policy trainer, value trainer, resident trainer, DPO and expert-iteration rounds all
+  get their `OptimizationConfig` from recipes that leave it at 0, so their compile behaviour is master's; arms C and D
+  are unchanged at the defaults (padding 0, limit 0). Nothing reads the field into a fingerprint or identity (the
+  offline walk fingerprint covers the walk sources only).
+- **N8: fixed.** Two named rates: `median_step_tokens_per_second` (stalls left out) and `sustained_tokens_per_second`
+  (all tokens over all seconds, what sets wall time), both in `throughput.json` and the training summary; the
+  operations note says to plan wall time from the sustained rate only and records that O2's first trainings wrote
+  `steady_tokens_per_second` (the sustained rate). Nothing reads these files back, and `offline_chain.sh` only copies
+  the `throughput:` line, so the renamed key breaks no reader.
+- **N9: fixed.** `validation_metrics` and `evaluate` take `packed_length_multiple` from `train`; padding positions
+  have ignored labels, so they never enter the loss, the token count or the per-row exact-match `bincount`.
+
+New:
+
+- N10 (nit). `set_compiled_shapes_limit` sets the process-global dynamo limit and never restores it (and could lower
+  it below a value set elsewhere). Harmless today: only the offline arm, in its own process, sets it. If a resident
+  process ever trains two recipes, `max(current, limit)` would be the safer form.
+
+Verdict: the training branch is ready to merge.

@@ -166,4 +166,7 @@ def search_phase_record(records: Sequence[TreeRecord], statistics: GraphStatisti
         forced_answers=len(forced),
         repetition_loops=sum(repeats_itself(completion.text) for completion in forced),
         mean_block_tactics=mean_block_tactics(records),
+        cached_tactics=sum(record.result.accounting.cached_tactics for record in records),
+        cache_saved_seconds=sum(record.result.accounting.cache_saved_seconds for record in records),
+        skipped_timeouts=sum(record.result.accounting.skipped_timeouts for record in records),
     )

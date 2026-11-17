@@ -301,6 +301,9 @@ class FakeSearcher:
         self.idle_repl_limits.append(keep_running)
         return ReleasedLeanMemory(1, 0)
 
+    def spare_text(self) -> str:
+        return ""
+
 
 @dataclass
 class FakeTrainer:
