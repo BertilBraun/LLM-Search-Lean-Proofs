@@ -383,16 +383,16 @@ the two downloaded corpora, about 6.5 GB; they never go to the PC).
 
 | Step | What | Markers | Node hours (estimate) |
 |---|---|---|---|
-| download | Goedel-LM/SFT_dataset_v2 and Leanabell SFT at phase 2's revisions, `HF_HUB_DISABLE_XET=1`, no token | `done_download` | 0.1 |
-| prepare | exclusions, phase 2's normalization of both corpora (32 processes on the Lean CPUs), the pool's proofs recovered → `proofs.jsonl`, `preparation.json` | `done_prepare` | 0.3 |
-| walk | every proof walked as the search runs blocks, 90 REPLs on the Lean CPUs (`background.sh`), resumable → `walks.jsonl` | `done_walk` | 3-6 (GPUs idle) |
+| download | Goedel-LM/SFT_dataset_v2 and Leanabell SFT at phase 2's revisions, `HF_HUB_DISABLE_XET=1`, no token | `done_download` | 0.03 (1.5 min on 2026-11-17) |
+| prepare | exclusions, phase 2's normalization of both corpora (32 processes on the Lean CPUs), the pool's proofs recovered → `proofs.jsonl`, `preparation.json` | `done_prepare` | 0.07 (4 min) |
+| walk | every proof walked as the search runs blocks, 90 REPLs on the Lean CPUs (`background.sh`), resumable → `walks.jsonl` | `done_walk` | 4.7 (3.9 proofs/s; GPUs idle) |
 | build | examples, validation split, the matched subset → `matched/`, `pool/`, `build.json`, `README.md` | `done_build` | 0.3 |
 | held_out_config | `held_out_loop.toml`: base.toml in the no-reasoning mode | `done_held_out_config` | - |
-| matched | dry run; servers stopped; 5e-5 and 1e-4 trained (`training/<label>.log`); held-out runs of v0 (`offline_v0_no_reasoning`, once) and both rates; `rank_matched.txt`; probe run `offline_arm_matched` (`runs_matched.toml`); `matched_against_run8.txt`, `report_matched.md` | `done_dry_run_matched`, `done_train_matched_<rate>`, `done_held_out_<name>`, `done_rank_matched`, `done_probe_matched`, `done_report_matched` | training 2 × 0.8-1 (4 epochs, about 26M tokens each), held-out 3 × 0.2, probe 4-5 |
-| pool | the same for O1 | `..._pool` | training 2 × 4.5-5.5 (about 130M tokens each at the 7.8k tokens/s of expert-iteration round 1), held-out 2 × 0.2, probe 4-5 |
+| matched | dry run; servers stopped; 5e-5 and 1e-4 trained (`training/<label>.log`); held-out runs of v0 (`offline_v0_no_reasoning`, once) and both rates; `rank_matched.txt`; probe run `offline_arm_matched` (`runs_matched.toml`); `matched_against_run8.txt`, `report_matched.md` | `done_dry_run_matched`, `done_train_matched_<rate>`, `done_held_out_<name>`, `done_rank_matched`, `done_probe_matched`, `done_report_matched` | training 2 × about 3 (4 epochs of about 21M tokens), held-out 3 × 0.2, probe 4-5 |
+| pool | the same for O1 | `..._pool` | training 2 × about 20 (about 565M tokens each, 430M of them prompts, at the 7.8k tokens/s of expert-iteration round 1), held-out 2 × 0.2, probe 4-5 |
 | HOLD | `stop_model.sh --all`, then HOLD | `HOLD` | |
 
-About 27-32 node hours in all, 4-7 of them with the GPUs idle (download to build). The dry runs' last lines and
+About 60 node hours in all, 5 of them with the GPUs idle (download to build); O1's two trainings are two thirds of it. Measured on 354 walked proofs: about 14 examples, 935 completion and 7,433 prompt tokens per proof. The dry runs' last lines and
 `build.json` give the exact examples and tokens; `report_<subset>.md` holds the owner's gate.
 
 **Install and start** (only on the orchestrator's word, at a HOLD, with nothing else running):
