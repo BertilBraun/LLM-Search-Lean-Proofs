@@ -409,7 +409,6 @@ class _TheoremSearch:
         skip_after = skip.max_wall_clock_timeouts if skip is not None and skip.enabled else None
         cache = bool(config.result_cache)
         self.memory = SearchMemory(cache, skip_after) if cache or skip_after is not None else None
-        assert repl.config.nlinarith_variant == config.nlinarith_variant, "the pool runs another nlinarith"
 
     def wall_seconds(self) -> float:
         return time.monotonic() - self.started
@@ -693,6 +692,7 @@ class _TheoremSearch:
         timeout_seconds = (
             candidate.timeout_seconds if candidate.timeout_seconds is not None else self.config.tactic_timeout_seconds
         )
+        assert self.repl.config.nlinarith_variant == self.config.nlinarith_variant, "the pool runs another nlinarith"
         plan = self._plan(node, candidate)
         return await self.repl.apply_block(node.state, plan, heartbeats, timeout_seconds, memory=self.memory)
 
