@@ -533,15 +533,21 @@ Merged weights are in `/workspace/checkpoints/probe_evaluations/weights/<digest>
 ## 7. The PC side
 
 - **Pull loop:** `C:\Projects\Lean-Proofs\node_backup\2026-11-15\pull_results.sh`, started detached from Git Bash. Its
-  pid is in `C:\Projects\Lean-Proofs\node_backup\2026-11-15\pull_results.pid`: Git Bash pid 16324, Windows pid 21220.
-  - Every 10 minutes it tars over SSH, excluding `trees`, `*.json.gz`, `weights` and `merges`:
+  pid is in `C:\Projects\Lean-Proofs\node_backup\2026-11-15\pull_results.pid` (Git Bash pid; restarted 2026-11-17 12:06
+  local time with the extended list below).
+  - Every 10 minutes it tars over SSH, excluding `trees`, `*.json.gz`, `weights`, `merges`, `*.safetensors`, `*.bin`,
+    `*.pt`:
     - `runs/step1_chain`, `runs/probe_evaluations`, `runs/calibration_evaluations`, `runs/probe_runs`,
       `runs/held_out_evaluations`, `runs/throughput`, `runs/backstop_replay`;
+    - `runs/offline_chain`, `runs/lean_overhead`, `runs/study_chain` (added 2026-11-17);
     - `runs/servers/*.log`, `*.cpus`, `*.members`;
     - `setup_logs`, `node_environment.sh` and `step1_chain_tools`.
   - It unpacks into `…\2026-11-15\live\` and writes `live\last_pull.txt`.
-  - Check it is alive: `ps -p 16324` in Git Bash, and `cat …/live/last_pull.txt` (under 10 minutes old).
-  - Stop it with `kill 16324` (Git Bash) or `Stop-Process -Id 21220`.
+  - Check it is alive: `ps -p $(cat pull_results.pid)` in Git Bash, and `cat …/live/last_pull.txt` (under 10 minutes
+    old).
+  - Stop it with `kill $(cat pull_results.pid)` (Git Bash), by that PID only.
+  - Changing the list: write the new script to a separate file, check it with `bash -n` AND that it is not empty, then
+    move it over, kill the old loop by PID and start a new one (bash reads a running script lazily).
   - Restart it: `cd /c/Projects/Lean-Proofs/node_backup/2026-11-15 && nohup bash pull_results.sh > pull_results.out 2>&1
     < /dev/null & echo $! > pull_results.pid`. It survives the shell that started it.
   - **When arms start**, add `runs/followup_*` (without `trees`, `weights` or `merges`; keep `loop.log`, `phases.jsonl`,
