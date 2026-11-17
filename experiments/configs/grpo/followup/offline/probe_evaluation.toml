@@ -1,0 +1,10 @@
+# The offline arm's probe runs (experiments/offline_arm.py probe-list; DESIGN.md, "Follow-up study: controlled arms",
+# "The offline arm"): probe v2, value v0, with offline/search_no_reasoning_16.toml (16 expansions, no reasoning, depth
+# weight 0.1) at the token-capped runs' wall cap of 14,400 s (the owner's), the searches started longest expected first
+# (the start-order check passed on 2026-11-17).
+base = "experiments/configs/grpo/followup/probe_evaluation.toml"
+submission_order = "longest_expected_search_first"
+expected_search_seconds = "experiments/configs/grpo/followup/probe_v2_expected_search_seconds.tsv"
+
+[probe]
+max_wall_seconds = 14400.0

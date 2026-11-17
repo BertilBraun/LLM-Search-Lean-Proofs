@@ -367,6 +367,39 @@ def test_replay_examples_stop_once_their_completion_tokens_reach_the_budget() ->
     assert len(examples_within_completion_tokens(examples, lambda example: example, 12, "seed")) == 3
 
 
+def test_replay_examples_without_repeat_stop_when_the_examples_run_out() -> None:
+    examples = [TokenizedExample(SftExample("replay", str(number), 0, (), ""), (1,) * 10, 5) for number in range(3)]
+    assert len(examples_within_completion_tokens(examples, lambda example: example, 40, "seed")) == 3
+
+
+def test_replay_examples_with_repeat_are_taken_again_until_the_budget() -> None:
+    examples = [TokenizedExample(SftExample("replay", str(number), 0, (), ""), (1,) * 10, 5) for number in range(3)]
+    assert len(examples_within_completion_tokens(examples, lambda example: example, 40, "seed", repeat=True)) == 8
+
+
+def test_replay_examples_with_repeat_take_every_example_before_any_twice() -> None:
+    examples = [TokenizedExample(SftExample("replay", str(number), 0, (), ""), (1,) * 10, 5) for number in range(3)]
+    taken = examples_within_completion_tokens(examples, lambda example: example, 30, "seed", repeat=True)
+    assert sorted(example.example.proof_identifier for example in taken[:3]) == ["0", "1", "2"]
+
+
+def test_replay_examples_with_repeat_and_no_completion_tokens_stop_on_an_assertion() -> None:
+    examples = [TokenizedExample(SftExample("replay", str(number), 0, (), ""), (1,) * 10, 10) for number in range(3)]
+    with pytest.raises(AssertionError):
+        examples_within_completion_tokens(examples, lambda example: example, 40, "seed", repeat=True)
+
+
+def test_replay_examples_with_repeat_of_no_examples_are_none() -> None:
+    assert examples_within_completion_tokens([], lambda example: example, 40, "seed", repeat=True) == []
+
+
+def test_replay_examples_without_repeat_keep_the_seeded_order_of_a_shuffled_list() -> None:
+    examples = [TokenizedExample(SftExample("replay", str(number), 0, (), ""), (1,) * 10, 5) for number in range(20)]
+    shuffled = list(examples)
+    random.Random("seed").shuffle(shuffled)
+    assert examples_within_completion_tokens(examples, lambda example: example, 1000, "seed") == shuffled
+
+
 REPLAY = ReplayConfig(
     lean_replay="lean.jsonl",
     math_replay="math.jsonl",

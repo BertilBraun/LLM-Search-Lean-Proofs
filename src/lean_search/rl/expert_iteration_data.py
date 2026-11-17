@@ -96,6 +96,8 @@ class ReplayConfig:
     validation: str = ""
     validation_examples: int = 1000
     seed: str = "grpo-expert-iteration-1/replay"
+    # A replay file too small for its share is taken again (new seeded orders); false lets the share fall short.
+    repeat: bool = False
 
 
 @dataclass(frozen=True)
@@ -591,20 +593,33 @@ def read_completions(path: Path) -> list[ProofGraphCompletion]:
 
 
 def examples_within_completion_tokens[T](
-    items: Sequence[T], tokenize: Callable[[T], TokenizedExample], token_budget: int, seed: str
+    items: Sequence[T],
+    tokenize: Callable[[T], TokenizedExample],
+    token_budget: int,
+    seed: str,
+    repeat: bool = False,
 ) -> list[TokenizedExample]:
-    """Items in a seeded random order, tokenized until their completion tokens reach the budget."""
-    order = list(items)
-    random.Random(seed).shuffle(order)
+    """Items in a seeded random order, tokenized until their completion tokens reach the budget; with `repeat`, once
+    every item is taken, again in a new seeded order, until the budget is reached."""
+    tokenized: dict[int, TokenizedExample] = {}
     examples: list[TokenizedExample] = []
     tokens = 0
-    for item in order:
-        if tokens >= token_budget:
-            break
-        example = tokenize(item)
-        examples.append(example)
-        tokens += example.completion_token_count
-    return examples
+    completed_passes = 0
+    while True:
+        tokens_before_pass = tokens
+        order = list(range(len(items)))
+        random.Random(seed if completed_passes == 0 else f"{seed}/pass-{completed_passes}").shuffle(order)
+        for index in order:
+            if tokens >= token_budget:
+                return examples
+            if index not in tokenized:
+                tokenized[index] = tokenize(items[index])
+            examples.append(tokenized[index])
+            tokens += tokenized[index].completion_token_count
+        completed_passes += 1
+        if not repeat or not items:
+            return examples
+        assert tokens > tokens_before_pass, "replay examples without completion tokens cannot fill a budget"
 
 
 def replay_token_budgets(expert_iteration_completion_tokens: int, config: ReplayConfig) -> tuple[int, int]:
@@ -626,31 +641,49 @@ class TrainingData:
         return [*self.expert_iteration, *self.lean_replay, *self.math_replay]
 
 
-def training_data(tokenizer: PolicyTokenizer, directory: Path, config: ReplayConfig, data_root: Path) -> TrainingData:
-    """`directory`'s expert-iteration examples (`build`), the Lean and math replay at their completion-token shares,
-    and the two validation sets: the expert-iteration one and `validation_examples` replay examples."""
-    expert = tuple(completion.tokenized for completion in read_completions(directory / "train.jsonl"))
-    lean_tokens, math_tokens = replay_token_budgets(sum(example.completion_token_count for example in expert), config)
+@dataclass(frozen=True)
+class ReplayData:
+    lean: tuple[TokenizedExample, ...]
+    math: tuple[TokenizedExample, ...]
+    validation: tuple[TokenizedExample, ...]
+
+
+def replay_data(
+    tokenizer: PolicyTokenizer, completion_tokens: int, config: ReplayConfig, data_root: Path
+) -> ReplayData:
+    """The Lean and math replay at their completion-token shares beside `completion_tokens` of the round's own, and
+    `validation_examples` replay validation examples."""
+    lean_tokens, math_tokens = replay_token_budgets(completion_tokens, config)
     lean = examples_within_completion_tokens(
         list(read_reasoning_examples(data_root / config.lean_replay)),
         functools.partial(tokenize_reasoning_example, tokenizer),
         lean_tokens,
         f"{config.seed}/lean",
+        config.repeat,
     )
     math = examples_within_completion_tokens(
         list(read_solutions(data_root / config.math_replay)),
         functools.partial(tokenize_math_solution, tokenizer),
         math_tokens,
         f"{config.seed}/math",
+        config.repeat,
     )
-    replay_validation: list[TokenizedExample] = []
+    validation: list[TokenizedExample] = []
     if config.validation:
         examples = list(read_reasoning_examples(data_root / config.validation))
         count = min(config.validation_examples, len(examples))
         chosen = random.Random(f"{config.seed}/validation").sample(examples, count)
-        replay_validation = [tokenize_reasoning_example(tokenizer, example) for example in chosen]
+        validation = [tokenize_reasoning_example(tokenizer, example) for example in chosen]
+    return ReplayData(tuple(lean), tuple(math), tuple(validation))
+
+
+def training_data(tokenizer: PolicyTokenizer, directory: Path, config: ReplayConfig, data_root: Path) -> TrainingData:
+    """`directory`'s expert-iteration examples (`build`), the Lean and math replay at their completion-token shares,
+    and the two validation sets: the expert-iteration one and `validation_examples` replay examples."""
+    expert = tuple(completion.tokenized for completion in read_completions(directory / "train.jsonl"))
+    replay = replay_data(tokenizer, sum(example.completion_token_count for example in expert), config, data_root)
     validation = tuple(completion.tokenized for completion in read_completions(directory / "validation.jsonl"))
-    return TrainingData(expert, tuple(lean), tuple(math), validation, tuple(replay_validation))
+    return TrainingData(expert, replay.lean, replay.math, validation, replay.validation)
 
 
 @dataclass(frozen=True)

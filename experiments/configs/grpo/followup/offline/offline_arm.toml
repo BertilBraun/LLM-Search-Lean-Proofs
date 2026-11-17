@@ -1,0 +1,89 @@
+# The offline arm (experiments/offline_arm.py; DESIGN.md, "Follow-up study: controlled arms", "The offline arm"; the
+# owner's scope of 2026-11-17): v0's adapter continued by SFT on the pool's known proofs without visible reasoning, in
+# two subsets (O1 "pool": every usable proof, one epoch; O2 "matched": about an expert-iteration arm's 2M completion
+# tokens, stratified by proof characters, four epochs), each at 5e-5 and 1e-4; the rate chosen on the held-out states
+# without reasoning. Driven on the node by deployment/offline_chain.sh.
+name = "offline_arm"
+# base.toml's [initial] policy_adapter: v0.
+initial_policy_adapter = "/workspace/checkpoints/data_rewrite_sft_numbered/adapter"
+learning_rates = ["5e-5", "1e-4"]
+
+[data]
+# base.toml's [statements.curriculum]: the frozen pool the arms feed from.
+pool = "followup/verified_pool_2026-11-01.jsonl"
+pool_sha256 = "1b216b06e30148a1e652291098c642842dadad83e2a6eaca9b85e3cb2aa5600c"
+# base.toml's [statements] held_out.
+held_out_sets = [
+    "grpo/fixed_sets/probe.jsonl",
+    "grpo/fixed_sets/gate.jsonl",
+    "grpo/fixed_sets/probe_v2.jsonl",
+    "grpo/fixed_sets/probe_v2_twins.jsonl",
+]
+held_out_states_file = "phase5_eval_visible_student_v2_visible/states.jsonl"
+near_duplicate_threshold = 0.7
+validation_fraction = 0.02
+seed = "offline-arm"
+
+[walk]
+# The no-reasoning sampling mode's search (followup/modes/no_reasoning.toml), the probe run's limits and checks.
+search_config = "experiments/configs/grpo/search/no_reasoning_student_v2.toml"
+# On the 96 Lean CPUs (background.sh), a few left for the walker itself.
+processes = 90
+max_block_tactics = 5
+seed = "offline-arm-blocks"
+max_prompt_tokens = 7168
+
+[matched]
+completion_tokens = 2_000_000
+band_edges = [500, 1000, 1500, 2000, 3000, 4500]
+seed = "offline-arm-matched"
+# The owner's (2026-11-17): an expert-iteration arm with a 4-phase window trains each block about 4 times. The pool
+# subset trains [sft.optimization] epochs, one.
+epochs = 4
+
+# The expert-iteration recipe's replay (followup/expert_iteration.toml): v0's own SFT data at 30% and 10% of the
+# training completion tokens. v0's Lean replay holds about 42.7k examples, too few for O1's share: repeat takes them
+# again in new orders rather than letting the share fall short (the recipe's protection against forgetting kept).
+[replay]
+lean_replay = "reasoning/visible_student_v3_numbered/train.jsonl"
+math_replay = "reasoning/visible_student_v3_numbered/math.jsonl"
+lean_token_share = 0.3
+math_token_share = 0.1
+validation = "reasoning/visible_student_v3_numbered/validation.jsonl"
+validation_examples = 1000
+seed = "offline-arm/replay"
+repeat = true
+
+# The expert-iteration recipe's fine-tuning (followup/expert_iteration.toml) at the run's learning rate.
+[sft]
+model = "Qwen/Qwen3.5-4B"
+data = ""
+merge = false
+initial_adapter = ""
+
+[sft.lora]
+rank = 64
+alpha = 64
+dropout = 0.0
+
+[sft.optimization]
+method = "lora"
+learning_rate = 5e-5
+warmup_fraction = 0.03
+minimum_learning_rate_ratio = 0.1
+weight_decay = 0.0
+max_gradient_norm = 1.0
+epochs = 1
+micro_batch_tokens = 16384
+micro_batches_per_step = 1
+gradient_checkpointing = true
+packing = true
+compile_layers = true
+seed = 0
+
+# Validated at the start, halfway and the end on up to 2,000 offline validation examples and the replay's.
+[sft.evaluation]
+interval_steps = 100
+validation_examples = 2000
+micro_batch_tokens = 16384
+generation_examples = 0

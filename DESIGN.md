@@ -1415,6 +1415,51 @@ alone (it sets the concurrencies and the pinning), the v0 reproduction, miniF2F 
 are written. Then the shared sampling, A's and B1's step-2 rounds (existing `grpo_phase.py`), B2 and C as WP3 and WP4a
 land, run 6 with WP2, the ranking and probe runs, while WP1 and WP5 are written. WP4b only after the gate.
 
+### The offline arm (O; agreed with the owner 2026-11-17)
+
+- **What:** v0's adapter continued by SFT on the pool's known proofs, without visible reasoning (completion: the Lean
+  block only, v0's no-reasoning SFT format: `render_prompt(goals)` with the fence prefill, then block, fence, end of
+  turn). No sampling: it asks what supervised training on the pool's known proofs alone buys at the probe. Arm B is
+  dropped from the study (owner, 2026-11-17).
+- **Data:** the frozen pool's usable statements less the held-out sets (`base.toml`'s `held_out`), the statements of
+  the 512 held-out states, and near-duplicates of them (estimated Jaccard ≥ 0.7, every pair, on the formal statement and
+  on the root state as `rl/training_overlap.py` compares them). The pool keeps each verified proof only as its source,
+  tactic count and characters, so the text is recovered from the two public source corpora (Goedel-LM/SFT_dataset_v2,
+  Leanabell SFT, phase 2's pinned revisions) by phase 2's normalization and cap (`rl/offline_arm.recovered_candidates`);
+  several matching candidates are tried in order. No other corpus (owner, 2026-11-17).
+- **Blocks:** each proof is walked in Lean exactly as the search runs a no-reasoning policy block
+  (`rl/offline_walk.py`): flattened as `plan_block` flattens, states named as the search names them, a block length k
+  drawn uniformly from 1-5, the next k steps as one normalized block, refused for a forbidden step or token, checked
+  for unknown identifiers, run at the search's heartbeat and wall-clock limits; the state after it starts the next
+  block. A block over the policy's 1,024-token cap falls back to fewer steps. A walk that fails at a block (mostly the
+  50k-heartbeat limit) or at a forbidden step keeps the blocks before it, steps of a verified proof as the search runs
+  them; one that revisits a state or leaves goals gives nothing. The walk skips the search's final whole-proof check
+  of a proof it finds (forbidden tokens cover the unsound closers). Walk survival falls with proof length (about 2%
+  failures under 500 characters, 26% from 4,500), shown per band in the build summary. Examples whose state nearly
+  repeats one of the 512 held-out states (fingerprint Jaccard ≥ 0.7) are dropped and counted.
+- **Two training sets:** O1 "pool", every walked proof; O2 "matched", proofs drawn one per probe band (0-499, ...,
+  4,500+ characters) in turn until the examples hold 2M completion tokens (about arm C's 16 phases), slightly biased to
+  long proofs by the equal bands. 2% of the statements validate. O2 at 5e-5 and 1e-4, O1 at O2's chosen rate; O1 one
+  epoch, O2 four (owner:
+  an expert-iteration arm with a 4-phase window trains each block about 4 times); the expert-iteration recipe's
+  fine-tuning and replay (30% Lean, 10% math by completion tokens; v0's 42.7k Lean replay
+  examples repeat for O1, whose share they would not fill once).
+- **Rate choice:** O2's rate on the 512 held-out states without reasoning against one shared v0 run in the same mode,
+  lower rate on a tie (`offline_arm.py rank`, `rl/rate_ranking.choose_rate`). Its success measure also accepts a block
+  ending inside the reference next step's nested proof (review AX, S1): the standard one accepts only the states after
+  whole top-level steps, while the offline blocks often stop inside a nested `have` proof. A held-out state keeps its
+  reference next step's text, the goals after it and after each later top-level step, not the later steps' texts, so
+  only the next step is flattened (`rl/offline_held_out.py`, run in Lean once). Both measures are reported.
+- **Order (owner, 2026-11-17):** O2 completely (both rates, the choice, one probe run, the reports), then HOLD. O1 only
+  on the owner's word, one training at O2's chosen rate, one probe run.
+- **Evaluation:** one probe run per subset (probe v2, all 2,000 statements, no reasoning, value v0, 16 expansions, depth
+  weight 0.1, 14,400 s cap, longest expected search first). **Gate (owner):** O passes if the paired 95% interval of
+  O − run 8 (v35, value v0) lies above 0; the anchors' run 1 against run 2 beside it as the run-to-run noise floor the
+  interval does not cover; descriptive: O against run 4 and the anchors, all cut at 16 expansions
+  (`rl/offline_report.py`, which refuses runs of another probe set or missing statements). No v0 run in O's exact
+  search settings (owner declined).
+- **Automation:** `deployment/offline_chain.sh` (results/followup_node_operations.md, "The offline arm's driver").
+
 ### Risks and open points
 
 - The block-only step value is a sum over the block's tokens, so short blocks score higher even with the per-block mean.

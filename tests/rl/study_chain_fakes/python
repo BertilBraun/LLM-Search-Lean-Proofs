@@ -84,6 +84,7 @@ case "${script}" in
         [[ -d "${adapter}" ]] || { log_command "MISSING adapter ${adapter}"; exit 1; }
         directory="${LEAN_SEARCH_RUNS}/held_out_evaluations/held_out_${name}"
         mkdir -p "${directory}/trees"
+        option_value --loop-config "$@" > "${directory}/loop_config.txt"
         outcome "held_out_${name}" || exit "$(cat "${FAKE_SCENARIO}/exit_held_out_${name}" 2>/dev/null || echo 1)"
         if outcome "complete_held_out_${name}"; then
             echo '{"dropped": []}' > "${directory}/summary.json"
@@ -138,6 +139,78 @@ case "${script}" in
         log_command "rank_learning_rates.py ${signal}"
         outcome "rank_${signal}" || exit 1
         echo "Chosen: ${signal}_5e-5 (the held-out states decide; tied on the held-out states: ${signal}_5e-5)"
+        ;;
+    experiments/offline_arm.py)
+        command="$3"
+        shift 3
+        case "${command}" in
+            download)
+                log_command "offline_arm.py download HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-unset} HF_HUB_DISABLE_XET=${HF_HUB_DISABLE_XET:-unset}"
+                outcome download || exit 1
+                ;;
+            prepare | walk | build)
+                log_command "offline_arm.py ${command}"
+                outcome "${command}" || exit 1
+                ;;
+            held-out-config)
+                log_command "offline_arm.py held-out-config"
+                echo 'name = "held_out"' > "$(option_value --output "$@")"
+                ;;
+            flat-references)
+                log_command "offline_arm.py flat-references"
+                outcome flat_references || exit 1
+                echo '{"identifier": "s", "goal_keys": []}' > "$(option_value --output "$@")"
+                ;;
+            train)
+                subset="$(option_value --subset "$@")"
+                rate="$(option_value --learning-rate "$@")"
+                if [[ " $* " == *" --dry-run "* ]]; then
+                    log_command "dry run ${subset} ${rate}"
+                    echo "offline_arm_${subset}_${rate}: 100 offline examples; 9 steps on 4 GPUs"
+                    exit "$(cat "${FAKE_SCENARIO}/dry_run_exit_${subset}" 2>/dev/null || echo 0)"
+                fi
+                output="${LEAN_SEARCH_CHECKPOINTS}/offline_arm_${subset}_${rate}"
+                log_command "train ${subset} ${rate}"
+                [[ -e "${output}" ]] && { log_command "OUTPUT EXISTS ${output}"; exit 1; }
+                mkdir -p "${output}"
+                # The attempt's number in its throughput line, and time for the driver's poll to see it.
+                echo "throughput: {\"attempt\": $(grep -c "^train ${subset} ${rate}$" "${FAKE_LOG}"), \"steady_tokens_per_second\": 20000.0}"
+                sleep 0.3
+                outcome "train_${subset}_${rate}" || exit 1
+                mkdir -p "${output}/adapter"
+                echo '{}' > "${output}/training_summary.json"
+                log_command "trained offline_arm_${subset}_${rate}"
+                outcome "after_train_${subset}_${rate}" || exit 1
+                ;;
+            rank)
+                subset="$(option_value --subset "$@")"
+                log_command "offline_arm.py rank ${subset} v0 $(option_value --v0 "$@")"
+                outcome "rank_${subset}" || exit 1
+                rate="$(cat "${FAKE_SCENARIO}/chosen_rate" 2>/dev/null || echo 5e-5)"
+                echo "Chosen: ${subset}_${rate} (the held-out states decide, on the flattened success; tied: ${subset}_${rate})"
+                ;;
+            chosen-rate)
+                subset="$(option_value --subset "$@")"
+                sed -n "s/^Chosen: ${subset}_\([^ ]*\) .*/\1/p" "$(option_value --rank "$@")"
+                ;;
+            probe-list)
+                subset="$(option_value --subset "$@")"
+                rate="$(option_value --rate "$@")"
+                log_command "offline_arm.py probe-list ${subset} ${rate}"
+                outcome "probe_list" || exit 1
+                printf '[[runs]]\npolicy_adapter = "%s"\n' "${LEAN_SEARCH_CHECKPOINTS}/offline_arm_${subset}_${rate}/adapter" \
+                    > "$(option_value --output "$@")"
+                ;;
+            report)
+                log_command "offline_arm.py report $(option_value --subset "$@")"
+                outcome "report" || exit 1
+                echo "The offline arm PASSES the owner's gate (the paired 95% interval lies above 0)."
+                ;;
+        esac
+        ;;
+    experiments/probe_compare.py)
+        log_command "probe_compare.py $1 $(option_value --x "$@")"
+        outcome "probe_compare" || exit 1
         ;;
     *)
         log_command "UNKNOWN ${script} $*"

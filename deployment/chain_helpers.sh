@@ -1,0 +1,76 @@
+# Helpers of the node's chain drivers (deployment/study_chain.sh, deployment/offline_chain.sh), sourced by a driver from
+# its own directory: installed as a copy beside it, never read from the checkout while a driver runs. A driver sets
+# before using them: state (its state directory, chain.log's), python, poll_seconds, gpus and gpu_free_mib (gpus_free),
+# held_out_loop_config (held_out); its working directory is the checkout.
+
+say() { echo "$(date -u +%FT%TZ) $*"; }
+stop_chain() { say "STOPPED: $*"; echo "$(date -u +%FT%TZ) $*" > "${state}/STOPPED"; exit 0; }
+
+attempt() {
+    local step="$1" count
+    count=$(( $(cat "${state}/attempts_${step}" 2>/dev/null || echo 0) + 1 ))
+    echo "${count}" > "${state}/attempts_${step}"
+    (( count <= 3 )) || stop_chain "step ${step} failed 3 times"
+    say "step ${step}, attempt ${count}"
+}
+done_step() { [[ -f "${state}/done_$1" ]]; }
+# A step's wall clock runs from its first attempt to its end, interruptions included (timings.tsv, for the report).
+mark_start() { [[ -f "${state}/started_$1" ]] || date +%s > "${state}/started_$1"; }
+finish() {
+    printf '%s\t%s\t%s\n' "$1" "$(cat "${state}/started_$1")" "$(date +%s)" >> "${state}/timings.tsv"
+    touch "${state}/done_$1"
+    say "step $1 done"
+}
+
+aside() {
+    local path="$1" moved
+    moved="${path}.interrupted_$(date -u +%Y%m%dT%H%M%SZ)"
+    mv "${path}" "${moved}" || stop_chain "could not move ${path} aside"
+    say "moved the interrupted ${path} aside to ${moved}"
+}
+
+# A held-out run on the servers (started if not answering; the run puts the adapter on the policy servers itself).
+held_out() {
+    local name="$1" arm="$2" phase="$3" adapter="$4" status=0
+    done_step "held_out_${name}" && return 0
+    attempt "held_out_${name}"
+    mark_start "held_out_${name}"
+    LOOP_CONFIG="${held_out_loop_config}" deployment/grpo_loop.sh servers >> "${state}/servers.log" 2>&1 \
+        || { say "starting the servers failed (servers.log); the driver exits for supervisord to retry"; exit 1; }
+    deployment/background.sh "${python}" experiments/held_out_evaluate.py --name "${name}" --arm "${arm}" \
+        --phase "${phase}" --policy-adapter "${adapter}" --loop-config "${held_out_loop_config}" \
+        >> "${state}/held_out/${name}.log" 2>&1 || status=$?
+    case "${status}" in
+        0)
+            # Exit 0 also after server failures left states without a tree (summary.json's dropped): resumed next start.
+            "${python}" experiments/learning_rate_step.py check-held-out --name "${name}" >> "${state}/held_out/${name}.log" 2>&1 \
+                || { say "held-out run ${name} left states without a tree; the driver exits for supervisord to resume it"; exit 1; }
+            finish "held_out_${name}"
+            ;;
+        4) stop_chain "held-out run ${name}: the servers kept dying (exit 4; held_out/${name}.log, the servers' logs)" ;;
+        *) say "held-out run ${name} exited ${status}; the driver exits for supervisord to retry"; exit 1 ;;
+    esac
+}
+
+# The GPUs must be free before a round trains (a dead round's torchrun workers live in sessions of their own). Judged
+# by the memory used, which a container sees; its process list may be empty or name host PIDs, so it is only shown.
+gpus_free() {
+    local readings busy check
+    for check in 1 2 3 4 5; do
+        readings="$(nvidia-smi --query-gpu=index,memory.used --format=csv,noheader,nounits)" \
+            || stop_chain "nvidia-smi --query-gpu failed: ${readings}"
+        (( $(grep -c . <<< "${readings}") == gpus )) || stop_chain "nvidia-smi reads not ${gpus} GPUs: ${readings//$'\n'/; }"
+        busy="$(awk -F', *' -v limit="${gpu_free_mib}" '$2 + 0 >= limit { printf "GPU %s %s MiB; ", $1, $2 }' <<< "${readings}")"
+        [[ -z "${busy}" ]] && return 0
+        say "GPUs in use (check ${check} of 5): ${busy}processes: $(nvidia-smi --query-compute-apps=pid,process_name --format=csv,noheader | paste -sd';' -)"
+        sleep "${poll_seconds}"
+    done
+    stop_chain "the GPUs stay in use (${busy}): look (nvidia-smi), stop what holds them by PID, move STOPPED aside"
+}
+
+complete() {
+    local file
+    for file in "$@"; do
+        [[ -e "${file}" ]] || return 1
+    done
+}

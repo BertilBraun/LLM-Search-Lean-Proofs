@@ -322,7 +322,9 @@ sampling differs from the shared run's: the arms sample in the step's mode or no
    cd /workspace/LLM-Search-Lean-Proofs
    mv /workspace/step1_chain_tools/study_chain.sh /workspace/step1_chain_tools/study_chain.sh.s1_only
    cp deployment/study_chain.sh /workspace/step1_chain_tools/study_chain.sh.new
+   cp deployment/chain_helpers.sh /workspace/step1_chain_tools/chain_helpers.sh.new   # sourced from beside the driver
    chmod +x /workspace/step1_chain_tools/study_chain.sh.new
+   mv /workspace/step1_chain_tools/chain_helpers.sh.new /workspace/step1_chain_tools/chain_helpers.sh
    mv /workspace/step1_chain_tools/study_chain.sh.new /workspace/step1_chain_tools/study_chain.sh
    cp deployment/study_chain.conf /workspace/step1_chain_tools/study_chain.conf
    cp deployment/study_chain.conf /etc/supervisor/conf.d/study_chain.conf
@@ -370,6 +372,102 @@ one, dropped held-out states, a start after HOLD; `tests/rl/test_learning_rate_s
 real tools' run times and memory, `nvidia-smi --query-gpu=index,memory.used` reading 1 MiB per idle GPU in this
 container (the threshold assumes it), `grpo_expert_iteration.py train` accepting the finished sampling-only run as
 "stopped in its sampling stage", held-out runs restarting the policy servers onto each variant.
+
+### The offline arm's driver (written 2026-11-17, not installed)
+
+`deployment/offline_chain.sh` (supervisord program `offline_chain`, conf `deployment/offline_chain.conf`) runs the
+offline arm (DESIGN.md, "The offline arm") unattended. State and logs: `/workspace/runs/offline_chain/` (log
+`chain.log`). Commands: `experiments/offline_arm.py` with `experiments/configs/grpo/followup/offline/offline_arm.toml`;
+data under `$LEAN_SEARCH_DATA/offline_arm/` (`raw/` holds the two downloaded corpora, about 6.5 GB; they never go to the
+PC).
+
+**The owner's order (2026-11-17):** O2 (matched) runs completely, then the driver writes HOLD with the servers
+stopped. O1 (pool) runs only on the owner's word and only at the rate O2's ranking chose: the switch is the file
+`/workspace/runs/offline_chain/run_pool` (any content). To give it: `touch /workspace/runs/offline_chain/run_pool`, move
+`HOLD` aside (`mv HOLD HOLD.after_matched`), `supervisorctl start offline_chain`.
+
+| Step | What | Markers | Node hours |
+|---|---|---|---|
+| download | Goedel-LM/SFT_dataset_v2 and Leanabell SFT at phase 2's revisions, `HF_HUB_DISABLE_XET=1`, no token | `done_download` | 0.03 (measured) |
+| prepare | exclusions, phase 2's normalization of both corpora (32 processes on the Lean CPUs), the pool's proofs recovered → `proofs.jsonl`, `preparation.json` | `done_prepare` | 0.07 (measured) |
+| walk | every proof walked as the search runs blocks, 90 REPLs on the Lean CPUs, resumable → `walks.jsonl`, and `walk.json` (what decided the walks) | `done_walk` | about 3.6 (5.1 proofs/s; GPUs idle) |
+| walk_record | `walk` again with the installed checkout: records `walk.json` for walks the detached data steps made (or checks it), walks the ones that raised | `done_walk_record` | minutes |
+| build | examples (with the valid prefix of walks that failed at a block), states near a held-out state dropped, validation split, the matched subset → `matched/`, `pool/`, `build.json`, `README.md` (walk statuses per band) | `done_build` | 0.3-0.5 |
+| flat_references | each held-out state's reference next step run flattened (16 REPLs) → `flat_references.jsonl` | `done_flat_references` | minutes |
+| held_out_config | `held_out_loop.toml`: base.toml in the no-reasoning mode | `done_held_out_config` | - |
+| matched | servers stopped; dry run (`dry_run_matched.log`: sizes, peak host memory; stops if 4 ranks would not fit); 5e-5 and 1e-4 trained (`training/<label>.log`; `chain.log` gets the throughput line after step 20); held-out runs of v0 (`offline_v0_no_reasoning`) and both rates; `rank_matched.txt` (both success measures, the choice on the flattened one); probe run `offline_arm_matched`; `matched_against_run8.txt`, `report_matched.md`; HOLD | `done_dry_run_matched`, `done_train_matched_<rate>`, `done_held_out_<name>`, `done_rank_matched`, `done_probe_list_matched`, `done_probe_matched`, `done_report_matched` | training 2 × about 3 (4 epochs of about 21M tokens), held-out 3 × 0.2, probe 4-5 |
+| pool | on `run_pool` only: dry run, one training at the chosen rate, its held-out run, probe run `offline_arm_pool`, reports; HOLD | the same with `_pool` | training about 20 at most (about 565M tokens; see "Throughput"), held-out 0.2, probe 4-5 |
+
+O2 to its HOLD: about 16 node hours from the start of the walk, 4 of them with the GPUs idle. O1 on top: about 25 at
+most. Measured on 354 walked proofs: about 14 examples, 935 completion and 7,433 prompt tokens per proof.
+
+**Throughput.** The 7.8k tokens/s of expert-iteration round 1 (4 GPUs) is that round's cumulative average: 5.03M tokens
+over 645 training seconds in only 78 steps, the compilation and Triton autotuning of the first steps included. Phase 2's
+10.8k (2 GPUs, `results/gpu_utilization/`) was measured over steps 6-16, after them, at 32k-token micro-batches on an
+earlier node without power caps. Other differences: 4 ranks all-reduce the LoRA gradients every step at about 3 GB/s
+(no peer-to-peer path on this node), and the slowest GPU (power-capped at about 262 W) sets the pace of every step. For
+the offline examples nothing is wasted that a config could save: packing leaves no padding, the loss projects only the
+completion positions onto the vocabulary (`training/sft.CompletionLoss`), the layers are compiled; the 535-token prompts
+are 89% of the tokens and must run forward and backward (the LoRA gradients flow through their keys and values). The one
+lever, 32k-token micro-batches, doubles the tokens per optimizer step and so changes the recipe; it is left to the
+owner. Each training now writes `throughput.json` (tokens/s over steps 11-20, the warm-up seconds, peak GPU memory),
+logs steps 1-20 one by one, and the driver copies the line into `chain.log`; the training summary holds the steady
+rate over the whole run. O1's 20 h is the upper bound at 7.8k; at a steady 15-20k it would take 8-10 h.
+
+**The detached data steps of 2026-11-17.** Download, prepare and walk were started before the reviews, from a copy of
+branch commit `0d663a4` in `/workspace/offline_arm_code` (`offline_data_steps.sh`, pid in `data_steps.pid`; `lean` and
+`.venv` linked to the checkout's). They write the driver's markers (`done_download`, `done_prepare`, `done_walk`,
+`started_*`, `timings.tsv`). Nothing restarts them after a container restart (the watchdog checks that the pid lives
+and `walk.log` grows; if they died, start them again the same way: the walk resumes). `tests/rl/test_offline_walk_lean.py`
+passed on the node from that copy before the walk (5 of 5). Their walks stay valid for the installed driver only if
+the walk's sources are unchanged: `git diff 0d663a4 <deployed commit> -- src/lean_search/rl/offline_walk.py
+src/lean_search/search/search.py src/lean_search/lean/plans.py src/lean_search/lean/text.py
+src/lean_search/lean/hypotheses.py src/lean_search/lean/identifiers.py src/lean_search/lean/repl.py
+src/lean_search/policy/prompts.py` must be empty, and `no_reasoning_student_v2.toml`'s search and policy sections
+unchanged; else move `walks.jsonl` and `done_walk` aside (the walk runs again, about 3.6 h).
+
+**Install and start** (only on the orchestrator's word, with nothing else running, and only once `done_walk` exists,
+`chain.log` says "CPU steps done" and the pid in `data_steps.pid` is gone: the driver refuses with STOPPED while it
+lives):
+
+```bash
+cd /workspace/LLM-Search-Lean-Proofs                      # a master holding the offline arm, node-local edits kept (section 4)
+mkdir -p /workspace/runs/offline_chain
+cp deployment/chain_helpers.sh /workspace/step1_chain_tools/chain_helpers.sh.new
+cp deployment/offline_chain.sh /workspace/step1_chain_tools/offline_chain.sh.new
+chmod +x /workspace/step1_chain_tools/offline_chain.sh.new
+mv /workspace/step1_chain_tools/chain_helpers.sh.new /workspace/step1_chain_tools/chain_helpers.sh
+mv /workspace/step1_chain_tools/offline_chain.sh.new /workspace/step1_chain_tools/offline_chain.sh
+cp deployment/offline_chain.conf /etc/supervisor/conf.d/offline_chain.conf
+supervisorctl reread && supervisorctl update                # autostart: it starts now
+```
+
+`chain_helpers.sh` is shared by `study_chain.sh` and `offline_chain.sh`: replace it only while both are at HOLD or
+STOPPED (a driver sources it at each start).
+
+**Failures and stops** as the step-2 driver's (`attempts_<step>`, the 4th writes STOPPED; `aside` for an interrupted
+training output; `gpus_free` before each training). STOPPED at once: the detached data steps alive, no
+`chain_helpers.sh` beside the driver, a refused server stop, GPUs that stay in use, a failed or memory-refused dry run,
+a failed ranking, probe list, comparison or report, a probe run rejected for wall-clock stops (exit 3) or whose servers
+kept dying (exit 4). `walk` exits 1 while more than 1% of all proofs' latest walks raised; the next start walks those
+again. `build` refuses walks whose `walk.json` differs from the code and settings it runs with.
+
+**A rejected probe run** (exit 3; not expected without reasoning at 16 expansions and 14,400 s): copy
+`offline/probe_evaluation.toml` to one at the doubled cap (28,800 s), write the list with
+`offline_arm.py probe-list --subset <s> --rate <chosen> --name offline_arm_<s>_cap28800 --evaluation-config <copy>
+--output /workspace/runs/offline_chain/runs_<s>.toml`, run `PROBE_CONCURRENCY=112 deployment/probe_runs.sh <list>`, then
+`offline_arm.py report --subset <s> --probe-name offline_arm_<s>_cap28800 > /workspace/runs/offline_chain/report_<s>.md`
+(and `probe_compare.py pair --x offline_arm_<s>_cap28800 ... > <s>_against_run8.txt`). The run it is compared with
+(run 8) ran at 7,200 s, which the report states as a setting difference. So that a restarted driver continues past the
+subset: `touch done_probe_<s> done_report_<s>` in `/workspace/runs/offline_chain/` (`done_probe_list_<s>` exists
+already), move STOPPED aside, `supervisorctl start offline_chain`. It then goes on to the HOLD after the matched subset
+or the final HOLD.
+
+Smoke points for the first run: `walk_record.log` (no difference refused), `build.json` (walk statuses per band, prefix
+and dropped counts, matched completion tokens near 2M), `flat_references.log` (states with flattened references,
+failures), `dry_run_matched.log` (shares near 60/30/10%, peak host memory), the throughput line in `chain.log`,
+`rank_matched.txt` (both measures), `runs_matched.toml` (the chosen adapter), `report_matched.md` (gate and noise
+floor).
 
 ## 4. Node-local edits and deploying master
 
