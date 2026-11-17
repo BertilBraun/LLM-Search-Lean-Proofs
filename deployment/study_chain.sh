@@ -30,9 +30,7 @@ loop_exit_seconds="${STUDY_CHAIN_LOOP_EXIT_SECONDS:-600}"
 builds_wait_seconds="${STUDY_CHAIN_BUILDS_WAIT_SECONDS:-10800}"
 mkdir -p "${state}/rounds" "${state}/held_out"
 exec >> "${state}/chain.log" 2>&1
-say() { echo "$(date -u +%FT%TZ) $*"; }
-stop_chain() { say "STOPPED: $*"; echo "$(date -u +%FT%TZ) $*" > "${state}/STOPPED"; exit 0; }
-
+source "$(dirname "${BASH_SOURCE[0]}")/chain_helpers.sh" || { echo "$(date -u +%FT%TZ) no chain_helpers.sh beside the driver"; exit 1; }
 say "driver start (pid $$)"
 for marker in STOPPED HOLD; do
     if [[ -f "${state}/${marker}" ]]; then say "${marker} present ($(cat "${state}/${marker}")): nothing to do"; exit 0; fi
@@ -48,27 +46,12 @@ followup=experiments/configs/grpo/followup
 shared=followup_shared_sampling
 shared_run="${LEAN_SEARCH_RUNS}/${shared}"
 shared_loop_config="${LEAN_SEARCH_RUNS}/followup_configs/${shared}/loop.toml"
+held_out_loop_config="${shared_loop_config}"
 configs="${state}/configs"
 mode="${state}/mode.toml"
 gpus=4
 # A GPU reads 1 MiB used after stop_model.sh; a CUDA context alone holds a few hundred.
 gpu_free_mib=100
-
-attempt() {
-    local step="$1" count
-    count=$(( $(cat "${state}/attempts_${step}" 2>/dev/null || echo 0) + 1 ))
-    echo "${count}" > "${state}/attempts_${step}"
-    (( count <= 3 )) || stop_chain "step ${step} failed 3 times"
-    say "step ${step}, attempt ${count}"
-}
-done_step() { [[ -f "${state}/done_$1" ]]; }
-# A step's wall clock runs from its first attempt to its end, interruptions included (timings.tsv, for the report).
-mark_start() { [[ -f "${state}/started_$1" ]] || date +%s > "${state}/started_$1"; }
-finish() {
-    printf '%s\t%s\t%s\n' "$1" "$(cat "${state}/started_$1")" "$(date +%s)" >> "${state}/timings.tsv"
-    touch "${state}/done_$1"
-    say "step $1 done"
-}
 
 [[ -z "${BACKGROUND_CPUS:-}" && -n "${BACKGROUND_CPU_LIST:-}" && -n "${TRAINING_CPU_LIST:-}" ]] \
     || stop_chain "the CPU layout must come from the node environment: BACKGROUND_CPU_LIST and TRAINING_CPU_LIST set, BACKGROUND_CPUS not"
@@ -133,13 +116,6 @@ if ! done_step s1_sampling; then
     finish s1_sampling
 fi
 
-aside() {
-    local path="$1" moved
-    moved="${path}.interrupted_$(date -u +%Y%m%dT%H%M%SZ)"
-    mv "${path}" "${moved}" || stop_chain "could not move ${path} aside"
-    say "moved the interrupted ${path} aside to ${moved}"
-}
-
 if ! done_step s1_slices; then
     mark_start s1_slices
     [[ -e "${shared_run}/slices" ]] && aside "${shared_run}/slices"
@@ -148,29 +124,6 @@ if ! done_step s1_slices; then
     cat "${state}/slices.log"
     finish s1_slices
 fi
-
-# A held-out run on the servers (started if not answering; the run puts the adapter on the policy servers itself).
-held_out() {
-    local name="$1" arm="$2" phase="$3" adapter="$4" status=0
-    done_step "held_out_${name}" && return 0
-    attempt "held_out_${name}"
-    mark_start "held_out_${name}"
-    LOOP_CONFIG="${shared_loop_config}" deployment/grpo_loop.sh servers >> "${state}/servers.log" 2>&1 \
-        || { say "starting the servers failed (servers.log); the driver exits for supervisord to retry"; exit 1; }
-    deployment/background.sh "${python}" experiments/held_out_evaluate.py --name "${name}" --arm "${arm}" \
-        --phase "${phase}" --policy-adapter "${adapter}" --loop-config "${shared_loop_config}" \
-        >> "${state}/held_out/${name}.log" 2>&1 || status=$?
-    case "${status}" in
-        0)
-            # Exit 0 also after server failures left states without a tree (summary.json's dropped): resumed next start.
-            "${python}" experiments/learning_rate_step.py check-held-out --name "${name}" >> "${state}/held_out/${name}.log" 2>&1 \
-                || { say "held-out run ${name} left states without a tree; the driver exits for supervisord to resume it"; exit 1; }
-            finish "held_out_${name}"
-            ;;
-        4) stop_chain "held-out run ${name}: the servers kept dying (exit 4; held_out/${name}.log, the servers' logs)" ;;
-        *) say "held-out run ${name} exited ${status}; the driver exits for supervisord to retry"; exit 1 ;;
-    esac
-}
 
 # S3a. v0's baseline under this step's code, mode and layout (the first line of held_out.tsv).
 IFS=$'\t' read -r v0_name v0_arm v0_phase v0_adapter < "${configs}/held_out.tsv"
@@ -181,22 +134,6 @@ all_rounds_done() {
     while IFS=$'\t' read -r label rest; do
         done_step "round_${label}" || return 1
     done < "${configs}/rounds.tsv"
-}
-
-# The GPUs must be free before a round trains (a dead round's torchrun workers live in sessions of their own). Judged
-# by the memory used, which a container sees; its process list may be empty or name host PIDs, so it is only shown.
-gpus_free() {
-    local readings busy check
-    for check in 1 2 3 4 5; do
-        readings="$(nvidia-smi --query-gpu=index,memory.used --format=csv,noheader,nounits)" \
-            || stop_chain "nvidia-smi --query-gpu failed: ${readings}"
-        (( $(grep -c . <<< "${readings}") == gpus )) || stop_chain "nvidia-smi reads not ${gpus} GPUs: ${readings//$'\n'/; }"
-        busy="$(awk -F', *' -v limit="${gpu_free_mib}" '$2 + 0 >= limit { printf "GPU %s %s MiB; ", $1, $2 }' <<< "${readings}")"
-        [[ -z "${busy}" ]] && return 0
-        say "GPUs in use (check ${check} of 5): ${busy}processes: $(nvidia-smi --query-compute-apps=pid,process_name --format=csv,noheader | paste -sd';' -)"
-        sleep "${poll_seconds}"
-    done
-    stop_chain "the GPUs stay in use (${busy}): look (nvidia-smi), stop what holds them by PID, move STOPPED aside"
 }
 
 # The expert-iteration data, built on the Lean CPUs; no attempt is counted here (ensure_builds counts them).
@@ -254,13 +191,6 @@ ensure_builds() {
             touch "${state}/done_dry_run_${name}"
         fi
     done 3< "${configs}/builds.tsv"
-}
-
-complete() {
-    local file
-    for file in "$@"; do
-        [[ -e "${file}" ]] || return 1
-    done
 }
 
 train_round() {

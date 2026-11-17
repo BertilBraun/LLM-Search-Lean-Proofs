@@ -216,6 +216,51 @@ class ForbiddenSteps:
         return [] if self._pattern is None else sorted(set(self._pattern.findall(text)))
 
 
+async def named_state(repl: LeanRepl, state: ProofState) -> tuple[ProofState, float]:
+    """The state with its inaccessible hypotheses renamed by Lean, or unchanged if that did not name them all."""
+    tactic = renaming_tactic(state.goals)
+    if tactic is None:
+        return state, 0.0
+    result = await repl.apply_tactic(state, tactic)
+    match result.outcome:
+        case ProofState() as renamed if not has_inaccessible_names(renamed.goals):
+            return renamed, result.elapsed_seconds
+        case _:
+            return state, result.elapsed_seconds
+
+
+class IdentifierCheck(NamedTuple):
+    checker: IdentifierChecker
+    scope: NameScope
+
+
+async def identifier_check(
+    repl: LeanRepl, problem: Problem, environment_names_directory: str
+) -> IdentifierCheck | None:
+    """The identifier check of the problem's policy blocks; None when the header is outside what the checker models or
+    the environment's names cannot be exported."""
+    scope = name_scope(problem.header, problem.formal_statement)
+    if scope is None:
+        return None
+    directory = Path(environment_names_directory) if environment_names_directory else None
+    try:
+        names = await environment_names(repl, problem.header, directory)
+    except RuntimeError:
+        logger.exception("The identifier check is off for %s", problem.name)
+        return None
+    return IdentifierCheck(IdentifierChecker(names), scope)
+
+
+def policy_plan(text: str, goals: Sequence[str], flatten: bool, check: IdentifierCheck | None) -> TacticPlan:
+    """A policy block's plan as the search executes it: flattened, and stopped before a tactic naming an unknown
+    identifier."""
+    plan = plan_block(text, flatten=flatten)
+    if check is None:
+        return plan
+    unknown = check.checker.first_unknown(plan.texts, goals, check.scope)
+    return plan if unknown is None else plan.rejecting(unknown.rejection)
+
+
 async def search_theorem(
     problem: Problem,
     repl: LeanRepl,
@@ -371,8 +416,7 @@ class _TheoremSearch:
         self.verification_failures = 0
         self.plain_verified: bool | None = None
         self.started = time.monotonic()
-        self.identifier_checker: IdentifierChecker | None = None
-        self.name_scope: NameScope | None = None
+        self.identifier_check: IdentifierCheck | None = None
         self.name_repairer: NameRepairer | None = None
         self.proofs: list[Node] = []
         self.exploration_random = random.Random(f"{config.exploration.seed}:{problem.name}")
@@ -414,31 +458,17 @@ class _TheoremSearch:
     async def _prepare_identifier_check(self) -> None:
         if not self.config.check_identifiers:
             return
-        self.name_scope = name_scope(self.problem.header, self.problem.formal_statement)
-        if self.name_scope is None:
-            return
-        directory = Path(self.config.environment_names_directory) if self.config.environment_names_directory else None
-        try:
-            names = await environment_names(self.repl, self.problem.header, directory)
-        except RuntimeError:
-            logger.exception("The identifier check is off for %s", self.problem.name)
-            return
-        self.identifier_checker = IdentifierChecker(names)
-        if self.config.name_repair.enabled:
+        self.identifier_check = await identifier_check(self.repl, self.problem, self.config.environment_names_directory)
+        if self.identifier_check is not None and self.config.name_repair.enabled:
             minimum = self.config.name_repair.min_similarity
-            self.name_repairer = await asyncio.to_thread(shared_name_repairer, names, minimum)
+            self.name_repairer = await asyncio.to_thread(
+                shared_name_repairer, self.identifier_check.checker.names, minimum
+            )
 
     async def _named(self, state: ProofState) -> tuple[ProofState, float]:
-        """The state with its inaccessible hypotheses renamed by Lean, or unchanged if that did not name them all."""
-        tactic = renaming_tactic(state.goals) if self.config.name_inaccessible_hypotheses else None
-        if tactic is None:
+        if not self.config.name_inaccessible_hypotheses:
             return state, 0.0
-        result = await self.repl.apply_tactic(state, tactic)
-        match result.outcome:
-            case ProofState() as renamed if not has_inaccessible_names(renamed.goals):
-                return renamed, result.elapsed_seconds
-            case _:
-                return state, result.elapsed_seconds
+        return await named_state(self.repl, state)
 
     async def _search(self) -> tuple[StopReason, Node | None]:
         while True:
@@ -648,11 +678,7 @@ class _TheoremSearch:
     def _plan(self, node: Node, candidate: Candidate) -> TacticPlan:
         if candidate.source == StepSource.AUTOMATION:
             return plain_plan(candidate.text)
-        plan = plan_block(candidate.text, flatten=self.config.flatten_blocks)
-        if self.identifier_checker is None or self.name_scope is None:
-            return plan
-        unknown = self.identifier_checker.first_unknown(plan.texts, node.goals, self.name_scope)
-        return plan if unknown is None else plan.rejecting(unknown.rejection)
+        return policy_plan(candidate.text, node.goals, self.config.flatten_blocks, self.identifier_check)
 
     async def _run_block(self, node: Node, candidate: Candidate) -> BlockResult:
         heartbeats = candidate.heartbeats if candidate.heartbeats is not None else self.config.tactic_heartbeats
@@ -675,8 +701,8 @@ class _TheoremSearch:
                 return None
         if not unknown:
             return None
-        assert self.name_scope is not None
-        namespaces = self.name_scope.namespaces
+        assert self.identifier_check is not None
+        namespaces = self.identifier_check.scope.namespaces
         repaired = await asyncio.to_thread(self.name_repairer.repaired, candidate.text, unknown, namespaces)
         if repaired is None:
             return None

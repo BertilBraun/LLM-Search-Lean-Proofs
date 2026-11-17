@@ -139,6 +139,55 @@ case "${script}" in
         outcome "rank_${signal}" || exit 1
         echo "Chosen: ${signal}_5e-5 (the held-out states decide; tied on the held-out states: ${signal}_5e-5)"
         ;;
+    experiments/offline_arm.py)
+        command="$3"
+        shift 3
+        case "${command}" in
+            download)
+                log_command "offline_arm.py download HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-unset} HF_HUB_DISABLE_XET=${HF_HUB_DISABLE_XET:-unset}"
+                outcome download || exit 1
+                ;;
+            prepare | walk | build)
+                log_command "offline_arm.py ${command}"
+                outcome "${command}" || exit 1
+                ;;
+            held-out-config)
+                log_command "offline_arm.py held-out-config"
+                echo 'name = "held_out"' > "$(option_value --output "$@")"
+                ;;
+            train)
+                subset="$(option_value --subset "$@")"
+                rate="$(option_value --learning-rate "$@")"
+                if [[ " $* " == *" --dry-run "* ]]; then
+                    log_command "dry run ${subset} ${rate}"
+                    echo "offline_arm_${subset}_${rate}: 100 offline examples; 9 steps on 4 GPUs"
+                    exit 0
+                fi
+                output="${LEAN_SEARCH_CHECKPOINTS}/offline_arm_${subset}_${rate}"
+                log_command "train ${subset} ${rate}"
+                [[ -e "${output}" ]] && { log_command "OUTPUT EXISTS ${output}"; exit 1; }
+                mkdir -p "${output}"
+                outcome "train_${subset}_${rate}" || exit 1
+                mkdir -p "${output}/adapter"
+                echo '{}' > "${output}/training_summary.json"
+                log_command "trained offline_arm_${subset}_${rate}"
+                outcome "after_train_${subset}_${rate}" || exit 1
+                ;;
+            probe-list)
+                subset="$(option_value --subset "$@")"
+                log_command "offline_arm.py probe-list ${subset} $(sed -n 's/^Chosen: \([^ ]*\) .*/\1/p' "$(option_value --rank "$@")")"
+                echo "[[runs]]" > "$(option_value --output "$@")"
+                ;;
+            report)
+                log_command "offline_arm.py report $(option_value --subset "$@")"
+                outcome "report" || exit 1
+                echo "The offline arm PASSES the owner's gate (the paired 95% interval lies above 0)."
+                ;;
+        esac
+        ;;
+    experiments/probe_compare.py)
+        log_command "probe_compare.py $1 $(option_value --x "$@")"
+        ;;
     *)
         log_command "UNKNOWN ${script} $*"
         exit 2

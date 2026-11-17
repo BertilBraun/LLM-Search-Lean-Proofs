@@ -322,7 +322,9 @@ sampling differs from the shared run's: the arms sample in the step's mode or no
    cd /workspace/LLM-Search-Lean-Proofs
    mv /workspace/step1_chain_tools/study_chain.sh /workspace/step1_chain_tools/study_chain.sh.s1_only
    cp deployment/study_chain.sh /workspace/step1_chain_tools/study_chain.sh.new
+   cp deployment/chain_helpers.sh /workspace/step1_chain_tools/chain_helpers.sh.new   # sourced from beside the driver
    chmod +x /workspace/step1_chain_tools/study_chain.sh.new
+   mv /workspace/step1_chain_tools/chain_helpers.sh.new /workspace/step1_chain_tools/chain_helpers.sh
    mv /workspace/step1_chain_tools/study_chain.sh.new /workspace/step1_chain_tools/study_chain.sh
    cp deployment/study_chain.conf /workspace/step1_chain_tools/study_chain.conf
    cp deployment/study_chain.conf /etc/supervisor/conf.d/study_chain.conf
@@ -370,6 +372,50 @@ one, dropped held-out states, a start after HOLD; `tests/rl/test_learning_rate_s
 real tools' run times and memory, `nvidia-smi --query-gpu=index,memory.used` reading 1 MiB per idle GPU in this
 container (the threshold assumes it), `grpo_expert_iteration.py train` accepting the finished sampling-only run as
 "stopped in its sampling stage", held-out runs restarting the policy servers onto each variant.
+
+### The offline arm's driver (written 2026-11-17, not installed)
+
+`deployment/offline_chain.sh` (supervisord program `offline_chain`, conf `deployment/offline_chain.conf`) runs the
+offline arm (DESIGN.md, "The offline arm") unattended and ends in a HOLD with the servers stopped. State and logs:
+`/workspace/runs/offline_chain/` (log `chain.log`). Commands: `experiments/offline_arm.py` with
+`experiments/configs/grpo/followup/offline/offline_arm.toml`; data under `$LEAN_SEARCH_DATA/offline_arm/` (`raw/` holds
+the two downloaded corpora, about 6.5 GB; they never go to the PC).
+
+| Step | What | Markers | Node hours (estimate) |
+|---|---|---|---|
+| download | Goedel-LM/SFT_dataset_v2 and Leanabell SFT at phase 2's revisions, `HF_HUB_DISABLE_XET=1`, no token | `done_download` | 0.1 |
+| prepare | exclusions, phase 2's normalization of both corpora (32 processes on the Lean CPUs), the pool's proofs recovered → `proofs.jsonl`, `preparation.json` | `done_prepare` | 0.3 |
+| walk | every proof walked as the search runs blocks, 90 REPLs on the Lean CPUs (`background.sh`), resumable → `walks.jsonl` | `done_walk` | 3-6 (GPUs idle) |
+| build | examples, validation split, the matched subset → `matched/`, `pool/`, `build.json`, `README.md` | `done_build` | 0.3 |
+| held_out_config | `held_out_loop.toml`: base.toml in the no-reasoning mode | `done_held_out_config` | - |
+| matched | dry run; servers stopped; 5e-5 and 1e-4 trained (`training/<label>.log`); held-out runs of v0 (`offline_v0_no_reasoning`, once) and both rates; `rank_matched.txt`; probe run `offline_arm_matched` (`runs_matched.toml`); `matched_against_run8.txt`, `report_matched.md` | `done_dry_run_matched`, `done_train_matched_<rate>`, `done_held_out_<name>`, `done_rank_matched`, `done_probe_matched`, `done_report_matched` | training 2 × 0.8-1 (4 epochs, about 26M tokens each), held-out 3 × 0.2, probe 4-5 |
+| pool | the same for O1 | `..._pool` | training 2 × 4.5-5.5 (about 130M tokens each at the 7.8k tokens/s of expert-iteration round 1), held-out 2 × 0.2, probe 4-5 |
+| HOLD | `stop_model.sh --all`, then HOLD | `HOLD` | |
+
+About 27-32 node hours in all, 4-7 of them with the GPUs idle (download to build). The dry runs' last lines and
+`build.json` give the exact examples and tokens; `report_<subset>.md` holds the owner's gate.
+
+**Install and start** (only on the orchestrator's word, at a HOLD, with nothing else running):
+
+```bash
+cd /workspace/LLM-Search-Lean-Proofs                      # a master holding the offline arm, node-local edits kept (section 4)
+mkdir -p /workspace/runs/offline_chain
+cp deployment/chain_helpers.sh /workspace/step1_chain_tools/chain_helpers.sh.new
+cp deployment/offline_chain.sh /workspace/step1_chain_tools/offline_chain.sh.new
+chmod +x /workspace/step1_chain_tools/offline_chain.sh.new
+mv /workspace/step1_chain_tools/chain_helpers.sh.new /workspace/step1_chain_tools/chain_helpers.sh
+mv /workspace/step1_chain_tools/offline_chain.sh.new /workspace/step1_chain_tools/offline_chain.sh
+cp deployment/offline_chain.conf /etc/supervisor/conf.d/offline_chain.conf
+supervisorctl reread && supervisorctl update                # autostart: it starts now
+```
+
+**Failures and stops** as the step-2 driver's (`attempts_<step>`, the 4th writes STOPPED; `aside` for an interrupted
+training output; `gpus_free` before each training): STOPPED at once for a refused server stop, GPUs that stay in use,
+a failed dry run, ranking, probe list or report, a probe run rejected for wall-clock stops (exit 3) or whose servers
+kept dying (exit 4). A walk session in which over 1% of the walks raised exits 1; the next start walks those again.
+Smoke points for the first run: the walk's rate in `walk.log` (`walked (x/s)`), its status counts, REPL memory at 90
+processes, `preparation.json`'s recovered and ambiguous counts, the dry runs' tokens, the first training steps'
+tokens per second.
 
 ## 4. Node-local edits and deploying master
 

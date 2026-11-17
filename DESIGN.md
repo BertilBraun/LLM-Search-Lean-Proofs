@@ -1415,6 +1415,38 @@ alone (it sets the concurrencies and the pinning), the v0 reproduction, miniF2F 
 are written. Then the shared sampling, A's and B1's step-2 rounds (existing `grpo_phase.py`), B2 and C as WP3 and WP4a
 land, run 6 with WP2, the ranking and probe runs, while WP1 and WP5 are written. WP4b only after the gate.
 
+### The offline arm (O; agreed with the owner 2026-11-17)
+
+- **What:** v0's adapter continued by SFT on the pool's known proofs, without visible reasoning (completion: the Lean
+  block only, v0's no-reasoning SFT format: `render_prompt(goals)` with the fence prefill, then block, fence, end of
+  turn). No sampling: it asks what supervised training on the pool's known proofs alone buys at the probe. Arm B is
+  dropped from the study (owner, 2026-11-17).
+- **Data:** the frozen pool's usable statements less the held-out sets (`base.toml`'s `held_out`), the statements of
+  the 512 held-out states, and near-duplicates of them (estimated Jaccard ≥ 0.7, every pair, on the formal statement and
+  on the root state as `rl/training_overlap.py` compares them). The pool keeps each verified proof only as its source,
+  tactic count and characters, so the text is recovered from the two public source corpora (Goedel-LM/SFT_dataset_v2,
+  Leanabell SFT, phase 2's pinned revisions) by phase 2's normalization and cap (`rl/offline_arm.recovered_candidates`);
+  several matching candidates are tried in order. No other corpus (owner, 2026-11-17).
+- **Blocks:** each proof is walked in Lean exactly as the search runs a no-reasoning policy block
+  (`rl/offline_walk.py`): flattened as `plan_block` flattens, states named as the search names them, a block length k
+  drawn uniformly from 1-5, the next k steps as one normalized block, refused for a forbidden step or token, checked
+  for unknown identifiers, run at the search's heartbeat and wall-clock limits; the state after it starts the next
+  block. A block over the policy's 1,024-token cap falls back to fewer steps. A walk that fails, revisits a state or
+  leaves goals gives no example.
+- **Two training sets:** O1 "pool", every walked proof; O2 "matched", proofs drawn one per probe band (0-499, ...,
+  4,500+ characters) in turn until the examples hold 2M completion tokens (about arm C's 16 phases), slightly biased to
+  long proofs by the equal bands. 2% of the statements validate. Each at 5e-5 and 1e-4; O1 one epoch, O2 four (owner:
+  an expert-iteration arm with a 4-phase window trains each block about 4 times); the expert-iteration recipe's
+  fine-tuning and replay (30% Lean, 10% math by completion tokens; v0's 42.7k Lean replay
+  examples repeat for O1, whose share they would not fill once).
+- **Choice and evaluation:** each subset's rate on the 512 held-out states without reasoning against one shared v0
+  run in the same mode (`rank_learning_rates.py`, lower rate on a tie); one probe run of the chosen adapter (probe v2,
+  no reasoning, value v0, 16 expansions, depth weight 0.1, 14,400 s cap, longest expected search first). **Gate
+  (owner):** O passes if the paired 95% interval of O − run 8 (v35, value v0) lies above 0; descriptive: O against run 4
+  and the anchors, all cut at 16 expansions (`rl/offline_report.py`).
+- **Automation:** `deployment/offline_chain.sh` (results/followup_node_operations.md, "The offline arm's driver"); O2
+  runs to its report before O1 trains.
+
 ### Risks and open points
 
 - The block-only step value is a sum over the block's tokens, so short blocks score higher even with the per-block mean.
