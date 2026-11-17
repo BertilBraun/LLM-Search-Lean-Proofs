@@ -200,6 +200,16 @@ shared across searches or pools. It sees every tactic of the block before Lean r
   on the machine's load: re-run alone, most end in an error or at the heartbeat limit within 30-100 s) and
   `ReplFailure`s. `BlockResult.cached_tactics` / `cached_seconds` (the seconds the first run took), `Edge.cached_tactics`
   and `Accounting.cached_tactics` / `cache_saved_seconds` record the hits.
+- **Timeout skip** (`SearchConfig.timeout_skip`, off; `max_wall_clock_timeouts = 2`): a tactic text (an executed
+  tactic of a block, so the whole block for the usual single-tactic one) stopped by the wall clock that often in the
+  search, at any states, is not run again in it. `apply_block` fails at it with `LeanTimeout(wall_clock=True,
+  skipped=True)`, keeping the block's valid prefix, without a kill or a replay. On run 4's trees: 528 timeouts and
+  11.7 h (2.0% of Lean time) avoided, 25 successful steps lost, none on a proof path (after 1 stop: 3.8%, 2 proofs
+  lost). The edge's failure is `FailureKind.SKIPPED_TIMEOUT`: labelled like a wall-clock timeout everywhere labels are
+  made (`EdgeKind.WALL_CLOCK_TIMEOUT`, the timeout tier, a negative label, never an infrastructure failure, never
+  shown as feedback), but counted apart in `Accounting.skipped_timeouts` and `StepStatistics.skipped_timeouts`, so the
+  Lean-load comparisons count only the stops that happened. The cache is consulted first: an exact input with a
+  deterministic outcome takes it even when its text is skipped elsewhere.
 
 ## Verification
 

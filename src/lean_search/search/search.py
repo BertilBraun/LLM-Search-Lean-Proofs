@@ -100,6 +100,15 @@ class NameRepairConfig:
 
 
 @dataclass(frozen=True)
+class TimeoutSkipConfig:
+    """A tactic text stopped by the wall clock `max_wall_clock_timeouts` times in the search, at any states, is not
+    run again there: it fails as a SKIPPED_TIMEOUT, labelled like a wall-clock timeout, without a kill or a replay."""
+
+    enabled: bool = False
+    max_wall_clock_timeouts: int = 2
+
+
+@dataclass(frozen=True)
 class SearchConfig:
     max_expansions: int = 256
     max_wall_seconds: float = 300.0
@@ -128,6 +137,7 @@ class SearchConfig:
     # A tactic run again on the same tactic path with the same limit takes its first deterministic outcome (success,
     # error, heartbeat limit) instead of running Lean; wall-clock stops and REPL failures run again.
     result_cache: bool = False
+    timeout_skip: TimeoutSkipConfig = field(default_factory=TimeoutSkipConfig)
 
 
 class StopReason(StrEnum):
@@ -170,6 +180,8 @@ class Accounting:
     # Tactics the result cache answered, and the Lean seconds they took when they ran (search.result_cache).
     cached_tactics: int = 0
     cache_saved_seconds: float = 0.0
+    # Edges ending at a tactic not run after its text's wall-clock stops (search.timeout_skip; not in `timeouts`).
+    skipped_timeouts: int = 0
 
 
 @dataclass
@@ -182,6 +194,7 @@ class StepStatistics:
     errors: int = 0
     heartbeat_timeouts: int = 0
     wall_clock_timeouts: int = 0
+    skipped_timeouts: int = 0
     repl_failures: int = 0
     rejected: int = 0
     repeated: int = 0
@@ -315,6 +328,8 @@ def step_statistics(tree: SearchTree) -> tuple[StepStatistics, ...]:
                 statistics.heartbeat_timeouts += 1
             case FailureKind.WALL_CLOCK_TIMEOUT:
                 statistics.wall_clock_timeouts += 1
+            case FailureKind.SKIPPED_TIMEOUT:
+                statistics.skipped_timeouts += 1
             case FailureKind.REPL_FAILURE:
                 statistics.repl_failures += 1
             case FailureKind.UNKNOWN_IDENTIFIER:
@@ -384,7 +399,9 @@ class _TheoremSearch:
         self.name_repairer: NameRepairer | None = None
         self.proofs: list[Node] = []
         self.exploration_random = random.Random(f"{config.exploration.seed}:{problem.name}")
-        self.memory = SearchMemory(config.result_cache) if config.result_cache else None
+        skip_after = config.timeout_skip.max_wall_clock_timeouts if config.timeout_skip.enabled else None
+        uses_memory = config.result_cache or config.timeout_skip.enabled
+        self.memory = SearchMemory(config.result_cache, skip_after) if uses_memory else None
 
     def wall_seconds(self) -> float:
         return time.monotonic() - self.started
@@ -701,6 +718,8 @@ class _TheoremSearch:
         match None if failure is None else failure.kind:
             case FailureKind.HEARTBEAT_TIMEOUT | FailureKind.WALL_CLOCK_TIMEOUT:
                 self.accounting.timeouts += 1
+            case FailureKind.SKIPPED_TIMEOUT:
+                self.accounting.skipped_timeouts += 1
             case FailureKind.REPL_FAILURE:
                 self.accounting.repl_failures += 1
             case FailureKind.ERROR:

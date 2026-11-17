@@ -151,6 +151,8 @@ class LeanError:
 class LeanTimeout:
     message: str
     wall_clock: bool
+    # Not run: the search's memory gave up on the tactic text after its earlier wall-clock stops (`memory.py`).
+    skipped: bool = False
 
 
 class ReplFailureKind(StrEnum):
@@ -206,6 +208,8 @@ class OutcomeMemory(Protocol):
     def recall(self, state: ProofState, tactic: str, heartbeats: int) -> Remembered | None: ...
 
     def record(self, state: ProofState, tactic: str, heartbeats: int, outcome: Outcome, seconds: float) -> None: ...
+
+    def skipped(self, tactic: str) -> LeanTimeout | None: ...
 
 
 @dataclass(frozen=True)
@@ -642,6 +646,9 @@ class LeanRepl:
         remembered = memory.recall(state, tactic, limits.heartbeats)
         if remembered is not None:
             return remembered.outcome, remembered
+        skipped = memory.skipped(tactic)
+        if skipped is not None:
+            return skipped, None
         started = time.monotonic()
         outcome = await self._guarded(self._apply_tactic, state, tactic, limits)
         memory.record(state, tactic, limits.heartbeats, outcome, time.monotonic() - started)

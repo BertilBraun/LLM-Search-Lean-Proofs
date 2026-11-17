@@ -45,7 +45,7 @@ def failure_tier(failure: Failure) -> FailureTier | None:
             return FailureTier.MALFORMED
         case FailureKind.UNKNOWN_IDENTIFIER:
             return FailureTier.INVALID_IN_STATE
-        case FailureKind.HEARTBEAT_TIMEOUT | FailureKind.WALL_CLOCK_TIMEOUT:
+        case FailureKind.HEARTBEAT_TIMEOUT | FailureKind.WALL_CLOCK_TIMEOUT | FailureKind.SKIPPED_TIMEOUT:
             return FailureTier.TIMEOUT
         case FailureKind.REPL_FAILURE:
             return None

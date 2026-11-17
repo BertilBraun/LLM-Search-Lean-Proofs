@@ -1,5 +1,7 @@
-"""One search's memory of the tactics it ran: deterministic outcomes of identical Lean input are not run again."""
+"""One search's memory of the tactics it ran: deterministic outcomes of identical Lean input are not run again, and
+tactic texts that kept hanging are not run at all."""
 
+import collections
 from typing import NamedTuple
 
 from lean_search.lean.repl import LeanError, LeanTimeout, Outcome, ProofState, Remembered, ReplFailure
@@ -31,12 +33,22 @@ def is_deterministic(outcome: Outcome) -> bool:
             return False
 
 
-class SearchMemory:
-    """Owned by one search and never shared: its keys are tactic paths of that search's statement."""
+def skipped_timeout(wall_clock_timeouts: int) -> LeanTimeout:
+    message = f"Not run: the tactic reached the wall-clock limit {wall_clock_timeouts} times earlier in this search."
+    return LeanTimeout(message, wall_clock=True, skipped=True)
 
-    def __init__(self, cache_results: bool) -> None:
+
+class SearchMemory:
+    """Owned by one search and never shared: its keys are tactic paths of that search's statement.
+    `max_wall_clock_timeouts`: a tactic text stopped by the wall clock that often in the search, at any states, is not
+    run again (None: always run)."""
+
+    def __init__(self, cache_results: bool, max_wall_clock_timeouts: int | None = None) -> None:
+        assert max_wall_clock_timeouts is None or max_wall_clock_timeouts >= 1
         self.cache_results = cache_results
+        self.max_wall_clock_timeouts = max_wall_clock_timeouts
         self._outcomes: dict[TacticInput, Remembered] = {}
+        self._wall_clock_timeouts: collections.Counter[str] = collections.Counter()
 
     def recall(self, state: ProofState, tactic: str, heartbeats: int) -> Remembered | None:
         if not self.cache_results:
@@ -46,3 +58,12 @@ class SearchMemory:
     def record(self, state: ProofState, tactic: str, heartbeats: int, outcome: Outcome, seconds: float) -> None:
         if self.cache_results and is_deterministic(outcome):
             self._outcomes[tactic_input(state, tactic, heartbeats)] = Remembered(outcome, seconds)
+        match outcome:
+            case LeanTimeout(wall_clock=True, skipped=False):
+                self._wall_clock_timeouts[tactic] += 1
+
+    def skipped(self, tactic: str) -> LeanTimeout | None:
+        timeouts = self._wall_clock_timeouts[tactic]
+        if self.max_wall_clock_timeouts is None or timeouts < self.max_wall_clock_timeouts:
+            return None
+        return skipped_timeout(timeouts)

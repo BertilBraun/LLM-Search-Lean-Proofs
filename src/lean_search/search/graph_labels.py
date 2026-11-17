@@ -174,7 +174,7 @@ def failure_edge_kind(kind: FailureKind) -> EdgeKind:
             return EdgeKind.LEAN_ERROR
         case FailureKind.HEARTBEAT_TIMEOUT:
             return EdgeKind.HEARTBEAT_TIMEOUT
-        case FailureKind.WALL_CLOCK_TIMEOUT:
+        case FailureKind.WALL_CLOCK_TIMEOUT | FailureKind.SKIPPED_TIMEOUT:
             return EdgeKind.WALL_CLOCK_TIMEOUT
         case FailureKind.FORBIDDEN:
             return EdgeKind.FORBIDDEN

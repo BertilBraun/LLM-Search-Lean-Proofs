@@ -73,6 +73,8 @@ def parse_run_config(text: str) -> RunConfig:
             'policy.failed_automation_in_prompt needs expander.kind = "automation_then_policy" and expander.overlap = '
             "false: the prompt names the sweep's failures, so the sweep must finish before the request."
         )
+    if config.search.timeout_skip.max_wall_clock_timeouts < 1:
+        raise ValueError("search.timeout_skip.max_wall_clock_timeouts must be at least 1.")
     name_repair = config.search.name_repair
     if name_repair.enabled and not (config.search.check_identifiers and 0 < name_repair.min_similarity <= 1):
         raise ValueError("search.name_repair needs search.check_identifiers and min_similarity in (0, 1].")

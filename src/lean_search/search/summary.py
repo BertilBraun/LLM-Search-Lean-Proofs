@@ -135,6 +135,7 @@ class StepCost:
     rejected: int
     closing: int
     on_proof_paths: int
+    skipped_timeouts: int = 0
 
 
 @dataclass(frozen=True)
@@ -238,6 +239,7 @@ def step_costs(results: Sequence[SearchResult]) -> tuple[StepCost, ...]:
             total.errors += step.errors
             total.heartbeat_timeouts += step.heartbeat_timeouts
             total.wall_clock_timeouts += step.wall_clock_timeouts
+            total.skipped_timeouts += step.skipped_timeouts
             total.repl_failures += step.repl_failures
             total.rejected += step.rejected
             total.repeated += step.repeated
@@ -261,6 +263,7 @@ def step_costs(results: Sequence[SearchResult]) -> tuple[StepCost, ...]:
             rejected=total.rejected,
             closing=total.proofs,
             on_proof_paths=on_proof_paths[total.step],
+            skipped_timeouts=total.skipped_timeouts,
         )
         for total in totals.values()
     )
@@ -404,6 +407,7 @@ def render_markdown(summary: RunSummary, title: str) -> str:
                 "errors",
                 "heartbeat timeouts",
                 "wall-clock timeouts",
+                "skipped timeouts",
                 "REPL failures",
                 "closing",
                 "on proof paths",
@@ -421,6 +425,7 @@ def render_markdown(summary: RunSummary, title: str) -> str:
                     cost.errors,
                     cost.heartbeat_timeouts,
                     cost.wall_clock_timeouts,
+                    cost.skipped_timeouts,
                     cost.repl_failures,
                     cost.closing,
                     cost.on_proof_paths,

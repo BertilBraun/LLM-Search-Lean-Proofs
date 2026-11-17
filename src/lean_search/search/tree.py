@@ -47,6 +47,9 @@ class FailureKind(StrEnum):
     UNPARSED = "unparsed"
     # Crash, failed or mismatched replay, failed restart: infrastructure, never the candidate's fault.
     REPL_FAILURE = "repl_failure"
+    # Not run because its tactic text hit the wall clock often enough earlier in the search (search.timeout_skip):
+    # labelled like a wall-clock timeout, counted apart from the stops that really happened.
+    SKIPPED_TIMEOUT = "skipped_timeout"
 
 
 @dataclass(frozen=True)
@@ -60,6 +63,8 @@ class Failure:
         match outcome:
             case Rejection():
                 return Failure(FailureKind.UNKNOWN_IDENTIFIER, message)
+            case LeanTimeout(skipped=True):
+                return Failure(FailureKind.SKIPPED_TIMEOUT, message)
             case LeanTimeout(wall_clock=True):
                 return Failure(FailureKind.WALL_CLOCK_TIMEOUT, message)
             case LeanTimeout():
