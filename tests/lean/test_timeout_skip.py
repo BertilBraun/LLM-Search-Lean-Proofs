@@ -37,27 +37,31 @@ def memory_after(timeouts: int, max_wall_clock_timeouts: int | None = 2) -> Sear
 
 
 def test_a_text_still_runs_after_fewer_wall_clock_stops_than_the_limit() -> None:
-    assert memory_after(1).skipped("nlinarith") is None
+    assert memory_after(1).skipped("nlinarith", 5) is None
 
 
 def test_a_text_is_skipped_at_any_state_after_the_limit() -> None:
-    skipped = memory_after(2).skipped("nlinarith")
+    skipped = memory_after(2).skipped("nlinarith", 5)
     assert skipped is not None and (skipped.wall_clock, skipped.skipped) == (True, True)
 
 
 def test_other_texts_still_run() -> None:
-    assert memory_after(2).skipped("nlinarith [sq_nonneg x]") is None
+    assert memory_after(2).skipped("nlinarith [sq_nonneg x]", 5) is None
+
+
+def test_stops_at_another_heartbeat_limit_do_not_skip_the_text() -> None:
+    assert memory_after(2).skipped("nlinarith", 6) is None
 
 
 def test_without_a_limit_nothing_is_skipped() -> None:
-    assert memory_after(5, max_wall_clock_timeouts=None).skipped("nlinarith") is None
+    assert memory_after(5, max_wall_clock_timeouts=None).skipped("nlinarith", 5) is None
 
 
 def test_a_skip_does_not_count_as_another_wall_clock_stop() -> None:
     memory = memory_after(2, max_wall_clock_timeouts=3)
     skipped = LeanTimeout("Not run", wall_clock=True, skipped=True)
     memory.record(OTHER, "nlinarith", 5, skipped, 0.0)
-    assert memory.skipped("nlinarith") is None
+    assert memory.skipped("nlinarith", 5) is None
 
 
 def test_a_skipped_tactic_is_a_failure_of_its_own_kind() -> None:

@@ -209,7 +209,7 @@ class OutcomeMemory(Protocol):
 
     def record(self, state: ProofState, tactic: str, heartbeats: int, outcome: Outcome, seconds: float) -> None: ...
 
-    def skipped(self, tactic: str) -> LeanTimeout | None: ...
+    def skipped(self, tactic: str, heartbeats: int) -> LeanTimeout | None: ...
 
 
 @dataclass(frozen=True)
@@ -475,6 +475,8 @@ class LeanRepl:
         self._replayed_states: dict[tuple[str, str, tuple[tuple[str, int], ...]], ProofState] = {}
         self._stderr_tail: collections.deque[str] = collections.deque(maxlen=40)
         self._stderr_task: asyncio.Task[None] | None = None
+        # The last tactic's own run, without the restart or replay before it (what the search memory records).
+        self._tactic_seconds = 0.0
 
     async def __aenter__(self) -> "LeanRepl":
         await self.start()
@@ -658,12 +660,12 @@ class LeanRepl:
         remembered = memory.recall(state, tactic, limits.heartbeats)
         if remembered is not None:
             return remembered.outcome, remembered
-        skipped = memory.skipped(tactic)
+        skipped = memory.skipped(tactic, limits.heartbeats)
         if skipped is not None:
             return skipped, None
-        started = time.monotonic()
+        self._tactic_seconds = 0.0
         outcome = await self._guarded(self._apply_tactic, state, tactic, limits)
-        memory.record(state, tactic, limits.heartbeats, outcome, time.monotonic() - started)
+        memory.record(state, tactic, limits.heartbeats, outcome, self._tactic_seconds)
         return outcome, None
 
     async def _guarded[**Parameters](
@@ -792,6 +794,7 @@ class LeanRepl:
         if forbidden:
             return LeanError(f"Forbidden tokens: {', '.join(forbidden)}")
         live_state = await self._live_state(state)
+        started = time.monotonic()
         try:
             return await self._run_tactic(live_state, tactic, limits)
         except ReplWallClockTimeoutError:
@@ -800,6 +803,8 @@ class LeanRepl:
             if crash.panic is None:
                 raise
             return _panic_error(crash.panic)
+        finally:
+            self._tactic_seconds = time.monotonic() - started
 
     async def _run_tactic(
         self, state: ProofState, tactic: str, limits: TacticLimits

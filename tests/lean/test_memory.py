@@ -120,3 +120,33 @@ async def test_a_cached_state_from_a_killed_process_is_replayed_to_continue(
         await repl.apply_block(root, "hang", memory=memory)
         finished = await repl.apply_block(root, "step\ndone", memory=memory)
     assert (finished.state.is_proved, finished.cached_tactics, project.requests("tactic").count("step")) == (True, 1, 2)
+
+
+@needs_linux
+async def test_a_cached_deterministic_panic_does_not_run_again(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    project = fake_repl_project(tmp_path, monkeypatch)
+    repl, root = await started(project)
+    memory = SearchMemory(cache_results=True)
+    async with repl:
+        await repl.apply_block(root, "panic", memory=memory)
+        again = await repl.apply_block(root, "panic", memory=memory)
+    assert (again.failure, project.requests("tactic").count("panic")) == (
+        LeanError("Lean panic: Nat.pow exponent is too big", panic=True),
+        1,
+    )
+
+
+@needs_linux
+async def test_cached_seconds_leave_out_the_replay_before_the_tactic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_REPL_SLOW_SECONDS", "1.0")
+    project = fake_repl_project(tmp_path, monkeypatch, timeout_seconds=0.5)
+    repl, root = await started(project)
+    memory = SearchMemory(cache_results=True)
+    async with repl:
+        slow = await repl.apply_block(root, "slow", memory=memory)
+        await repl.apply_block(root, "hang", memory=memory)
+        await repl.apply_block(slow.state, "step", memory=memory)
+        again = await repl.apply_block(slow.state, "step", memory=memory)
+    assert (again.cached_tactics, again.cached_seconds < 0.5) == (1, True)

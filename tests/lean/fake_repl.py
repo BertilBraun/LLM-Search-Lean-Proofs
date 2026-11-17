@@ -1,7 +1,8 @@
 """A stand-in for the Lean REPL binary speaking its JSON protocol, for process tests without Lean.
 
-Tactics (after the search's heartbeat wrapper): `hang` never answers, `fail` is a Lean error, `done` closes the goal,
-anything else reaches a new state with the goal unchanged. Imports take FAKE_REPL_IMPORT_SECONDS. Every request is
+Tactics (after the search's heartbeat wrapper): `hang` never answers, `fail` is a Lean error, `panic` ends the process
+in a deterministic Lean panic, `slow` takes FAKE_REPL_SLOW_SECONDS, `done` closes the goal, anything else reaches a new
+state with the goal unchanged. Imports take FAKE_REPL_IMPORT_SECONDS. Every request is
 appended to FAKE_REPL_LOG as `<pid>\t<cmd|tactic>\t<text>`.
 """
 
@@ -47,6 +48,12 @@ def answer(request: dict[str, object], counters: dict[str, int]) -> dict[str, ob
             return None
         case "fail":
             return {"message": "Lean error:\nlinarith failed"}
+        case "panic":
+            sys.stderr.write("INTERNAL PANIC: Nat.pow exponent is too big\n")
+            sys.stderr.flush()
+            sys.exit(1)
+        case "slow":
+            time.sleep(float(os.environ.get("FAKE_REPL_SLOW_SECONDS", "0.5")))
     counters["state"] += 1
     return {"proofState": counters["state"], "goals": [] if tactic == "done" else [GOAL]}
 

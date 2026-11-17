@@ -9,7 +9,8 @@ from lean_search.lean.repl import LeanError, LeanTimeout, Outcome, ProofState, R
 
 class TacticInput(NamedTuple):
     """Everything Lean's result depends on: the state's whole tactic path from the statement (so its environment,
-    metavariables and fresh-name counters, which equal goals do not pin down) and the step with its limit."""
+    metavariables and fresh-name counters, which equal goals do not pin down) and the step with its limit. The
+    wall-clock limit is left out: only outcomes that do not depend on it are stored."""
 
     header: str
     statement: str
@@ -48,7 +49,8 @@ class SearchMemory:
         self.cache_results = cache_results
         self.max_wall_clock_timeouts = max_wall_clock_timeouts
         self._outcomes: dict[TacticInput, Remembered] = {}
-        self._wall_clock_timeouts: collections.Counter[str] = collections.Counter()
+        # By tactic text and heartbeat limit: the sweep's stops at its own limit do not skip the policy's text.
+        self._wall_clock_timeouts: collections.Counter[tuple[str, int]] = collections.Counter()
 
     def recall(self, state: ProofState, tactic: str, heartbeats: int) -> Remembered | None:
         if not self.cache_results:
@@ -60,10 +62,10 @@ class SearchMemory:
             self._outcomes[tactic_input(state, tactic, heartbeats)] = Remembered(outcome, seconds)
         match outcome:
             case LeanTimeout(wall_clock=True, skipped=False):
-                self._wall_clock_timeouts[tactic] += 1
+                self._wall_clock_timeouts[tactic, heartbeats] += 1
 
-    def skipped(self, tactic: str) -> LeanTimeout | None:
-        timeouts = self._wall_clock_timeouts[tactic]
+    def skipped(self, tactic: str, heartbeats: int) -> LeanTimeout | None:
+        timeouts = self._wall_clock_timeouts[tactic, heartbeats]
         if self.max_wall_clock_timeouts is None or timeouts < self.max_wall_clock_timeouts:
             return None
         return skipped_timeout(timeouts)
