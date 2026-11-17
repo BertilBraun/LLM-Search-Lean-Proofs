@@ -356,6 +356,10 @@ reached HOLD at 09:30 UTC.
   weight 0.1). **Gate:** if the offline policy beats v35 with value v0 (run 8, 1,083 of 2,000) with the paired 95%
   interval above 0, the arms run without reasoning; otherwise with reasoning. Offline runs go before the other arms.
 - **O1 runs last**, after the arms (owner, 2026-11-17).
+- **Learning-rate step shrunk** (owner, 2026-11-17): arm C takes O2's chosen rate (the same expert-iteration recipe
+  and trainer) and a 4-phase window; D takes C's rate and window and A's rate. Step 2 only picks A's GRPO rate: one
+  shared phase of 12M sampled tokens from v0, three rounds (2e-5, 5e-5, 1e-4), held-out states; about 3-4 node hours
+  instead of 8-16.
 - **O2 first; O1 decided after O2's result** (O1 is about 565M training tokens, about 20 h per rate at the measured
   7.8k tokens/s; if it runs, at O2's chosen rate only, after checking training throughput).
 - **Search efficiency for the arms** (owner, 2026-11-17): result cache, timeout skip, warm spares and the
