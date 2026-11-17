@@ -485,9 +485,9 @@ def ranks_fit(peak_bytes: int, ranks: int, limit_bytes: int) -> bool:
     return ranks * peak_bytes <= MAX_HOST_MEMORY_SHARE * limit_bytes
 
 
-def steady_tokens_per_second(records: Sequence[StepRecord], warmup_steps: int) -> float | None:
-    """The median step's tokens per second after the first `warmup_steps`, so that a step stalled by a compilation does
-    not set it; None before any."""
+def median_step_tokens_per_second(records: Sequence[StepRecord], warmup_steps: int) -> float | None:
+    """The median step's rate after the first `warmup_steps`: what a step costs when nothing stalls it; None before
+    any. Not for planning wall time (`sustained_tokens_per_second` is)."""
     if len(records) <= warmup_steps:
         return None
     seconds = [record.training_seconds for record in records]
@@ -497,6 +497,14 @@ def steady_tokens_per_second(records: Sequence[StepRecord], warmup_steps: int) -
         if index >= warmup_steps
     ]
     return statistics.median(rates)
+
+
+def sustained_tokens_per_second(records: Sequence[StepRecord], warmup_steps: int) -> float | None:
+    """All tokens over all training seconds after the first `warmup_steps`, stalls included; None before any."""
+    if len(records) <= warmup_steps:
+        return None
+    start = records[warmup_steps - 1].training_seconds if warmup_steps else 0.0
+    return sum(record.tokens for record in records[warmup_steps:]) / (records[-1].training_seconds - start)
 
 
 # Under src/lean_search: the walk and the search code it runs a block with (naming, planning, identifier check,

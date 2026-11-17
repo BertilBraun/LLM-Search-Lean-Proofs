@@ -174,7 +174,7 @@ case "${script}" in
                 [[ -e "${output}" ]] && { log_command "OUTPUT EXISTS ${output}"; exit 1; }
                 mkdir -p "${output}"
                 # The attempt's number in its throughput line, and time for the driver's poll to see it.
-                echo "throughput: {\"attempt\": $(grep -c "^train ${subset} ${rate}$" "${FAKE_LOG}"), \"steady_tokens_per_second\": 20000.0}"
+                echo "throughput: {\"attempt\": $(grep -c "^train ${subset} ${rate}$" "${FAKE_LOG}"), \"median_step_tokens_per_second\": 20000.0}"
                 sleep 0.3
                 outcome "train_${subset}_${rate}" || exit 1
                 mkdir -p "${output}/adapter"

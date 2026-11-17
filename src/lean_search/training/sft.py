@@ -39,7 +39,6 @@ COMPILED_MODULE = re.compile(
     r"|self_attn\.(q_proj|k_proj|v_proj|o_proj|q_norm|k_norm))$"
 )
 LOSS_CHUNK_POSITIONS = 1024
-COMPILED_SHAPES_LIMIT = 64
 
 
 class FineTuningMethod(StrEnum):
@@ -73,10 +72,14 @@ class OptimizationConfig:
     gradient_checkpointing: bool = True
     # Concatenate shuffled examples into one row per micro-batch, without padding (Qwen3.5 only).
     packing: bool = False
-    # A packed row padded up to a multiple of this by an ignored segment of its own (0: not padded). Triton compiles a
-    # kernel again for a length divisible by 16 and one that is not; unpadded rows meet both on each rank in turn.
+    # A packed row padded up to a multiple of this by an ignored segment of its own (0: not padded), in `train`'s steps
+    # and validations only; the other trainers ignore it. Triton compiles a kernel again for a length divisible by 16
+    # and one that is not, and unpadded rows meet both on each rank in turn.
     packed_length_multiple: int = 0
     compile_layers: bool = False
+    # Dynamo's recompile limit with compile_layers (0: torch's own, 8). peft's LoRA forward is compiled once per
+    # projection shape, and past the limit the remaining projections run eager.
+    compiled_shapes_limit: int = 0
     seed: int = 0
 
 
@@ -368,6 +371,12 @@ class CompletionLoss(torch.nn.Module):
         return token_losses, correct, torch.searchsorted(sequence_ends, mask[0].nonzero()[:, 0], right=True)
 
 
+def set_compiled_shapes_limit(limit: int) -> None:
+    """0 leaves torch's own limit."""
+    if limit:
+        torch._dynamo.config.recompile_limit = limit
+
+
 def load_trainable_model(
     model_name: str,
     optimization: OptimizationConfig,
@@ -406,8 +415,7 @@ def load_trainable_model(
             model.train()
             saved = causal_model = model
     if optimization.compile_layers:
-        # The projections share peft's LoRA forward, compiled once per weight shape; at the default 8 some ran eager.
-        torch._dynamo.config.recompile_limit = max(torch._dynamo.config.recompile_limit, COMPILED_SHAPES_LIMIT)
+        set_compiled_shapes_limit(optimization.compiled_shapes_limit)
         for name, module in causal_model.named_modules():
             if COMPILED_MODULE.search(name):
                 module.compile(dynamic=True)
@@ -432,6 +440,7 @@ def validation_metrics(
     packing: bool,
     pad_token_id: int,
     device: torch.device,
+    packed_length_multiple: int = 0,
 ) -> tuple[float, float]:
     """Mean completion-token loss and the fraction of examples whose every target token is the argmax."""
     lengths = [example.token_count for example in examples]
@@ -444,7 +453,9 @@ def validation_metrics(
     token_count = 0
     exact = 0
     for indices in micro_batches:
-        batch = micro_batch([examples[index] for index in indices], packing, pad_token_id, device)
+        batch = micro_batch(
+            [examples[index] for index in indices], packing, pad_token_id, device, packed_length_multiple
+        )
         with torch.autocast(device.type, dtype=torch.bfloat16):
             token_losses, correct, rows = loss_module(
                 batch.input_ids, batch.attention_mask, batch.labels, batch.position_ids, batch.sequence_starts
@@ -499,6 +510,7 @@ def evaluate(
     packing: bool,
     device: torch.device,
     validation_sets: Sequence[ValidationSet] = (),
+    packed_length_multiple: int = 0,
 ) -> EvaluationRecord:
     start = time.perf_counter()
     causal_model.eval()
@@ -509,13 +521,20 @@ def evaluate(
         packing,
         tokenizer.pad_token_id,
         device,
+        packed_length_multiple,
     )
     sets = tuple(
         SetValidation(
             validation_set.name,
             len(validation_set.examples),
             validation_metrics(
-                loss_module, validation_set.examples, config.micro_batch_tokens, packing, tokenizer.pad_token_id, device
+                loss_module,
+                validation_set.examples,
+                config.micro_batch_tokens,
+                packing,
+                tokenizer.pad_token_id,
+                device,
+                packed_length_multiple,
             )[0],
         )
         for validation_set in validation_sets
@@ -593,6 +612,7 @@ def train(
                 optimization.packing,
                 context.device,
                 validation_sets,
+                optimization.packed_length_multiple,
             )
             evaluations.append(record)
             on_evaluation(record)

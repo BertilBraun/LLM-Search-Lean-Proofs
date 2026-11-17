@@ -68,15 +68,40 @@ def test_the_probe_evaluation_is_the_studys_but_for_cap_and_order() -> None:
     assert offline == changed
 
 
-def test_the_fine_tuning_is_the_expert_iteration_recipes_but_for_padded_packed_rows() -> None:
+OFFLINE_ONLY = ("packed_length_multiple", "compiled_shapes_limit")
+
+
+def test_the_fine_tuning_is_the_expert_iteration_recipes_but_for_padding_and_compiled_shapes() -> None:
     offline = toml(CONFIG)["sft"]
     recipe = toml(FOLLOWUP / "expert_iteration.toml")["sft"]
-    optimization = {key: value for key, value in offline["optimization"].items() if key != "packed_length_multiple"}
+    optimization = {key: value for key, value in offline["optimization"].items() if key not in OFFLINE_ONLY}
     assert {**offline, "optimization": optimization} == recipe
 
 
 def test_the_offline_packed_rows_are_padded_to_a_multiple_of_64() -> None:
     assert load_offline_arm_config(CONFIG).sft.optimization.packed_length_multiple == 64
+
+
+def test_the_offline_training_compiles_up_to_64_shapes() -> None:
+    assert load_offline_arm_config(CONFIG).sft.optimization.compiled_shapes_limit == 64
+
+
+def leaves(table: dict, prefix: str = "") -> list[str]:
+    found = []
+    for key, value in table.items():
+        found += leaves(value, f"{prefix}{key}.") if isinstance(value, dict) else [f"{prefix}{key}"]
+    return found
+
+
+@pytest.mark.parametrize("key", OFFLINE_ONLY)
+def test_no_other_shipped_recipe_pads_packed_rows_or_raises_the_compiled_shapes(key: str) -> None:
+    configs = REPOSITORY / "experiments" / "configs"
+    setting = [
+        path.relative_to(configs).as_posix()
+        for path in sorted(configs.rglob("*.toml"))
+        if any(name.rsplit(".", 1)[-1] == key for name in leaves(toml(path)))
+    ]
+    assert setting == ["grpo/followup/offline/offline_arm.toml"]
 
 
 def test_the_replay_is_the_expert_iteration_recipes_but_for_seed_and_repetition() -> None:

@@ -83,6 +83,8 @@ packing = true
 # 2026-11-17: 8 such steps among the first 32).
 packed_length_multiple = 64
 compile_layers = true
+# All LoRA projection shapes compiled (torch's limit of 8 left some eager in O2's first training); offline arm only.
+compiled_shapes_limit = 64
 seed = 0
 
 # Validated at the start, halfway and the end on up to 2,000 offline validation examples and the replay's.

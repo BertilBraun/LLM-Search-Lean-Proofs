@@ -410,9 +410,16 @@ the offline examples nothing is wasted that a config could save: packing leaves 
 completion positions onto the vocabulary (`training/sft.CompletionLoss`), the layers are compiled; the 535-token prompts
 are 89% of the tokens and must run forward and backward (the LoRA gradients flow through their keys and values). The one
 lever, 32k-token micro-batches, doubles the tokens per optimizer step and so changes the recipe; it is left to the
-owner. Each training now writes `throughput.json` (tokens/s over steps 11-20, the warm-up seconds, peak GPU memory),
-logs steps 1-20 one by one, and the driver copies the line into `chain.log`; the training summary holds the steady
-rate over the whole run. O1's 20 h is the upper bound at 7.8k; at a steady 15-20k it would take 8-10 h.
+owner. Each training now writes `throughput.json` (over steps 11-20: the median step's rate, which a stall does not
+set, and the sustained rate, all tokens over all seconds, which sets wall time; the warm-up seconds, peak GPU memory),
+logs steps 1-20 one by one, and the driver copies the line into `chain.log`; the training summary holds both rates
+over the whole run. O2's first two trainings wrote `steady_tokens_per_second` instead, the sustained rate. Plan wall
+time from the sustained rate only. O2's first training (2026-11-17) ran fast steps at about 12.1k tokens/s after 8
+steps stalled 20-45 s among the first 32 (Triton compiling again for row lengths divisible by 16 on each rank); from
+commit 7f58dd7 on (not in O2's first trainings) the offline recipe pads packed rows to a multiple of 64
+(`packed_length_multiple`, used by `training/sft.train`'s steps and validations only; the expert-iteration, GRPO, DPO
+and value trainers ignore it) and lets dynamo compile up to 64 LoRA projection shapes (`compiled_shapes_limit`, set
+only in `offline_arm.toml`; every other recipe keeps torch's 8). O1 at about 12k tokens/s sustained: about 13 h.
 
 **The detached data steps of 2026-11-17.** Download, prepare and walk were started before the reviews, from a copy of
 branch commit `0d663a4` in `/workspace/offline_arm_code` (`offline_data_steps.sh`, pid in `data_steps.pid`; `lean` and

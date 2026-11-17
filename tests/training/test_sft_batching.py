@@ -12,8 +12,10 @@ from lean_search.training.sft import (  # noqa: E402
     collate,
     learning_rate_factor,
     length_grouped_micro_batches,
+    micro_batch,
     pack,
     plan_steps,
+    set_compiled_shapes_limit,
 )
 from lean_search.training.sft_data import IGNORE_INDEX, SftExample, TokenizedExample  # noqa: E402
 
@@ -168,6 +170,31 @@ def test_a_padded_pack_adds_an_ignored_segment_of_its_own() -> None:
 def test_a_padded_packs_padding_restarts_its_positions() -> None:
     padded = pack([tokenized((5, 6, 7), 2)], device=CPU, length_multiple=8, pad_token_id=0)
     assert padded.position_ids is not None and padded.position_ids.tolist() == [[0, 1, 2, 0, 1, 2, 3, 4]]
+
+
+def test_a_packed_micro_batch_is_padded_to_the_multiple() -> None:
+    batch = micro_batch([tokenized((5, 6, 7), 2)], True, 0, CPU, 8)
+    assert batch.input_ids.shape == (1, 8)
+
+
+def test_the_recipes_leave_dynamos_recompile_limit_and_the_row_lengths_by_default() -> None:
+    optimization = OptimizationConfig()
+    assert (optimization.compiled_shapes_limit, optimization.packed_length_multiple) == (0, 0)
+
+
+def test_no_compiled_shapes_limit_leaves_torchs_own() -> None:
+    before = torch._dynamo.config.recompile_limit
+    set_compiled_shapes_limit(0)
+    assert torch._dynamo.config.recompile_limit == before
+
+
+def test_a_compiled_shapes_limit_sets_dynamos_recompile_limit() -> None:
+    before = torch._dynamo.config.recompile_limit
+    try:
+        set_compiled_shapes_limit(64)
+        assert torch._dynamo.config.recompile_limit == 64
+    finally:
+        torch._dynamo.config.recompile_limit = before
 
 
 def test_a_pack_without_a_multiple_is_not_padded() -> None:

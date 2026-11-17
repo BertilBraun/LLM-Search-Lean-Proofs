@@ -106,6 +106,7 @@ from lean_search.rl.offline_arm import (
     held_out_references,
     load_offline_arm_config,
     matched_sample,
+    median_step_tokens_per_second,
     pool_selection,
     ranks_fit,
     read_pool_proofs,
@@ -113,8 +114,8 @@ from lean_search.rl.offline_arm import (
     run_label,
     run_name,
     split_examples,
-    steady_tokens_per_second,
     subset_epochs,
+    sustained_tokens_per_second,
     usable_blocks,
     walk_fingerprint,
     walk_settings_text,
@@ -697,8 +698,11 @@ class OfflineTrainingSummary:
     prompt_tokens: int
     completion_tokens: int
     training_seconds: float
-    # The median step after the first WARMUP_STEPS (compilation and autotuning left out); the main rank's peak.
-    steady_tokens_per_second: float | None
+    # After the first WARMUP_STEPS: the median step's rate (stalls left out) and all tokens over all seconds (the rate
+    # that sets wall time); the main rank's peak. O2's first trainings wrote `steady_tokens_per_second` instead: the
+    # sustained rate (in throughput.json over steps 11-20 only).
+    median_step_tokens_per_second: float | None
+    sustained_tokens_per_second: float | None
     peak_memory_gib: float
     curve: tuple[ValidationPoint, ...]
     replay_loss_change: float | None
@@ -710,7 +714,8 @@ class Throughput:
 
     run_name: str
     warmup_seconds: float
-    steady_tokens_per_second: float | None
+    median_step_tokens_per_second: float | None
+    sustained_tokens_per_second: float | None
     peak_memory_gib: float
 
 
@@ -804,7 +809,11 @@ def run_training(config: OfflineArmConfig, subset: Subset, rate: str, dry_run: b
             print(f"step {record.step}: {record.tokens / seconds:,.0f} tokens/s, peak {peak:.1f} GiB", flush=True)
         if record.step == LOGGED_FIRST_STEPS:
             throughput = Throughput(
-                name, records[WARMUP_STEPS - 1].training_seconds, steady_tokens_per_second(records, WARMUP_STEPS), peak
+                name,
+                records[WARMUP_STEPS - 1].training_seconds,
+                median_step_tokens_per_second(records, WARMUP_STEPS),
+                sustained_tokens_per_second(records, WARMUP_STEPS),
+                peak,
             )
             write_text(run_directory / "throughput.json", to_json(throughput) + "\n")
             print(f"throughput: {to_json(throughput)}", flush=True)
@@ -838,7 +847,8 @@ def run_training(config: OfflineArmConfig, subset: Subset, rate: str, dry_run: b
         prompt_tokens=prompt_tokens,
         completion_tokens=sum(parts),
         training_seconds=result.training_seconds,
-        steady_tokens_per_second=steady_tokens_per_second(records, WARMUP_STEPS),
+        median_step_tokens_per_second=median_step_tokens_per_second(records, WARMUP_STEPS),
+        sustained_tokens_per_second=sustained_tokens_per_second(records, WARMUP_STEPS),
         peak_memory_gib=result.peak_memory_gib,
         curve=curve,
         replay_loss_change=replay_loss_change(curve),
