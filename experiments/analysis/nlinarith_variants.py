@@ -55,6 +55,8 @@ BUCKETS = ((0, 6), (7, 12), (13, 16), (17, 1_000_000))
 OUTCOMES = ("success", "error", "heartbeat_timeout", "wall_clock_timeout")
 VARIANTS = ("full", "linear", "goal_hints", "degree", "cap8")
 ORIGINAL = "original"
+# The tactic succeeded: it closed every goal, or the goal it ran on while others stay open (a block step).
+SUCCESSES = frozenset({"success", "open_goals"})
 _PLAIN_NLINARITH = re.compile(r"nlinarith(?P<hints>\s*\[.*\])?\s*", re.DOTALL)
 
 VARIANT_DEFINITIONS = """
@@ -486,11 +488,11 @@ def tallies(measurements: Sequence[Measurement]) -> dict[tuple[str, str], dict[s
         if not measurement.state_built:
             continue
         runs = {run.variant: run for run in measurement.runs}
-        original = runs[ORIGINAL].outcome == "success"
+        original = runs[ORIGINAL].outcome in SUCCESSES
         key = (measurement.job.bucket, measurement.job.recorded_outcome)
         for variant, run in runs.items():
             tally = result[key][variant]
-            success = run.outcome == "success"
+            success = run.outcome in SUCCESSES
             tally.jobs += 1
             tally.seconds += run.wall_seconds
             tally.successes += success
