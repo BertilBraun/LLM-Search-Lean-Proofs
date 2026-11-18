@@ -8,5 +8,5 @@ name = "followup_A"
 credit = "per_tactic"
 
 [phase.policy.optimization]
-# Step 2's choice among 2e-5, 5e-5 and 1e-4 (experiments/rank_learning_rates.py).
-learning_rate = 2e-5
+# Step 2 tied 2e-5 and 5e-5 on the held-out states; the owner chose 5e-5, as C and D use (2026-11-18).
+learning_rate = 5e-5

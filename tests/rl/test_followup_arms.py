@@ -34,11 +34,11 @@ ROUND_ARMS = {
 }
 # Arm B is dropped (owner, 2026-11-17): its configs keep their placeholders, so they cannot start.
 DROPPED_ARMS = [path for path in ARMS if path.stem in ("B1", "B2")]
-# Step 2's choice for A (2026-11-18) and O2's for the expert-iteration rounds (2026-11-17).
+# A: step 2 tied 2e-5 and 5e-5, the owner chose 5e-5 (2026-11-18); the expert-iteration rounds: O2's (2026-11-17).
 CHOSEN_RATES = {
-    ("A", "phase.policy.optimization.learning_rate"): 2e-5,
+    ("A", "phase.policy.optimization.learning_rate"): 5e-5,
     ("C", "expert_iteration.sft.optimization.learning_rate"): 5e-5,
-    ("D", "phase.policy.optimization.learning_rate"): 2e-5,
+    ("D", "phase.policy.optimization.learning_rate"): 5e-5,
     ("D", "expert_iteration.sft.optimization.learning_rate"): 5e-5,
 }
 RECIPE = CONFIGS / "followup/expert_iteration.toml"
