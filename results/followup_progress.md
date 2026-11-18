@@ -304,6 +304,28 @@ default), safe server stops, results pulled to the PC as they are written.
 | First node, 2026-11-14 11:20 UTC to its outage at about 23:35 UTC | about $11 at most; partly refunded by the provider (owner) |
 | Second node, from 2026-11-15 about 08:30 UTC | $0.83 per hour |
 
+## Arm A started 2026-11-18 04:58 UTC
+
+Per-tactic GRPO at 2e-5, from v0 and value v0, 16 phases of 12M generated tokens, value trained every 2 phases, visible
+reasoning with the search-efficiency switches (master `0f12c1d`). Started by hand with `deployment/arm_loop.sh`; the
+automation that runs the arms one after another (with each arm's probe run and adapter pull) is not written yet.
+
+## Step 2 results (2026-11-18, `node_backup/2026-11-15/live/runs/study_chain/learning_rates_report.md`)
+
+One per-tactic GRPO round from v0 on the shared phase (385 trees, 2,085 groups, 245 steps, 2.2M trained tokens), each
+rate against v0 on the 512 held-out states (points, 95%):
+
+| Rate | Valid Lean | Success |
+|---|---|---|
+| 2e-5 | +3.4 [+1.1, +5.8] | +0.4 [-2.7, +3.0] |
+| 5e-5 | +4.9 [+2.6, +7.1] | +0.5 [-2.0, +2.7] |
+| 1e-4 | +3.8 [+1.9, +6.5] | -2.6 [-4.7, -0.2] |
+
+- **Chosen for A: 2e-5** (tied with 5e-5 on the held-out states; the lower rate by the rule). D: 2e-5 and 5e-5;
+  C: 5e-5 (O2). 1e-4 already lowers success after one round.
+- v0's A/A check (start against end of the step): valid Lean +0.5 [-1.5, +3.0], success -0.4 [-2.8, +1.9].
+- The step took 3.5 h in all: sampling 0.85 h (12.3M tokens), three rounds 1.4 h, held-out runs 0.9 h.
+
 ## Step 2 (A's learning rate), started 2026-11-18 00:38 UTC
 
 Master `c15afc5` deployed (node-local edits unchanged; the node's Lean tests at it: 548 passed). The step-2 driver runs
