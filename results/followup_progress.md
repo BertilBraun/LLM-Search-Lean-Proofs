@@ -304,6 +304,18 @@ default), safe server stops, results pulled to the PC as they are written.
 | First node, 2026-11-14 11:20 UTC to its outage at about 23:35 UTC | about $11 at most; partly refunded by the provider (owner) |
 | Second node, from 2026-11-15 about 08:30 UTC | $0.83 per hour |
 
+## Arm A stopped 2026-11-18 14:39 UTC (owner): bare-`have` drift
+
+After 6 trained phases at 5e-5 (phase 7 sampled), bare-`have` openings rose every phase, 20.5 → 32.4% (below the band
+16.8 → 26.6%); `have` as first tactic 28 → 42%; the share of those claims the tree later proves stayed at ~11%;
+`have … :=` (proved inline) flat at 8-10%. Held-out valid Lean 0.624 → 0.537 (v0 ~0.572), success 0.342 → 0.317 (v0
+~0.321): no collapse, but no gain and a drift with the habit. The old run's reward fix (−0.25 on an unproved claim) is
+active and does not hold it. The owner decided to fix the reward and rerun A from v0 (D shares the GRPO signal; C's
+data excludes open claims). Stopped with `pause_A` and `grpo_loop.sh stop`; the arms driver halts on the pause. Being
+done: the credit bare-`have` samples get in A's trees, a fix, an offline replay, two reviews. The habit alert did not
+fire because `health_checks.py` compares the below-band share against 1.5× the reference's all-statements share; fixed
+with the reward change.
+
 ## Arms driver installed 2026-11-18 10:53 UTC
 
 `deployment/arms_chain.sh` (reviews BC and BD with re-reviews; master `6f3ce10`) adopted the running arm A without
