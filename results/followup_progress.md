@@ -320,6 +320,17 @@ default), safe server stops, results pulled to the PC as they are written.
   unchanged, positive proof-graph mass −2 to −5.5%. Weaker variants (either switch alone, cost 0.2) stay positive in
   2-8 of 10 phases.
 
+## Smoke test passed (by hand), arm C started 2026-11-18 18:49 UTC
+
+Smoke C and D (6M tokens, one phase each; D with GRPO, value training and a round in one pause, killed by SIGKILL 30 s
+into publishing and restarted) passed every gate but one: "GPU memory before the wake" read the LAST such line, which
+for D comes from the restart after the kill, with the servers already up on version 0 (1.9 GiB free). D's line before
+the kill showed 23.0 of 24.0 GiB free against the servers' 21.6: a pass. The orchestrator accepted the test by hand
+(`done_smoke`; note appended to `smoke_report.md`); the gate is to be fixed. Readings: rounds of 774 and 794 examples
+from about 148 solved trees, 7-8 optimizer steps, 70-77 s of training; D's whole training stage 20 min; /dev/shm peak
+33.7 of 71 GiB; replay validation loss +3.3% after C's round (alert, recorded). The node idled 17:35-18:48 (the PC
+slept, so the stop was seen late).
+
 ## Smoke test and arm C first (owner, 2026-11-18)
 
 While A's reward is fixed, the arms driver runs in the order `smoke C A D` with A held (`order`, `hold_A`; review BE,
