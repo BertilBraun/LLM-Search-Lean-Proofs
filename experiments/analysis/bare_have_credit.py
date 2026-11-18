@@ -7,16 +7,19 @@ and under reward variants (overrides of `[reward]`), compared on the same groups
                      "never positive": {"transform": "open_claim_never_positive"}}' --check-production --output a.json
 
 A variant overrides the phase's `[reward]`; `transform` (`Transform`) replays an alternative without a production
-switch, `extra` its cost. With --check-production every sequence's token advantages under the phase's reward are
-asserted equal to the trainer's (`policy_data.tree_policy_data`). Samples are recorded completions (one training
-sequence each) of the groups the trainer keeps. Openings by the block's first top-level tactic as
-`tree_summary.block_habits` counts them; a bare `have` by what its claim became: proved in its block, left open and
-proved by the tree (on the proof graph or elsewhere), left open and never proved (alone, followed by a failing attempt,
-or by valid tactics), or failing itself. Run on the node on 2026-11-18 over arm A's phases 1-7, step 2's v0 phase and
-the 2e-5 start's two phases (`src/lean_search/rl/README.md`, "Claims").
+switch, `extra` its cost. Groups are built as the trainer builds them (`training_phase.label_phase_data`: the trees'
+recorded value estimates, which enter only through μ, the phase's excluded versions); with --check-production every
+sequence's token advantages under the phase's reward are asserted equal to `policy_data.tree_policy_data`'s on those
+groups. --no-token-credit keeps the sequence advantages only (no tokenizer; the per-band readings), --workers 1 runs in
+this one process. Samples are recorded completions (one training sequence each) of the groups the trainer keeps,
+keyed by opening (`claim_watch.Opening`: the block's first top-level tactic as `tree_summary.block_habits` counts it, a
+bare `have` by what its claim became), whether the sample reaches the proof graph, and the statement's probe band
+(`claim_watch.proof_band`). Run on the node on 2026-11-18 over arm A's phases 1-7, step 2's v0 phase and the 2e-5
+start's two phases (`src/lean_search/rl/README.md`, "Claims").
 """
 
 import argparse
+import contextlib
 import dataclasses
 import hashlib
 import json
@@ -26,7 +29,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from functools import partial
-from multiprocessing import Pool
+from multiprocessing.pool import Pool
 from pathlib import Path
 from typing import NamedTuple
 
@@ -38,6 +41,7 @@ from lean_search.rl.advantages import (
     SampleAdvantages,
     group_advantages,
 )
+from lean_search.rl.claim_watch import BARE_OPENINGS, Opening, proof_band, sample_openings
 from lean_search.rl.grpo_groups import GroupSample, PolicyGroup, RewardConfig, RewardParts, policy_groups
 from lean_search.rl.policy_data import (
     CompletionTokens,
@@ -51,40 +55,23 @@ from lean_search.rl.reward_replay import added, added_all
 from lean_search.rl.token_credit import tactic_position, token_credits
 from lean_search.rl.training_phase import TrainingPhaseConfig, groups_not_sampled_by
 from lean_search.rl.tree_store import TreeEntry, TreeStore
-from lean_search.rl.tree_summary import is_bare_have, is_linarith_opening, is_proof_have, opening
 from lean_search.search.graph_labels import GraphLabels, label_graph
 from lean_search.search.records import TreeRecord, from_json_object, read_tree
-from lean_search.search.tactic_labels import CLAIM_TACTIC, TacticLabel, TacticOutcome, policy_tactics
+from lean_search.search.tactic_labels import TacticLabel, TacticOutcome, policy_tactics
 from lean_search.search.texts import SampledCompletion, overlaps
-from lean_search.search.tree import StepSource
-from lean_search.value.graph_targets import ValueEstimate
+from lean_search.value.graph_targets import recorded_estimates
 
 SAMPLE_SEED = "bare-have-credit"
+TOKENIZER = "Qwen/Qwen3.5-4B"
 BASE_VARIANT = "phase reward"
-
-
-class Opening(StrEnum):
-    BARE_CLOSED_IN_BLOCK = "bare have, proved in its block"
-    BARE_OPEN_ON_GRAPH = "bare have, open, on the proof graph"
-    BARE_OPEN_PROVED_ELSEWHERE = "bare have, open, proved by the tree off the graph"
-    BARE_OPEN_ALONE = "bare have, open, never proved, nothing after"
-    BARE_OPEN_FAILED_ATTEMPT = "bare have, open, never proved, a failing tactic after"
-    BARE_OPEN_CONTINUED = "bare have, open, never proved, valid tactics after"
-    BARE_WASTED = "bare have, no progress or redundant"
-    BARE_FAILING = "bare have, failing itself"
-    PROOF_HAVE = "have ... := (inline proof)"
-    OTHER_CLAIM = "other claim opening (obtain, suffices, replace, ...)"
-    LINARITH = "linarith / nlinarith opening"
-    OTHER = "other opening"
-
-
-BARE_OPENINGS = tuple(opening for opening in Opening if opening.name.startswith("BARE"))
 
 
 class CreditKey(NamedTuple):
     variant: str
     opening: Opening
     on_graph: bool
+    # The statement's probe band (`claim_watch.proof_band`).
+    band: str
 
 
 @dataclass(frozen=True)
@@ -125,6 +112,7 @@ class SampleCount:
 class SampleKey(NamedTuple):
     opening: Opening
     on_graph: bool
+    band: str
 
 
 @dataclass(frozen=True)
@@ -166,33 +154,6 @@ def combined(first: TreeCredit, second: TreeCredit) -> TreeCredit:
         merged(first.samples, second.samples),
         merged(first.groups, second.groups),
     )
-
-
-def opening_of(text: str, outcomes: Sequence[TacticOutcome]) -> Opening:
-    first_tactic = opening(text)
-    if is_proof_have(first_tactic):
-        return Opening.PROOF_HAVE
-    if not is_bare_have(first_tactic):
-        if CLAIM_TACTIC.search(first_tactic) is not None:
-            return Opening.OTHER_CLAIM
-        return Opening.LINARITH if is_linarith_opening(first_tactic) else Opening.OTHER
-    first = outcomes[0]
-    later = [outcome.label for outcome in outcomes[1:]]
-    match first.label:
-        case TacticLabel.FAILING:
-            return Opening.BARE_FAILING
-        case TacticLabel.NO_PROGRESS | TacticLabel.REDUNDANT_HYPOTHESIS:
-            return Opening.BARE_WASTED
-        case _ if not first.leaves_claim_open:
-            return Opening.BARE_CLOSED_IN_BLOCK
-        case TacticLabel.UNPROVED_CLAIM if TacticLabel.FAILING in later:
-            return Opening.BARE_OPEN_FAILED_ATTEMPT
-        case TacticLabel.UNPROVED_CLAIM:
-            return Opening.BARE_OPEN_CONTINUED if later else Opening.BARE_OPEN_ALONE
-        case TacticLabel.PROOF_GRAPH:
-            return Opening.BARE_OPEN_ON_GRAPH
-        case _:
-            return Opening.BARE_OPEN_PROVED_ELSEWHERE
 
 
 @dataclass(frozen=True)
@@ -278,6 +239,17 @@ def sequence_tally(
     )
 
 
+def sequence_only(advantages: SampleAdvantages) -> CreditTally:
+    sequence = advantages.sequence
+    return CreditTally(
+        sequences=1,
+        sequence_advantage=sequence or 0.0,
+        positive_sequences=int(sequence is not None and sequence > ZERO_ADVANTAGE),
+        negative_sequences=int(sequence is not None and sequence < -ZERO_ADVANTAGE),
+        first_tactic_advantage=(advantages.tactics[0] if advantages.tactics else None) or 0.0,
+    )
+
+
 def signature(advantages: GroupAdvantages) -> tuple[int, ...]:
     return tuple(
         0 if sample.sequence is None or abs(sample.sequence) <= ZERO_ADVANTAGE else (1 if sample.sequence > 0 else -1)
@@ -309,6 +281,8 @@ class Settings:
     phase_config: TrainingPhaseConfig
     variants: dict[str, Variant]
     check_production: bool
+    # False: sequence advantages only, no token placement (no tokenizer; several times faster).
+    token_credit: bool = True
 
 
 def with_unproved_claim_extra(sample: GroupSample, extra: float) -> GroupSample:
@@ -350,9 +324,12 @@ def variant_groups(
     labels: GraphLabels,
     tactics: Mapping[int, Sequence[TacticOutcome]],
     variant: Variant,
-    excluded: Sequence[int],
+    config: TrainingPhaseConfig,
 ) -> tuple[PolicyGroup, ...]:
-    estimates: list[ValueEstimate | None] = [None] * len(record.nodes)
+    """The trainer's groups (`training_phase.label_phase_data`: the recorded value estimates, the excluded versions
+    dropped) under the variant's reward."""
+    estimates = recorded_estimates(record, config.readout)
+    excluded = config.excluded_policy_versions
     if variant.transform == Transform.OPEN_CLAIM_PROGRESS_DROPPED:
         tactics = open_claims_only(tactics)
     groups = groups_not_sampled_by(
@@ -381,19 +358,17 @@ def variant_advantages(group: PolicyGroup, variant: Variant, open_claim_edges: f
     )
 
 
-def tree_credit(record: TreeRecord, tokenizer: PolicyTokenizer, settings: Settings) -> TreeCredit:
+def tree_credit(record: TreeRecord, tokenizer: PolicyTokenizer | None, settings: Settings, band: str) -> TreeCredit:
+    """`tokenizer`: None without token credit."""
     labels = label_graph(record)
     tactics = policy_tactics(record, labels, settings.phase_config.reward.off_graph_min_expanded_nodes)
-    excluded = settings.phase_config.excluded_policy_versions
     texts_by_prompt = {(expansion.node_id, expansion.feedback): expansion for expansion in record.expansions}
-    opening_by_edge: dict[int, Opening] = {}
-    open_claim_edges: set[int] = set()
-    for label in labels.edges:
-        if label.source == StepSource.POLICY and label.executed_edge_id in tactics:
-            executed = record.edges[label.executed_edge_id]
-            opening_by_edge[label.edge_id] = opening_of(executed.text, tactics[label.executed_edge_id])
-            if any(outcome.leaves_claim_open for outcome in tactics[label.executed_edge_id]):
-                open_claim_edges.add(label.edge_id)
+    opening_by_edge = sample_openings(record, labels, tactics)
+    open_claim_edges = {
+        edge
+        for edge in opening_by_edge
+        if any(outcome.leaves_claim_open for outcome in tactics[labels.edges[edge].executed_edge_id])
+    }
     token_cache: dict[tuple[int, bool, int], tuple[CompletionTokens, TokenPositions]] = {}
     credit: dict[CreditKey, CreditTally] = {}
     groups_by_variant: dict[str, GroupCount] = {}
@@ -403,8 +378,9 @@ def tree_credit(record: TreeRecord, tokenizer: PolicyTokenizer, settings: Settin
     mismatches = 0
     production: dict[tuple[int, tuple[int, ...]], tuple[float, ...]] = {}
     for variant, settings_variant in settings.variants.items():
-        groups = variant_groups(record, labels, tactics, settings_variant, excluded)
+        groups = variant_groups(record, labels, tactics, settings_variant, settings.phase_config)
         if settings.check_production and variant == BASE_VARIANT:
+            assert tokenizer is not None
             parts = tree_policy_data(PolicyTree(groups, record.expansions), tokenizer, PolicyDataConfig())
             mismatches = parts.mismatches
             production = {
@@ -447,9 +423,13 @@ def tree_credit(record: TreeRecord, tokenizer: PolicyTokenizer, settings: Settin
             if expansion is None:
                 continue
             for sample, sample_advantages in zip(group.samples, advantages.samples, strict=True):
-                key = CreditKey(variant, opening_by_edge[sample.edge_ids[0]], sample.reaches_proof_graph)
+                key = CreditKey(variant, opening_by_edge[sample.edge_ids[0]], sample.reaches_proof_graph, band)
                 for completion_index, completion in enumerate(expansion.completions):
                     if completion.edge_id not in sample.edge_ids:
+                        continue
+                    if tokenizer is None:
+                        tally = sequence_only(sample_advantages)
+                        credit[key] = added(credit[key], tally) if key in credit else tally
                         continue
                     cache_key = (group.node_id, group.feedback, completion_index)
                     if cache_key not in token_cache:
@@ -484,7 +464,7 @@ def tree_credit(record: TreeRecord, tokenizer: PolicyTokenizer, settings: Settin
             any(outcome.label == TacticLabel.PROOF_GRAPH for outcome in tactics[label.executed_edge_id])
             and label.effective_kind.is_forward
         )
-        key = SampleKey(opening_by_edge[label.edge_id], on_graph)
+        key = SampleKey(opening_by_edge[label.edge_id], on_graph, band)
         count = SampleCount(
             label.sample_count,
             label.sample_count * (label.edge_id in grouped_edges),
@@ -497,8 +477,9 @@ def tree_credit(record: TreeRecord, tokenizer: PolicyTokenizer, settings: Settin
 WORKER_TOKENIZER: list[PolicyTokenizer] = []
 
 
-def start_worker(tokenizer: str) -> None:
-    WORKER_TOKENIZER.append(load_tokenizer(tokenizer))
+def start_worker(tokenizer: str | None) -> None:
+    if tokenizer is not None:
+        WORKER_TOKENIZER.append(load_tokenizer(tokenizer))
 
 
 def file_credit(entry: TreeEntry, directory: Path, settings: Settings) -> TreeCredit:
@@ -506,7 +487,8 @@ def file_credit(entry: TreeEntry, directory: Path, settings: Settings) -> TreeCr
         record = read_tree(directory / entry.file)
     except (OSError, EOFError, ValueError, zlib.error):
         return TreeCredit(trees=1, unreadable=1)
-    return tree_credit(record, WORKER_TOKENIZER[0], settings)
+    tokenizer = WORKER_TOKENIZER[0] if settings.token_credit else None
+    return tree_credit(record, tokenizer, settings, proof_band(entry.difficulty))
 
 
 def sampled_entries(store: TreeStore, phase: int, count: int) -> list[TreeEntry]:
@@ -527,12 +509,13 @@ def as_json(credit: TreeCredit) -> dict[str, object]:
                 "variant": key.variant,
                 "opening": key.opening.value,
                 "on_graph": key.on_graph,
+                "band": key.band,
                 **dataclasses.asdict(tally),
             }
             for key, tally in sorted(credit.credit.items())
         ],
         "samples": [
-            {"opening": key.opening.value, "on_graph": key.on_graph, **dataclasses.asdict(count)}
+            {"opening": key.opening.value, "on_graph": key.on_graph, "band": key.band, **dataclasses.asdict(count)}
             for key, count in sorted(credit.samples.items())
         ],
         "groups": {variant: dataclasses.asdict(count) for variant, count in credit.groups.items()},
@@ -570,11 +553,16 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--trees-per-phase", type=int, default=0, help="0: every tree")
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--check-production", action="store_true", help="also build the phase's policy data")
+    parser.add_argument(
+        "--no-token-credit", action="store_true", help="sequence advantages only: no tokenizer, no token placement"
+    )
     parser.add_argument("--output", type=Path, required=True)
     return parser.parse_args()
 
 
-def phase_settings(run: Path, phase: int, variants: Mapping[str, Mapping[str, object]], check: bool) -> Settings:
+def phase_settings(
+    run: Path, phase: int, variants: Mapping[str, Mapping[str, object]], check: bool, token_credit: bool
+) -> Settings:
     config = from_json_object(
         TrainingPhaseConfig, tomllib.loads((run / "training" / f"phase_{phase:04d}.toml").read_text(encoding="utf-8"))
     )
@@ -585,25 +573,41 @@ def phase_settings(run: Path, phase: int, variants: Mapping[str, Mapping[str, ob
         transform = Transform(changes.pop("transform", Transform.NONE))
         extra = float(changes.pop("extra", 0.0))
         built[name] = Variant(from_json_object(RewardConfig, reward | changes), transform, extra)
-    return Settings(config, built, check)
+    return Settings(config, built, check, token_credit)
+
+
+def phase_credit(entries: Sequence[TreeEntry], directory: Path, settings: Settings, pool: Pool | None) -> TreeCredit:
+    """In this process without a pool."""
+    task = partial(file_credit, directory=directory, settings=settings)
+    credit = TreeCredit()
+    for tree in map(task, entries) if pool is None else pool.imap_unordered(task, entries, chunksize=2):
+        credit = combined(credit, tree)
+    return credit
 
 
 def main() -> None:
     arguments = parse_arguments()
+    token_credit = not arguments.no_token_credit
+    if arguments.check_production and not token_credit:
+        raise ValueError("--check-production compares token advantages: it needs the token credit.")
     store = TreeStore(arguments.trees or arguments.run / "trees")
     variants = json.loads(arguments.variants)
+    tokenizer = TOKENIZER if token_credit else None
     results = {}
-    with Pool(arguments.workers, initializer=start_worker, initargs=("Qwen/Qwen3.5-4B",), maxtasksperchild=40) as pool:
+    pool = None
+    if arguments.workers == 1:
+        start_worker(tokenizer)
+    else:
+        pool = Pool(arguments.workers, initializer=start_worker, initargs=(tokenizer,), maxtasksperchild=40)
+    with contextlib.ExitStack() as stack:
+        if pool is not None:
+            stack.enter_context(pool)
         for phase in arguments.phases:
             settings = phase_settings(
-                arguments.run, arguments.config_phase or phase, variants, arguments.check_production
+                arguments.run, arguments.config_phase or phase, variants, arguments.check_production, token_credit
             )
             entries = sampled_entries(store, phase, arguments.trees_per_phase)
-            credit = TreeCredit()
-            for tree in pool.imap_unordered(
-                partial(file_credit, directory=store.directory, settings=settings), entries, chunksize=2
-            ):
-                credit = combined(credit, tree)
+            credit = phase_credit(entries, store.directory, settings, pool)
             results[phase] = as_json(credit)
             print(
                 f"\n## Phase {phase}: {credit.trees} trees ({credit.unreadable} unreadable, {credit.mismatches} "

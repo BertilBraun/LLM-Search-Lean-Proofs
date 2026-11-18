@@ -104,30 +104,73 @@ no-op after an open claim (−0.25, −0.35) below an error there (−0.15).
 
 **Claims (`claims_earn_progress`, `unproved_claim_cost`; on in arms A and D since 2026-11-18).** Arm A's first run
 (5e-5, stopped by the owner after 7 of 16 phases) drifted into bare `have` openings (20.5% → 32.4% of blocks over
-phases 1-6) with the reward fix above in force. Replayed on its trees with the production path
-(`experiments/analysis/bare_have_credit.py`): an unproved bare claim was already charged (sequence advantage −0.36 to
-−0.46, never positive), but the bare-`have` opening as a whole earned +13.6k to +21.0k summed token advantage per phase,
-all of it on the explanation tokens (the `have` token itself was net negative). The payer was the bare `have` whose
-block proves its own claim (`have h : A`, a proof of it, more steps): +0.22 to +0.30 per sample against +0.01 to +0.09
-for `have … :=` openings, and on the proof graph +0.9 to +1.3 against +0.3 for a direct tactic, because progress
-counts flattened tactics and every claim was one step of δ. Two switches, both off by default (grpo_loop_v1's reward):
+phases 1-6) with the reward fix above in force. Replayed on its trees with the trainer's path
+(`experiments/analysis/bare_have_credit.py`; reviews BF, BG):
 
-- `claims_earn_progress = false`: a tactic adding a claim as a goal (`TacticOutcome.adds_claim`: a bare `have h : A`, a
-  flattened `have h : A := by …`, `obtain … : A`; not `suffices`, which replaces the goal) earns δ less for its own
-  step on the proof graph (`claim_step`: at most one step, relative to the block's last proof-graph state or the node;
-  as the anchor or as a gain, never below 0 there). The next tactic is judged against the state the claim reached, so
-  the δ is dropped, not deferred: `have h : A := by p` counts as p's steps, like a term-mode `have`, and a bare claim
-  the tree proves later scores the on-graph R without progress, one proof step (δ) below proving it inline.
+- An unproved bare claim was already charged: sequence advantage (score − b) −0.36 to −0.46 per sample, never positive.
+- The bare-`have` opening as a whole was paid: summed token advantage +13.6k to +21.0k per phase over arm A's phases
+  1-6 (+4.4k in phase 7, +25.9k on step 2's v0 phase, +18.2k and +8.4k on the 2e-5 start), all of it on the
+  explanation tokens; the `have` token itself was net negative.
+- The payer was the bare `have` whose block proves its own claim (`have h : A`, a proof of it, more steps). Over all
+  its samples: +0.22 to +0.30 per sample against +0.01 to +0.09 for `have … :=` openings. On the proof graph only:
+  +0.78 to +1.26 per sample against +0.62 to +0.91 for `have … :=` and +0.30 to +0.39 for direct openings
+  (linarith/nlinarith and every opening without a claim), 2.1-4.0x the direct ones: progress counts flattened tactics,
+  and a bare claim with its proof earned two steps of δ, one of them for stating the claim.
+- What grew was mostly off the proof graph (review BG): bare blocks proving their own claim there (4.0% → about 10% of
+  the samples) and bare claims left open with a failing attempt after (3.3% → about 6%), both already negative.
+  Explanation style learned from the on-graph successes spread to states where it does not help.
+
+Two switches, both off by default (grpo_loop_v1's reward):
+
+- `claims_earn_progress = false`: a tactic adding exactly one goal as a claim (`TacticOutcome.adds_claim`: a bare
+  `have h : A`, a flattened `have h : A := by …`, `obtain … : A`, `replace`, `rsuffices`; not `suffices`, which replaces
+  the goal) earns δ less for its own step on the proof graph (`claim_step`: at most one step, relative to the block's
+  last proof-graph state or the node; as the anchor or as a gain, never below 0 there). The next tactic is judged
+  against the state the claim reached, so the δ is dropped, not deferred: `have h : A := by p` counts as p's steps,
+  like a term-mode `have`, and a bare claim the tree proves later scores the on-graph R without progress, one proof
+  step (δ) below proving it inline.
 - `unproved_claim_cost = 0.3` (None: c): leaving an invented claim open costs an error there plus 0.3 instead of
   c = 0.1: −0.45 as the anchor, −0.4 later. The search keeps the claim as a child state it proves in about one case in
   nine, so the cost is more than the tokens an error wastes.
 
-Either alone leaves the bare-`have` opening net positive on most of the recorded phases; together, with the cost
-chosen by the replay (0.2 leaves two of ten phases positive), its summed token advantage is negative on all ten (arm
-A's phases 1-7, step 2's v0 phase, the 2e-5 start's two phases), the trainable groups are unchanged, the positive
-advantage of samples reaching the proof graph falls 2-6%, and 6-13% of the groups change the sign of some sample's
-sequence advantage. Bare claims proved in their block keep a positive advantage (+0.16 to +0.23 per sample); claims the
-tree proves elsewhere are not touched beyond their δ.
+Replayed together on the same groups (all ten recorded phases: arm A's 1-7, step 2's v0 phase, the 2e-5 start's two):
+
+- The bare-`have` opening's summed token advantage is negative on all ten (−1.6k to −16.8k). Either switch alone
+  leaves it positive on eight of ten; cost 0.2 with the first switch leaves two positive (v0 +3.6k, A5 +3.7k). 0.3 was
+  chosen on the same ten phases, all sampled by policies trained under the old reward, at its margin on v0 (−3.8k):
+  provisional, to be confirmed on the rerun's own phases.
+- Trainable groups are unchanged; the positive advantage of samples reaching the proof graph falls 1.7-5.5%; 5.6-13.4%
+  of the trained groups change the sign of some sample's sequence advantage.
+- Bare claims proved in their block stay positive: +0.16 to +0.23 per sample over all their samples, +0.68 to +1.06 on
+  the proof graph, still 1.8-3.3x a direct opening's there; `have … :=` on the graph is practically unchanged (+0.61
+  to +0.90). The removed δ takes about 15% of the on-graph premium; the aggregate turns negative mostly through the
+  failure classes. Claims the tree proves elsewhere lose only their δ.
+- By the statement's probe band (`claim_watch.proof_band`, the shortest known proof's characters), 250 trees of each
+  of the ten phases, per-sample sequence advantage before → with both switches (review BG, S3). The curriculum fed no
+  statement past 2,000 characters in these phases, so the long-proof bands, where `have` chains are the natural style,
+  are not covered; the rerun's watch (below) reads them once they are fed. In every band present, on-graph
+  decompositions stay at 1.8-3.0x a direct opening and the bare class turns negative:
+
+  | Band | On-graph bare self-proving (n) | On-graph decompositions, `have … :=` too (n) | On-graph direct (n) | Ratio | Bare class per sample (n) |
+  |---|---|---|---|---|---|
+  | 0-499 | +0.69 → +0.60 (966) | +0.62 → +0.58 (2,066) | +0.32 → +0.32 (7,954) | 1.9x → 1.8x | −0.03 → −0.09 (2,861) |
+  | 500-999 | +0.86 → +0.75 (537) | +0.83 → +0.74 (742) | +0.38 → +0.38 (3,183) | 2.2x → 1.9x | +0.03 → −0.03 (1,690) |
+  | 1000-1499 | +1.07 → +0.91 (2,226) | +0.98 → +0.87 (3,319) | +0.39 → +0.39 (14,169) | 2.5x → 2.2x | +0.02 → −0.05 (8,648) |
+  | 1500-1999 | +1.09 → +0.92 (108) | +1.12 → +0.98 (156) | +0.32 → +0.32 (397) | 3.5x → 3.0x | +0.03 → −0.02 (392) |
+
+Limitations. A claim opening more than one goal (`constructor <;> have h : A`, `all_goals have` on two goals,
+`have h : A ∧ B := ⟨?_, ?_⟩`) is not detected (`claim_of` takes exactly one added goal with the first goal's
+hypotheses unchanged) and keeps its δ; none is a drift pattern in A's trees. `CLAIM_TACTIC` finds the keyword anywhere
+in the tactic text (a term, a comment, a nested `by`), so a tactic that merely mentions `have` and whose states happen
+to have the claim shape loses δ too; the shape test makes it rare, and `leaves_claim_open` has the same exposure. The
+replay is static: the sign of the gradient on fixed samples, not where training goes.
+
+The rerun is watched per phase with `experiments/claim_watch.py --run <run> --phase <k>` (`rl/claim_watch.py`): bare
+`have` openings (every statement and below the band) against phase 1, the two subclasses that grew, the substitutes
+(`obtain`, `suffices`, `have … :=`), claims proved, the on-graph per-sample advantage of decompositions against direct
+openings under the phase's own reward, mean explanation tokens, held-out against v0. It flags review BG's suggested
+stop rule (bare haves more than 5 points over phase 1, or a growing subclass more than 1.5x) for the owner to decide;
+one process, a few minutes per phase on the CPU.
 
 The baseline b is the multiplicity-weighted mean score of the group's samples with a score, the first-tactic baseline
 b₁ the same mean of their anchors' R (`GroupSample.anchor_parts`, `GroupAdvantages.first_tactic_baseline`). The
