@@ -425,6 +425,8 @@ def test_the_followup_base_differs_from_the_loop_only_in_the_followups_settings(
         held_out_states=EvaluationTarget(
             1, 120.0, 56, every_hours=0.0, at_start=True, baseline_concurrency=56, at_each_pause=True
         ),
+        # Off on the follow-up's node (2026-11-18): the gate benchmark was never built there.
+        value_benchmark=dataclasses.replace(old.evaluation.value_benchmark, path=""),
     )
     health = dataclasses.replace(
         old.health, reference_phases=1, rollback_window_phases=0, resume_beside_held_out_states=False
