@@ -86,6 +86,7 @@ fi
 
 # From here on servers and GPUs: never beside a running offline chain.
 other_chain_idle "${OFFLINE_CHAIN_STATE:-/workspace/runs/offline_chain}" offline
+other_chain_idle "${ARMS_CHAIN_STATE:-/workspace/runs/arms_chain}" arms
 
 loop_alive() { [[ -f "${shared_run}/loop.pid" ]] && kill -0 "$(cat "${shared_run}/loop.pid")" 2>/dev/null; }
 

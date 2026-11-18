@@ -91,6 +91,7 @@ step held_out_config "${python}" experiments/offline_arm.py --config "${config}"
 
 # From here on servers and GPUs: never beside a running step 2.
 other_chain_idle "${STUDY_CHAIN_STATE:-/workspace/runs/study_chain}" study
+other_chain_idle "${ARMS_CHAIN_STATE:-/workspace/runs/arms_chain}" arms
 
 output_of() { echo "${LEAN_SEARCH_CHECKPOINTS}/${arm}_$1_$2"; }
 

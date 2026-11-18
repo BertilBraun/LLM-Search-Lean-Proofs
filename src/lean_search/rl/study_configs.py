@@ -8,8 +8,9 @@ An arm (experiments/configs/grpo/followup/arms/) is a thin overlay over base.tom
 [loop] and [phase] tables change only `ARM_SETTINGS`; an arm whose policy trains in expert-iteration rounds (C, D) also
 gets the rounds' recipe (followup/expert_iteration.toml), its [expert_iteration] table changing only the learning
 rate. Step 2's shared sampling run (followup/shared_sampling.toml) is one over base.toml changing only
-`SHARED_SAMPLING_SETTINGS`. experiments/followup_arm.py writes the configs the loop reads, and refuses a result whose
-phases are not ended by generated tokens.
+`SHARED_SAMPLING_SETTINGS`. A smoke run (deployment/arms_chain.sh) is an arm's overlay under its own name with a
+smaller budget, changing `SMOKE_SETTINGS`. experiments/followup_arm.py writes the configs the loop reads, and refuses a
+result whose phases are not ended by generated tokens.
 
 The sampling mode (followup/modes/: with or without visible reasoning, the expansions per training search) is one file
 over base.toml's [sampling] that changes exactly `MODE_SETTINGS`, applied alike to the shared sampling run and every
@@ -34,6 +35,8 @@ BASE_KEY = "base"
 class OverlayKind(StrEnum):
     ARM = "arm"
     SHARED_SAMPLING = "shared sampling"
+    # An arm's short run under its own name, before the arm runs (deployment/arms_chain.sh's smoke test).
+    SMOKE = "smoke"
 
 
 # An arm is base.toml and its phase template changed only here (DESIGN.md, "Arms": everything else identical, the
@@ -61,6 +64,10 @@ SHARED_SAMPLING_SETTINGS = frozenset(
         "loop.training.max_phases",
     }
 )
+
+
+# A smoke run: an arm's overlay with a smaller budget (rl/arms_chain.py, smoke_overlay).
+SMOKE_SETTINGS = ARM_SETTINGS | frozenset({"loop.training.phase_generated_tokens", "loop.training.max_phases"})
 
 
 MODE_SETTINGS = frozenset({"sampling.search_config", "sampling.max_expansions"})
@@ -130,6 +137,8 @@ def overlay_settings(kind: OverlayKind) -> frozenset[str]:
             return ARM_SETTINGS
         case OverlayKind.SHARED_SAMPLING:
             return SHARED_SAMPLING_SETTINGS
+        case OverlayKind.SMOKE:
+            return SMOKE_SETTINGS
 
 
 def placeholders(table: Mapping[str, object], prefix: str = "") -> list[str]:
@@ -193,7 +202,7 @@ def budget_refusals(kind: OverlayKind, training: Mapping[str, object]) -> list[s
     never come due before its total stop."""
     phase_tokens = training.get("phase_generated_tokens", 0)
     match kind:
-        case OverlayKind.ARM:
+        case OverlayKind.ARM | OverlayKind.SMOKE:
             refusals = [] if phase_tokens else ["no [training] phase_generated_tokens: phases would end on minutes"]
             if not training.get("max_phases", 0):
                 refusals.append("no [training] max_phases: the arm would never stop")
