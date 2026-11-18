@@ -320,6 +320,19 @@ default), safe server stops, results pulled to the PC as they are written.
   unchanged, positive proof-graph mass −2 to −5.5%. Weaker variants (either switch alone, cost 0.2) stay positive in
   2-8 of 10 phases.
 
+## Arm A's rerun: the fix and its stop rule (owner, 2026-11-18)
+
+- The claim reward switches (master `2a1caf4`, reviews BF and BG) are merged, NOT yet deployed: deploy only at the
+  arms driver's HOLD "waiting for: A" after arm C, then the rerun path for A (old run, configs, checkpoints, markers,
+  `pause_A` moved aside), remove `hold_A`, start. Check `git diff` of `experiments/configs/grpo/search/` is empty
+  (A and D are bound to the shared run's search config).
+- **Stop rule (owner):** after phases 2 and 4 the orchestrator runs `experiments/claim_watch.py --run
+  /workspace/runs/followup_A --phase <k>` on the node; reassess at phase 4 (report to the owner, who decides) if the
+  bare-`have` share rose more than 5 points over phase 1, or either growing subclass (bare claims proved in their block
+  off the proof graph; open claims followed by a failing attempt) grew more than 1.5x. Also watched: `suffices`/
+  `obtain`/`have … :=` as substitutes, claims proved, the on-graph decomposition premium, explanation tokens,
+  held-out against v0.
+
 ## Smoke test passed (by hand), arm C started 2026-11-18 18:49 UTC
 
 Smoke C and D (6M tokens, one phase each; D with GRPO, value training and a round in one pause, killed by SIGKILL 30 s
