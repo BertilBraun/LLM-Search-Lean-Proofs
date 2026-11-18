@@ -4,21 +4,22 @@ Written 2026-11-16 by the orchestrating agent for the agent that takes over on a
 repository, same rented node; no conversation history and no running subagents carry over. Everything needed is in this
 file and the files it points to. Keep this file current while you work, or replace it with your own.
 
-**State at a glance (2026-11-16, about 21:45 UTC; updated by the second orchestrator)**
+**State at a glance (2026-11-18, about 11:00 UTC; updated by the second orchestrator)**
 
-- Step 1 of the study (evaluations) is done except for the reasoning comparison: six full runs have answered its
-  value-model questions and measured the old run's gain on a clean probe (+26 points, policy and value gains additive).
-- The repeated no-reasoning pilot was ACCEPTED (70 of 200, 0 wall-clock stops, 2.47 h). The chain deployed `9834972`
-  and started run 3 (visible, longest expected search first) at about 20:25 UTC; run 4, the reports, the order check
-  run and HOLD follow by themselves.
-- Step 2's node automation (`deployment/study_chain.sh`) was shrunk on 2026-11-17 to arm A's rate (owner): one shared
-  phase of 12M tokens, A's three GRPO rounds, held-out runs, A's ranking, HOLD with the servers stopped; about 3-4 node
-  hours (branch `step2-a-only`, reviews BA and BB). Never run on the node yet. It runs only after O2's gate has chosen
-  the mode and the search-efficiency branch is deployed (`results/followup_node_operations.md` section 3, "The study
-  driver: step 2", "Install and start").
-- Superseded by the owner's decisions of 2026-11-17: the 48M sampling, slice 4, the ten rounds, arm B and C's window
-  test. C's window is 4 (in `arms/C.toml`, `arms/D.toml`); C's rate comes from O2. Still open from review AV: the tie
-  rule (lower rate on a tie likely picks 2e-5 for GRPO) and probe runs under no reasoning.
+- Done: step 1 (incl. the reasoning comparison: no reasoning +4.9 points at equal tokens but Lean-bound, 1.8x the
+  time), the offline run O2 (545 of 2,000: FAILED the owner's gate against v35, so the arms sample WITH visible
+  reasoning), step 2 (A's learning rate: 2e-5 and 5e-5 tied; the owner chose 5e-5). Details and numbers:
+  `results/followup_progress.md`.
+- Running unattended: the arms driver `deployment/arms_chain.sh` (supervisord `arms_chain`, state
+  `/workspace/runs/arms_chain/`), installed 10:53 UTC on master `6f3ce10`. It adopted arm A (per-tactic GRPO 5e-5,
+  started by hand 07:15 UTC, `runs/followup_A`), then runs A's probe run, the C/D smoke test, arm C (expert iteration
+  5e-5, window 4), arm D (GRPO 5e-5 + a round every 4 phases), each with a probe run and comparisons, then HOLD. About
+  19 h per arm; A ends around 03:00 UTC 2026-11-19, the chain about 48-50 h after that. `on_health_stop = continue`
+  (owner): a health-stopped arm gets a report, the next arm runs, the owner decides at the end.
+- In the arms' training sampling only: the search-efficiency switches (result cache, timeout skip, warm spares,
+  degree-bounded `nlinarith`; `search/*_sampling.toml`). Probe and held-out runs keep the anchors' plain settings.
+- No code in flight. Arm B is dropped. O1 (the whole-pool offline run) runs last, on the owner's word. Review letters
+  used up to `bd` (next: `be`). Spend about $63 of the $190 loaded at $0.83/h.
 
 ## 1. First hour: what to do
 
@@ -28,8 +29,9 @@ file and the files it points to. Keep this file current while you work, or repla
    "Follow-up study: controlled arms (agreed 2026-11-14)".
 2. Check the node (section 6 has the command). Compare with what section 6 says it should be doing.
 3. Set up the 30-minute watchdog (section 6) and confirm the results pull on the PC is alive (section 7).
-4. No code is in flight (section 8). Read the reasoning comparison's report files when they exist (section 9, step
-   1) and prepare the node automation for the learning rates and the arms while the node works (section 9).
+4. Check the arms driver: `tail /workspace/runs/arms_chain/chain.log`, the running arm's `loop.log` (phases, health
+   alerts), STOPPED/HOLD markers; its section in `results/followup_node_operations.md` ("The arms driver") has every
+   marker, the pause files, the owner's word files and the rerun path. Report each arm's probe-run result to the owner.
 5. Tell the owner in a few lines where things stand. He checks in about twice a day and wants short, concrete updates.
 
 ## 2. The project in brief
@@ -55,7 +57,7 @@ file and the files it points to. Keep this file current while you work, or repla
 
 - **Subagents:** implementation, analysis and review run in subagents on Opus 5.5 at high effort. Two independent
   reviews after every implementation wave, then fixes, then a re-review by the same reviewers, then merge. Reviews are
-  files in `results/reviews/` named `<date>_review_<letters>_<topic>.md`; the last used letters are `av` (next: `aw`).
+  files in `results/reviews/` named `<date>_review_<letters>_<topic>.md`; the last used letters are `bd` (next: `be`).
 - **Usage:** running 5-8 Opus subagents at once exhausted the 5-hour usage limit on 2026-11-14 and left the node idle
   for hours. Keep few agents running, have node agents report on events rather than on a timer, and make node work
   self-sustaining so it does not depend on an agent being awake.
