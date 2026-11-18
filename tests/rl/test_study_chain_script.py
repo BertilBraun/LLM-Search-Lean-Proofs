@@ -505,6 +505,23 @@ def test_a_running_arms_chain_stops_step_2_before_any_server_or_gpu_action(node:
     assert ("the arms chain" in node.stopped(), node.steps()) == (True, expected)
 
 
+def test_an_arms_live_loop_stops_step_2_even_with_the_arms_chain_stopped(node: Node) -> None:
+    arms_state = node.root / "arms_state"
+    arms_state.mkdir()
+    (arms_state / "chain.log").write_text("driver start\n", encoding="utf-8")
+    (arms_state / "STOPPED").write_text("stopped\n", encoding="utf-8")
+    run = node.workspace / "runs" / "followup_A"
+    run.mkdir(parents=True)
+    sleeper = subprocess.Popen(["sleep", "30"])  # noqa: S603, S607
+    (run / "loop.pid").write_text(f"{sleeper.pid}\n", encoding="utf-8")
+    try:
+        supervise(node)
+    finally:
+        sleeper.kill()
+    expected = ["learning_rate_step.py check-mode", "learning_rate_step.py write-configs"]
+    assert ("the loop of" in node.stopped(), node.steps()) == (True, expected)
+
+
 def test_a_prepared_but_unstarted_offline_state_does_not_stop_step_2(node: Node) -> None:
     node.offline_state.mkdir()
     assert supervise(node) == [0] and node.steps() == expected_steps(node)

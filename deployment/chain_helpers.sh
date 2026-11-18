@@ -2,7 +2,7 @@
 # its own directory: installed as a copy beside it, never read from the checkout while a driver runs. A driver sets
 # before using them: state (its state directory, chain.log's), python, poll_seconds, gpus and gpu_free_mib (gpus_free),
 # held_out_loop_config (held_out); its working directory is the checkout. other_chain_idle takes the other driver's
-# state directory.
+# state directory; no_other_loop reads LEAN_SEARCH_RUNS (deployment/environment.sh).
 
 say() { echo "$(date -u +%FT%TZ) $*"; }
 stop_chain() { say "STOPPED: $*"; echo "$(date -u +%FT%TZ) $*" > "${state}/STOPPED"; exit 0; }
@@ -31,6 +31,31 @@ other_chain_idle() {
     [[ -f "${other}/chain.log" ]] || return 0
     [[ -f "${other}/HOLD" || -f "${other}/STOPPED" ]] && return 0
     stop_chain "the ${name} chain (${other}) has started and stands neither at HOLD nor STOPPED: the two chains share the GPUs and servers; move STOPPED aside and start this one once the other holds"
+}
+
+# A start of the run is in flight or its loop lives: deployment/arm_loop.sh holds <run>.lock from its start, and the
+# detached loop holds it for its whole life.
+run_lock_held() { [[ -e "$1.lock" ]] && ! flock -n "$1.lock" true; }
+
+# Before a driver's first server or GPU action, whatever the other chains' markers say (the arms' loops outlive their
+# driver, so a STOPPED arms chain may have a loop running): no loop of a run but the given own runs lives, and no start
+# of one is in flight.
+no_other_loop() {
+    local own=" $* " pid_file lock run pid
+    for pid_file in "${LEAN_SEARCH_RUNS}"/*/loop.pid; do
+        run="$(dirname "${pid_file}")"
+        [[ "${own}" == *" ${run} "* ]] && continue
+        pid="$(cat "${pid_file}" 2>/dev/null)"
+        if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
+            stop_chain "the loop of ${run} runs (pid ${pid}): this chain shares the GPUs and servers with it; stop it or wait for its end, then move STOPPED aside"
+        fi
+    done
+    for lock in "${LEAN_SEARCH_RUNS}"/*.lock; do
+        run="${lock%.lock}"
+        [[ "${own}" == *" ${run} "* ]] && continue
+        run_lock_held "${run}" && stop_chain "a start of ${run} is in flight or its loop runs (${lock} is held); wait for its end, then move STOPPED aside"
+    done
+    return 0
 }
 
 aside() {

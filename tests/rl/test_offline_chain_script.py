@@ -486,6 +486,18 @@ def test_a_running_arms_chain_stops_the_offline_chain_before_any_server_or_gpu_a
     assert ("the arms chain" in node.stopped(), node.steps()) == (True, DATA_STEPS)
 
 
+def test_an_arms_live_loop_stops_the_offline_chain_before_any_server_or_gpu_action(node: Node) -> None:
+    run = node.root / "workspace" / "runs" / "followup_C"
+    run.mkdir(parents=True, exist_ok=True)
+    sleeper = subprocess.Popen(["sleep", "30"])  # noqa: S603, S607
+    (run / "loop.pid").write_text(f"{sleeper.pid}\n", encoding="utf-8")
+    try:
+        supervise(node)
+    finally:
+        sleeper.kill()
+    assert ("the loop of" in node.stopped(), node.steps()) == (True, DATA_STEPS)
+
+
 def test_a_prepared_but_unstarted_step_2_does_not_stop_the_offline_chain(node: Node) -> None:
     node.study_state.mkdir()
     (node.study_state / "mode.toml").write_text("", encoding="utf-8")

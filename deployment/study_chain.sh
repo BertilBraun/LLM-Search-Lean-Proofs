@@ -36,7 +36,7 @@ exec >> "${state}/chain.log" 2>&1
 source "$(dirname "${BASH_SOURCE[0]}")/chain_helpers.sh" \
     || { echo "$(date -u +%FT%TZ) no chain_helpers.sh beside the driver: install it" | tee "${state}/STOPPED"; exit 0; }
 # An older copy of the helpers lacks what this driver calls (bash would only print "command not found" and go on).
-declare -F other_chain_idle > /dev/null || stop_chain "chain_helpers.sh is older than the driver: install the current one"
+declare -F other_chain_idle no_other_loop > /dev/null || stop_chain "chain_helpers.sh is older than the driver: install the current one"
 say "driver start (pid $$)"
 for marker in STOPPED HOLD; do
     if [[ -f "${state}/${marker}" ]]; then say "${marker} present ($(cat "${state}/${marker}")): nothing to do"; exit 0; fi
@@ -87,6 +87,8 @@ fi
 # From here on servers and GPUs: never beside a running offline chain.
 other_chain_idle "${OFFLINE_CHAIN_STATE:-/workspace/runs/offline_chain}" offline
 other_chain_idle "${ARMS_CHAIN_STATE:-/workspace/runs/arms_chain}" arms
+# The arms' loops outlive their driver: a STOPPED arms chain may still have one running.
+no_other_loop "${shared_run}"
 
 loop_alive() { [[ -f "${shared_run}/loop.pid" ]] && kill -0 "$(cat "${shared_run}/loop.pid")" 2>/dev/null; }
 

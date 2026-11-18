@@ -34,7 +34,7 @@ case "${script}" in
                     "${arm}" "${x}" "${arm}"
                 printf '%s_against_run7.txt\t%s\tarm %s\tv35 value final\tstep1_run7_v35_value_final\n' "${arm}" "${x}" "${arm}"
                 for other in A C D; do
-                    [[ "${other}" == "${arm}" ]] && break
+                    [[ "${other}" == "${arm}" ]] && continue
                     [[ -f "${state}/done_probe_${other}" ]] || continue
                     printf '%s_against_%s.txt\t%s\tarm %s\tarm %s\tarm_%s_phase16_run1\n' \
                         "${arm}" "${other}" "${x}" "${arm}" "${other}" "${other}"

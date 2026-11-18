@@ -18,7 +18,8 @@
 # deployment/grpo_loop.sh loop, which resumes an interrupted one, and fails when the loop has exited
 # ARM_LOOP_START_SECONDS (30) later. Prints where the logs are. A run that ended by itself (finished.json: after
 # max_phases, or a sampling-only run at its token total) is not started again: the loop leaves its servers up, serving
-# the last version, and this says which still run and how to stop them.
+# the last version, and this says which still run and how to stop them. Exit 1 while another start of the same run is
+# in flight or its loop lives (<run>.lock, held by the detached loop; deployment/arms_chain.sh waits on it).
 
 set -euo pipefail
 
@@ -41,7 +42,7 @@ if [[ "${1:-}" == --mode ]]; then
     mode="$2"
     shift 2
 fi
-[[ $# -eq 1 && -n "${mode}" ]] || { sed -n '2,21p' "$0" >&2; exit 2; }
+[[ $# -eq 1 && -n "${mode}" ]] || { sed -n '2,22p' "$0" >&2; exit 2; }
 
 loop_config="$(python experiments/followup_arm.py --kind "${kind}" --mode "${mode}" --arm "$1" \
     --output "${LEAN_SEARCH_RUNS}/followup_configs")"
@@ -91,14 +92,20 @@ fi
     echo "Set BACKGROUND_CPUS or BACKGROUND_CPU_LIST: every arm runs pinned (DESIGN.md, Load)." >&2
     exit 2
 }
-python experiments/node_checks.py pinning
-python experiments/node_checks.py servers-free
+# One start of a run at a time, and none while its loop lives: <run>.lock is held on fd 9 from here, and the detached
+# loop inherits it for its whole life (grpo_loop.sh loop); init and the servers do not (9>&-). Without it a second start
+# during this one's minutes of init and server starts would run two loops on one run directory.
+mkdir -p "${LEAN_SEARCH_RUNS}"
+exec 9> "${run_directory}.lock"
+flock -n 9 || { echo "Another start of ${name} is in flight or its loop runs (${run_directory}.lock is held)." >&2; exit 1; }
+python experiments/node_checks.py pinning 9>&-
+python experiments/node_checks.py servers-free 9>&-
 
 if [[ ! -f "${run_directory}/models/current.json" ]]; then
-    LOOP_CONFIG="${loop_config}" "${script_directory}/grpo_loop.sh" init
+    LOOP_CONFIG="${loop_config}" "${script_directory}/grpo_loop.sh" init 9>&-
 fi
 # Before detaching: a server that cannot start fails here, not in a loop nobody watches.
-LOOP_CONFIG="${loop_config}" "${script_directory}/grpo_loop.sh" servers
+LOOP_CONFIG="${loop_config}" "${script_directory}/grpo_loop.sh" servers 9>&-
 LOOP_CONFIG="${loop_config}" "${script_directory}/grpo_loop.sh" loop
 # A loop that refuses its start (a health stop, a held lock, a config error) exits within seconds.
 sleep "${ARM_LOOP_START_SECONDS:-30}"

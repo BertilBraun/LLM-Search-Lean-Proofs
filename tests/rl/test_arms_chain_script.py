@@ -90,6 +90,8 @@ def environment(node: Node, extra: dict[str, str] | None = None) -> dict[str, st
             "ARMS_CHAIN_SAMPLE_SECONDS": "0.05",
             "ARMS_CHAIN_KILL_DELAY_SECONDS": "0",
             "ARMS_CHAIN_LOOP_EXIT_SECONDS": "5",
+            "ARMS_CHAIN_GPU_WAIT_SECONDS": "0",
+            "ARMS_CHAIN_LOCK_WAIT_SECONDS": "60",
             "ARMS_CHAIN_SHARED_MEMORY": str(node.root / "shm"),
             "FAKE_REPOSITORY": str(node.root / "repository"),
             "FAKE_WORKSPACE": str(node.root / "workspace"),
@@ -352,6 +354,124 @@ def test_a_driver_killed_while_its_loop_runs_adopts_the_loop_at_the_next_start(n
     os.killpg(driver.pid, signal.SIGKILL)
     driver.wait()
     assert supervise(node, extra) == [0] and loop_starts(node).count("arm_loop.sh arm A") == 1
+
+
+def killed_while_starting(node: Node, extra: dict[str, str]) -> None:
+    """The driver started, killed (its whole group) once arm_loop.sh for A is in flight in its own session."""
+    driver = subprocess.Popen(["bash", str(SCRIPT)], env=environment(node, extra), start_new_session=True)  # noqa: S603
+    deadline = time.monotonic() + 60
+    while "arm_loop.sh arm A" not in node.lines() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    os.killpg(driver.pid, signal.SIGKILL)
+    driver.wait()
+
+
+def test_a_driver_killed_while_arm_loop_is_in_flight_starts_the_arm_once(node: Node) -> None:
+    extra = {"FAKE_ARM_LOOP_SECONDS": "3"}
+    killed_while_starting(node, extra)
+    assert supervise(node, extra) == [0] and loop_starts(node).count("arm_loop.sh arm A") == 1
+
+
+def test_a_driver_killed_while_arm_loop_is_in_flight_stops_no_server_under_it(node: Node) -> None:
+    extra = {"FAKE_ARM_LOOP_SECONDS": "3"}
+    killed_while_starting(node, extra)
+    supervise(node, extra)
+    lines = node.lines()
+    assert lines[: lines.index("arms_chain.py adapters")] == ["stop_model.sh --all", "arm_loop.sh arm A"]
+
+
+def test_a_second_start_while_the_run_lock_is_held_is_refused(node: Node) -> None:
+    runs = node.runs
+    runs.mkdir(parents=True)
+    holder = subprocess.Popen(["flock", str(runs / "followup_A.lock"), "sleep", "30"])  # noqa: S603, S607
+    try:
+        deadline = time.monotonic() + 10
+        while subprocess.run(["flock", "-n", str(runs / "followup_A.lock"), "true"], check=False).returncode == 0:  # noqa: S603, S607
+            assert time.monotonic() < deadline
+            time.sleep(0.05)
+        supervise(node, {"ARMS_CHAIN_LOCK_WAIT_SECONDS": "1"})
+    finally:
+        holder.kill()
+    assert ("is held for 1 s without a live loop" in node.stopped(), loop_starts(node)) == (True, [])
+
+
+def test_another_runs_live_loop_stops_the_chain_before_anything_runs(node: Node) -> None:
+    run = node.runs / "followup_shared_sampling"
+    run.mkdir(parents=True)
+    sleeper = subprocess.Popen(["sleep", "30"])  # noqa: S603, S607
+    (run / "loop.pid").write_text(f"{sleeper.pid}\n", encoding="utf-8")
+    try:
+        supervise(node)
+    finally:
+        sleeper.kill()
+    assert ("the loop of" in node.stopped() and "followup_shared_sampling" in node.stopped(), node.lines()) == (
+        True,
+        [],
+    )
+
+
+def test_a_paused_arm_is_not_started(node: Node) -> None:
+    (node.state / "pause_A").touch()
+    supervise(node)
+    assert ("A is paused" in node.stopped(), loop_starts(node)) == (True, [])
+
+
+def test_an_arm_paused_while_it_runs_is_not_started_again_once_stopped(node: Node) -> None:
+    extra = {"FAKE_ARM_STAGE_SECONDS": "0.1"}
+    driver = subprocess.Popen(["bash", str(SCRIPT)], env=environment(node, extra), start_new_session=True)  # noqa: S603
+    run = node.runs / "followup_A"
+    deadline = time.monotonic() + 60
+    while not (run / "loop_state.json").exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    (node.state / "pause_A").touch()
+    os.kill(int((run / "loop.pid").read_text(encoding="utf-8")), signal.SIGTERM)
+    driver.wait(timeout=120)
+    assert ("A is paused" in node.stopped(), loop_starts(node)) == (True, ["arm_loop.sh arm A"])
+
+
+def test_a_paused_arm_resumes_once_the_pause_is_lifted(node: Node) -> None:
+    node.set("die_followup_A", "1")
+    (node.state / "pause_A").touch()
+    supervise(node)
+    (node.state / "pause_A").unlink()
+    (node.state / "STOPPED").rename(node.state / "STOPPED.paused")
+    assert supervise(node) == [0] and loop_starts(node).count("arm_loop.sh arm A") == 2
+
+
+def continue_after_health_stop(node: Node) -> None:
+    node.set("health_stop_followup_C")
+    (node.state / "on_health_stop").write_text("continue\n", encoding="utf-8")
+    supervise(node)
+
+
+def test_with_continue_the_next_arm_runs_after_a_health_stop(node: Node) -> None:
+    continue_after_health_stop(node)
+    assert "arm_loop.sh arm D" in node.lines() and "probe_runs.sh PROBE_CONCURRENCY=112 runs_D.toml" in node.lines()
+
+
+def test_with_continue_the_chain_asks_for_the_word_at_the_end_with_the_servers_stopped(node: Node) -> None:
+    continue_after_health_stop(node)
+    assert ("waits for the owner's word" in node.stopped(), node.lines()[-1]) == (True, "stop_model.sh --all")
+
+
+def test_with_continue_the_stopped_arm_is_evaluated_after_the_word_against_both_other_arms(node: Node) -> None:
+    continue_after_health_stop(node)
+    (node.state / "word_C").write_text("evaluate\n", encoding="utf-8")
+    (node.state / "STOPPED").rename(node.state / "STOPPED.word_C")
+    assert supervise(node) == [0] and held(node)
+    labels = [line.split(" against ", 1)[1] for line in node.lines() if line.startswith("probe_compare.py pair arm_C")]
+    assert labels == ["v0 anchors", "v35 value final", "arm A", "arm D"]
+
+
+def test_an_unknown_on_health_stop_stops_the_chain(node: Node) -> None:
+    node.set("health_stop_followup_C")
+    (node.state / "on_health_stop").write_text("later\n", encoding="utf-8")
+    supervise(node)
+    assert "write wait or continue" in node.stopped()
+
+
+def test_the_driver_records_the_checkout_each_loop_started_from(finished: Node) -> None:
+    assert (finished.state / "loops" / "C.revisions").read_text(encoding="utf-8").count("\n") == 1
 
 
 def other_chain_running(node: Node, directory: str, marker: str = "") -> None:
