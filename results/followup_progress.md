@@ -304,6 +304,14 @@ default), safe server stops, results pulled to the PC as they are written.
 | First node, 2026-11-14 11:20 UTC to its outage at about 23:35 UTC | about $11 at most; partly refunded by the provider (owner) |
 | Second node, from 2026-11-15 about 08:30 UTC | $0.83 per hour |
 
+## Step 2 (A's learning rate), started 2026-11-18 00:38 UTC
+
+Master `c15afc5` deployed (node-local edits unchanged; the node's Lean tests at it: 548 passed). The step-2 driver runs
+in the visible mode (`followup/modes/visible.toml` → `search/visible_student_v2_sampling.toml`: result cache, timeout
+skip at 2, degree-bounded `nlinarith`, 8 warm spares). The shared sampling loop started 00:47 UTC (112 searches plus
+8 spare REPLs). Then: A's three GRPO rounds, held-out runs, ranking, HOLD; about 3-4 h. Read
+`experiments/analysis/plain_checks.py` on its phase before the arms (share of proofs that need the bounded nlinarith).
+
 ## Offline run O2 (token-matched), 2026-11-17
 
 - Data: 2,091 pool proofs (about 299 per proof-length band), 30,632 blocks of 1-5 tactics, 2.0M completion and 17.3M
