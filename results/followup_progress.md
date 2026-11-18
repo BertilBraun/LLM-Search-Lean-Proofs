@@ -304,9 +304,14 @@ default), safe server stops, results pulled to the PC as they are written.
 | First node, 2026-11-14 11:20 UTC to its outage at about 23:35 UTC | about $11 at most; partly refunded by the provider (owner) |
 | Second node, from 2026-11-15 about 08:30 UTC | $0.83 per hour |
 
-## Arm A started 2026-11-18 04:58 UTC
+## Arm A restarted 2026-11-18 07:15 UTC at 5e-5
 
-Per-tactic GRPO at 2e-5, from v0 and value v0, 16 phases of 12M generated tokens, value trained every 2 phases, visible
+The owner chose 5e-5 for A (step 2 tied 2e-5 and 5e-5; C and D use 5e-5), so D's GRPO rate is 5e-5 too (master
+`0e04599`). The first start at 2e-5 (04:58-07:10, one phase published, no health alerts) was stopped cleanly with
+`grpo_loop.sh stop` and kept as `followup_A.lr2e-5_stopped_20261118`. Arm-chaining automation and the expert-iteration
+smoke test before arm C are being written.
+
+Earlier start, superseded: per-tactic GRPO at 2e-5, from v0 and value v0, 16 phases of 12M generated tokens, value trained every 2 phases, visible
 reasoning with the search-efficiency switches (master `0f12c1d`). Started by hand with `deployment/arm_loop.sh`; the
 automation that runs the arms one after another (with each arm's probe run and adapter pull) is not written yet.
 
