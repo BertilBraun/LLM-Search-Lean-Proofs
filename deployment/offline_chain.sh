@@ -29,7 +29,7 @@ exec >> "${state}/chain.log" 2>&1
 source "$(dirname "${BASH_SOURCE[0]}")/chain_helpers.sh" \
     || { echo "$(date -u +%FT%TZ) no chain_helpers.sh beside the driver: install it" | tee "${state}/STOPPED"; exit 0; }
 # An older copy of the helpers lacks what this driver calls (bash would only print "command not found" and go on).
-declare -F other_chain_idle > /dev/null || stop_chain "chain_helpers.sh is older than the driver: install the current one"
+declare -F other_chain_idle no_other_loop > /dev/null || stop_chain "chain_helpers.sh is older than the driver: install the current one"
 
 say "driver start (pid $$)"
 for marker in STOPPED HOLD; do
@@ -91,6 +91,9 @@ step held_out_config "${python}" experiments/offline_arm.py --config "${config}"
 
 # From here on servers and GPUs: never beside a running step 2.
 other_chain_idle "${STUDY_CHAIN_STATE:-/workspace/runs/study_chain}" study
+other_chain_idle "${ARMS_CHAIN_STATE:-/workspace/runs/arms_chain}" arms
+# The arms' loops outlive their driver: a STOPPED arms chain may still have one running.
+no_other_loop
 
 output_of() { echo "${LEAN_SEARCH_CHECKPOINTS}/${arm}_$1_$2"; }
 

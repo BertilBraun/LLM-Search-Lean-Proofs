@@ -129,6 +129,7 @@ def environment(node: Node, extra: dict[str, str] | None = None) -> dict[str, st
         | {
             "STUDY_CHAIN_STATE": str(node.state),
             "OFFLINE_CHAIN_STATE": str(node.offline_state),
+            "ARMS_CHAIN_STATE": str(node.root / "arms_state"),
             "STUDY_CHAIN_REPOSITORY": str(node.root / "repository"),
             "STUDY_CHAIN_START_SECONDS": "0",
             "STUDY_CHAIN_POLL_SECONDS": "0",
@@ -493,6 +494,32 @@ def test_a_running_offline_chain_stops_step_2_before_any_server_or_gpu_action(no
 def test_an_offline_chain_at_hold_or_stopped_lets_step_2_run(node: Node, marker: str) -> None:
     offline_chain_running(node, marker)
     assert supervise(node) == [0] and node.steps() == expected_steps(node)
+
+
+def test_a_running_arms_chain_stops_step_2_before_any_server_or_gpu_action(node: Node) -> None:
+    arms_state = node.root / "arms_state"
+    arms_state.mkdir()
+    (arms_state / "chain.log").write_text("driver start\n", encoding="utf-8")
+    supervise(node)
+    expected = ["learning_rate_step.py check-mode", "learning_rate_step.py write-configs"]
+    assert ("the arms chain" in node.stopped(), node.steps()) == (True, expected)
+
+
+def test_an_arms_live_loop_stops_step_2_even_with_the_arms_chain_stopped(node: Node) -> None:
+    arms_state = node.root / "arms_state"
+    arms_state.mkdir()
+    (arms_state / "chain.log").write_text("driver start\n", encoding="utf-8")
+    (arms_state / "STOPPED").write_text("stopped\n", encoding="utf-8")
+    run = node.workspace / "runs" / "followup_A"
+    run.mkdir(parents=True)
+    sleeper = subprocess.Popen(["sleep", "30"])  # noqa: S603, S607
+    (run / "loop.pid").write_text(f"{sleeper.pid}\n", encoding="utf-8")
+    try:
+        supervise(node)
+    finally:
+        sleeper.kill()
+    expected = ["learning_rate_step.py check-mode", "learning_rate_step.py write-configs"]
+    assert ("the loop of" in node.stopped(), node.steps()) == (True, expected)
 
 
 def test_a_prepared_but_unstarted_offline_state_does_not_stop_step_2(node: Node) -> None:

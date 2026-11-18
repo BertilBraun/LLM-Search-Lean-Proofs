@@ -100,6 +100,7 @@ def start(node: Node, script: Path = SCRIPT) -> int:
     environment = os.environ | {
         "OFFLINE_CHAIN_STATE": str(node.state),
         "STUDY_CHAIN_STATE": str(node.study_state),
+        "ARMS_CHAIN_STATE": str(node.root / "arms_state"),
         "OFFLINE_CHAIN_REPOSITORY": str(node.root / "repository"),
         "OFFLINE_CHAIN_START_SECONDS": "0",
         "OFFLINE_CHAIN_POLL_SECONDS": "0",
@@ -475,6 +476,26 @@ def test_a_running_step_2_stops_the_offline_chain_before_any_server_or_gpu_actio
 def test_step_2_at_hold_or_stopped_lets_the_offline_chain_run(node: Node, marker: str) -> None:
     study_chain_running(node, marker)
     assert supervise(node) == [0] and node.steps() == [*DATA_STEPS, *MATCHED_STEPS]
+
+
+def test_a_running_arms_chain_stops_the_offline_chain_before_any_server_or_gpu_action(node: Node) -> None:
+    arms_state = node.root / "arms_state"
+    arms_state.mkdir()
+    (arms_state / "chain.log").write_text("driver start\n", encoding="utf-8")
+    supervise(node)
+    assert ("the arms chain" in node.stopped(), node.steps()) == (True, DATA_STEPS)
+
+
+def test_an_arms_live_loop_stops_the_offline_chain_before_any_server_or_gpu_action(node: Node) -> None:
+    run = node.root / "workspace" / "runs" / "followup_C"
+    run.mkdir(parents=True, exist_ok=True)
+    sleeper = subprocess.Popen(["sleep", "30"])  # noqa: S603, S607
+    (run / "loop.pid").write_text(f"{sleeper.pid}\n", encoding="utf-8")
+    try:
+        supervise(node)
+    finally:
+        sleeper.kill()
+    assert ("the loop of" in node.stopped(), node.steps()) == (True, DATA_STEPS)
 
 
 def test_a_prepared_but_unstarted_step_2_does_not_stop_the_offline_chain(node: Node) -> None:

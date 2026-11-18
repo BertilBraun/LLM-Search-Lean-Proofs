@@ -15,7 +15,8 @@ overlay's [loop] lines, its training.phase_config pointing at the file beside it
 whose policy trains in expert-iteration rounds (C, D) also gets <output>/<name>/expert_iteration.toml
 (followup/expert_iteration.toml with the overlay's [expert_iteration] lines), which its loop config names. Refuses an
 overlay that changes anything but its kind's settings (an arm: name, seed offset, credit mode, learning rate, the
-rounds' schedule, window and learning rate; the shared sampling: name, the phase and total token budgets), one that
+rounds' schedule, window and learning rate; the shared sampling: name, the phase and total token budgets; a smoke run,
+--kind smoke, as deployment/arms_chain.sh derives it: an arm's and its phase budget and count), one that
 still holds a PLACEHOLDER, a mode that sets anything but the search config and the expansions or whose search config
 does not load or caps each search's generated tokens, an arm whose sampling differs from step 2's shared run's (its
 sampling.json: the search config, the expansions and the search config's sha256, written beside every loop.toml), an
@@ -111,7 +112,7 @@ def main() -> None:
     overlay = read_toml(arguments.arm)
     base = mode_base(arguments.mode)
     record = sampling_record(base["sampling"], REPOSITORY_DIRECTORY)
-    if arguments.kind == OverlayKind.ARM:
+    if arguments.kind in (OverlayKind.ARM, OverlayKind.SMOKE):
         refusal = shared_sampling_refusal(arguments.output.absolute(), record)
         if refusal is not None:
             raise SystemExit(f"{arguments.arm}: {refusal}.")

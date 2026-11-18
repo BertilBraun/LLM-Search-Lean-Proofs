@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# The stand-in for the checkout's python: each experiments/ script the arms driver runs, logged, writing what the real
+# one leaves behind (tests/rl/test_arms_chain.py runs the real experiments/arms_chain.py's logic). kill_<key> and
+# fail_<key> (fake_common.sh) with the key arms_chain_<command> or probe_compare; smoke_fails makes the smoke check
+# fail, and so does a missing kill record.
+source "${FAKE_REPOSITORY}/deployment/fake_common.sh"
+script="$1"
+shift
+case "${script}" in
+    experiments/arms_chain.py)
+        command="$1"
+        arm="$(option_value --arm "$@")"
+        log_command "arms_chain.py ${command}${arm:+ ${arm}}"
+        outcome "arms_chain_${command}" || exit 1
+        case "${command}" in
+            smoke-overlays)
+                output="$(option_value --output "$@")"
+                mkdir -p "${output}"
+                touch "${output}/C.toml" "${output}/D.toml"
+                ;;
+            adapters)
+                output="$(option_value --output "$@")"
+                [[ -e "${output}" ]] && { echo "${output} exists" >&2; exit 1; }
+                mkdir -p "${output}/phase_0008/policy"
+                echo "${output}: phase 8 policy, phase 8 value, phase 16 policy, phase 16 value"
+                ;;
+            probe-list)
+                printf '[[runs]]\nname = "arm_%s_phase16_run1"\n' "${arm}" > "$(option_value --output "$@")"
+                ;;
+            compare-plan)
+                state="$(option_value --state "$@")"
+                x="arm_${arm}_phase16_run1"
+                printf '%s_against_anchors.txt\t%s\tarm %s\tv0 anchors\tstep1_run1_v0_value_v0 step1_run2_v0_value_v0\n' \
+                    "${arm}" "${x}" "${arm}"
+                printf '%s_against_run7.txt\t%s\tarm %s\tv35 value final\tstep1_run7_v35_value_final\n' "${arm}" "${x}" "${arm}"
+                for other in A C D; do
+                    [[ "${other}" == "${arm}" ]] && continue
+                    [[ -f "${state}/done_probe_${other}" ]] || continue
+                    printf '%s_against_%s.txt\t%s\tarm %s\tarm %s\tarm_%s_phase16_run1\n' \
+                        "${arm}" "${other}" "${x}" "${arm}" "${other}" "${other}"
+                done
+                ;;
+            report)
+                state="$(option_value --state "$@")"
+                if [[ -f "${state}/done_probe_${arm}" ]]; then
+                    echo "- Probe run arm_${arm}_phase16_run1 (phase 16): **700 of 2,000 (35.00%)**"
+                else
+                    echo "- No probe run (the owner's word after the health stop)."
+                fi
+                ;;
+            health-report)
+                echo "# Arm ${arm} stopped on its health rule"
+                ;;
+            smoke-check)
+                state="$(option_value --state "$@")"
+                echo "# Smoke test" > "$(option_value --output "$@")"
+                if [[ -f "${FAKE_SCENARIO}/smoke_fails" ]]; then
+                    echo "failed: C round trained"
+                    exit 3
+                fi
+                if [[ ! -f "${state}/smoke/kill_D.json" ]]; then
+                    echo "failed: D killed while publishing"
+                    exit 3
+                fi
+                echo "passed"
+                ;;
+            *)
+                exit 2
+                ;;
+        esac
+        ;;
+    experiments/probe_compare.py)
+        log_command "probe_compare.py $1 $(option_value --x "$@") against $(option_value --y-label "$@")"
+        outcome probe_compare || exit 1
+        echo "Paired difference: +0.0 points"
+        ;;
+    *)
+        log_command "UNKNOWN ${script} $*"
+        exit 2
+        ;;
+esac
