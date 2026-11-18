@@ -309,8 +309,16 @@ default), safe server stops, results pulled to the PC as they are written.
 Master `c15afc5` deployed (node-local edits unchanged; the node's Lean tests at it: 548 passed). The step-2 driver runs
 in the visible mode (`followup/modes/visible.toml` → `search/visible_student_v2_sampling.toml`: result cache, timeout
 skip at 2, degree-bounded `nlinarith`, 8 warm spares). The shared sampling loop started 00:47 UTC (112 searches plus
-8 spare REPLs). Then: A's three GRPO rounds, held-out runs, ranking, HOLD; about 3-4 h. Read
-`experiments/analysis/plain_checks.py` on its phase before the arms (share of proofs that need the bounded nlinarith).
+8 spare REPLs). Then: A's three GRPO rounds, held-out runs, ranking, HOLD; about 3-4 h.
+
+- First start failed at once (00:52): the loop reads a value benchmark (`grpo_gate/benchmark.json.gz`) that was never
+  built on this node. Turned off in `followup/base.toml` (master `2c74e67`; a trend nothing acts on), failed state
+  moved aside (`*.failed_value_benchmark_20261118`), restarted 01:19.
+- **Shared sampling done: 12.3M generated tokens in 37 min** (01:34-02:11 UTC, after the loop's 6-minute v0 held-out
+  baseline), 385 trees, 4,356 verified proofs; 102 searches cut off at the stop (2.4M tokens
+  not counted, as designed).
+- **Plain-Mathlib check:** 3 of 4,356 verified proofs (0.07%) fail it, all at its 60 s limit; no solved tree lacks a
+  plain-verified proof. The bounded `nlinarith` does not change what the arms train on in any material way.
 
 ## Offline run O2 (token-matched), 2026-11-17
 
