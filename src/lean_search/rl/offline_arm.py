@@ -3,6 +3,7 @@
 import dataclasses
 import hashlib
 import json
+import statistics
 import tomllib
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -484,8 +485,22 @@ def ranks_fit(peak_bytes: int, ranks: int, limit_bytes: int) -> bool:
     return ranks * peak_bytes <= MAX_HOST_MEMORY_SHARE * limit_bytes
 
 
-def steady_tokens_per_second(records: Sequence[StepRecord], warmup_steps: int) -> float | None:
-    """Tokens per training second over the steps after the first `warmup_steps`; None before any."""
+def median_step_tokens_per_second(records: Sequence[StepRecord], warmup_steps: int) -> float | None:
+    """The median step's rate after the first `warmup_steps`: what a step costs when nothing stalls it; None before
+    any. Not for planning wall time (`sustained_tokens_per_second` is)."""
+    if len(records) <= warmup_steps:
+        return None
+    seconds = [record.training_seconds for record in records]
+    rates = [
+        record.tokens / (seconds[index] - (seconds[index - 1] if index else 0.0))
+        for index, record in enumerate(records)
+        if index >= warmup_steps
+    ]
+    return statistics.median(rates)
+
+
+def sustained_tokens_per_second(records: Sequence[StepRecord], warmup_steps: int) -> float | None:
+    """All tokens over all training seconds after the first `warmup_steps`, stalls included; None before any."""
     if len(records) <= warmup_steps:
         return None
     start = records[warmup_steps - 1].training_seconds if warmup_steps else 0.0

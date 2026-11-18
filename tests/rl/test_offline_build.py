@@ -27,9 +27,10 @@ from lean_search.rl.offline_arm import (  # noqa: E402
     fingerprint_differences,
     load_offline_arm_config,
     matched_sample,
+    median_step_tokens_per_second,
     ranks_fit,
     split_examples,
-    steady_tokens_per_second,
+    sustained_tokens_per_second,
     usable_blocks,
     walk_fingerprint,
     walk_settings_text,
@@ -190,13 +191,23 @@ def step(number: int, seconds: float, tokens: int = 1000) -> StepRecord:
     return StepRecord(number, 0.0, 1e-4, 1.0, 1.0, tokens, tokens, 10, seconds, 0.0)
 
 
-def test_steady_throughput_leaves_out_the_warmup_steps() -> None:
+def test_the_median_step_rate_leaves_out_the_warmup_steps() -> None:
     records = [step(1, 100.0), step(2, 101.0), step(3, 102.0)]
-    assert steady_tokens_per_second(records, 1) == 1000.0
+    assert median_step_tokens_per_second(records, 1) == 1000.0
 
 
-def test_steady_throughput_needs_a_step_after_the_warmup() -> None:
-    assert steady_tokens_per_second([step(1, 100.0)], 1) is None
+def test_the_median_step_rate_is_not_set_by_a_stalled_step() -> None:
+    records = [step(1, 100.0), step(2, 101.0), step(3, 141.0), step(4, 142.0)]
+    assert median_step_tokens_per_second(records, 1) == 1000.0
+
+
+def test_the_median_step_rate_needs_a_step_after_the_warmup() -> None:
+    assert median_step_tokens_per_second([step(1, 100.0)], 1) is None
+
+
+def test_the_sustained_rate_counts_a_stalled_step() -> None:
+    records = [step(1, 100.0), step(2, 101.0), step(3, 141.0), step(4, 142.0)]
+    assert sustained_tokens_per_second(records, 1) == 3000 / 42
 
 
 def problem_with_reference(keys: tuple[tuple[str, ...], ...]) -> StateProblem:

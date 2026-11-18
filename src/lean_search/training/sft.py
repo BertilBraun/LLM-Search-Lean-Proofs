@@ -72,7 +72,14 @@ class OptimizationConfig:
     gradient_checkpointing: bool = True
     # Concatenate shuffled examples into one row per micro-batch, without padding (Qwen3.5 only).
     packing: bool = False
+    # A packed row padded up to a multiple of this by an ignored segment of its own (0: not padded), in `train`'s steps
+    # and validations only; the other trainers ignore it. Triton compiles a kernel again for a length divisible by 16
+    # and one that is not, and unpadded rows meet both on each rank in turn.
+    packed_length_multiple: int = 0
     compile_layers: bool = False
+    # Dynamo's recompile limit with compile_layers (0: torch's own, 8). peft's LoRA forward is compiled once per
+    # projection shape, and past the limit the remaining projections run eager.
+    compiled_shapes_limit: int = 0
     seed: int = 0
 
 
@@ -282,18 +289,34 @@ def collate(examples: Sequence[TokenizedExample], pad_token_id: int, device: tor
     return Batch(input_ids.to(device), attention_mask.to(device), labels.to(device))
 
 
-def pack(examples: Sequence[TokenizedExample], device: torch.device) -> Batch:
+def pack(
+    examples: Sequence[TokenizedExample], device: torch.device, length_multiple: int = 0, pad_token_id: int = 0
+) -> Batch:
     # Each example starts with a prompt token, whose label is ignored, so no target crosses an example boundary.
     lengths = [example.token_count for example in examples]
-    input_ids = torch.tensor([token for example in examples for token in example.input_ids]).unsqueeze(0)
-    labels = torch.tensor([label for example in examples for label in example.labels]).unsqueeze(0)
+    padding = -sum(lengths) % length_multiple if length_multiple else 0
+    input_ids = [token for example in examples for token in example.input_ids] + [pad_token_id] * padding
+    labels = [label for example in examples for label in example.labels] + [IGNORE_INDEX] * padding
+    lengths += [padding] if padding else []
     return Batch(
-        input_ids.to(device), None, labels.to(device), packed_positions(lengths).to(device), sequence_starts(lengths)
+        torch.tensor(input_ids).unsqueeze(0).to(device),
+        None,
+        torch.tensor(labels).unsqueeze(0).to(device),
+        packed_positions(lengths).to(device),
+        sequence_starts(lengths),
     )
 
 
-def micro_batch(examples: Sequence[TokenizedExample], packing: bool, pad_token_id: int, device: torch.device) -> Batch:
-    return pack(examples, device) if packing else collate(examples, pad_token_id, device)
+def micro_batch(
+    examples: Sequence[TokenizedExample],
+    packing: bool,
+    pad_token_id: int,
+    device: torch.device,
+    packed_length_multiple: int = 0,
+) -> Batch:
+    if packing:
+        return pack(examples, device, packed_length_multiple, pad_token_id)
+    return collate(examples, pad_token_id, device)
 
 
 def token_losses_and_correctness(
@@ -348,6 +371,12 @@ class CompletionLoss(torch.nn.Module):
         return token_losses, correct, torch.searchsorted(sequence_ends, mask[0].nonzero()[:, 0], right=True)
 
 
+def set_compiled_shapes_limit(limit: int) -> None:
+    """0 leaves torch's own limit."""
+    if limit:
+        torch._dynamo.config.recompile_limit = limit
+
+
 def load_trainable_model(
     model_name: str,
     optimization: OptimizationConfig,
@@ -386,6 +415,7 @@ def load_trainable_model(
             model.train()
             saved = causal_model = model
     if optimization.compile_layers:
+        set_compiled_shapes_limit(optimization.compiled_shapes_limit)
         for name, module in causal_model.named_modules():
             if COMPILED_MODULE.search(name):
                 module.compile(dynamic=True)
@@ -410,6 +440,7 @@ def validation_metrics(
     packing: bool,
     pad_token_id: int,
     device: torch.device,
+    packed_length_multiple: int = 0,
 ) -> tuple[float, float]:
     """Mean completion-token loss and the fraction of examples whose every target token is the argmax."""
     lengths = [example.token_count for example in examples]
@@ -422,7 +453,9 @@ def validation_metrics(
     token_count = 0
     exact = 0
     for indices in micro_batches:
-        batch = micro_batch([examples[index] for index in indices], packing, pad_token_id, device)
+        batch = micro_batch(
+            [examples[index] for index in indices], packing, pad_token_id, device, packed_length_multiple
+        )
         with torch.autocast(device.type, dtype=torch.bfloat16):
             token_losses, correct, rows = loss_module(
                 batch.input_ids, batch.attention_mask, batch.labels, batch.position_ids, batch.sequence_starts
@@ -477,6 +510,7 @@ def evaluate(
     packing: bool,
     device: torch.device,
     validation_sets: Sequence[ValidationSet] = (),
+    packed_length_multiple: int = 0,
 ) -> EvaluationRecord:
     start = time.perf_counter()
     causal_model.eval()
@@ -487,13 +521,20 @@ def evaluate(
         packing,
         tokenizer.pad_token_id,
         device,
+        packed_length_multiple,
     )
     sets = tuple(
         SetValidation(
             validation_set.name,
             len(validation_set.examples),
             validation_metrics(
-                loss_module, validation_set.examples, config.micro_batch_tokens, packing, tokenizer.pad_token_id, device
+                loss_module,
+                validation_set.examples,
+                config.micro_batch_tokens,
+                packing,
+                tokenizer.pad_token_id,
+                device,
+                packed_length_multiple,
             )[0],
         )
         for validation_set in validation_sets
@@ -571,6 +612,7 @@ def train(
                 optimization.packing,
                 context.device,
                 validation_sets,
+                optimization.packed_length_multiple,
             )
             evaluations.append(record)
             on_evaluation(record)
@@ -591,7 +633,13 @@ def train(
         step_totals = torch.zeros(5, dtype=torch.float64, device=context.device)
         for micro_index, indices in enumerate(local_batches):
             batch_examples = [train_examples[index] for index in indices]
-            batch = micro_batch(batch_examples, optimization.packing, tokenizer.pad_token_id, context.device)
+            batch = micro_batch(
+                batch_examples,
+                optimization.packing,
+                tokenizer.pad_token_id,
+                context.device,
+                optimization.packed_length_multiple,
+            )
             synchronize = micro_index == len(local_batches) - 1 or context.world_size == 1
             with (
                 contextlib.nullcontext() if synchronize else distributed_module.no_sync(),
