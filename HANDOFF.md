@@ -4,22 +4,24 @@ Written 2026-11-16 by the orchestrating agent for the agent that takes over on a
 repository, same rented node; no conversation history and no running subagents carry over. Everything needed is in this
 file and the files it points to. Keep this file current while you work, or replace it with your own.
 
-**State at a glance (2026-11-18, about 11:00 UTC; updated by the second orchestrator)**
+**State at a glance (2026-11-18, about 21:45 UTC; updated by the second orchestrator)**
 
 - Done: step 1 (incl. the reasoning comparison: no reasoning +4.9 points at equal tokens but Lean-bound, 1.8x the
   time), the offline run O2 (545 of 2,000: FAILED the owner's gate against v35, so the arms sample WITH visible
-  reasoning), step 2 (A's learning rate: 2e-5 and 5e-5 tied; the owner chose 5e-5). Details and numbers:
-  `results/followup_progress.md`.
+  reasoning), step 2 (A's learning rate: 2e-5 and 5e-5 tied; the owner chose 5e-5), the C/D smoke test (accepted by
+  hand: its wake-memory gate read the line after the deliberate kill). Details: `results/followup_progress.md`.
+- Arm A (per-tactic GRPO 5e-5) was STOPPED by the owner after 6 trained phases for a bare-`have` drift; its run is
+  kept at `runs/followup_A` with `pause_A` and the driver's `hold_A`. The cause (a claim tactic earned its own progress
+  step) is fixed by two reward switches for A and D, merged on master `2a1caf4`, NOT deployed.
 - Running unattended: the arms driver `deployment/arms_chain.sh` (supervisord `arms_chain`, state
-  `/workspace/runs/arms_chain/`), installed 10:53 UTC on master `6f3ce10`. It adopted arm A (per-tactic GRPO 5e-5,
-  started by hand 07:15 UTC, `runs/followup_A`), then runs A's probe run, the C/D smoke test, arm C (expert iteration
-  5e-5, window 4), arm D (GRPO 5e-5 + a round every 4 phases), each with a probe run and comparisons, then HOLD. About
-  19 h per arm; A ends around 03:00 UTC 2026-11-19, the chain about 48-50 h after that. `on_health_stop = continue`
-  (owner): a health-stopped arm gets a report, the next arm runs, the owner decides at the end.
-- In the arms' training sampling only: the search-efficiency switches (result cache, timeout skip, warm spares,
-  degree-bounded `nlinarith`; `search/*_sampling.toml`). Probe and held-out runs keep the anchors' plain settings.
-- No code in flight. Arm B is dropped. O1 (the whole-pool offline run) runs last, on the owner's word. Review letters
-  used up to `bd` (next: `be`). Spend about $63 of the $190 loaded at $0.83/h.
+  `/workspace/runs/arms_chain/`, order file `smoke C A D`, `hold_A`) runs arm C (expert iteration 5e-5, window 4; started
+  18:49 UTC, healthy, held-out above v0 after 2 phases), its probe run, then writes HOLD "waiting for: A" (about
+  18:00-20:00 UTC 2026-11-19). AT THAT HOLD: deploy master, check the search configs are unchanged, run the rerun path
+  for A (ops note, "The order and holds"), remove `hold_A`, start the driver; A reruns from v0, then D. The owner's stop
+  rule for A: `experiments/claim_watch.py` after phases 2 and 4 (`results/followup_progress.md`, "Arm A's rerun").
+- `on_health_stop = continue`. Search-efficiency switches only in the arms' sampling. Arm B dropped; O1 last, on the
+  owner's word. Review letters used up to `bg` (next: `bh`). Spend about $75 of $190 at $0.83/h. The PC sleeps at
+  times: the watchdog and the pull pause, the node does not.
 
 ## 1. First hour: what to do
 
@@ -57,7 +59,7 @@ file and the files it points to. Keep this file current while you work, or repla
 
 - **Subagents:** implementation, analysis and review run in subagents on Opus 5.5 at high effort. Two independent
   reviews after every implementation wave, then fixes, then a re-review by the same reviewers, then merge. Reviews are
-  files in `results/reviews/` named `<date>_review_<letters>_<topic>.md`; the last used letters are `bd` (next: `be`).
+  files in `results/reviews/` named `<date>_review_<letters>_<topic>.md`; the last used letters are `bg` (next: `bh`).
 - **Usage:** running 5-8 Opus subagents at once exhausted the 5-hour usage limit on 2026-11-14 and left the node idle
   for hours. Keep few agents running, have node agents report on events rather than on a timer, and make node work
   self-sustaining so it does not depend on an agent being awake.
