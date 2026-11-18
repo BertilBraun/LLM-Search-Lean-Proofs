@@ -593,17 +593,48 @@ S=/workspace/runs/arms_chain; R=/workspace/runs; C=/workspace/checkpoints; X=C; 
 mv $R/followup_$X $R/followup_$X.bug_$T
 mv $R/followup_configs/followup_$X $R/followup_configs/followup_$X.bug_$T
 for d in $C/followup_${X}_phase_* $C/followup_$X; do mv $d $d.bug_$T; done
-mkdir -p $S/rerun_$T/probe $S/rerun_$T/adapters
+mkdir -p $S/rerun_$T/probe $S/rerun_$T/adapters $S/rerun_$T/loops
 for f in done_loop_$X started_loop_$X attempts_loop_${X}_start word_$X done_health_report_$X health_report_$X.md \
     health_report_$X.log started_adapters_$X done_adapters_$X adapters_$X.log adapters/$X done_probe_list_$X \
     started_probe_$X attempts_probe_$X done_probe_$X done_compare_$X done_report_$X report_$X.md report_$X.log \
-    probe/runs_$X.toml; do [[ -e $S/$f ]] && mv $S/$f $S/rerun_$T/$f; done
+    probe/runs_$X.toml pause_$X loops/$X.revisions loops/$X.log; do [[ -e $S/$f ]] && mv $S/$f $S/rerun_$T/$f; done
 [[ -e $R/probe_evaluations/probe_arm_${X}_phase16_run1 ]] && mv $R/probe_evaluations/probe_arm_${X}_phase16_run1{,.bug_$T}
 ```
 
 Check `ls $S | grep "_$X\b"` (the smoke runs' markers, `*_smoke_C`, stay). Deploy the fix (section 4) and start the
 driver: it starts arm X afresh and evaluates it. Earlier arms hit by the same bug are rerun the same way; a probe run
 of a stopped arm at another phase has another name (`probe/runs_X.toml` says which).
+
+**The order and holds** (owner, 2026-11-18). `$state/order` holds the steps' order as words, on one line or several:
+`A`, `C`, `D` and `smoke`, each at most once, `smoke` before `C` and `D` (unless `done_smoke` exists); without the file
+the order is `A smoke C D`. It is read at each start; anything else STOPs the chain before it touches anything. Steps
+done keep their markers and are skipped, so the order may change between starts. A step left out is not run; the
+final HOLD names the order it finished. `$state/hold_<arm>` holds an arm back: when the order reaches it, the chain
+stops the servers and writes HOLD "waiting for: <arm>"; the arm is not started, adopted, resumed or evaluated, its run
+directory and markers are not touched (an arm held while its loop runs STOPs the chain), and the steps after it in
+the order wait too (put an arm before the held one to run it meanwhile). To go on: remove `hold_<arm>`, move HOLD
+aside (`mv HOLD HOLD.waiting_for_<arm>`), `supervisorctl start arms_chain`. A hold removed while the chain still
+works through earlier steps simply never stops it.
+
+**Today's sequence** (arm A stopped at phase 7 for the bare-`have` reward problem, 14:39 UTC 2026-11-18; `pause_A`
+present, the chain STOPPED "A is paused"): first install the driver of this change (copy, `.new`, `mv`; it is
+read at the next start), then
+
+```bash
+S=/workspace/runs/arms_chain
+echo "smoke C A D" > $S/order
+touch $S/hold_A
+mv $S/STOPPED $S/STOPPED.A_paused_reward_fix
+supervisorctl start arms_chain
+```
+
+The chain runs the smoke test (about 2-2.5 h), then arm C (about 21-23 h with its probe run), then HOLD "waiting for:
+A". A's old run (`followup_A`, phase 7) is left as it is. Once the reward fix is merged: at that HOLD (never while C's
+loop runs: its jobs read the checkout), deploy master (section 4), run the rerun path below for X=A (it moves
+`followup_A`, its configs, checkpoints, markers and `pause_A` aside), remove `hold_A`, move HOLD aside and start the
+chain: arm A starts from v0 through `arm_loop.sh`, then D runs. Each arm is compared with every other arm whose probe
+run is done (A with C; D with C and A). Note that the smoke test and C then ran on the code before the fix, A and D
+on the code after it; `loops/<arm>.revisions` and each report record which.
 
 **Stopping an arm by hand** (BC S2). The driver starts a loop again within a minute when it finds it neither running
 nor ended, so first tell it not to: `touch /workspace/runs/arms_chain/pause_<X>` (X = A, C, D, or `smoke_C`,
