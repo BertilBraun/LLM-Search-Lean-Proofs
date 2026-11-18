@@ -309,8 +309,8 @@ default), safe server stops, results pulled to the PC as they are written.
 `deployment/arms_chain.sh` (reviews BC and BD with re-reviews; master `6f3ce10`) adopted the running arm A without
 touching it. It then runs: A's adapters (phase 8 and final) and one probe run, the C/D smoke test (6M tokens, one
 phase each, GRPO + value + a round in one pause, a kill during publishing), arm C, arm D, each with its probe run and
-comparisons, then HOLD with the servers stopped. A health stop waits for the owner's word (`on_health_stop` absent,
-i.e. `wait`, until the owner chooses). The PC pull now includes `runs/arms_chain` and every `runs/followup_*`, and
+comparisons, then HOLD with the servers stopped. A health stop: the owner chose `continue` (2026-11-18): the driver writes
+the stopped arm's report, goes on with the next arm, and asks for the owner's word on the stopped one at the end. The PC pull now includes `runs/arms_chain` and every `runs/followup_*`, and
 fetches each arm's adapters into `node_backup/2026-11-15/adapters/<arm>/` with a checksum check.
 
 ## Arm A restarted 2026-11-18 07:15 UTC at 5e-5
