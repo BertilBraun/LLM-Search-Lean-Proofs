@@ -1,7 +1,8 @@
-# The sampling mode with visible reasoning: base.toml's own search (visible student v2) at 32 expansions per training
+# The sampling mode with visible reasoning: base.toml's own search (visible student v2) with the search efficiency
+# switches (search/visible_student_v2_sampling.toml; probe runs keep the plain file) at 32 expansions per training
 # search. A mode sets exactly these two lines (src/lean_search/rl/study_configs.py, MODE_SETTINGS); experiments/
 # followup_arm.py --mode applies it to base.toml for step 2's shared sampling run and every arm alike. The study driver
 # (deployment/study_chain.sh) reads the owner's chosen mode from a copy in its state directory (mode.toml).
 [sampling]
-search_config = "experiments/configs/grpo/search/visible_student_v2.toml"
+search_config = "experiments/configs/grpo/search/visible_student_v2_sampling.toml"
 max_expansions = 32

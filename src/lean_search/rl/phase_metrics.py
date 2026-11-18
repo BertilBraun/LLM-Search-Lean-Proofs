@@ -45,7 +45,7 @@ def failure_tier(failure: Failure) -> FailureTier | None:
             return FailureTier.MALFORMED
         case FailureKind.UNKNOWN_IDENTIFIER:
             return FailureTier.INVALID_IN_STATE
-        case FailureKind.HEARTBEAT_TIMEOUT | FailureKind.WALL_CLOCK_TIMEOUT:
+        case FailureKind.HEARTBEAT_TIMEOUT | FailureKind.WALL_CLOCK_TIMEOUT | FailureKind.SKIPPED_TIMEOUT:
             return FailureTier.TIMEOUT
         case FailureKind.REPL_FAILURE:
             return None
@@ -153,10 +153,41 @@ def mean_block_tactics(records: Sequence[TreeRecord]) -> float:
     return tactics / samples if samples else 0.0
 
 
+@dataclass(frozen=True)
+class PlainChecks:
+    """Verified proofs of searches with an nlinarith variant against Mathlib's own nlinarith: the proofs checked,
+    those whose written text failed (they need the variant), and the solved trees all of whose proofs failed."""
+
+    checked_proofs: int
+    failed_proofs: int
+    variant_only_trees: int
+    # Of the failed proofs: those whose check hit its wall clock rather than failing in Lean.
+    timed_out_proofs: int = 0
+
+    def text(self) -> str:
+        return (
+            f"{self.failed_proofs} of {self.checked_proofs} verified proofs fail the plain Mathlib check (their "
+            f"written text with Mathlib's nlinarith; {self.timed_out_proofs} of them at its wall clock); "
+            f"{self.variant_only_trees} solved trees have no proof passing it"
+        )
+
+
+def plain_checks(records: Sequence[TreeRecord]) -> PlainChecks:
+    checked = failed = variant_only = timed_out = 0
+    for record in records:
+        flags = [node.plain_verified for node in record.nodes if node.plain_verified is not None]
+        checked += len(flags)
+        failed += flags.count(False)
+        variant_only += bool(flags) and not any(flags)
+        timed_out += sum(node.plain_check_timed_out for node in record.nodes)
+    return PlainChecks(checked, failed, variant_only, timed_out)
+
+
 def search_phase_record(records: Sequence[TreeRecord], statistics: GraphStatistics) -> SearchPhase:
     expansions = sum(record.result.accounting.expansions for record in records)
     lean_seconds = sum(record.result.accounting.lean_seconds for record in records)
     forced = forced_completions(records)
+    checks = plain_checks(records)
     return SearchPhase(
         graph=statistics,
         failure_tiers=failure_tiers(records),
@@ -166,4 +197,11 @@ def search_phase_record(records: Sequence[TreeRecord], statistics: GraphStatisti
         forced_answers=len(forced),
         repetition_loops=sum(repeats_itself(completion.text) for completion in forced),
         mean_block_tactics=mean_block_tactics(records),
+        cached_tactics=sum(record.result.accounting.cached_tactics for record in records),
+        cache_saved_seconds=sum(record.result.accounting.cache_saved_seconds for record in records),
+        skipped_timeouts=sum(record.result.accounting.skipped_timeouts for record in records),
+        plain_checked_proofs=checks.checked_proofs,
+        plain_failed_proofs=checks.failed_proofs,
+        variant_only_trees=checks.variant_only_trees,
+        plain_timed_out_proofs=checks.timed_out_proofs,
     )

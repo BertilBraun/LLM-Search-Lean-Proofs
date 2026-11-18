@@ -1410,6 +1410,14 @@ Arm B (B1 and B2 below) is dropped (owner, 2026-11-17); its rows stay for the re
   makes every arm's reference its own phase 1, which v0 sampled.
 - **After a stop** (decided): the owner and the orchestrator look at the cause; an obvious bug is fixed and every
   affected arm rerun; otherwise the degradation is documented as a result. No silent mid-run recipe changes.
+- **Search efficiency** (decided 2026-11-17; `rl/README.md`, "Search efficiency switches"): every arm's training
+  sampling, from step 2's shared sampling run on, runs with the per-search result cache, the timeout skip (a tactic
+  text not run again in a search after 2 wall-clock stops at its heartbeat limit), the degree-bounded `nlinarith`
+  (the owner's decision without a search A/B: about 29% less time on those calls, 93% of their successes kept; the
+  trees and training keep the policy's plain `nlinarith` text) and 8 spare REPL processes; probe runs and held-out
+  evaluations run without them, as the anchors did. A skipped tactic is labelled as the wall-clock
+  timeout it is expected to be (a negative label, never an infrastructure failure); the Lean-load health readings
+  count skipped tactics apart from real stops, so load stays comparable.
 
 ### Work packages
 

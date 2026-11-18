@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import ClassVar
 
+from lean_search.record_fields import written_when_set
 from lean_search.rl.policy_data import SamplerAgreement, SignedRatios, UpdateSize
 from lean_search.rl.tree_statistics import GraphStatistics
 from lean_search.search.tactic_labels import TacticLabelCounts
@@ -511,6 +512,17 @@ class SearchPhase:
     forced_answers: int
     repetition_loops: int
     mean_block_tactics: float
+    # The search memory (search.result_cache, search.timeout_skip): tactics answered without Lean, the Lean seconds
+    # their first runs took, and edges ending at a tactic not run after its text's wall-clock stops.
+    cached_tactics: int = written_when_set(0)
+    cache_saved_seconds: float = written_when_set(0.0)
+    skipped_timeouts: int = written_when_set(0)
+    # With an nlinarith variant (`phase_metrics.plain_checks`): verified proofs whose written text was checked in plain
+    # Mathlib, those that failed it, and solved trees whose every proof failed it.
+    plain_checked_proofs: int = written_when_set(0)
+    plain_failed_proofs: int = written_when_set(0)
+    variant_only_trees: int = written_when_set(0)
+    plain_timed_out_proofs: int = written_when_set(0)
 
 
 @dataclass(frozen=True)

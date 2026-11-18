@@ -28,7 +28,7 @@ from lean_search.expert_iteration.serving import (
     start_command,
     write_json_atomically,
 )
-from lean_search.lean import FORBIDDEN_TOKENS, LeanReplConfig, LeanReplPool
+from lean_search.lean import FORBIDDEN_TOKENS, LeanReplPool
 from lean_search.monitoring.cpu_layout import on_training_cpus, training_cpu_list
 from lean_search.monitoring.system_sampler import (
     CGROUP,
@@ -77,6 +77,7 @@ from lean_search.rl.search_options import CONTROL_ARM, OptionsArmConfig
 from lean_search.rl.trainer_channel import TrainerChannel, TrainerCommand, TrainerCommandKind
 from lean_search.rl.training_phase import PhaseOutcome
 from lean_search.search import CandidateBatches, CompletedSearch, Expander, Node, RunConfig, SearchConfig, SearchContext
+from lean_search.search.config import search_repl_config
 from lean_search.search.records import from_json_object
 from lean_search.training.resident import HostDirectories
 from lean_search.value.benchmark import BenchmarkScores, ValueBenchmark
@@ -188,6 +189,9 @@ class LeanTreeSearcher:
         stopped = await self.pool.stop_idle_processes(keep_running)
         return ReleasedLeanMemory(len(stopped), sum(usage.anonymous_bytes for usage in stopped))
 
+    def spare_text(self) -> str:
+        return self.pool.spare_text()
+
 
 @contextlib.asynccontextmanager
 async def open_tree_searcher(
@@ -207,7 +211,12 @@ async def open_tree_searcher(
             arm_models = await stack.enter_async_context(open_search_models(arm_config, gate))
             arm = OptionsArmSearch(options_arm, arm_config.search, arm_models)
         pool = await stack.enter_async_context(
-            LeanReplPool(config.lean.pool_size, LeanReplConfig(), config.lean.restart_fraction)
+            LeanReplPool(
+                config.lean.pool_size,
+                search_repl_config(config),
+                config.lean.restart_fraction,
+                spare_processes=config.lean.spare_processes or 0,
+            )
         )
         await pool.start(headers)
         yield LeanTreeSearcher(config, pool, models, gate, renamings, arm)

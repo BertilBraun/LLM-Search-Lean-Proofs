@@ -13,7 +13,7 @@ from pathlib import Path
 
 from lean_search.data import Problem
 from lean_search.expert_iteration.pool import problem_source
-from lean_search.lean import LeanReplConfig, LeanReplPool
+from lean_search.lean import LeanReplPool
 from lean_search.policy.expander import PolicyExpander, PolicyStatistics, open_policy_expander
 from lean_search.search import (
     CompletedSearch,
@@ -26,6 +26,7 @@ from lean_search.search import (
     tree_record,
     write_tree,
 )
+from lean_search.search.config import search_repl_config
 from lean_search.search.records import from_json_object, to_json
 from lean_search.value.estimator import ValueModelEstimator, ValueStatistics, open_value_estimator
 
@@ -254,7 +255,12 @@ async def search_pool(
             )
 
         try:
-            async with LeanReplPool(config.lean.pool_size, LeanReplConfig(), config.lean.restart_fraction) as pool:
+            async with LeanReplPool(
+                config.lean.pool_size,
+                search_repl_config(config),
+                config.lean.restart_fraction,
+                spare_processes=config.lean.spare_processes or 0,
+            ) as pool:
                 started = time.monotonic()
                 await pool.start(common_headers(problems, PRELOADED_HEADER_SHARE))
                 log(f"Pool of {config.lean.pool_size} ready in {time.monotonic() - started:.1f}s")

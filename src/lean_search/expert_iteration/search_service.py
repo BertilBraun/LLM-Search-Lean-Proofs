@@ -60,7 +60,7 @@ from lean_search.expert_iteration.shards import (
 from lean_search.expert_iteration.thinking import TreeReasoning
 from lean_search.expert_iteration.thinking_expander import ReasoningExpander, ReasoningLog
 from lean_search.expert_iteration.trainer import PhaseStage, PhaseTrainer, read_phase_state
-from lean_search.lean import LeanRepl, LeanReplConfig, LeanReplPool
+from lean_search.lean import LeanRepl, LeanReplPool
 from lean_search.policy.expander import PolicyStatistics, open_policy_expander
 from lean_search.search import (
     Expander,
@@ -74,6 +74,7 @@ from lean_search.search import (
     build_priority_function,
     tree_record,
 )
+from lean_search.search.config import search_repl_config
 from lean_search.search.records import from_json_object
 from lean_search.value.estimator import ValueModelEstimator, open_value_estimator
 
@@ -384,7 +385,12 @@ class SearchService:
         async with contextlib.AsyncExitStack() as stack:
             models = await self.open_models(stack)
             pool = await stack.enter_async_context(
-                LeanReplPool(workers, LeanReplConfig(), self.template.lean.restart_fraction)
+                LeanReplPool(
+                    workers,
+                    search_repl_config(self.template),
+                    self.template.lean.restart_fraction,
+                    spare_processes=self.template.lean.spare_processes or 0,
+                )
             )
             await pool.start(headers)
             self.log(f"Pool of {workers} REPLs ready")

@@ -386,7 +386,9 @@ def probe_run_config(
 
 
 def run_config_sha256(config: RunConfig) -> str:
-    return hashlib.sha256(run_config_text(config).encode()).hexdigest()
+    """The digest of what decides a search's outcomes: the run config without its spare processes (timing only)."""
+    identity = dataclasses.replace(config, lean=dataclasses.replace(config.lean, spare_processes=None))
+    return hashlib.sha256(run_config_text(identity).encode()).hexdigest()
 
 
 def run_directory(runs_root: Path, name: str) -> Path:

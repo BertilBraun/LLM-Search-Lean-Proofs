@@ -8,7 +8,7 @@ from pathlib import Path
 from lean_search.lean import LeanError, LeanReplConfig, ProofState
 from lean_search.lean.identifiers import environment_names_path
 from lean_search.lean.plans import TacticPlan
-from lean_search.lean.repl import BlockResult, VerificationResult
+from lean_search.lean.repl import BlockResult, OutcomeMemory, VerificationResult
 from lean_search.lean.text import split_header
 
 HEADER = "import Mathlib\n"
@@ -42,7 +42,12 @@ class ScriptedRepl:
         return LeanReplConfig(project_directory=self.project_directory)
 
     async def apply_block(
-        self, state: ProofState, plan: TacticPlan, heartbeats: int | None = None, timeout_seconds: float | None = None
+        self,
+        state: ProofState,
+        plan: TacticPlan,
+        heartbeats: int | None = None,
+        timeout_seconds: float | None = None,
+        memory: OutcomeMemory | None = None,
     ) -> BlockResult:
         self.blocks.append(plan.block)
         if plan.rejection is not None:

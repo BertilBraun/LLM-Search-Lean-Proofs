@@ -8,6 +8,7 @@ from lean_search.lean.identifiers import NameRepair
 from lean_search.lean.plans import Rejection
 from lean_search.lean.repl import BlockFailure
 from lean_search.lean.text import TacticPiece
+from lean_search.record_fields import written_when_set
 from lean_search.search.texts import ExpansionTexts
 
 MAX_FAILURE_MESSAGE_CHARACTERS = 1000
@@ -47,6 +48,9 @@ class FailureKind(StrEnum):
     UNPARSED = "unparsed"
     # Crash, failed or mismatched replay, failed restart: infrastructure, never the candidate's fault.
     REPL_FAILURE = "repl_failure"
+    # Not run because its tactic text hit the wall clock often enough earlier in the search (search.timeout_skip):
+    # labelled like a wall-clock timeout, counted apart from the stops that really happened.
+    SKIPPED_TIMEOUT = "skipped_timeout"
 
 
 @dataclass(frozen=True)
@@ -60,6 +64,8 @@ class Failure:
         match outcome:
             case Rejection():
                 return Failure(FailureKind.UNKNOWN_IDENTIFIER, message)
+            case LeanTimeout(skipped=True):
+                return Failure(FailureKind.SKIPPED_TIMEOUT, message)
             case LeanTimeout(wall_clock=True):
                 return Failure(FailureKind.WALL_CLOCK_TIMEOUT, message)
             case LeanTimeout():
@@ -100,6 +106,11 @@ class Node:
     expansion_prompt_tokens: int | None = None
     expansion_generated_tokens: int | None = None
     verification_problems: tuple[str, ...] = ()
+    # A verified proof of a search with an nlinarith variant: whether the written text also verifies with Mathlib's
+    # own nlinarith, without the heartbeat wrappers. None otherwise.
+    plain_verified: bool | None = None
+    # That check hit its wall clock (`LeanReplConfig.plain_check_timeout_seconds`).
+    plain_check_timed_out: bool = False
 
     @property
     def goals(self) -> tuple[str, ...]:
@@ -143,6 +154,8 @@ class Edge:
     # A REPAIR edge's replaced names. Records before 2026-10-31 kept them on the policy edge, its `text` the repaired
     # block and its outcome the repaired run's.
     name_repairs: tuple[NameRepair, ...] = ()
+    # Executed tactics answered by the search's result cache instead of Lean (search.result_cache).
+    cached_tactics: int = written_when_set(0)
 
     @property
     def repaired(self) -> bool:
@@ -211,6 +224,7 @@ class SearchTree:
         tactic_goals: tuple[tuple[str, ...], ...] = (),
         feedback: bool = False,
         name_repairs: tuple[NameRepair, ...] = (),
+        cached_tactics: int = 0,
     ) -> Edge:
         assert parent.expansion_index is not None, parent.node_id
         edge = Edge(
@@ -236,6 +250,7 @@ class SearchTree:
             tactic_goals=tactic_goals,
             feedback=feedback,
             name_repairs=name_repairs,
+            cached_tactics=cached_tactics,
         )
         self.edges.append(edge)
         if failure is not None and failure.kind in (FailureKind.WALL_CLOCK_TIMEOUT, FailureKind.HEARTBEAT_TIMEOUT):

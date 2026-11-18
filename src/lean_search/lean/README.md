@@ -184,6 +184,80 @@ print `x✝` where the node prints `x_1`; intermediate states match nodes by `no
   definitions change (4 of 500 sampled traced proofs did when they last changed). `?m.N` numbers in goals shift too
   (13 of 267k traced steps show one).
 
+## Search memory
+
+`apply_block(..., memory=...)` takes an `OutcomeMemory` (`memory.py`, `SearchMemory`), owned by one search and never
+shared across searches or pools. It sees every tactic of the block before Lean runs it. Both switches are off (None)
+by default and then absent from the written run config, so a config without them keeps its digest; they are for the
+arms' training sampling only (`rl/README.md`, "Search efficiency switches"), and `evaluation_run_config` turns them off.
+
+- **Result cache** (`SearchConfig.result_cache`, off): a tactic whose exact Lean input ran before in the search (the
+  state's whole tactic path from the statement with each step's heartbeat limit, the tactic text, its limit) takes the
+  outcome of that run instead of running. The key is the path, not the goals: equal goals reached by different paths
+  can differ in what the goals do not print (the environment's step matchers, metavariables, fresh-name counters, which
+  change the run time and so the heartbeat outcome, see above); the path is what replay already relies on to be
+  deterministic. On the old run's trees a path key finds 87% of what a goal key would (11.6% against 13.3% of Lean
+  seconds). Cached: successes (the recorded `ProofState`; from a restarted process it is replayed when used, like any
+  state), errors including deterministic panics, heartbeat timeouts. Not cached: wall-clock stops (their outcome depends
+  on the machine's load: re-run alone, most end in an error or at the heartbeat limit within 30-100 s) and
+  `ReplFailure`s. `BlockResult.cached_tactics` / `cached_seconds` (the seconds the first run's tactic itself took,
+  without a restart or the replay of its state before it), `Edge.cached_tactics` and `Accounting.cached_tactics` /
+  `cache_saved_seconds` record the hits (written to records only when non-zero). The wall-clock limit is not part of
+  the key: only outcomes that do not depend on it are kept.
+- **Timeout skip** (`SearchConfig.timeout_skip`, off; `max_wall_clock_timeouts = 2`): a tactic text (an executed
+  tactic of a block, so the whole block for the usual single-tactic one) stopped by the wall clock that often in the
+  search at the same heartbeat limit, at any states, is not run again in it at that limit (the sweep's stops at 200k
+  do not skip the policy's text at 50k). `apply_block` fails at it with `LeanTimeout(wall_clock=True,
+  skipped=True)`, keeping the block's valid prefix, without a kill or a replay. On run 4's trees: 528 timeouts and
+  11.7 h (2.0% of Lean time) avoided, 25 successful steps lost, none on a proof path (after 1 stop: 3.8%, 2 proofs
+  lost). The edge's failure is `FailureKind.SKIPPED_TIMEOUT`: labelled like a wall-clock timeout everywhere labels are
+  made (`EdgeKind.WALL_CLOCK_TIMEOUT`, the timeout tier, a negative label, never an infrastructure failure, never
+  shown as feedback), but counted apart in `Accounting.skipped_timeouts` and `StepStatistics.skipped_timeouts`, so the
+  Lean-load comparisons count only the stops that happened. The cache is consulted first: an exact input with a
+  deterministic outcome takes it even when its text is skipped elsewhere.
+
+## Bounded nlinarith
+
+`LeanReplConfig.nlinarith_variant` (from `[search] nlinarith_variant`, None by default and then absent from the run
+config and its digest; `search_repl_config` gives a pool's REPLs the search's, and a search refuses a REPL with
+another) runs Mathlib's `nlinarith` as a bounded variant (`nlinarith.py`): linarith with nlinarith's squares and fewer
+of its pairwise products. On step 1's run 4 (`experiments/analysis/nlinarith_variants.py`, 300 calls, 95% intervals)
+`degree` took 71% (57-85%) of plain nlinarith's time and kept 92.7% (87-98%) of its successes; the arms' training
+sampling uses it (`rl/README.md`, "Search efficiency switches"), evaluations never do.
+
+- **Environment:** `VARIANT_DEFINITIONS` is appended to the base definitions of every process of the pool (spares
+  included), exactly the environment the measurement used. It moves the fresh-name counters, so heavy steps' run
+  times shift as after any change of the base definitions (above); never on without the switch. The definitions need
+  Mathlib's linarith, so every header of such a pool must import it (`import Mathlib`); a start says so otherwise.
+- **What runs:** `variant_tactic` rewrites, just before a tactic goes to Lean (`_run_tactic`, so steps, replays and
+  re-runs alike), every whole-word `nlinarith` with or without a hint list, also inside combinators, nested `by`
+  blocks and `first`, to `lean_search_nlinarith <variant>`. Forms with their own options (`nlinarith!`,
+  `nlinarith only`, `nlinarith (config := ...)`) and names containing the word run as written.
+- **What is recorded:** the text as written. States' tactic paths, edges, executed pieces, proofs and so the
+  training data hold the policy's (or the sweep's) `nlinarith [...]`: arms learn to write plain Mathlib. The result
+  cache, the timeout skip, the identifier check, the forbidden-token check and de-duplication all see the written
+  text; since the rewrite is a fixed function of the pool's config, equal written inputs are equal executed ones.
+  `lean_search_nlinarith` itself is a forbidden token, so a policy cannot call the variant directly.
+- **Verification:** `verify_state` accepts on the executed text (the variant, wrapped as executed) in the base
+  environment with the definitions; the kernel checks the term the variant built like any other, and the variant only
+  adds proofs of facts to linarith's input, so soundness is the kernel's as always. `plain_verified` still re-checks
+  the written text with Mathlib's own `nlinarith`, unwrapped, as for every proof. Nothing requires it: the variant's
+  products are a subset of nlinarith's, so plain nlinarith has a certificate too but may not find it within Lean's
+  default limits. Cost: one plain elaboration per found proof, which with the variant takes about the plain
+  nlinarith's own time (seconds for most); for a proof whose step only the variant finds in time, up to the
+  declaration's default 200k heartbeats, and at most `LeanReplConfig.plain_check_timeout_seconds` (60 s) of wall
+  clock, after which the process is replaced and the check counts as failed and timed out
+  (`VerificationResult.plain_timed_out`, `Node.plain_check_timed_out`, counted apart in the phase record). Such
+  proofs (`plain_verified = False`) train the policy all the same (a search with the variant reproduces them); they
+  are not plain-Mathlib proofs and must be filtered out of anything published as such. With the variant on, every
+  verified proof of a search, harvested ones included, records its check (`Node.plain_verified`, written only then);
+  `SearchPhase` counts the proofs checked and failed and the solved trees with no proof passing it (the loop logs
+  them), and `experiments/analysis/plain_checks.py <trees directory>` reads the same counts from a finished run.
+- **Renaming:** `rl/renaming.py` re-verifies a renamed statement's proof against the original with `verify_proof` on
+  the written text, so with `[renaming] enabled` a proof only the variant finds would count as unsolved and its tree
+  be dropped. Renaming is off in the controls study (`followup/base.toml`); turn the two on together only after
+  making that check use the executed text.
+
 ## Verification
 
 `verify_state` and `verify_proof` re-elaborate the theorem from scratch in the base environment with three separate
@@ -228,6 +302,20 @@ or the `lean_search_step.match_N` matchers of executed steps. A crash during ver
   mappings, and a REPL holds about 0.25 GiB after `import Mathlib`), so a runaway tactic crashes its own process
   (`ReplFailure(CRASHED)`) instead of the node. `PR_SET_PDEATHSIG` kills REPLs when the orchestrating process dies
   (strictly: when the thread that started them exits, so start them from the event-loop thread).
+- **Spare processes** (`LeanReplPool(spare_processes=n)`, the run config's `[lean] spare_processes`, 0 by default): the
+  pool keeps up to `n` started processes with its headers loaded (`pool.SpareProcesses`, filled after `start`). A REPL
+  that must replace its process (a wall-clock kill, a crash or panic, the memory or proof-state limit, or its first
+  use after `stop_idle_processes` or `stop_processes` stopped it: `_recover` and `_ensure_healthy`) takes a ready
+  spare's process and environments instead of starting and importing in the caller's time, and the pool starts
+  another in the background; with none ready it starts its own as before (`LeanRepl.spare_swaps`, `spare_misses`,
+  summed by `LeanReplPool.spare_text`, which the loop logs with its host memory). Its proof states replay on the new
+  process like after any restart. A failed spare start is tried again after `retry_seconds`, doubling with every
+  failure in a row up to `max_retry_seconds` (10 min), with the traceback logged once and then a count; a dead ready spare is
+  closed, never handed out. Spares are neither stopped by `stop_idle_processes` / `stop_processes` nor counted by
+  them; each holds about 0.24 GiB private memory (3.5 GiB resident, the rest the shared .olean mappings; measured on
+  the node, `experiments/analysis/restart_cost.py`), and a swap costs the caller about 0.2 s against about 6.2 s for a
+  restart. `pool.close()` cancels starting ones and closes ready ones. Background restarts of released REPLs
+  (`acquire`'s exit) do not use spares. Timing only, so `[lean] spare_processes` is not part of a run config's digest.
 - `lake env` runs once per project directory and Python process, shared by concurrent starts.
 - The pool restarts a process before reusing it if the `acquire` body raised (including cancellation), if the process
   needs a restart, or if it is past `restart_fraction` of its limits. Restarts run in the background with

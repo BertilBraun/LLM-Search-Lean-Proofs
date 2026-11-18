@@ -170,7 +170,7 @@ def error_category(failure: Failure) -> ErrorCategory:
     match failure.kind:
         case FailureKind.UNKNOWN_IDENTIFIER:
             return ErrorCategory.UNKNOWN_IDENTIFIER
-        case FailureKind.HEARTBEAT_TIMEOUT | FailureKind.WALL_CLOCK_TIMEOUT:
+        case FailureKind.HEARTBEAT_TIMEOUT | FailureKind.WALL_CLOCK_TIMEOUT | FailureKind.SKIPPED_TIMEOUT:
             return ErrorCategory.TIMEOUT
         case FailureKind.FORBIDDEN:
             return ErrorCategory.FORBIDDEN

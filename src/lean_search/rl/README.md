@@ -703,6 +703,34 @@ last-quarter share exceeds `max_late_solve_share` (0.10) over `late_solve_phases
 (`search_budget`); raise `[sampling] max_expansions` (e.g. 64) in the loop config and restart the loop (each tree
 records its own budget, so the signals stay comparable). In the visible run, expansions 17-64 added 8 of 171 solves.
 
+## Search efficiency switches
+
+Four switches cut Lean time per expansion (`lean/README.md`, "Search memory" and "Processes"; measured on step 1's
+run 4: the result cache about 5.7% of Lean time, the timeout skip 2.0% with no proof lost, spares most of the 4.2%
+spent restarting killed processes; the degree-bounded nlinarith about 29% of the time of the policy's nlinarith
+calls, which were 68% of all Lean time, keeping 93% of their successes, `lean/README.md`, "Bounded nlinarith").
+Decided for the controls study (2026-11-17, the nlinarith variant by the owner without a search A/B): they are on in
+the arms' **training sampling only**, through the sampling modes' search configs (`followup/modes/*.toml` name
+`search/<student>_sampling.toml`, the student config plus `[search] result_cache = true`,
+`nlinarith_variant = "degree"`,
+`[search.timeout_skip] enabled = true`, `max_wall_clock_timeouts = 2`, `[lean] spare_processes = 8`;
+`tests/rl/test_sampling_configs.py` keeps the copies equal to the student configs otherwise). Step 2's shared sampling
+run uses the same modes, so `study_configs.sampling_refusal` still refuses an arm sampling otherwise. Probe runs and
+held-out evaluations keep the plain student configs, and `search_models.evaluation_run_config` turns all four off
+for every fixed-target search, so evaluations stay comparable with the anchors and the offline arm. Off, the switches
+are absent from the written config and its digest (`probe_evaluation.run_config_sha256`, which also leaves spares out
+as timing only), and the new record fields are written only when non-zero.
+
+What the loop shows: `SearchPhase.cached_tactics`, `cache_saved_seconds`, `skipped_timeouts` (the phase's trees);
+the dashboard's edge counts put tactics the skip did not run in their own group, apart from the wall-clock stops they
+are labelled as; `lean_load` adds "+ N skipped" after the real stops; the host-memory log lines name the sampling
+pool's spares (ready, swaps, misses); with the nlinarith variant, `SearchPhase.plain_checked_proofs`,
+`plain_failed_proofs` and `variant_only_trees` (also logged) count the verified proofs whose written text needs the
+variant, and `experiments/analysis/plain_checks.py` reads them from a run's trees (step 2's shared sampling phase,
+before the arms: if more than a percent or two of proofs need the variant, the owner decides whether expert-iteration
+data takes plain-verified blocks only). A skipped tactic is a wall-clock timeout for every label (GRPO, value, tiers):
+it is the text's expected outcome, not an infrastructure failure.
+
 ## Host memory
 
 The node has about 240 GiB of RAM (check the cgroup limit, `system.memory_total_gib`). Its users: one Lean REPL per
@@ -714,7 +742,9 @@ states still in Lean: every search the pause held continues at once and restarts
 held to what the job's searches in flight leave, at least `sampling.min_concurrency_beside_evaluations`, so the peak is
 up to 112 + the ~110 states still in Lean, about 0.25-0.5 GiB each at fresh sizes; the probe and miniF2F 56 beside
 sampling, the idle search REPLs above the limit
-stopped as each run starts; version 0's baselines 112 together before sampling); the eight
+stopped as each run starts; version 0's baselines 112 together before sampling); the sampling pool's spare
+processes (`[lean] spare_processes`, 8 in the study's sampling configs: about 0.24 GiB private each, measured with the
+other Lean processes; neither the training pause nor `stop_idle_processes` stops them); the eight
 vLLM processes; the training job's ranks (per-phase job: each reads and labels the phase's trees,
 about 13 MiB per tree with its texts in a synthetic unsolved-tree test; persistent job: only the main rank, one tree at
 a time while sampling, keeping the policy sequences, which every rank then holds during training; in a value phase the

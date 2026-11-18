@@ -27,7 +27,7 @@ import httpx
 from lean_search.data import Problem
 from lean_search.expert_iteration.pool_search import PRELOADED_HEADER_SHARE, common_headers
 from lean_search.expert_iteration.serving import write_json_atomically
-from lean_search.lean import LeanReplConfig, LeanReplPool
+from lean_search.lean import LeanReplPool
 from lean_search.monitoring.families import BandOutcome, FixedTargets, PairedDifference, ValueArmResult
 from lean_search.policy.rotation import RequestFailures, is_server_error
 from lean_search.rl.fixed_sets import stratum_order
@@ -35,7 +35,7 @@ from lean_search.rl.loop_config import ValueArmConfig
 from lean_search.rl.renaming import StatementRenamings, search_problem
 from lean_search.rl.search_models import open_search_models, run_config_text
 from lean_search.search import CompletedSearch, RunConfig, SearchResult, StopReason, read_results, tree_record
-from lean_search.search.config import parse_run_config
+from lean_search.search.config import parse_run_config, search_repl_config
 from lean_search.search.records import from_json_object, to_json, write_tree
 
 
@@ -710,7 +710,12 @@ async def search_problem_set(
         async with contextlib.AsyncExitStack() as stack:
             models = await stack.enter_async_context(open_search_models(config, None, request_failures))
             pool = await stack.enter_async_context(
-                LeanReplPool(config.lean.pool_size, LeanReplConfig(), config.lean.restart_fraction)
+                LeanReplPool(
+                    config.lean.pool_size,
+                    search_repl_config(config),
+                    config.lean.restart_fraction,
+                    spare_processes=config.lean.spare_processes or 0,
+                )
             )
             await pool.start(common_headers(pending, PRELOADED_HEADER_SHARE))
 

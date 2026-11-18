@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
+from lean_search.record_fields import written_when_set
 from lean_search.search.search import Accounting, SearchConfig, SearchResult, StepStatistics, StopReason
 
 CATEGORIES = (
@@ -135,6 +136,7 @@ class StepCost:
     rejected: int
     closing: int
     on_proof_paths: int
+    skipped_timeouts: int = written_when_set(0)
 
 
 @dataclass(frozen=True)
@@ -179,6 +181,8 @@ class RunSummary:
     verification_failures: int
     plain_verified: int
     start_failures: int
+    # The search's nlinarith variant: the plain check then also runs Mathlib's own nlinarith.
+    nlinarith_variant: str | None = written_when_set(None)
 
 
 def category(problem_name: str) -> str:
@@ -238,6 +242,7 @@ def step_costs(results: Sequence[SearchResult]) -> tuple[StepCost, ...]:
             total.errors += step.errors
             total.heartbeat_timeouts += step.heartbeat_timeouts
             total.wall_clock_timeouts += step.wall_clock_timeouts
+            total.skipped_timeouts += step.skipped_timeouts
             total.repl_failures += step.repl_failures
             total.rejected += step.rejected
             total.repeated += step.repeated
@@ -261,10 +266,20 @@ def step_costs(results: Sequence[SearchResult]) -> tuple[StepCost, ...]:
             rejected=total.rejected,
             closing=total.proofs,
             on_proof_paths=on_proof_paths[total.step],
+            skipped_timeouts=total.skipped_timeouts,
         )
         for total in totals.values()
     )
     return tuple(sorted(costs, key=lambda cost: -cost.lean_seconds))
+
+
+def plain_check_label(nlinarith_variant: str | None) -> str:
+    if nlinarith_variant is None:
+        return "Proofs that also verify without the per-step heartbeat wrappers"
+    return (
+        "Proofs that also verify as written in plain Mathlib (without the heartbeat wrappers, with Mathlib's "
+        f"nlinarith where the search ran the {nlinarith_variant} variant; first proof of each solved statement)"
+    )
 
 
 def summarize(results: Sequence[SearchResult], metadata: RunMetadata, search_config: SearchConfig) -> RunSummary:
@@ -314,6 +329,7 @@ def summarize(results: Sequence[SearchResult], metadata: RunMetadata, search_con
         multi_step_proofs=multi_step,
         verification_failures=sum(result.verification_failures for result in results),
         plain_verified=sum(result.plain_verified is True for result in results),
+        nlinarith_variant=search_config.nlinarith_variant,
         start_failures=sum(result.stop_reason == StopReason.START_FAILED for result in results),
     )
 
@@ -343,7 +359,7 @@ def render_markdown(summary: RunSummary, title: str) -> str:
         f"**Solved {summary.solved}/{summary.problems} ({summary.solve_rate:.1%}).** "
         f"Solved only with proofs of 2 or more steps: {summary.solved_at_depth_two_or_more}. "
         f"Verification failures (bugs): {summary.verification_failures}. "
-        f"Proofs that also verify without the per-step heartbeat wrappers: {summary.plain_verified}/{summary.solved}. "
+        f"{plain_check_label(summary.nlinarith_variant)}: {summary.plain_verified}/{summary.solved}. "
         f"Statements that failed to start: {summary.start_failures}.",
         "## By category",
         markdown_table(
@@ -390,6 +406,8 @@ def render_markdown(summary: RunSummary, title: str) -> str:
         "closing = the step produced a proof that verified or not; on proof paths = steps of found proofs; "
         "REPL failures (crash, failed replay) are infrastructure, not the step's fault."
     )
+    # A run without the timeout skip keeps the table it had before the skip existed.
+    skips = any(cost.skipped_timeouts for cost in summary.steps)
     sections.append(
         markdown_table(
             [
@@ -404,6 +422,7 @@ def render_markdown(summary: RunSummary, title: str) -> str:
                 "errors",
                 "heartbeat timeouts",
                 "wall-clock timeouts",
+                *(["skipped timeouts"] if skips else []),
                 "REPL failures",
                 "closing",
                 "on proof paths",
@@ -421,6 +440,7 @@ def render_markdown(summary: RunSummary, title: str) -> str:
                     cost.errors,
                     cost.heartbeat_timeouts,
                     cost.wall_clock_timeouts,
+                    *([cost.skipped_timeouts] if skips else []),
                     cost.repl_failures,
                     cost.closing,
                     cost.on_proof_paths,

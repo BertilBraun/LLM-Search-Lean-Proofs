@@ -21,7 +21,9 @@ from lean_search.search import Edge, EdgeOutcome, FailureKind, NodeRecord, NodeS
 from lean_search.training.dpo_data import PreferencePair
 from lean_search.value.labels import distances_to, frontier_ids, predecessors
 
-TIMEOUT_FAILURES = frozenset({FailureKind.HEARTBEAT_TIMEOUT, FailureKind.WALL_CLOCK_TIMEOUT})
+TIMEOUT_FAILURES = frozenset(
+    {FailureKind.HEARTBEAT_TIMEOUT, FailureKind.WALL_CLOCK_TIMEOUT, FailureKind.SKIPPED_TIMEOUT}
+)
 NO_REASONING: Mapping[int, str] = MappingProxyType({})
 
 

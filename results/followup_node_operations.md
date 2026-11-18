@@ -698,6 +698,14 @@ Merged weights are in `/workspace/checkpoints/probe_evaluations/weights/<digest>
 
 ## 8. Known behaviours and pitfalls
 
+- **Search efficiency switches** (from step 2 on, the arms' training sampling only; `src/lean_search/rl/README.md`,
+  "Search efficiency switches"): the sampling pool keeps 8 spare REPL processes (`[lean] spare_processes`) beside its
+  112, started on the same Lean CPUs (the background list) as the pool's own. Each holds about 0.24 GiB private memory
+  (3.5 GiB resident, mostly the shared .olean pages), so 8 add about 2 GiB to the host-memory budget, counted with the
+  other Lean processes; the training pause does not stop them. The loop's host-memory log lines name them ("spare REPL
+  processes k of 8 ready; n replacements took one, m found none ready"); many misses mean kills come in bursts
+  faster than about 8 per 6 s. Probe runs and held-out evaluations keep no spares and no cache or skip.
+
 - **Downloads:** the Hugging Face xet backend stalled (files stuck at 0 bytes). With `HF_HUB_DISABLE_XET=1` downloads
   ran at about 30 MB/s. No token is needed; everything is public.
 - **Cold starts:** the first 4B policy server start takes about 5 min (torch.compile caches in `~/.cache/vllm`, not

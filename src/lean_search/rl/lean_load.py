@@ -6,6 +6,7 @@ compared with unlike figures ran under unlike load (reviews AO and AP of 2026-11
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
+from lean_search.record_fields import written_when_set
 from lean_search.rl.fixed_sets import stratum_order
 from lean_search.search import SearchResult
 from lean_search.search.search import POLICY_STEP_KEY
@@ -25,6 +26,8 @@ class LeanLoad:
     policy_lean_seconds: float
     # None without a policy attempt.
     lean_seconds_per_policy_attempt: float | None
+    # Tactics not run after their text's wall-clock stops (search.timeout_skip): not stops, so not in the counts above.
+    skipped_timeouts: int = written_when_set(0)
 
 
 def wall_clock_timeouts(result: SearchResult) -> int:
@@ -46,6 +49,7 @@ def lean_load(stratum: str, results: Sequence[SearchResult]) -> LeanLoad:
         policy_attempts=attempts,
         policy_lean_seconds=seconds,
         lean_seconds_per_policy_attempt=seconds / attempts if attempts else None,
+        skipped_timeouts=sum(result.accounting.skipped_timeouts for result in results),
     )
 
 
@@ -59,9 +63,12 @@ def lean_loads(results: Sequence[SearchResult], strata: Mapping[str, str]) -> tu
 
 
 def load_cell(load: LeanLoad) -> str:
-    """Timeouts (statements with one) / REPL failures / Lean s per policy attempt."""
+    """Timeouts (statements with one) / REPL failures / Lean s per policy attempt; tactics the timeout skip did not run
+    follow the timeouts as "+ N skipped" when there are any."""
     seconds = load.lean_seconds_per_policy_attempt
     timeouts = f"{load.wall_clock_timeouts} ({load.statements_with_wall_clock_timeouts})"
+    if load.skipped_timeouts:
+        timeouts += f" + {load.skipped_timeouts} skipped"
     return f"{timeouts} / {load.repl_failures} / {'-' if seconds is None else f'{seconds:.2f}'}"
 
 

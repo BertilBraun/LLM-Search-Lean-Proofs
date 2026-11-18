@@ -38,6 +38,7 @@ FORBIDDEN_TOKENS = frozenset(
         "lean_search_check_constants",
         "lean_search_auxiliaries",
         "lean_search_step",
+        "lean_search_nlinarith",
         # `apply?`, `hint` and `slim_check` close goals with `sorryAx` and no error; the others build a lemma index.
         "apply?",
         "exact?",

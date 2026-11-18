@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
+from lean_search.lean.repl import LeanReplConfig
 from lean_search.policy.config import PolicyConfig, policy_config_problem
 from lean_search.search.expanders import AutomationConfig, AutomationExpander, CompositeExpander, Expander
 from lean_search.search.priority import PriorityConfig, PriorityKind
@@ -36,6 +37,10 @@ class LeanConfig:
     pool_size: int = 32
     concurrency: int = 32
     restart_fraction: float = 0.5
+    # Warm processes with the headers imported that replace a killed or crashed one mid-search, so the search does
+    # not wait for a new process and its import (lean/README.md, "Processes"). None: none. Timing only, so not part
+    # of a run config's digest (probe_evaluation.run_config_sha256).
+    spare_processes: int | None = None
 
 
 @dataclass(frozen=True)
@@ -53,6 +58,8 @@ def parse_run_config(text: str) -> RunConfig:
     config = from_json_object(RunConfig, tomllib.loads(text))
     if not 0 < config.lean.concurrency <= config.lean.pool_size:
         raise ValueError("lean.concurrency must be between 1 and lean.pool_size: each search holds one process.")
+    if config.lean.spare_processes is not None and config.lean.spare_processes < 0:
+        raise ValueError("lean.spare_processes must not be negative.")
     if config.search.max_expansions < 1 or config.search.max_depth < 1 or config.search.max_wall_seconds <= 0:
         raise ValueError("search budgets must be positive.")
     exploration = config.search.exploration
@@ -73,6 +80,8 @@ def parse_run_config(text: str) -> RunConfig:
             'policy.failed_automation_in_prompt needs expander.kind = "automation_then_policy" and expander.overlap = '
             "false: the prompt names the sweep's failures, so the sweep must finish before the request."
         )
+    if config.search.timeout_skip is not None and config.search.timeout_skip.max_wall_clock_timeouts < 1:
+        raise ValueError("search.timeout_skip.max_wall_clock_timeouts must be at least 1.")
     name_repair = config.search.name_repair
     if name_repair.enabled and not (config.search.check_identifiers and 0 < name_repair.min_similarity <= 1):
         raise ValueError("search.name_repair needs search.check_identifiers and min_similarity in (0, 1].")
@@ -81,6 +90,11 @@ def parse_run_config(text: str) -> RunConfig:
     if not config.value.server_urls or config.value.top_k < 1:
         raise ValueError("value.server_urls must not be empty and value.top_k must be positive.")
     return config
+
+
+def search_repl_config(config: RunConfig) -> LeanReplConfig:
+    """The REPLs of a pool for this config's searches (their nlinarith variant is the search's)."""
+    return LeanReplConfig(nlinarith_variant=config.search.nlinarith_variant)
 
 
 def load_run_config(path: Path) -> RunConfig:

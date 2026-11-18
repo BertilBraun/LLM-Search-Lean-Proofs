@@ -90,7 +90,9 @@ def test_an_arm_without_a_mode_is_refused(tmp_path: Path) -> None:
 
 
 def test_check_mode_names_the_search_configs_sha256(tmp_path: Path) -> None:
-    digest = hashlib.sha256((REPOSITORY / "experiments/configs/grpo/search/visible_student_v2.toml").read_bytes())
+    digest = hashlib.sha256(
+        (REPOSITORY / "experiments/configs/grpo/search/visible_student_v2_sampling.toml").read_bytes()
+    )
     result = command(tmp_path, "learning_rate_step.py", "check-mode", "--mode", str(VISIBLE))
     assert result.stdout.splitlines()[1] == f"search config sha256 {digest.hexdigest()}"
 

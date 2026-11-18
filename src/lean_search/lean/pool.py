@@ -1,19 +1,122 @@
 """A fixed-size pool of Lean REPL processes shared by many concurrent proof searches in one asyncio program."""
 
 import asyncio
+import collections
 import contextlib
 import itertools
 import logging
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 
 from lean_search.lean.repl import LeanRepl, LeanReplConfig, MemoryUsage
 
 logger = logging.getLogger(__name__)
 
 
+class SpareProcesses:
+    """Up to `count` started REPL processes with the pool's headers loaded, each handed to a REPL that must replace its
+    process (a wall-clock kill, a crash, a limit, or its first use after the pool stopped it) and replaced in the
+    background. They run on the CPUs of the process that starts them, like the pool's own. A start that fails is tried
+    again after `retry_seconds`, doubling with every failure in a row up to `max_retry_seconds`."""
+
+    def __init__(
+        self,
+        count: int,
+        config: LeanReplConfig | None,
+        headers: Callable[[], Sequence[str]],
+        retry_seconds: float = 5.0,
+        max_retry_seconds: float = 600.0,
+    ) -> None:
+        self.count = count
+        self.config = config
+        self.retry_seconds = retry_seconds
+        self.max_retry_seconds = max_retry_seconds
+        self._headers = headers
+        self._ready: collections.deque[LeanRepl] = collections.deque()
+        self._starting: set[asyncio.Task[None]] = set()
+        # Dead spares being closed: not counted as starting, never cancelled.
+        self._closing: set[asyncio.Task[None]] = set()
+        self._closed = False
+        self._failed_starts = 0
+
+    @property
+    def ready(self) -> int:
+        return len(self._ready)
+
+    def ready_process_ids(self) -> list[int]:
+        return [process_id for spare in self._ready if (process_id := spare.process_id) is not None]
+
+    def fill(self) -> None:
+        while not self._closed and len(self._ready) + len(self._starting) < self.count:
+            start = asyncio.create_task(self._start_one())
+            self._starting.add(start)
+            start.add_done_callback(self._starting.discard)
+
+    def take(self) -> LeanRepl | None:
+        """A ready spare, or None while none is ready (the caller then starts its own process)."""
+        spare = None
+        while self._ready and spare is None:
+            candidate = self._ready.popleft()
+            if candidate.needs_restart:
+                self._close_later(candidate)
+            else:
+                spare = candidate
+        self.fill()
+        return spare
+
+    async def close(self) -> None:
+        self._closed = True
+        for start in self._starting:
+            start.cancel()
+        await asyncio.gather(*self._starting, return_exceptions=True)
+        ready, self._ready = list(self._ready), collections.deque()
+        await asyncio.gather(*(spare.close() for spare in ready))
+        # A REPL still in use while the pool closes can hand back a dead spare to close meanwhile.
+        while self._closing:
+            await asyncio.gather(*self._closing, return_exceptions=True)
+
+    async def _start_one(self) -> None:
+        spare = LeanRepl(self.config)
+        try:
+            await spare.start()
+            for header in self._headers():
+                await spare.load_header(header)
+        except asyncio.CancelledError:
+            await spare.close()
+            raise
+        except Exception:
+            self._failed_starts += 1
+            delay = min(self.retry_seconds * 2 ** (self._failed_starts - 1), self.max_retry_seconds)
+            if self._failed_starts == 1:
+                logger.exception("Starting a spare Lean REPL failed; trying again in %g s", delay)
+            else:
+                logger.warning(
+                    "Starting a spare Lean REPL failed again (%d failures in a row); trying again in %g s",
+                    self._failed_starts,
+                    delay,
+                )
+            await spare.close()
+            await asyncio.sleep(delay)
+            current = asyncio.current_task()
+            assert current is not None
+            self._starting.discard(current)
+            self.fill()
+            return
+        self._failed_starts = 0
+        if self._closed:
+            await spare.close()
+            return
+        self._ready.append(spare)
+
+    def _close_later(self, spare: LeanRepl) -> None:
+        closing = asyncio.create_task(spare.close())
+        self._closing.add(closing)
+        closing.add_done_callback(self._closing.discard)
+
+
 class LeanReplPool:
     """Processes past `restart_fraction` of their limits, or whose user raised, are restarted before reuse. The most
-    recently released REPL is handed out first, so stopped idle processes start again only when demand needs them."""
+    recently released REPL is handed out first, so stopped idle processes start again only when demand needs them.
+    `spare_processes` warm processes (started with `start`) replace a process that must be replaced mid-use."""
 
     def __init__(
         self,
@@ -22,8 +125,10 @@ class LeanReplPool:
         restart_fraction: float = 0.5,
         restart_attempts: int = 3,
         restart_backoff_seconds: float = 2.0,
+        spare_processes: int = 0,
     ) -> None:
-        self.repls = [LeanRepl(config) for _ in range(size)]
+        self.spares = SpareProcesses(spare_processes, config, lambda: self._headers) if spare_processes else None
+        self.repls = [LeanRepl(config, self.spares) for _ in range(size)]
         self.restart_fraction = restart_fraction
         self.restart_attempts = restart_attempts
         self.restart_backoff_seconds = restart_backoff_seconds
@@ -45,9 +150,22 @@ class LeanReplPool:
     async def __aexit__(self, *exception_information: object) -> None:
         await self.close()
 
+    def spare_text(self) -> str:
+        """How the spare processes served the pool's REPLs so far; empty without spares."""
+        if self.spares is None:
+            return ""
+        swaps = sum(repl.spare_swaps for repl in self.repls)
+        misses = sum(repl.spare_misses for repl in self.repls)
+        return (
+            f"spare REPL processes {self.spares.ready} of {self.spares.count} ready; {swaps} replacements took one, "
+            f"{misses} found none ready"
+        )
+
     async def start(self, headers: Sequence[str] = ()) -> None:
         self._headers = list(dict.fromkeys([*self._headers, *headers]))
         await asyncio.gather(*(self._prepare(repl) for repl in self.repls))
+        if self.spares is not None:
+            self.spares.fill()
 
     @contextlib.asynccontextmanager
     async def acquire(self) -> AsyncIterator[LeanRepl]:
@@ -86,6 +204,8 @@ class LeanReplPool:
         for restart in self._restarts:
             restart.cancel()
         await asyncio.gather(*self._restarts, return_exceptions=True)
+        if self.spares is not None:
+            await self.spares.close()
         await asyncio.gather(*(repl.close() for repl in self.repls))
 
     async def _prepare(self, repl: LeanRepl) -> None:

@@ -28,9 +28,12 @@ from lean_search.lean.identifiers import (
     name_scope,
     shared_name_repairer,
 )
+from lean_search.lean.memory import SearchMemory
+from lean_search.lean.nlinarith import NlinarithVariant
 from lean_search.lean.plans import Rejection, TacticPlan, plain_plan, plan_block
 from lean_search.lean.repl import BlockFailure, BlockResult
 from lean_search.lean.text import TacticPiece, join_tactics
+from lean_search.record_fields import written_when_set
 from lean_search.search.expanders import Candidate, CandidateBatch, Expander, SearchContext
 from lean_search.search.frontier import Frontier
 from lean_search.search.priority import PriorityFunction, Scores
@@ -99,6 +102,15 @@ class NameRepairConfig:
 
 
 @dataclass(frozen=True)
+class TimeoutSkipConfig:
+    """A tactic text stopped by the wall clock `max_wall_clock_timeouts` times in the search, at any states, is not
+    run again there: it fails as a SKIPPED_TIMEOUT, labelled like a wall-clock timeout, without a kill or a replay."""
+
+    enabled: bool = False
+    max_wall_clock_timeouts: int = 2
+
+
+@dataclass(frozen=True)
 class SearchConfig:
     max_expansions: int = 256
     max_wall_seconds: float = 300.0
@@ -124,6 +136,14 @@ class SearchConfig:
     exploration: ExplorationConfig = field(default_factory=ExplorationConfig)
     # Needs the identifier check, whose environment names it searches.
     name_repair: NameRepairConfig = field(default_factory=NameRepairConfig)
+    # A tactic run again on the same tactic path with the same limit takes its first deterministic outcome (success,
+    # error, heartbeat limit) instead of running Lean; wall-clock stops and REPL failures run again. None (off) and
+    # an absent timeout skip keep the written config, so its digest, as it was before these switches.
+    result_cache: bool | None = None
+    timeout_skip: TimeoutSkipConfig | None = None
+    # Every plain `nlinarith` the policy or the sweep writes runs as this bounded variant (lean/nlinarith.py); the tree
+    # and training keep the written text. Set on the pool's REPLs (`search_repl_config`), which must match.
+    nlinarith_variant: NlinarithVariant | None = None
 
 
 class StopReason(StrEnum):
@@ -163,6 +183,11 @@ class Accounting:
     # log-probability also covers the tokens of the failed tail.
     policy_children: int = 0
     partial_policy_children: int = 0
+    # Tactics the result cache answered, and the Lean seconds they took when they ran (search.result_cache).
+    cached_tactics: int = written_when_set(0)
+    cache_saved_seconds: float = written_when_set(0.0)
+    # Edges ending at a tactic not run after its text's wall-clock stops (search.timeout_skip; not in `timeouts`).
+    skipped_timeouts: int = written_when_set(0)
 
 
 @dataclass
@@ -175,6 +200,7 @@ class StepStatistics:
     errors: int = 0
     heartbeat_timeouts: int = 0
     wall_clock_timeouts: int = 0
+    skipped_timeouts: int = written_when_set(0)
     repl_failures: int = 0
     rejected: int = 0
     repeated: int = 0
@@ -353,6 +379,8 @@ def step_statistics(tree: SearchTree) -> tuple[StepStatistics, ...]:
                 statistics.heartbeat_timeouts += 1
             case FailureKind.WALL_CLOCK_TIMEOUT:
                 statistics.wall_clock_timeouts += 1
+            case FailureKind.SKIPPED_TIMEOUT:
+                statistics.skipped_timeouts += 1
             case FailureKind.REPL_FAILURE:
                 statistics.repl_failures += 1
             case FailureKind.UNKNOWN_IDENTIFIER:
@@ -371,6 +399,7 @@ class _Execution(NamedTuple):
     flattened: bool = False
     tactic_goals: tuple[tuple[str, ...], ...] = ()
     name_repairs: tuple[NameRepair, ...] = ()
+    cached_tactics: int = 0
 
 
 @dataclass
@@ -420,6 +449,10 @@ class _TheoremSearch:
         self.name_repairer: NameRepairer | None = None
         self.proofs: list[Node] = []
         self.exploration_random = random.Random(f"{config.exploration.seed}:{problem.name}")
+        skip = config.timeout_skip
+        skip_after = skip.max_wall_clock_timeouts if skip is not None and skip.enabled else None
+        cache = bool(config.result_cache)
+        self.memory = SearchMemory(cache, skip_after) if cache or skip_after is not None else None
 
     def wall_seconds(self) -> float:
         return time.monotonic() - self.started
@@ -685,7 +718,9 @@ class _TheoremSearch:
         timeout_seconds = (
             candidate.timeout_seconds if candidate.timeout_seconds is not None else self.config.tactic_timeout_seconds
         )
-        return await self.repl.apply_block(node.state, self._plan(node, candidate), heartbeats, timeout_seconds)
+        assert self.repl.config.nlinarith_variant == self.config.nlinarith_variant, "the pool runs another nlinarith"
+        plan = self._plan(node, candidate)
+        return await self.repl.apply_block(node.state, plan, heartbeats, timeout_seconds, memory=self.memory)
 
     async def _repaired(
         self, expansion: _Expansion, candidate: Candidate, failure: BlockFailure | None
@@ -717,6 +752,8 @@ class _TheoremSearch:
         match None if failure is None else failure.kind:
             case FailureKind.HEARTBEAT_TIMEOUT | FailureKind.WALL_CLOCK_TIMEOUT:
                 self.accounting.timeouts += 1
+            case FailureKind.SKIPPED_TIMEOUT:
+                self.accounting.skipped_timeouts += 1
             case FailureKind.REPL_FAILURE:
                 self.accounting.repl_failures += 1
             case FailureKind.ERROR:
@@ -731,6 +768,8 @@ class _TheoremSearch:
         )
         lean_seconds = result.elapsed_seconds + naming_seconds
         self.accounting.lean_seconds += lean_seconds
+        self.accounting.cached_tactics += result.cached_tactics
+        self.accounting.cache_saved_seconds += result.cached_seconds
         execution = _Execution(
             applied_tactics,
             result.total_tactics,
@@ -740,6 +779,7 @@ class _TheoremSearch:
             result.flattened,
             tuple(tactic_state.goals for tactic_state in result.tactic_states),
             name_repairs,
+            result.cached_tactics,
         )
         if not applied_tactics:
             return self._record(node, candidate, EdgeOutcome.FAILED, execution=execution), None
@@ -798,12 +838,16 @@ class _TheoremSearch:
             tactic_goals=execution.tactic_goals,
             feedback=candidate.feedback,
             name_repairs=execution.name_repairs,
+            cached_tactics=execution.cached_tactics,
         )
 
     async def _verify(self, node: Node) -> bool:
         verification = await self.repl.verify_state(node.state)
         self.accounting.verification_seconds += verification.elapsed_seconds
         if verification.verified:
+            if self.config.nlinarith_variant is not None:
+                node.plain_verified = verification.plain_verified
+                node.plain_check_timed_out = verification.plain_timed_out
             self.proofs.append(node)
             self.accounting.proofs += 1
             if self.solved_at is None:

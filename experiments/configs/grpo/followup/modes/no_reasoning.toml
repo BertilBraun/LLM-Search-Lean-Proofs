@@ -1,7 +1,8 @@
-# The sampling mode without visible reasoning: step 1's run 4 as a training search (search/no_reasoning_student_v2.toml),
+# The sampling mode without visible reasoning: step 1's run 4 as a training search (search/no_reasoning_student_v2.toml
+# with the search efficiency switches: search/no_reasoning_student_v2_sampling.toml; probe runs keep the plain file),
 # at the visible mode's 32 expansions per training search until the owner decides otherwise (without reasoning the same
 # tokens buy about 2.3 times the expansions; raising them is this one number). A mode sets exactly these two lines
 # (src/lean_search/rl/study_configs.py, MODE_SETTINGS).
 [sampling]
-search_config = "experiments/configs/grpo/search/no_reasoning_student_v2.toml"
+search_config = "experiments/configs/grpo/search/no_reasoning_student_v2_sampling.toml"
 max_expansions = 32

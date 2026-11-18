@@ -25,7 +25,7 @@ from pathlib import Path
 from lean_search.corpora.tracing import state_before
 from lean_search.data import Problem, Split
 from lean_search.expert_iteration.serving import write_json_atomically
-from lean_search.lean import LeanRepl, LeanReplConfig, LeanReplPool, ProofState
+from lean_search.lean import LeanRepl, LeanReplPool, ProofState
 from lean_search.reasoning.states import ReasoningState
 from lean_search.rl.advantages import CreditMode
 from lean_search.rl.evaluation import FailureTolerance, SearchProgress, ToleratedSearches
@@ -47,6 +47,7 @@ from lean_search.search import (
     search_theorem,
     tree_record,
 )
+from lean_search.search.config import search_repl_config
 from lean_search.search.graph_labels import EdgeKind, GoalKey, GraphLabels, NodeClass, goal_key, label_graph
 from lean_search.search.records import read_tree, write_tree
 from lean_search.search.tactic_labels import TacticLabel, TacticOutcome, policy_tactics
@@ -339,7 +340,12 @@ async def search_states(
         async with contextlib.AsyncExitStack() as stack:
             models = await stack.enter_async_context(open_search_models(config, None, request_failures))
             pool = await stack.enter_async_context(
-                LeanReplPool(config.lean.pool_size, LeanReplConfig(), config.lean.restart_fraction)
+                LeanReplPool(
+                    config.lean.pool_size,
+                    search_repl_config(config),
+                    config.lean.restart_fraction,
+                    spare_processes=config.lean.spare_processes or 0,
+                )
             )
             await pool.start(sorted({state.problem.header for state in pending}))
             await search_pending(pending, models, pool, config, trees_directory, progress, log, tolerance)
