@@ -282,6 +282,18 @@ def health_thresholds(
                 config.max_after_proof_graph_factor,
                 config.min_unproved_claim_after_proof_graph_rise,
             ),
+            max_below_band_bare_have_share=scaled(reference.below_band_bare_have_share, config.max_bare_have_factor),
+            min_below_band_claim_proved_rate=scaled(
+                reference.below_band_claim_proved_rate, config.min_claim_proved_fraction
+            ),
+            min_below_band_explanation_characters=scaled(
+                reference.below_band_median_explanation_characters, config.min_explanation_characters_fraction
+            ),
+            max_below_band_unproved_claim_after_proof_graph_share=raised(
+                reference.below_band_unproved_claim_after_proof_graph_share,
+                config.max_after_proof_graph_factor,
+                config.min_unproved_claim_after_proof_graph_rise,
+            ),
         )
     if version_zero is not None:
         thresholds = dataclasses.replace(
@@ -339,10 +351,22 @@ def health_alert(check: HealthCheck, severity: HealthSeverity, detail: str) -> H
     return HealthAlert(check, severity, alert_title(check, severity), detail)
 
 
-def compared(below_band: float | None, every: float | None) -> tuple[float | None, str]:
-    """The value a habit warning compares with the reference phases', and where it was measured: the statements from
-    below the band, whose difficulty is nearer the reference phases', when the phase has any."""
-    return (every, "") if below_band is None else (below_band, " of the statements below the band")
+@dataclass(frozen=True)
+class HabitComparison:
+    value: float | None
+    limit: float | None
+    # Where both were measured; "" for every statement.
+    where: str
+
+
+def compared(
+    below_band: float | None, below_band_limit: float | None, every: float | None, every_limit: float | None
+) -> HabitComparison:
+    """A habit warning's value and limit, like with like: the statements from below the band, whose difficulty is
+    nearer the reference phases', when the phase has any and the reference phases had some; else every statement."""
+    if below_band is None or below_band_limit is None:
+        return HabitComparison(every, every_limit, "")
+    return HabitComparison(below_band, below_band_limit, " of the statements below the band")
 
 
 def health_alerts(
@@ -391,52 +415,60 @@ def health_alerts(
             f"{thresholds.min_valid_block_rate:.1%} ({config.min_valid_block_fraction:.0%} of the first phases'): the "
             "held-out states run at the next pause.",
         )
-    bare_haves, where = compared(measured.below_band_bare_have_share, measured.bare_have_share)
-    if above(bare_haves, thresholds.max_bare_have_share):
+    bare_haves = compared(
+        measured.below_band_bare_have_share,
+        thresholds.max_below_band_bare_have_share,
+        measured.bare_have_share,
+        thresholds.max_bare_have_share,
+    )
+    if above(bare_haves.value, bare_haves.limit):
         warn(
             HealthCheck.BARE_HAVES,
-            f"{bare_haves:.1%} of the blocks{where} open with a bare `have` > {thresholds.max_bare_have_share:.1%} "
-            f"({config.max_bare_have_factor:g}x the first phases'): claims left as new goals, as in the reward hacking "
-            "of phases 1-10.",
+            f"{bare_haves.value:.1%} of the blocks{bare_haves.where} open with a bare `have` > "
+            f"{bare_haves.limit:.1%} ({config.max_bare_have_factor:g}x the first phases'): claims left as new goals, "
+            "as in the reward hacking of phases 1-10.",
         )
-    proved, where = compared(measured.below_band_claim_proved_rate, measured.claim_proved_rate)
-    if below(proved, thresholds.min_claim_proved_rate):
+    proved = compared(
+        measured.below_band_claim_proved_rate,
+        thresholds.min_below_band_claim_proved_rate,
+        measured.claim_proved_rate,
+        thresholds.min_claim_proved_rate,
+    )
+    if below(proved.value, proved.limit):
         warn(
             HealthCheck.CLAIMS_PROVED,
-            f"{proved:.1%} of the claims bare-`have` blocks{where} left open got proved < "
-            f"{thresholds.min_claim_proved_rate:.1%} ({config.min_claim_proved_fraction:.0%} of the first phases').",
+            f"{proved.value:.1%} of the claims bare-`have` blocks{proved.where} left open got proved < "
+            f"{proved.limit:.1%} ({config.min_claim_proved_fraction:.0%} of the first phases').",
         )
-    characters, where = compared(
-        measured.below_band_median_explanation_characters, measured.median_explanation_characters
+    characters = compared(
+        measured.below_band_median_explanation_characters,
+        thresholds.min_below_band_explanation_characters,
+        measured.median_explanation_characters,
+        thresholds.min_explanation_characters,
     )
-    if below(characters, thresholds.min_explanation_characters):
+    if below(characters.value, characters.limit):
         warn(
             HealthCheck.EXPLANATION_CHARACTERS,
-            f"Median explanation{where} {characters:.0f} characters < {thresholds.min_explanation_characters:.0f} "
+            f"Median explanation{characters.where} {characters.value:.0f} characters < {characters.limit:.0f} "
             f"({config.min_explanation_characters_fraction:.0%} of the first phases'): the visible reasoning shrinks.",
         )
     # The failing tail after the proof graph is charted only: on grpo_loop_v1 its share rose from 16% to 32-36% while
-    # the probe improved.
+    # the probe improved. Too few below-band samples reaching the graph: every statement's.
     below_band = measured.below_band_proof_graph_samples
-    if below_band is not None and below_band >= config.min_proof_graph_samples:
-        reached, unproved, where = (
-            below_band,
-            measured.below_band_unproved_claim_after_proof_graph_share,
-            " of the statements below the band",
-        )
-    else:
-        # Too few below-band samples reach the graph: every statement's.
-        reached, unproved, where = (
-            measured.proof_graph_samples,
-            measured.unproved_claim_after_proof_graph_share,
-            "",
-        )
+    enough_below_band = below_band is not None and below_band >= config.min_proof_graph_samples
+    unproved = compared(
+        measured.below_band_unproved_claim_after_proof_graph_share if enough_below_band else None,
+        thresholds.max_below_band_unproved_claim_after_proof_graph_share,
+        measured.unproved_claim_after_proof_graph_share,
+        thresholds.max_unproved_claim_after_proof_graph_share,
+    )
+    reached = below_band if unproved.where else measured.proof_graph_samples
     enough = reached is not None and reached >= config.min_proof_graph_samples
-    if enough and above(unproved, thresholds.max_unproved_claim_after_proof_graph_share):
+    if enough and above(unproved.value, unproved.limit):
         warn(
             HealthCheck.UNPROVED_CLAIM_AFTER_PROOF_GRAPH,
-            f"{unproved:.1%} of the {reached:,} samples{where} reaching the proof graph end in a claim the tree never "
-            f"proves > {thresholds.max_unproved_claim_after_proof_graph_share:.1%} (the first phases' x "
+            f"{unproved.value:.1%} of the {reached:,} samples{unproved.where} reaching the proof graph end in a claim "
+            f"the tree never proves > {unproved.limit:.1%} (the first phases' x "
             f"{config.max_after_proof_graph_factor:g}, at least + "
             f"{config.min_unproved_claim_after_proof_graph_rise:.0%}): a tail that a credit stopping at the proof "
             "graph leaves uncharged.",

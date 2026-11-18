@@ -42,6 +42,9 @@ CHOSEN_RATES = {
     ("D", "expert_iteration.sft.optimization.learning_rate"): 5e-5,
 }
 RECIPE = CONFIGS / "followup/expert_iteration.toml"
+# The reward's claim switches, on in the arms training with GRPO since arm A's bare-have drift (2026-11-18).
+CLAIM_SWITCHES = {"reward": {"claims_earn_progress": False, "unproved_claim_cost": 0.3}}
+CLAIM_SWITCH_ARMS = {"A": CLAIM_SWITCHES, "B1": {}, "B2": {}}
 
 
 def toml(path: Path) -> dict:
@@ -86,6 +89,8 @@ def test_an_arm_may_change_its_credit_learning_rates_seed_offset_name_and_rounds
         "loop.seed_offset",
         "phase.policy.data.credit",
         "phase.policy.optimization.learning_rate",
+        "phase.reward.claims_earn_progress",
+        "phase.reward.unproved_claim_cost",
         "loop.training.policy_update",
         "loop.training.expert_iteration_every_phases",
         "loop.training.expert_iteration_window_phases",
@@ -161,7 +166,10 @@ def test_an_arms_loop_config_is_the_base_but_for_its_name_and_phase_config(path:
 @pytest.mark.parametrize("path", GRPO_ARMS, ids=lambda path: path.stem)
 def test_an_arms_phase_config_is_its_credits_shipped_phase_at_the_chosen_rate(path: Path) -> None:
     configs = arm_configs(with_learning_rate(toml(path), 5e-5))
-    shipped = with_learning_rate({"phase": toml(CONFIGS / CREDIT_PHASES[path.stem])}, 5e-5)["phase"]
+    shipped = merged(
+        with_learning_rate({"phase": toml(CONFIGS / CREDIT_PHASES[path.stem])}, 5e-5)["phase"],
+        CLAIM_SWITCH_ARMS[path.stem],
+    )
     written = tomllib.loads(toml_text(configs.phase))
     assert from_json_object(TrainingPhaseConfig, written) == from_json_object(TrainingPhaseConfig, shipped)
 
@@ -231,6 +239,15 @@ def test_arm_cs_phase_config_is_the_shipped_phase() -> None:
     assert from_json_object(TrainingPhaseConfig, written) == from_json_object(TrainingPhaseConfig, PHASE)
 
 
+@pytest.mark.parametrize("name", ["A", "D"])
+def test_the_claim_switches_are_on_in_the_arms_training_with_grpo(name: str) -> None:
+    assert toml(CONFIGS / f"followup/arms/{name}.toml")["phase"]["reward"] == CLAIM_SWITCHES["reward"]
+
+
+def test_the_old_runs_phase_config_keeps_claims_earning_progress() -> None:
+    assert from_json_object(TrainingPhaseConfig, PHASE).reward.claims_earn_progress
+
+
 def test_arm_ds_phase_config_is_arm_as_at_the_same_rate() -> None:
     arm_a = arm_configs(filled(toml(CONFIGS / "followup/arms/A.toml"), 2e-5))
     arm_d = round_arm("D", 2e-5)
@@ -289,6 +306,7 @@ def test_the_recipe_is_the_hand_run_rounds_but_for_its_seeds_and_what_the_loop_f
         ("A", {"loop": {"training": {"expert_iteration_every_phases": 4}}}),
         ("C", {"phase": {"policy": {"optimization": {"learning_rate": 5e-5}}}}),
         ("C", {"phase": {"policy": {"data": {"credit": "sequence"}}}}),
+        ("C", {"phase": {"reward": {"claims_earn_progress": False}}}),
     ],
     ids=[
         "a recipe rate in a GRPO arm",
@@ -296,6 +314,7 @@ def test_the_recipe_is_the_hand_run_rounds_but_for_its_seeds_and_what_the_loop_f
         "a round period in a GRPO arm",
         "a GRPO rate in arm C",
         "a GRPO credit in arm C",
+        "a GRPO reward switch in arm C",
     ],
 )
 def test_an_arm_setting_what_its_policy_update_never_reads_is_refused(name: str, contradiction: dict) -> None:

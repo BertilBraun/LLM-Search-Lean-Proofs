@@ -30,10 +30,17 @@ class RewardConfig:
     # δ: a proof-graph state earns this per remaining step it is closer to a proof than the group's node (negative
     # when farther), its global part never below the best off-graph state's (1 − λ) · μ.
     progress_per_step: float = 0.2
+    # False: a tactic adding a claim as a goal (`TacticOutcome.adds_claim`) earns no δ, only the steps proving things
+    # do; a flattened `have h : A := by p` or a bare one then counts as p's steps. True (grpo_loop_v1, the default):
+    # the claim's own step earns δ too, so a decomposition pays δ per claim it states (owner, 2026-11-18).
+    claims_earn_progress: bool = True
     # c: the advantage of a failing, no-progress or redundant tactic other than the block's anchor (the block's prefix
     # is kept, so only its tokens are wasted) and of an unknown or off-graph state ending a block after a state with
     # evidence; an unproved claim costs an error's there plus c. Continuing pays when P(correct) > c / (c + δ).
     wasted_tactic_cost: float = 0.1
+    # What leaving an invented claim open costs beyond an error there; None: c (grpo_loop_v1). The search keeps the
+    # claim as a child state the tree rarely proves, which costs more than the tokens an error wastes.
+    unproved_claim_cost: float | None = None
     # μ: an expanded off-graph state earns G = μ · q, q its value part; the loop's μ, 0 until set by hand.
     value_share: float = 0.0
     # An off-graph state with live children and fewer expanded nodes in its subtree (itself included) is unknown.
@@ -73,7 +80,7 @@ NO_GAIN = RewardParts(0.0, 0.0)
 @dataclass(frozen=True)
 class TacticReward:
     label: TacticLabel
-    # R of the state reached (an unproved claim anchoring its block: c less, `judged_in_block`); None for masked
+    # R of the state reached (an unproved claim anchoring its block: c' less, `judged_in_block`); None for masked
     # tactics, which earn nothing.
     parts: RewardParts | None
     # Judged within the block (`judged_in_block`). None with parts: the block's anchor, judged against the group's
@@ -81,6 +88,8 @@ class TacticReward:
     gain: RewardParts | None = None
     # On the proof graph: the group node's remaining steps minus the state's (negative for a detour).
     steps_gained: int | None = None
+    # `TacticOutcome.adds_claim`.
+    adds_claim: bool = False
 
 
 @dataclass(frozen=True)
@@ -202,7 +211,14 @@ def tactic_reward(
         case TacticLabel.MASKED:
             parts = None
     steps_gained = None if outcome.remaining_steps is None else node_steps - outcome.remaining_steps
-    return TacticReward(outcome.label, parts, steps_gained=steps_gained)
+    return TacticReward(outcome.label, parts, steps_gained=steps_gained, adds_claim=outcome.adds_claim)
+
+
+def claim_step(reward: TacticReward, previous_steps: int, config: RewardConfig) -> float:
+    """δ for the step a claim on the proof graph moved closer to a proof than the block's last proof-graph state (else
+    the node), at most one: the share of its global part that claims earn only with `claims_earn_progress`."""
+    assert reward.steps_gained is not None
+    return config.progress_per_step * min(1, max(0, reward.steps_gained - previous_steps))
 
 
 def judged_in_block(rewards: Sequence[TacticReward], config: RewardConfig) -> tuple[TacticReward, ...]:
@@ -212,19 +228,30 @@ def judged_in_block(rewards: Sequence[TacticReward], config: RewardConfig) -> tu
       it ends the block's states (an unverified continuation, never below an error there); after an unknown anchor an
       off-graph state gains over it, an unknown one 0;
     - a failing, no-progress or redundant tactic costs c.
-    The block's first unproved claim carries what leaving it open costs, an error's there plus c: its R − c as the
-    anchor, else −2c. Every tactic after it gains 0, whether it proves, fails or wastes: attempting the proof never
-    scores below the bare claim, and no proof tactic takes the claim's blame."""
+    The block's first unproved claim carries what leaving it open costs, an error's there plus c'
+    (`unproved_claim_cost`, by default c): its R − c' as the anchor, else −c − c'. Every tactic after it gains 0,
+    whether it proves, fails or wastes: attempting the proof never scores below the bare claim, and no proof tactic
+    takes the claim's blame.
+    Without `claims_earn_progress` a claim adding a goal on the proof graph earns δ less for its own step
+    (`claim_step`), as the anchor or later (never below 0 there); the next tactic is judged against the state the claim
+    reached, so the claim's δ is dropped, not deferred."""
     cost = RewardParts(0.0, -config.wasted_tactic_cost)
+    open_claim_cost = RewardParts(
+        0.0, -(config.wasted_tactic_cost if config.unproved_claim_cost is None else config.unproved_claim_cost)
+    )
+    unpaid_claims = not config.claims_earn_progress
     labels = [reward.label for reward in rewards]
     claim = labels.index(TacticLabel.UNPROVED_CLAIM) if TacticLabel.UNPROVED_CLAIM in labels else len(labels)
     reached = [index for index, label in enumerate(labels) if label in REACHED_STATE_LABELS]
     anchor = min(reached, default=0)
     reference: RewardParts | None = None
     evidence = False
+    previous_steps = 0
     judged = []
     for index, reward in enumerate(rewards):
         gain = None
+        unpaid = reward.label == TacticLabel.PROOF_GRAPH and reward.adds_claim and unpaid_claims
+        step = claim_step(reward, previous_steps, config) if unpaid else 0.0
         match reward.label:
             case TacticLabel.MASKED:
                 pass
@@ -232,12 +259,15 @@ def judged_in_block(rewards: Sequence[TacticReward], config: RewardConfig) -> tu
                 gain = NO_GAIN
             case TacticLabel.UNPROVED_CLAIM if index == anchor:
                 assert reward.parts is not None
-                reward = dataclasses.replace(reward, parts=reward.parts + cost)
+                reward = dataclasses.replace(reward, parts=reward.parts + open_claim_cost)
             case label if index == anchor:
                 if label in REACHED_STATE_LABELS:
                     reference, evidence = reward.parts, label in EVIDENCE_LABELS
+                if step:
+                    assert reward.parts is not None
+                    reward = dataclasses.replace(reward, parts=reward.parts - RewardParts(step, 0.0))
             case TacticLabel.UNPROVED_CLAIM:
-                gain = cost + cost
+                gain = cost + open_claim_cost
             case TacticLabel.FAILING | TacticLabel.NO_PROGRESS | TacticLabel.REDUNDANT_HYPOTHESIS:
                 gain = cost
             case TacticLabel.UNKNOWN | TacticLabel.OFF_GRAPH if evidence:
@@ -245,7 +275,11 @@ def judged_in_block(rewards: Sequence[TacticReward], config: RewardConfig) -> tu
             case TacticLabel.PROOF_GRAPH | TacticLabel.OFF_GRAPH | TacticLabel.UNKNOWN:
                 assert reward.parts is not None and reference is not None
                 gain = reward.parts - reference
+                if step:
+                    gain -= RewardParts(min(step, max(0.0, gain.global_part)), 0.0)
                 reference, evidence = reward.parts, reward.label in EVIDENCE_LABELS
+        if reward.label == TacticLabel.PROOF_GRAPH and reward.steps_gained is not None:
+            previous_steps = reward.steps_gained
         judged.append(dataclasses.replace(reward, gain=gain))
     return tuple(judged)
 

@@ -95,6 +95,8 @@ def test_a_rounds_phase_config_is_the_shipped_per_tactic_phase_at_its_rate_and_p
     changes = {
         "policy": {"optimization": {"learning_rate": found.learning_rate, "seed": 1}},
         "policy_replay": {"seed": "grpo-replay/1"},
+        # Arm A's claim switches since 2026-11-18 (step 2's rounds ran before them).
+        "reward": {"claims_earn_progress": False, "unproved_claim_cost": 0.3},
     }
     assert grpo_phase_config(found, TEMPLATES) == merged(toml(CONFIGS / "phase.toml"), changes)
 

@@ -1178,6 +1178,11 @@ Arm B (B1 and B2 below) is dropped (owner, 2026-11-17); its rows stay for the re
 | D interleaved | exactly A, plus a C round every N = 4 phases (proposed) over C's window after that phase's GRPO update; the KL reference stays v0 | `policy_update = "grpo_and_expert_iteration"`, `expert_iteration_every_phases = 4` (WP4b, `arms/D.toml`) |
 | E unsolved-tree signal | open, owner decides (below) | missing |
 
+- **The claim switches** (2026-11-18, after arm A's first run at 5e-5 drifted into bare `have` openings and was
+  stopped after 7 phases): A and D train with `[reward] claims_earn_progress = false` (a claim adding a goal earns no
+  δ for its own step; everywhere else a step stays one flattened tactic) and `unproved_claim_cost = 0.3` (an invented
+  claim left open: −0.45 instead of −0.25), chosen by a replay on A's trees (`rl/README.md`, "Claims"). A reruns from
+  v0. C reads no reward; a GRPO reward key in C's overlay is refused.
 - **The closed-loop outcome-only control was B2** (superseded: arm B is dropped, owner 2026-11-17; it differs from A
   only in reward shaping, 92-94% sign agreement on the old trees, which one seed cannot resolve).
 - **No GRPO signal or C learns from unsolved trees**: `rl/grpo_groups.policy_groups` builds groups only at proof-graph

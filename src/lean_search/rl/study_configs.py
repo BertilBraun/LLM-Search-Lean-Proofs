@@ -48,6 +48,9 @@ ARM_SETTINGS = frozenset(
         "loop.seed_offset",
         "phase.policy.data.credit",
         "phase.policy.optimization.learning_rate",
+        # The claim switches of the GRPO reward (arm A's bare-have drift, 2026-11-18).
+        "phase.reward.claims_earn_progress",
+        "phase.reward.unproved_claim_cost",
         # Expert-iteration rounds (arms C, D): instead of or beside GRPO, their schedule and window, their rate.
         "loop.training.policy_update",
         "loop.training.expert_iteration_every_phases",
@@ -223,7 +226,7 @@ def unused_settings(update: PolicyUpdate, overlay: Mapping[str, object]) -> list
         case PolicyUpdate.GRPO:
             unused = ("expert_iteration.", "loop.training.expert_iteration_")
         case PolicyUpdate.EXPERT_ITERATION:
-            unused = ("phase.policy.",)
+            unused = ("phase.policy.", "phase.reward.")
         case PolicyUpdate.GRPO_AND_EXPERT_ITERATION:
             unused = ()
     return [key for key in leaf_keys(overlay) if key.startswith(unused)]

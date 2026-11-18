@@ -358,7 +358,11 @@
      "min_claim_proved_rate": null,
      "min_explanation_characters": null,
      "max_failing_after_proof_graph_share": null,
-     "max_unproved_claim_after_proof_graph_share": null
+     "max_unproved_claim_after_proof_graph_share": null,
+     "max_below_band_bare_have_share": null,
+     "min_below_band_claim_proved_rate": null,
+     "min_below_band_explanation_characters": null,
+     "max_below_band_unproved_claim_after_proof_graph_share": null
     },
     "alerts": [],
     "hard_stop": false,
@@ -413,7 +417,11 @@
      "min_claim_proved_rate": null,
      "min_explanation_characters": null,
      "max_failing_after_proof_graph_share": null,
-     "max_unproved_claim_after_proof_graph_share": null
+     "max_unproved_claim_after_proof_graph_share": null,
+     "max_below_band_bare_have_share": null,
+     "min_below_band_claim_proved_rate": null,
+     "min_below_band_explanation_characters": null,
+     "max_below_band_unproved_claim_after_proof_graph_share": null
     },
     "alerts": [],
     "hard_stop": false,
@@ -468,7 +476,11 @@
      "min_claim_proved_rate": null,
      "min_explanation_characters": null,
      "max_failing_after_proof_graph_share": 0.1,
-     "max_unproved_claim_after_proof_graph_share": 0.03
+     "max_unproved_claim_after_proof_graph_share": 0.03,
+     "max_below_band_bare_have_share": null,
+     "min_below_band_claim_proved_rate": null,
+     "min_below_band_explanation_characters": null,
+     "max_below_band_unproved_claim_after_proof_graph_share": null
     },
     "alerts": [],
     "hard_stop": false,

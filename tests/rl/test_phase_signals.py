@@ -457,6 +457,10 @@ THRESHOLDS = HealthThresholds(
     min_explanation_characters=100.0,
     max_failing_after_proof_graph_share=0.15,
     max_unproved_claim_after_proof_graph_share=0.06,
+    max_below_band_bare_have_share=0.3,
+    min_below_band_claim_proved_rate=0.01,
+    min_below_band_explanation_characters=100.0,
+    max_below_band_unproved_claim_after_proof_graph_share=0.06,
 )
 HEALTHY = HealthMeasurements(
     0.001,
@@ -587,6 +591,61 @@ def test_habit_alerts_compare_the_statements_from_below_the_band(change: dict[st
 
 def test_habit_alerts_ignore_the_band_when_the_statements_from_below_it_are_healthy() -> None:
     assert checks(dataclasses.replace(HEALTHY, bare_have_share=0.4, below_band_bare_have_share=0.2)) == []
+
+
+def below_band_record(phase: int, every: float, below_band: float) -> PhaseHealth:
+    measured = HealthMeasurements(
+        bare_have_share=every,
+        below_band_bare_have_share=below_band,
+        claim_proved_rate=0.12,
+        below_band_claim_proved_rate=0.2,
+        median_explanation_characters=150.0,
+        below_band_median_explanation_characters=200.0,
+        unproved_claim_after_proof_graph_share=0.02,
+        below_band_unproved_claim_after_proof_graph_share=0.01,
+    )
+    return PhaseHealth(phase, phase, measured, HealthThresholds(0.02, 0.1))
+
+
+# Two reference phases near arm A's first (2026-11-18): bare haves on about a fifth of every statement's blocks, fewer
+# below the band.
+ARM_A_REFERENCE = reference_measurements([below_band_record(1, 0.205, 0.168), below_band_record(2, 0.233, 0.180)], 2)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("max_below_band_bare_have_share", 1.5 * 0.174),
+        ("min_below_band_claim_proved_rate", 0.5 * 0.2),
+        ("min_below_band_explanation_characters", 0.7 * 200.0),
+        ("max_below_band_unproved_claim_after_proof_graph_share", 0.01 + 0.03),
+    ],
+)
+def test_the_below_band_habit_thresholds_scale_the_first_phases_below_band(field: str, value: float) -> None:
+    assert getattr(health_thresholds(CONFIG, ARM_A_REFERENCE, None), field) == pytest.approx(value)
+
+
+def test_a_below_band_bare_have_share_is_judged_against_the_first_phases_below_band_share() -> None:
+    measured = dataclasses.replace(HEALTHY, bare_have_share=0.30, below_band_bare_have_share=0.266)
+    thresholds = health_thresholds(CONFIG, ARM_A_REFERENCE, None)
+    alerts = health_alerts(measured, thresholds, QUIET_BUDGET, CONFIG)
+    assert HealthCheck.BARE_HAVES in [alert.check for alert in alerts]
+
+
+@pytest.mark.parametrize(
+    ("change", "alerts"),
+    [
+        ({"bare_have_share": 0.2, "below_band_bare_have_share": 0.4}, []),
+        ({"bare_have_share": 0.4, "below_band_bare_have_share": 0.2}, [HealthCheck.BARE_HAVES]),
+    ],
+    ids=["a below-band rise unread", "every statement's rise alerts"],
+)
+def test_without_a_below_band_reference_every_statement_is_judged(
+    change: dict[str, float], alerts: list[HealthCheck]
+) -> None:
+    thresholds = dataclasses.replace(THRESHOLDS, max_below_band_bare_have_share=None)
+    found = health_alerts(dataclasses.replace(HEALTHY, **change), thresholds, QUIET_BUDGET, CONFIG)
+    assert [alert.check for alert in found] == alerts
 
 
 @pytest.mark.parametrize(("valid_rate", "severity"), [(0.6, HealthSeverity.WARNING), (0.5, HealthSeverity.STOP)])

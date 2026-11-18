@@ -54,6 +54,9 @@ class TacticOutcome:
     remaining_steps: int | None = None
     # Made a claim the rest of its block does not prove, whether the tree proves it or not.
     leaves_claim_open: bool = False
+    # Made a claim adding a goal (`Claim.continuation`: `have h : A`, a flattened `have h : A := by` too), whether its
+    # block proves it or not; `suffices` replaces the goal and adds none.
+    adds_claim: bool = False
 
 
 @dataclass(frozen=True)
@@ -294,10 +297,13 @@ class TacticGraph:
                 continue
             texts = tactic_texts(edge) if texts is None else texts
             claim = claim_made(texts[index], before, goals) if index < len(texts) else None
-            later = [state for state in states[index + 1 :] if state is not None]
-            if claim is None or any(proves(claim, state) for state in later):
+            if claim is None:
                 continue
-            outcome = dataclasses.replace(outcomes[index], leaves_claim_open=True)
+            judged[index] = dataclasses.replace(outcomes[index], adds_claim=claim.continuation is not None)
+            later = [state for state in states[index + 1 :] if state is not None]
+            if any(proves(claim, state) for state in later):
+                continue
+            outcome = dataclasses.replace(judged[index], leaves_claim_open=True)
             assert edge.target_id is not None, edge.edge_id
             node_ids = {edge.target_id} | {
                 self.node_by_key[key] for key in map(goal_key, later) if key in self.node_by_key
@@ -307,7 +313,9 @@ class TacticGraph:
             if outcome.label in (TacticLabel.OFF_GRAPH, TacticLabel.UNKNOWN) and not self.claims.proved(
                 claim, later, node_ids
             ):
-                outcome = TacticOutcome(TacticLabel.UNPROVED_CLAIM, outcome.node_id, leaves_claim_open=True)
+                outcome = TacticOutcome(
+                    TacticLabel.UNPROVED_CLAIM, outcome.node_id, leaves_claim_open=True, adds_claim=outcome.adds_claim
+                )
             judged[index] = outcome
         return tuple(judged)
 

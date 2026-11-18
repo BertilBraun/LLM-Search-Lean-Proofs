@@ -714,6 +714,12 @@ class HealthThresholds:
     min_explanation_characters: float | None = None
     max_failing_after_proof_graph_share: float | None = None
     max_unproved_claim_after_proof_graph_share: float | None = None
+    # The habit limits from the reference phases' statements below the band, for a phase measured there; None in
+    # records written before 2026-11-18, which judged a below-band share against the every-statement limit.
+    max_below_band_bare_have_share: float | None = None
+    min_below_band_claim_proved_rate: float | None = None
+    min_below_band_explanation_characters: float | None = None
+    max_below_band_unproved_claim_after_proof_graph_share: float | None = None
 
 
 class HealthCheck(StrEnum):
