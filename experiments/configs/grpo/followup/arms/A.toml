@@ -9,4 +9,4 @@ credit = "per_tactic"
 
 [phase.policy.optimization]
 # Step 2's choice among 2e-5, 5e-5 and 1e-4 (experiments/rank_learning_rates.py).
-learning_rate = "PLACEHOLDER: step 2's learning rate for A"
+learning_rate = 2e-5

@@ -16,4 +16,4 @@ expert_iteration_window_phases = 4
 
 [expert_iteration.sft.optimization]
 # The offline run O2's choice between 5e-5 and 1e-4 (the same recipe and trainer; owner, 2026-11-17).
-learning_rate = "PLACEHOLDER: O2's learning rate (the offline chain's rank_matched.txt)"
+learning_rate = 5e-5

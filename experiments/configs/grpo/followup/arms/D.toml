@@ -16,7 +16,7 @@ expert_iteration_window_phases = 4
 credit = "per_tactic"
 
 [phase.policy.optimization]
-learning_rate = "PLACEHOLDER: A's learning rate from step 2"
+learning_rate = 2e-5
 
 [expert_iteration.sft.optimization]
-learning_rate = "PLACEHOLDER: C's learning rate, O2's"
+learning_rate = 5e-5

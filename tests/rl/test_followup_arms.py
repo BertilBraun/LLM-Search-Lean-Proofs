@@ -32,6 +32,15 @@ ROUND_ARMS = {
     "C": ["expert_iteration.sft.optimization.learning_rate"],
     "D": ["phase.policy.optimization.learning_rate", "expert_iteration.sft.optimization.learning_rate"],
 }
+# Arm B is dropped (owner, 2026-11-17): its configs keep their placeholders, so they cannot start.
+DROPPED_ARMS = [path for path in ARMS if path.stem in ("B1", "B2")]
+# Step 2's choice for A (2026-11-18) and O2's for the expert-iteration rounds (2026-11-17).
+CHOSEN_RATES = {
+    ("A", "phase.policy.optimization.learning_rate"): 2e-5,
+    ("C", "expert_iteration.sft.optimization.learning_rate"): 5e-5,
+    ("D", "phase.policy.optimization.learning_rate"): 2e-5,
+    ("D", "expert_iteration.sft.optimization.learning_rate"): 5e-5,
+}
 RECIPE = CONFIGS / "followup/expert_iteration.toml"
 
 
@@ -88,17 +97,25 @@ def test_a_second_seeds_offset_is_a_top_level_loop_setting() -> None:
     assert "loop.seed_offset" in ARM_SETTINGS
 
 
-@pytest.mark.parametrize("path", GRPO_ARMS, ids=lambda path: path.stem)
-def test_an_arms_learning_rate_waits_for_step_2(path: Path) -> None:
+@pytest.mark.parametrize("path", DROPPED_ARMS, ids=lambda path: path.stem)
+def test_a_dropped_arms_learning_rate_stays_a_placeholder(path: Path) -> None:
     assert placeholders(toml(path)) == ["phase.policy.optimization.learning_rate"]
 
 
-@pytest.mark.parametrize("name", ROUND_ARMS)
-def test_a_round_arms_learning_rates_wait_for_step_2_and_o2(name: str) -> None:
-    assert sorted(placeholders(toml(CONFIGS / f"followup/arms/{name}.toml"))) == sorted(ROUND_ARMS[name])
+@pytest.mark.parametrize(("name", "setting"), sorted(CHOSEN_RATES))
+def test_an_arms_learning_rate_is_the_chosen_one(name: str, setting: str) -> None:
+    section = toml(CONFIGS / f"followup/arms/{name}.toml")
+    for key in setting.split("."):
+        section = section[key]
+    assert section == CHOSEN_RATES[(name, setting)]
 
 
-@pytest.mark.parametrize("path", ARMS, ids=lambda path: path.stem)
+@pytest.mark.parametrize("name", ["A", *ROUND_ARMS])
+def test_a_running_arm_has_no_placeholder_left(name: str) -> None:
+    assert placeholders(toml(CONFIGS / f"followup/arms/{name}.toml")) == []
+
+
+@pytest.mark.parametrize("path", DROPPED_ARMS, ids=lambda path: path.stem)
 def test_an_arm_with_a_placeholder_is_refused(path: Path) -> None:
     with pytest.raises(ValueError, match="placeholders"):
         arm_configs(toml(path))
