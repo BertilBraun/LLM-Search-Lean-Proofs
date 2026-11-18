@@ -122,9 +122,11 @@ def test_the_pool_is_the_arms_frozen_pool() -> None:
     assert (data.pool, data.pool_sha256) == (curriculum["verified"], curriculum["verified_sha256"])
 
 
-def test_the_walk_uses_the_no_reasoning_modes_search() -> None:
+def test_the_walk_uses_the_plain_search_the_no_reasoning_mode_samples_with_switches() -> None:
+    # The walk ran on the plain search, like the probe runs; the mode's sampling copy only adds the efficiency switches.
     mode = toml(FOLLOWUP / "modes/no_reasoning.toml")["sampling"]["search_config"]
-    assert load_offline_arm_config(CONFIG).walk.search_config == mode
+    walk = load_offline_arm_config(CONFIG).walk.search_config
+    assert mode == walk.removesuffix(".toml") + "_sampling.toml"
 
 
 def test_the_starting_adapter_is_v0() -> None:
