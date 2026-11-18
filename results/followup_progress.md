@@ -304,6 +304,13 @@ default), safe server stops, results pulled to the PC as they are written.
 | First node, 2026-11-14 11:20 UTC to its outage at about 23:35 UTC | about $11 at most; partly refunded by the provider (owner) |
 | Second node, from 2026-11-15 about 08:30 UTC | $0.83 per hour |
 
+## Smoke test and arm C first (owner, 2026-11-18)
+
+While A's reward is fixed, the arms driver runs in the order `smoke C A D` with A held (`order`, `hold_A`; review BE,
+master `d03ff06`). The smoke test started 15:13 UTC (smoke C, then smoke D with the kill during publishing), then arm
+C (about 21-23 h with its probe run), then HOLD "waiting for: A". There: deploy the reward fix, the rerun path for A,
+remove `hold_A`, start; A from v0, then D.
+
 ## Arm A stopped 2026-11-18 14:39 UTC (owner): bare-`have` drift
 
 After 6 trained phases at 5e-5 (phase 7 sampled), bare-`have` openings rose every phase, 20.5 → 32.4% (below the band
