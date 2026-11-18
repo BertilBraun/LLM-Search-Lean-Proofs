@@ -250,12 +250,10 @@ enabled = false
 confidence = 0.95
 significance = 0.05
 
-# grpo_fixed_sets.py gate-benchmark (the gate set searched once without a value model), under $LEAN_SEARCH_RUNS: every
-# newly served value model scores it through the value servers while the searches run, a trend against v0 and the value
-# model before it (share of labelled sibling pairs ordered by h with a paired cluster bootstrap over problems; AUC,
-# Brier, calibration, Spearman of the steps).
+# Off (2026-11-18): the gate benchmark was never built on this node and is only a trend nothing acts on; the old run's
+# version stayed flat while the value model gained 8 points on the probe. grpo_fixed_sets.py gate-benchmark builds it.
 [evaluation.value_benchmark]
-path = "grpo_gate/benchmark.json.gz"
+path = ""
 
 # Off: miniF2F-valid runs standalone at an arm's end (64 expansions, its own value model), never beside an arm.
 [evaluation.minif2f]
