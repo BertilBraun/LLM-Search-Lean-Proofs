@@ -159,3 +159,96 @@ window, the loop's jobs started then (held-out evaluation, a trainer restart) re
 4. Smoke D: the kill line about 30 s into "1 publishing", a second "Loop followup_smoke_D: version" line, no second
    "trained", and `smoke_report.md`.
 5. After the smoke, arm C's start: servers stopped first, then `arm_loop.sh --kind arm … arms/C.toml`.
+
+## Re-review (2026-11-18)
+
+Fixes `b5199ee..f61d1d3`. WSL: `test_arm_loop_lock.py`, `test_arms_chain_script.py`, `test_arms_chain.py`,
+`test_study_chain_script.py`, `test_offline_chain_script.py`, `test_followup_arms.py`: 353 passed.
+
+Node, read-only:
+- Arm A is pid 788377 (phase 3, training).
+- Two `loop.pid` files exist: `followup_A`'s, and a stale one in `followup_shared_sampling.failed_value_benchmark_20261118`
+  (pid 617372, no such process).
+- No `*.lock` files yet; `pid_max` is 4,194,304.
+
+**Verdict: merge.** Every finding is fixed or reduced to a nit; the new mechanisms hold up. Three new nits and two
+smoke points below.
+
+| Finding | Status | Note |
+|---|---|---|
+| B1 two loops of one arm | Fixed | See "The lock" below. |
+| S1 STOPPED arms chain with a live loop | Fixed | `no_other_loop` (`chain_helpers.sh:40-59`), called by all three drivers before their first server or GPU action. See below. |
+| S2 a stopped arm restarted | Fixed | `pause_<key>`: a loop found neither alive nor in flight with the file present STOPs "paused" (`arms_chain.sh:236-237`); doc "Stopping an arm by hand". |
+| S3 smoke gates that fail on a sound loop | Fixed | 6M tokens (the comment's own numbers: about 60 examples at 2M, so about 180 at 6M against the floor of 100). The GPU peak is now a reading. The round's skip reason is spelled out. |
+| N1 kill command-line match | Fixed | `grep grpo_loop.py \| grep -q followup_configs/followup_smoke_D/loop.toml`. |
+| N2 adoption trusts `kill -0` | Mostly fixed | `loop_process_alive` requires `grpo_loop.py` in the command line, though not the run's own config (only one loop runs at a time, so this is enough). `no_other_loop` still uses bare `kill -0`: see N8. |
+| N3 5-minute GPU wait | Fixed | `wait_gpus`: up to 1 hour of polling, then `gpus_free`'s five checks. |
+| N4 missed-kill recipe | Fixed | Written into `smoke_report.md` when the kill gate fails. |
+| N5 deploy window | Fixed (doc) | Install step 0 names it and says to deploy in the sampling stage. |
+
+**The lock.**
+- **Placement.** `arm_loop.sh` opens `<run>.lock` on fd 9 and takes it with `flock -n` after its `finished.json` and
+  pinning preconditions, before `servers-free`, `init`, `servers` and `loop`.
+- **Who holds it.**
+  - `init`, `servers` and the `node_checks` calls run with `9>&-`, so the servers it starts never hold the lock (tested
+    with a detached stand-in server).
+  - `grpo_loop.sh loop` passes fd 9 to the nohup'd loop through `background.sh`'s `exec taskset … python`, so the loop
+    holds it for its life and releases it when it exits (tested).
+  - Everything the loop starts later inherits nothing: the persistent trainer, the evaluation jobs, the vLLM servers
+    (via `bash -c serve_model.sh`) and the Lean REPLs all go through asyncio/subprocess with the default
+    `close_fds=True`.
+- **A second start fails cleanly.** It exits 1 with a clear message while another start is in flight or the loop lives
+  (tested). The driver counts that as an attempt and adopts on the next poll.
+- **The driver.** `loop_alive` is a live `grpo_loop.py` process, or the lock held. A held lock without a process is "a
+  start in flight", waited on for up to 30 minutes, then STOPPED with the `fuser -v` hint. Adoption of a restarted
+  driver mid-start is therefore right.
+- **Arm A's current loop holds no lock** (started before the lock existed). It is adopted by its process alone, and a
+  restart of A after its death takes the lock as usual.
+
+**`no_other_loop`, and whether it ever refuses a driver's own restart.**
+- Arms chain: its own five runs are exempt (`followup_{A,C,D,smoke_C,smoke_D}`), so adopting its own arm or resuming
+  its own smoke run is never refused.
+- Step 2: its own shared run is exempt (`no_other_loop "${shared_run}"`), so resuming its own sampling is never refused.
+- Offline chain: it runs no loop of its own and exempts none, which is correct.
+- A loop of another run alive, or a start of one in flight, STOPs the calling driver, which is what S1 asked for.
+- The stale `followup_shared_sampling.failed_value_benchmark_20261118/loop.pid` names a dead pid, so it refuses
+  nothing today (see N8).
+
+**The health-stop switch and the chain's end.**
+- With `on_health_stop` absent or `wait`: report, servers stopped, STOPPED, as before.
+- With `continue`: report once (`done_health_report_<arm>`), the loop marked done, `run_arm` skips the evaluation, and
+  the next arm's `start_loop` stops the servers.
+- At the end every health-stopped arm without a word STOPs with servers stopped. With a word,
+  `evaluate_arm` runs; already-evaluated arms are no-ops through their markers.
+- Comparisons now take every other arm with a probe run, so an arm evaluated at the end is compared with all of them.
+- An unknown switch or word STOPs. `evaluate` on a version-0 stop STOPs at `probe-list`, as the health report now says.
+
+**The smoke changes.** `value_every_phases = 1` is added to `SMOKE_SETTINGS`, so each smoke phase trains the value
+model too: D's phase is GRPO, value and a round in one trainer process. The new gate "value model trained in the
+phase" compares version 1's value adapter with version 0's. Both fine.
+
+### New nits
+
+**N6.** `chain_helpers.sh:38`: `run_lock_held` probes by taking the lock (`flock -n <lock> true`) for an instant. An
+`arm_loop.sh` taking it in that same instant would fail "another start in flight". That costs one counted attempt and
+a minute; it can only happen when another driver starts while an arm is being started, which the other guards already
+refuse. Harmless; `flock -n -s`, or testing with `fuser`, would avoid even that.
+
+**N7.** Any process that inherits fd 9 from the loop and outlives it keeps the run "in flight". After the smoke D kill
+the driver would then wait 30 minutes and STOP. Nothing in the loop forks without `close_fds` today: the children
+checked above all close it, and nothing in `loop.py` or `loop_services.py` imports multiprocessing or ProcessPool. A
+future `fork`-started pool in the loop would change that. Worth one line in `arm_loop.sh`'s comment, and a smoke point
+(below).
+
+**N8.** `chain_helpers.sh:47-50`: `no_other_loop` judges a `loop.pid` by `kill -0` alone, while the arms driver now
+uses `loop_process_alive` (command line names `grpo_loop.py`). A stale `loop.pid`, such as the
+`followup_shared_sampling.failed_value_benchmark_20261118` one on the node, would STOP all three drivers if its pid
+were ever reused. That is unlikely with `pid_max` 4.19M and pids near 0.8M, but sharing the command-line check (move
+`loop_process_alive` into the helpers) makes the three drivers agree.
+
+### Further smoke points for the first run
+
+6. After the smoke D kill: `fuser -v /workspace/runs/followup_smoke_D.lock` shows nobody within a minute or two (the
+   persistent trainer and the servers never held it), so the restart happens at once rather than after the 30-minute
+   in-flight wait.
+7. After arm C's first start by the driver: `fuser -v /workspace/runs/followup_C.lock` names only the loop's python.
