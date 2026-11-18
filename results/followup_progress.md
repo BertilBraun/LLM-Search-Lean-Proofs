@@ -304,6 +304,15 @@ default), safe server stops, results pulled to the PC as they are written.
 | First node, 2026-11-14 11:20 UTC to its outage at about 23:35 UTC | about $11 at most; partly refunded by the provider (owner) |
 | Second node, from 2026-11-15 about 08:30 UTC | $0.83 per hour |
 
+## Arms driver installed 2026-11-18 10:53 UTC
+
+`deployment/arms_chain.sh` (reviews BC and BD with re-reviews; master `6f3ce10`) adopted the running arm A without
+touching it. It then runs: A's adapters (phase 8 and final) and one probe run, the C/D smoke test (6M tokens, one
+phase each, GRPO + value + a round in one pause, a kill during publishing), arm C, arm D, each with its probe run and
+comparisons, then HOLD with the servers stopped. A health stop waits for the owner's word (`on_health_stop` absent,
+i.e. `wait`, until the owner chooses). The PC pull now includes `runs/arms_chain` and every `runs/followup_*`, and
+fetches each arm's adapters into `node_backup/2026-11-15/adapters/<arm>/` with a checksum check.
+
 ## Arm A restarted 2026-11-18 07:15 UTC at 5e-5
 
 The owner chose 5e-5 for A (step 2 tied 2e-5 and 5e-5; C and D use 5e-5), so D's GRPO rate is 5e-5 too (master
