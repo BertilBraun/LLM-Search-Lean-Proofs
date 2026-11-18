@@ -252,3 +252,52 @@ were ever reused. That is unlikely with `pid_max` 4.19M and pids near 0.8M, but 
    persistent trainer and the servers never held it), so the restart happens at once rather than after the 30-minute
    in-flight wait.
 7. After arm C's first start by the driver: `fuser -v /workspace/runs/followup_C.lock` names only the loop's python.
+
+## Review BE (2026-11-18): the order file and holds
+
+Branch `arms-chain-order`, change `eecaf11` (`deployment/arms_chain.sh`, its tests, the ops note). WSL:
+`test_arms_chain_script.py` 71 passed.
+
+Node, read-only, as it is now:
+- `arms_chain` is STOPPED "A is paused (pause_A)". `pause_A`, `started_loop_A`, `loops/A.revisions` and
+  `on_health_stop` (= continue) are present; there is no `done_*` marker and no smoke run yet.
+- `followup_A` stands at phase 7, stage publishing. It has no `loop.pid` (`grpo_loop.sh stop` removed it), and there
+  is no `followup_A.lock`.
+- No server pid files, so the servers are off.
+- `study_chain` and `offline_chain` are both at HOLD.
+- The only stale `loop.pid` left is the dead `followup_shared_sampling.failed_value_benchmark_20261118` one.
+
+**Verdict: merge, and the sequence is safe on the node as it is.**
+
+- **The start with `smoke C A D` and `hold_A`** (`arms_chain.sh:76-93`).
+  - The order is validated before anything runs. `no_other_loop` passes (A is exempt; no lock exists; the stale pid is
+    dead).
+  - Nothing at the driver's start reads or writes `followup_A`.
+- **The smoke test and arm C run as before** (`arms_chain.sh:380-395`). Each starts with the servers stopped and fresh
+  run directories and configs (`followup_smoke_C`, `_D`, `followup_C`). C's comparisons find no other probed arm (A has
+  no `done_probe_A`).
+- **Then A is held.** `loop_alive followup_A` is false: no `loop.pid`, no lock. The driver stops the servers, writes
+  HOLD "waiting for: A" and exits 0. D waits too. `pause_A`, `started_loop_A` and the old run are never read or touched
+  (`run_loop A` is not reached). Had A's loop been alive, the driver would have STOPPED instead.
+- **The later rerun.**
+  - The rerun path moves aside the run, the configs, the checkpoints, the markers, `pause_A` and `loops/A.*`.
+  - With `hold_A` removed, `run_arm A` finds no `done_loop_A` or `started_loop_A`, counts a fresh attempt and starts A
+    from v0 through `arm_loop.sh`: new configs, new run directory, `init`, and the run lock.
+  - The smoke test and C are skipped by their markers, and D follows.
+- **Two safety nets.**
+  - If someone removes `hold_A` but skips the rerun path, `pause_A` still makes the driver STOP rather than resume the
+    old phase-7 run.
+  - Both other chains are at HOLD, and HOLD counts as idle to their guards.
+- **The tests** cover each of these: the order's refusals, waiting for A, the old run left untouched, no evaluation of
+  a held arm, the fresh start after the hold is lifted with comparisons against every other done arm, and a held arm
+  whose loop runs.
+
+No blocking or should-fix points. Two notes for the operator:
+
+- **The reward fix and the sampling binding.** Arms A and D are checked against the shared run's `sampling.json`:
+  `search/visible_student_v2_sampling.toml`, 32 expansions, sha256 `2a773fe6…`. If the reward fix touches that search
+  config file (rather than the phase or reward configs), A's and D's starts are refused three times and the chain
+  STOPs. Before removing `hold_A`, check that `git diff <old> <new> -- experiments/configs/grpo/search/` is empty.
+- **The rerun path relies on `pause_A` until it is run.** Removing `pause_A` and `hold_A` together without moving the
+  run aside would resume the old phase-7 run under the new code. The ops note's order of steps is right; keep it that
+  way.
