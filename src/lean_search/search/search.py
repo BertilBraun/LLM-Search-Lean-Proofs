@@ -821,6 +821,7 @@ class _TheoremSearch:
         if verification.verified:
             if self.config.nlinarith_variant is not None:
                 node.plain_verified = verification.plain_verified
+                node.plain_check_timed_out = verification.plain_timed_out
             self.proofs.append(node)
             self.accounting.proofs += 1
             if self.solved_at is None:

@@ -10,9 +10,10 @@ import pytest
 from fake_repl_project import HEADER, STATEMENT, FakeReplProject, fake_repl_project, needs_linux
 
 from lean_search.data import Problem, Split
-from lean_search.lean import LeanError, LeanRepl, LeanReplConfig, ProofState
+from lean_search.lean import LeanError, LeanRepl, LeanReplConfig, LeanTimeout, ProofState
 from lean_search.lean.memory import SearchMemory
 from lean_search.lean.nlinarith import VARIANT_DEFINITIONS, NlinarithVariant, variant_tactic
+from lean_search.lean.plans import plan_block
 from lean_search.lean.repl import BASE_ENVIRONMENT_DEFINITIONS, PROJECT_DIRECTORY, REPL_BINARY
 from lean_search.lean.text import executed_proof, theorem_with_proof
 from lean_search.rl.loop_config import EvaluationTarget
@@ -301,3 +302,71 @@ def test_the_summary_names_the_variant_in_its_plain_check() -> None:
 
 def test_the_summary_without_the_variant_reads_as_before() -> None:
     assert plain_check_label(None) == "Proofs that also verify without the per-step heartbeat wrappers"
+
+
+@needs_linux
+async def test_a_plain_check_past_its_wall_clock_counts_as_a_timed_out_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = variant_project(tmp_path, monkeypatch, DEGREE)
+    config = dataclasses.replace(project.config, plain_check_timeout_seconds=0.5)
+    async with LeanRepl(config) as repl:
+        start = await repl.start_proof(STATEMENT, HEADER)
+        assert isinstance(start.outcome, ProofState)
+        result = await repl.apply_block(start.outcome, "nlinarith [slowly]\ndone", HEARTBEATS)
+        verification = await repl.verify_state(result.state)
+    assert (verification.verified, verification.plain_verified, verification.plain_timed_out) == (True, False, True)
+
+
+@needs_linux
+async def test_the_trees_count_plain_checks_that_timed_out(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    project = variant_project(tmp_path, monkeypatch, DEGREE)
+    config = dataclasses.replace(project.config, plain_check_timeout_seconds=0.5)
+    async with LeanRepl(config) as repl:
+        blocks = Blocks("nlinarith [slowly]\ndone")
+        completed = await search_theorem(PROBLEM, repl, blocks, DepthPlusGoals(), search_config(DEGREE))
+    record = tree_record(completed.tree, STATEMENT, completed.result)
+    assert plain_checks([record]) == PlainChecks(1, 1, 1, timed_out_proofs=1)
+
+
+@needs_linux
+async def test_a_header_without_linarith_names_what_the_variant_needs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_REPL_WITHOUT_LINARITH", "1")
+    project = variant_project(tmp_path, monkeypatch, DEGREE)
+    async with LeanRepl(project.config) as repl:
+        start = await repl.start_proof(STATEMENT, HEADER)
+    assert isinstance(start.outcome, LeanError) and "Mathlib's linarith" in start.outcome.message
+
+
+@needs_lean
+@pytest.mark.parametrize("flatten", [True, False], ids=["flattened", "as written"])
+async def test_a_variant_inside_a_nested_proof_verifies_as_executed(flatten: bool) -> None:
+    block = "have h : a * b ≤ (a + b) ^ 2 / 2 := by\n  nlinarith [sq_nonneg (a - b), sq_nonneg (a + b)]\nexact h"
+    async with LeanRepl(LeanReplConfig(nlinarith_variant=DEGREE)) as repl:
+        start = await repl.start_proof(INEQUALITY, MATHLIB)
+        assert isinstance(start.outcome, ProofState)
+        result = await repl.apply_block(start.outcome, plan_block(block, flatten=flatten), 50_000)
+        verification = await repl.verify_state(result.state)
+    assert (result.state.is_proved, verification.verified) == (True, True)
+
+
+@needs_lean
+async def test_a_state_reached_by_the_variant_is_replayed_after_a_kill() -> None:
+    config = LeanReplConfig(nlinarith_variant=DEGREE, forbidden_tokens=frozenset(), tactic_timeout_seconds=3.0)
+    async with LeanRepl(config) as repl:
+        start = await repl.start_proof(INEQUALITY, MATHLIB)
+        assert isinstance(start.outcome, ProofState)
+        claim = "have h : a * b ≤ (a + b) ^ 2 / 2 := by nlinarith [sq_nonneg (a - b), sq_nonneg (a + b)]"
+        stepped = await repl.apply_tactic(start.outcome, claim, 50_000)
+        assert isinstance(stepped.outcome, ProofState)
+        killed = await repl.apply_tactic(stepped.outcome, "sleep 100000", 50_000)
+        finished = await repl.apply_tactic(stepped.outcome, "exact h", 50_000)
+        assert isinstance(finished.outcome, ProofState)
+        verification = await repl.verify_state(finished.outcome)
+    assert (killed.outcome, finished.outcome.is_proved, verification.verified) == (
+        LeanTimeout("The tactic exceeded the wall-clock limit.", wall_clock=True),
+        True,
+        True,
+    )

@@ -85,6 +85,7 @@ DETERMINISTIC_PANICS = frozenset(
 INTERNAL_PANIC_PREFIX = "INTERNAL PANIC: "
 INTERNAL_PANIC_EXIT_CODE = 1
 
+VERIFICATION_WALL_CLOCK_PROBLEM = "Verification exceeded the wall-clock limit."
 _HEARTBEAT_MESSAGES = ("(deterministic) timeout", "maximum number of heartbeats")
 _STREAM_LIMIT_BYTES = 1 << 28
 _PR_SET_PDEATHSIG = 1
@@ -115,6 +116,9 @@ class LeanReplConfig:
     # Every plain `nlinarith` of a tactic runs as this bounded variant, defined in the base environment
     # (nlinarith.py); states record the text as written. None: Mathlib's nlinarith, and the base environment as before.
     nlinarith_variant: NlinarithVariant | None = None
+    # With a variant, the wall clock of the plain-Mathlib re-check of a found proof (a statistic, so it must not hold a
+    # search's process for the full command limit when only the variant finds the step in time).
+    plain_check_timeout_seconds: float = 60.0
 
 
 @dataclass(frozen=True)
@@ -223,6 +227,8 @@ class VerificationResult:
     axioms: tuple[str, ...]
     elapsed_seconds: float
     plain_verified: bool | None = None
+    # The plain re-check hit its wall clock (then `plain_verified` is False).
+    plain_timed_out: bool = False
 
 
 @dataclass(frozen=True)
@@ -645,7 +651,10 @@ class LeanRepl:
             executed = await self._guarded_verification(
                 state.statement, state.header, self._executed_proof(state), state.proof
             )
-            plain = await self._guarded_verification(state.statement, state.header, state.proof, state.proof)
+            plain_timeout = None if self.config.nlinarith_variant is None else self.config.plain_check_timeout_seconds
+            plain = await self._guarded_verification(
+                state.statement, state.header, state.proof, state.proof, plain_timeout
+            )
             await self._recover()
             return VerificationResult(
                 not executed.problems,
@@ -653,6 +662,7 @@ class LeanRepl:
                 executed.axioms,
                 time.monotonic() - started,
                 plain_verified=not plain.problems,
+                plain_timed_out=plain.problems == (VERIFICATION_WALL_CLOCK_PROBLEM,),
             )
 
     async def _remembered_outcome(
@@ -699,14 +709,18 @@ class LeanRepl:
         except ReplCrashedError as crash:
             return ReplFailure(ReplFailureKind.CRASHED, str(crash))
 
-    async def _guarded_verification(self, statement: str, header: str, proof: str, user_text: str) -> _Verification:
+    async def _guarded_verification(
+        self, statement: str, header: str, proof: str, user_text: str, timeout_seconds: float | None = None
+    ) -> _Verification:
         try:
             await self._ensure_healthy()
-            return await self._verify(statement, header, proof, user_text)
+            return await self._verify(statement, header, proof, user_text, timeout_seconds)
         except (ReplFailureError, ReplCrashedError) as error:
             return _Verification((str(error),), ())
 
-    async def _verify(self, statement: str, header: str, proof: str, user_text: str) -> _Verification:
+    async def _verify(
+        self, statement: str, header: str, proof: str, user_text: str, timeout_seconds: float | None = None
+    ) -> _Verification:
         forbidden = find_forbidden_tokens(user_text, self.config.forbidden_tokens)
         if forbidden:
             return _Verification((f"Forbidden tokens: {', '.join(forbidden)}",), ())
@@ -714,7 +728,7 @@ class LeanRepl:
             name = theorem_name(statement)
             theorem = theorem_with_proof(statement, proof)
             environment = await self._base_environment(header)
-            timeout = self.config.command_timeout_seconds
+            timeout = self.config.command_timeout_seconds if timeout_seconds is None else timeout_seconds
             single = await self._command(
                 f"lean_search_single_command {lean_string_literal(theorem)}", environment, timeout
             )
@@ -732,7 +746,7 @@ class LeanRepl:
                 await self._command(f"#print axioms _root_.{name}", response.environment, timeout), name
             )
         except ReplWallClockTimeoutError:
-            return _Verification(("Verification exceeded the wall-clock limit.",), ())
+            return _Verification((VERIFICATION_WALL_CLOCK_PROBLEM,), ())
         except ValueError as error:
             return _Verification((str(error),), ())
         if axioms is None:
@@ -923,9 +937,14 @@ class LeanRepl:
                     self._base_definitions(), environment, self.config.command_timeout_seconds
                 )
                 if response.texts(Severity.ERROR):
+                    needs = (
+                        "Lean itself (`import Mathlib` or `import Lean`)"
+                        if self.config.nlinarith_variant is None
+                        else "Mathlib's linarith for the nlinarith variant's definitions (`import Mathlib`)"
+                    )
                     raise ValueError(
-                        "The header does not elaborate with the search wrapper, which needs Lean itself "
-                        f"(`import Mathlib` or `import Lean`): {response.texts(Severity.ERROR)[0][:500]}"
+                        f"The header does not elaborate with the search wrapper, which needs {needs}: "
+                        f"{response.texts(Severity.ERROR)[0][:500]}"
                     )
             except ValueError as error:
                 self._header_failures[header] = str(error)

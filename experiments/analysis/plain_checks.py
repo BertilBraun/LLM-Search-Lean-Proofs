@@ -25,7 +25,7 @@ def directory_checks(directory: Path) -> PlainChecks:
 
 
 def main() -> None:
-    totals = PlainChecks(0, 0, 0)
+    totals = PlainChecks(0, 0, 0, 0)
     for directory in parse_arguments().directories:
         checks = directory_checks(directory)
         print(f"{directory}: {checks.text()}")
@@ -33,6 +33,7 @@ def main() -> None:
             totals.checked_proofs + checks.checked_proofs,
             totals.failed_proofs + checks.failed_proofs,
             totals.variant_only_trees + checks.variant_only_trees,
+            totals.timed_out_proofs + checks.timed_out_proofs,
         )
     print(f"all: {totals.text()}")
 

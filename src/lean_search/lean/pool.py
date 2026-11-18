@@ -16,7 +16,7 @@ class SpareProcesses:
     """Up to `count` started REPL processes with the pool's headers loaded, each handed to a REPL that must replace its
     process (a wall-clock kill, a crash, a limit, or its first use after the pool stopped it) and replaced in the
     background. They run on the CPUs of the process that starts them, like the pool's own. A start that fails is tried
-    again after `retry_seconds`."""
+    again after `retry_seconds`, doubling with every failure in a row up to `max_retry_seconds`."""
 
     def __init__(
         self,
@@ -24,10 +24,12 @@ class SpareProcesses:
         config: LeanReplConfig | None,
         headers: Callable[[], Sequence[str]],
         retry_seconds: float = 5.0,
+        max_retry_seconds: float = 600.0,
     ) -> None:
         self.count = count
         self.config = config
         self.retry_seconds = retry_seconds
+        self.max_retry_seconds = max_retry_seconds
         self._headers = headers
         self._ready: collections.deque[LeanRepl] = collections.deque()
         self._starting: set[asyncio.Task[None]] = set()
@@ -83,17 +85,23 @@ class SpareProcesses:
             raise
         except Exception:
             self._failed_starts += 1
+            delay = min(self.retry_seconds * 2 ** (self._failed_starts - 1), self.max_retry_seconds)
             if self._failed_starts == 1:
-                logger.exception("Starting a spare Lean REPL failed; trying again in %g s", self.retry_seconds)
+                logger.exception("Starting a spare Lean REPL failed; trying again in %g s", delay)
             else:
-                logger.warning("Starting a spare Lean REPL failed again (%d failures so far)", self._failed_starts)
+                logger.warning(
+                    "Starting a spare Lean REPL failed again (%d failures in a row); trying again in %g s",
+                    self._failed_starts,
+                    delay,
+                )
             await spare.close()
-            await asyncio.sleep(self.retry_seconds)
+            await asyncio.sleep(delay)
             current = asyncio.current_task()
             assert current is not None
             self._starting.discard(current)
             self.fill()
             return
+        self._failed_starts = 0
         if self._closed:
             await spare.close()
             return

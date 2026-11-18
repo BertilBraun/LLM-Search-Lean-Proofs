@@ -2,7 +2,8 @@
 
 Tactics (after the search's heartbeat wrapper): `hang` never answers, `fail` is a Lean error, `panic` ends the process
 in a deterministic Lean panic, `slow` takes FAKE_REPL_SLOW_SECONDS, `done` closes the goal, anything else reaches a new
-state with the goal unchanged. A theorem command whose proof uses plain `nlinarith` fails (not the variant's).
+state with the goal unchanged. A theorem command whose proof uses plain `nlinarith` fails (not the variant's), and
+never answers if it also says `slowly`; with FAKE_REPL_WITHOUT_LINARITH, a command using `Linarith` fails.
 Imports take FAKE_REPL_IMPORT_SECONDS. Every request is appended to FAKE_REPL_LOG as `<pid>\t<cmd|tactic>\t<text>`.
 """
 
@@ -40,7 +41,12 @@ def answer(request: dict[str, object], counters: dict[str, int]) -> dict[str, ob
             counters["state"] += 1
             response["sorries"] = [{"goal": GOAL, "proofState": counters["state"]}]
         if command.startswith("theorem") and PLAIN_NLINARITH.search(command):
+            if "slowly" in command:
+                time.sleep(3600)
+                return None
             response["messages"] = [{"severity": "error", "data": "linarith failed"}]
+        if os.environ.get("FAKE_REPL_WITHOUT_LINARITH") and "Linarith" in command:
+            response["messages"] = [{"severity": "error", "data": "unknown namespace 'Linarith'"}]
         if command.startswith("#print axioms _root_."):
             name = command.removeprefix("#print axioms _root_.")
             response["messages"] = [{"severity": "info", "data": f"'{name}' does not depend on any axioms"}]

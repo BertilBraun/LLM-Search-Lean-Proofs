@@ -522,6 +522,7 @@ class SearchPhase:
     plain_checked_proofs: int = written_when_set(0)
     plain_failed_proofs: int = written_when_set(0)
     variant_only_trees: int = written_when_set(0)
+    plain_timed_out_proofs: int = written_when_set(0)
 
 
 @dataclass(frozen=True)

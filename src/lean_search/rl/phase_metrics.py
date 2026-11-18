@@ -161,22 +161,26 @@ class PlainChecks:
     checked_proofs: int
     failed_proofs: int
     variant_only_trees: int
+    # Of the failed proofs: those whose check hit its wall clock rather than failing in Lean.
+    timed_out_proofs: int = 0
 
     def text(self) -> str:
         return (
             f"{self.failed_proofs} of {self.checked_proofs} verified proofs fail the plain Mathlib check (their "
-            f"written text with Mathlib's nlinarith); {self.variant_only_trees} solved trees have no proof passing it"
+            f"written text with Mathlib's nlinarith; {self.timed_out_proofs} of them at its wall clock); "
+            f"{self.variant_only_trees} solved trees have no proof passing it"
         )
 
 
 def plain_checks(records: Sequence[TreeRecord]) -> PlainChecks:
-    checked = failed = variant_only = 0
+    checked = failed = variant_only = timed_out = 0
     for record in records:
         flags = [node.plain_verified for node in record.nodes if node.plain_verified is not None]
         checked += len(flags)
         failed += flags.count(False)
         variant_only += bool(flags) and not any(flags)
-    return PlainChecks(checked, failed, variant_only)
+        timed_out += sum(node.plain_check_timed_out for node in record.nodes)
+    return PlainChecks(checked, failed, variant_only, timed_out)
 
 
 def search_phase_record(records: Sequence[TreeRecord], statistics: GraphStatistics) -> SearchPhase:
@@ -199,4 +203,5 @@ def search_phase_record(records: Sequence[TreeRecord], statistics: GraphStatisti
         plain_checked_proofs=checks.checked_proofs,
         plain_failed_proofs=checks.failed_proofs,
         variant_only_trees=checks.variant_only_trees,
+        plain_timed_out_proofs=checks.timed_out_proofs,
     )

@@ -44,6 +44,7 @@ class NodeRecord:
     value_distribution: tuple[float, ...] | None = None
     # A verified proof of a search with an nlinarith variant: whether its written text verifies in plain Mathlib.
     plain_verified: bool | None = written_when_set(None)
+    plain_check_timed_out: bool = written_when_set(False)
 
 
 @dataclass(frozen=True)
@@ -83,6 +84,7 @@ def tree_record(tree: SearchTree, statement: str, result: SearchResult) -> TreeR
             expansion_generated_tokens=node.expansion_generated_tokens,
             value_distribution=node.value_distribution,
             plain_verified=node.plain_verified,
+            plain_check_timed_out=node.plain_check_timed_out,
         )
         for node in tree.nodes
     )

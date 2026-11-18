@@ -109,6 +109,8 @@ class Node:
     # A verified proof of a search with an nlinarith variant: whether the written text also verifies with Mathlib's
     # own nlinarith, without the heartbeat wrappers. None otherwise.
     plain_verified: bool | None = None
+    # That check hit its wall clock (`LeanReplConfig.plain_check_timeout_seconds`).
+    plain_check_timed_out: bool = False
 
     @property
     def goals(self) -> tuple[str, ...]:

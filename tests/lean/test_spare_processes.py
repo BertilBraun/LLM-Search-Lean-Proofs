@@ -210,3 +210,15 @@ async def test_a_failing_spare_start_logs_its_traceback_once(
     await spares.close()
     tracebacks = [record for record in caplog.records if record.exc_info]
     assert (len(tracebacks), any("failed again" in record.message for record in caplog.records)) == (1, True)
+
+
+async def test_a_spare_that_keeps_failing_backs_off_to_its_cap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    project = fake_repl_project(tmp_path, monkeypatch)
+    (project.config.project_directory / REPL_BINARY).unlink()
+    spares = SpareProcesses(1, project.config, lambda: [HEADER], retry_seconds=0.05, max_retry_seconds=0.1)
+    spares.fill()
+    await asyncio.sleep(0.8)
+    await spares.close()
+    assert any("failures in a row); trying again in 0.1 s" in record.getMessage() for record in caplog.records)

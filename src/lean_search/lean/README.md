@@ -227,7 +227,8 @@ sampling uses it (`rl/README.md`, "Search efficiency switches"), evaluations nev
 
 - **Environment:** `VARIANT_DEFINITIONS` is appended to the base definitions of every process of the pool (spares
   included), exactly the environment the measurement used. It moves the fresh-name counters, so heavy steps' run
-  times shift as after any change of the base definitions (above); never on without the switch.
+  times shift as after any change of the base definitions (above); never on without the switch. The definitions need
+  Mathlib's linarith, so every header of such a pool must import it (`import Mathlib`); a start says so otherwise.
 - **What runs:** `variant_tactic` rewrites, just before a tactic goes to Lean (`_run_tactic`, so steps, replays and
   re-runs alike), every whole-word `nlinarith` with or without a hint list, also inside combinators, nested `by`
   blocks and `first`, to `lean_search_nlinarith <variant>`. Forms with their own options (`nlinarith!`,
@@ -244,7 +245,9 @@ sampling uses it (`rl/README.md`, "Search efficiency switches"), evaluations nev
   products are a subset of nlinarith's, so plain nlinarith has a certificate too but may not find it within Lean's
   default limits. Cost: one plain elaboration per found proof, which with the variant takes about the plain
   nlinarith's own time (seconds for most); for a proof whose step only the variant finds in time, up to the
-  declaration's default 200k heartbeats or the 300 s command limit when the time goes into unmetered arithmetic. Such
+  declaration's default 200k heartbeats, and at most `LeanReplConfig.plain_check_timeout_seconds` (60 s) of wall
+  clock, after which the process is replaced and the check counts as failed and timed out
+  (`VerificationResult.plain_timed_out`, `Node.plain_check_timed_out`, counted apart in the phase record). Such
   proofs (`plain_verified = False`) train the policy all the same (a search with the variant reproduces them); they
   are not plain-Mathlib proofs and must be filtered out of anything published as such. With the variant on, every
   verified proof of a search, harvested ones included, records its check (`Node.plain_verified`, written only then);
@@ -306,7 +309,8 @@ or the `lean_search_step.match_N` matchers of executed steps. A crash during ver
   spare's process and environments instead of starting and importing in the caller's time, and the pool starts
   another in the background; with none ready it starts its own as before (`LeanRepl.spare_swaps`, `spare_misses`,
   summed by `LeanReplPool.spare_text`, which the loop logs with its host memory). Its proof states replay on the new
-  process like after any restart. A failed spare start is tried again after `retry_seconds`; a dead ready spare is
+  process like after any restart. A failed spare start is tried again after `retry_seconds`, doubling with every
+  failure in a row up to `max_retry_seconds` (10 min), with the traceback logged once and then a count; a dead ready spare is
   closed, never handed out. Spares are neither stopped by `stop_idle_processes` / `stop_processes` nor counted by
   them; each holds about 0.24 GiB private memory (3.5 GiB resident, the rest the shared .olean mappings; measured on
   the node, `experiments/analysis/restart_cost.py`), and a swap costs the caller about 0.2 s against about 6.2 s for a

@@ -1892,7 +1892,10 @@ class GrpoLoop:
         self.writer.write(phase_record)
         if phase_record.plain_checked_proofs:
             checks = PlainChecks(
-                phase_record.plain_checked_proofs, phase_record.plain_failed_proofs, phase_record.variant_only_trees
+                phase_record.plain_checked_proofs,
+                phase_record.plain_failed_proofs,
+                phase_record.variant_only_trees,
+                phase_record.plain_timed_out_proofs,
             )
             self.log(f"Phase {phase}, nlinarith variant: {checks.text()}")
         metrics = phase_value_metrics(labelled.trees, self.value_readout)
