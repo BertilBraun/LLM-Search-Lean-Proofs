@@ -304,6 +304,22 @@ default), safe server stops, results pulled to the PC as they are written.
 | First node, 2026-11-14 11:20 UTC to its outage at about 23:35 UTC | about $11 at most; partly refunded by the provider (owner) |
 | Second node, from 2026-11-15 about 08:30 UTC | $0.83 per hour |
 
+## Why arm A drifted into bare `have` claims (measured 2026-11-18 on all of A's trees)
+
+- Bare claims left open and never proved are already net negative every phase (−0.36 to −0.46 per sample; the −0.25
+  penalty is applied).
+- But the bare-`have` opening as a class is net positive in every phase (+4k to +26k of summed token advantage per
+  phase, v0's phase included), almost all on the explanation tokens. It is paid by bare `have` blocks that prove their
+  own claim in the same block (9 → 14% of samples): progress is counted per flattened tactic, so every claim tactic
+  earns its own δ = 0.2 step, and a decomposition is paid per claim it states (+0.9 to +1.3 on the proof graph against
+  +0.3 for a direct tactic). Open never-proved claims grow alongside (5.9 → 10.4% of samples).
+- **Fix** (branch `bare-have-claim-switches`, under reviews BF and BG): `claims_earn_progress = false` (a claim tactic
+  earns no δ of its own) and `unproved_claim_cost = 0.3` (from 0.1), both off by default and on for arms A and D.
+  Replayed on the same groups (v0, A1-A7, the 2e-5 run's 2 phases): the bare class becomes net negative in all ten
+  (e.g. A1 +19.6k → −9.3k), self-proving decompositions stay positive (+0.16 to +0.23 per sample), trainable groups
+  unchanged, positive proof-graph mass −2 to −5.5%. Weaker variants (either switch alone, cost 0.2) stay positive in
+  2-8 of 10 phases.
+
 ## Smoke test and arm C first (owner, 2026-11-18)
 
 While A's reward is fixed, the arms driver runs in the order `smoke C A D` with A held (`order`, `hold_A`; review BE,
