@@ -13,7 +13,7 @@ smoke-overlays writes C.toml and D.toml, the arms' overlays with the smoke's nam
 adapters copies the arm's phase-8 and final policy and value adapters with a sha256 manifest. probe-list writes the
 arm's one probe run (exit 1 when a health-stopped arm has no healthy phase to evaluate). compare-plan prints, one per
 line and tab-separated, the output file, the x run and label, the y label and the y runs (space-separated): against
-the anchors, run 7 and every earlier arm with a probe run done. report and health-report print markdown. smoke-check
+the anchors, run 7 and every other arm with a probe run done. report and health-report print markdown. smoke-check
 writes the smoke report and exits 0 when every gate passed, 3 when one failed.
 """
 
@@ -108,9 +108,7 @@ def write_probe_list(arm: str, run: Path, output: Path) -> None:
 
 def print_compare_plan(arm: str, state: Path) -> None:
     earlier = [
-        (other, probe_name(state, other))
-        for other in ARMS[: ARMS.index(arm)]
-        if (state / f"done_probe_{other}").exists()
+        (other, probe_name(state, other)) for other in ARMS if other != arm and (state / f"done_probe_{other}").exists()
     ]
     for comparison in comparisons(arm, probe_name(state, arm), earlier):
         fields = [comparison.file_name, comparison.x_run, comparison.x_label, comparison.y_label]
@@ -121,7 +119,9 @@ def print_report(arm: str, run: Path, state: Path, probe_runs: Path) -> None:
     probed = (state / f"done_probe_{arm}").exists()
     probe_directory = run_directory(probe_runs, probe_name(state, arm)) if probed else None
     files = sorted(path.name for path in (state / "compare").glob(f"{arm}_against_*.txt"))
-    print(arm_report(arm, run, probe_directory, files, state / "adapters" / arm))
+    revisions_file = state / "loops" / f"{arm}.revisions"
+    revisions = revisions_file.read_text(encoding="utf-8").splitlines() if revisions_file.exists() else []
+    print(arm_report(arm, run, probe_directory, files, state / "adapters" / arm, revisions))
 
 
 def check_smoke(runs: Path, checkpoints: Path, state: Path, output: Path) -> None:

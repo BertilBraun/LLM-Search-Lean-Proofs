@@ -20,7 +20,7 @@ from pathlib import Path
 
 from lean_search.expert_iteration.serving import ModelVersion
 from lean_search.expert_iteration.toml_text import toml_value
-from lean_search.monitoring.families import ExpertIterationPhase, GrpoPhase
+from lean_search.monitoring.families import ExpertIterationPhase, GrpoPhase, RoundSkip
 from lean_search.rl.health_checks import HealthStop, read_health_history
 from lean_search.rl.loop import PhaseRecord, RunFinished, phase_trigger, read_phase_outcome, value_adapter_version
 from lean_search.rl.probe_evaluation import ProbeRunRecord
@@ -31,7 +31,9 @@ ARMS = ("A", "C", "D")
 SMOKE_ARMS = ("C", "D")
 # The one kill during publishing: D's phase publishes GRPO's and the round's update together.
 SMOKE_KILLED_ARM = "D"
-SMOKE_PHASE_GENERATED_TOKENS = 2_000_000
+# Half an arm's phase: its round then trains on a near-real amount of data (at 2M tokens, about 60 examples against the
+# loop's floor of 100; reviews BC S3, BD S1).
+SMOKE_PHASE_GENERATED_TOKENS = 6_000_000
 SMOKE_PHASES = 1
 # Retained for the second pass (DESIGN.md, "Evaluation"), beside the final checkpoint.
 MIDDLE_PHASE = 8
@@ -41,8 +43,8 @@ ANCHOR_RUNS = ("step1_run1_v0_value_v0", "step1_run2_v0_value_v0")
 V35_FINAL_VALUE_RUN = "step1_run7_v35_value_final"
 MANIFEST_FILE = "manifest.sha256"
 SOURCES_FILE = "sources.json"
-# nvidia-smi's used memory (reserved by the allocator included) while training, and /dev/shm's use, as gates.
-MAX_TRAINING_GPU_SHARE = 0.95
+# /dev/shm's use as a gate (the parked models, the policy merge and the value merge); nvidia-smi's used memory while
+# training is only a reading: the caching allocator may reserve nearly all of a card without ever failing.
 MAX_SHARED_MEMORY_SHARE = 0.9
 
 
@@ -60,8 +62,9 @@ def phase_directory_name(run: str, phase: int) -> str:
 
 
 def smoke_overlay(overlay: Mapping[str, object], arm: str) -> dict[str, object]:
-    """The arm's overlay under its smoke name with the smoke's budget; a round interval longer than the smoke's phases
-    is brought within them, so that D's one phase trains GRPO and a round in one trainer process."""
+    """The arm's overlay under its smoke name with the smoke's budget, its one phase training the value model too, and a
+    round interval longer than the smoke's phases brought within them: D's one phase then trains GRPO, the value model
+    and a round in one trainer process, the heaviest pause C and D meet (C at every even phase, D at every fourth)."""
     loop = overlay.get("loop", {})
     assert isinstance(loop, Mapping)
     training = loop.get("training", {})
@@ -69,6 +72,7 @@ def smoke_overlay(overlay: Mapping[str, object], arm: str) -> dict[str, object]:
     smoke_training: dict[str, object] = {
         "phase_generated_tokens": SMOKE_PHASE_GENERATED_TOKENS,
         "max_phases": SMOKE_PHASES,
+        "value_every_phases": SMOKE_PHASES,
     }
     interval = training.get("expert_iteration_every_phases")
     if isinstance(interval, int) and interval > SMOKE_PHASES:
@@ -250,8 +254,8 @@ class Comparison:
 
 
 def comparisons(arm: str, probe_run: str, earlier: Sequence[tuple[str, str]]) -> list[Comparison]:
-    """Against the anchors, against v35 with the final value model (descriptive) and against each earlier arm's probe
-    run (`earlier`: arm and run name)."""
+    """Against the anchors, against v35 with the final value model (descriptive) and against each other arm's probe
+    run done before this one (`earlier`: arm and run name; a health-stopped arm evaluated at the end has them all)."""
     label = f"arm {arm}"
     found = [
         Comparison(f"{arm}_against_anchors.txt", probe_run, label, "v0 anchors", ANCHOR_RUNS),
@@ -352,9 +356,16 @@ def health_report(arm: str, run_directory: Path) -> str:
             "",
             f"- Phase {stop.phase}, version {stop.policy_version} collapsed; last good version "
             f"{stop.last_good_version}; {stop.reason} (at {stop.stopped_at}).",
-            "- The chain is STOPPED. The owner decides: `skip` (no probe run; the next arm) or `evaluate` (a probe "
-            "run of the last good version with its value model, then the next arm), written into "
-            f"`word_{arm}` in the chain's state directory; then move STOPPED aside and start arms_chain.",
+            "- The owner decides: `skip` (no probe run) or `evaluate` (a probe run of the last good version with its "
+            f"value model), written into `word_{arm}` in the chain's state directory. With `on_health_stop` = wait "
+            "(the default) the chain is STOPPED until then (move STOPPED aside and start arms_chain); with continue "
+            "it goes on with the next arm and asks for the word at the end. A bug found instead: fix it, move the "
+            'arm\'s run aside and rerun it (results/followup_node_operations.md, "The arms driver").',
+            *(
+                ["- **`evaluate` is not possible: no healthy version** (the last good version is 0); write `skip`."]
+                if stop.last_good_version == 0
+                else []
+            ),
             f"- Loop hours so far: {loop_hours(run_directory):.1f}.",
             "",
             "## The last phases",
@@ -379,9 +390,15 @@ def read_probe_record(probe_directory: Path) -> ProbeRunRecord | None:
 
 
 def arm_report(
-    arm: str, run_directory: Path, probe_directory: Path | None, comparison_files: Sequence[str], adapters: Path
+    arm: str,
+    run_directory: Path,
+    probe_directory: Path | None,
+    comparison_files: Sequence[str],
+    adapters: Path,
+    revisions: Sequence[str] = (),
 ) -> str:
-    """The arm's loop, its probe run and where the comparisons and adapters are."""
+    """The arm's loop, the checkouts the driver started it from (`revisions`, "<time> <commit>"), its probe run and
+    where the comparisons and adapters are."""
     finished = read_finished(run_directory)
     stop = read_health_stop(run_directory)
     if finished is not None:
@@ -410,7 +427,14 @@ def arm_report(
             f"stops {record.wall_clock_stops} ({record.wall_clock_stop_share:.2%}). Anchors: 713 and 716; v35 with "
             "the final value model (run 7): 1,236."
         )
+    started = ", ".join(revisions) if revisions else "none recorded (started by hand, or adopted)"
+    lines.append(f"- The driver started its loop from the checkout at: {started}.")
     lines += [f"- Comparison: `{name}`" for name in comparison_files]
+    if comparison_files:
+        lines.append(
+            '- These comparisons use one probe run per arm: provisional (DESIGN.md, "Evaluation": two runs pooled, '
+            "at least 3 points with the 95% interval excluding 0, one seed); the second pass adds the second run."
+        )
     lines += [
         f"- Adapters (phase 8 and the final checkpoint, policy and value): `{adapters}`, for the PC's "
         "`node_backup/2026-11-15/adapters/` (deployment/pull_arm_adapters.sh).",
@@ -523,15 +547,19 @@ def round_checks(run: SmokeRun, version: ModelVersion | None) -> list[Check]:
         and record.lean_replay_examples > 0
         and record.math_replay_examples > 0
     )
-    checks.append(
-        gate(
-            "round trained",
-            trained,
-            f"one line; skipped {record.skipped} ({record.skip}); {record.examples:,} examples, "
-            f"{record.optimizer_steps} steps, LoRA change {record.parameter_change_norm}, replay "
-            f"{record.lean_replay_examples} Lean and {record.math_replay_examples} math examples",
-        )
+    counts = (
+        f"{record.examples:,} training examples from {record.solved_trees:,} solved trees, "
+        f"{record.optimizer_steps} steps, LoRA change {record.parameter_change_norm}, replay "
+        f"{record.lean_replay_examples} Lean and {record.math_replay_examples} math examples"
     )
+    match record.skip:
+        case RoundSkip.TOO_FEW_EXAMPLES:
+            detail = f"skipped: too few examples for the loop's floor (expert_iteration_min_examples); {counts}"
+        case RoundSkip.NO_OPTIMIZER_STEP:
+            detail = f"skipped: its examples and replay fill no optimizer step; {counts}"
+        case None:
+            detail = f"one line; {counts}"
+    checks.append(gate("round trained", trained, detail))
     adapter = "" if version is None else version.policy_adapter
     checks.append(
         gate(
@@ -579,19 +607,18 @@ def memory_checks(run: SmokeRun, log: str, trainer_log: str, readings: Sequence[
     )
     training = [entry for entry in readings if entry.stage == "training" and entry.phase == SMOKE_PHASES]
     if not training:
-        checks.append(gate("GPU memory while training", False, "no nvidia-smi reading in the training stage"))
+        checks.append(reading("GPU memory while training", "no nvidia-smi reading in the training stage"))
     else:
         peaks = {
             gpu: max(entry.used_mib for entry in training if entry.gpu == gpu)
             for gpu in sorted({entry.gpu for entry in training})
         }
         total = max(entry.total_mib for entry in training)
+        listed = ", ".join(f"GPU {gpu} {peak:,} MiB" for gpu, peak in peaks.items())
         checks.append(
-            gate(
+            reading(
                 "GPU memory while training",
-                all(peak <= MAX_TRAINING_GPU_SHARE * total for peak in peaks.values()),
-                f"nvidia-smi peaks {', '.join(f'GPU {gpu} {peak:,} MiB' for gpu, peak in peaks.items())} of "
-                f"{total:,} MiB (at most {MAX_TRAINING_GPU_SHARE:.0%}); {len(training)} readings",
+                f"nvidia-smi peaks (reserved included) {listed} of {total:,} MiB; {len(training)} readings",
             )
         )
     wakes = [WAKE_PATTERN.findall(line) for line in log.splitlines() if "GPU memory before the wake" in line]
@@ -666,6 +693,14 @@ def kill_checks(run: SmokeRun, kill: SmokeKill, log: str, version_count: int) ->
     ]
 
 
+def value_check(run_directory: Path, version: ModelVersion | None) -> Check:
+    """The smoke's phase trains the value model beside the policy update (value_every_phases = 1)."""
+    initial = next((record for record in read_versions(run_directory) if record.version == 0), None)
+    published = version is not None and initial is not None and version.value_adapter != initial.value_adapter
+    adapter = "missing" if version is None else version.value_adapter
+    return gate("value model trained in the phase", published, f"version 1's value adapter {adapter}")
+
+
 def smoke_checks(run: SmokeRun) -> list[Check]:
     """The smoke run's gates (any failing one fails the smoke test) and readings."""
     finished = read_finished(run.run_directory)
@@ -679,6 +714,7 @@ def smoke_checks(run: SmokeRun) -> list[Check]:
             f"health_stop.json {'present' if stop else 'absent'}",
         ),
         gate("one version for the phase", len(versions) == 1, f"{len(versions)} versions published as phase 1"),
+        value_check(run.run_directory, versions[0] if versions else None),
     ]
     log = text_of(run.run_directory / "loop.log")
     trainer_log = text_of(run.run_directory / "training" / "trainer.log")
@@ -711,8 +747,16 @@ def smoke_report(results: Sequence[tuple[SmokeRun, Sequence[Check]]]) -> tuple[b
         f"# Smoke test of expert iteration inside the loop: {'PASSED' if passed else 'FAILED'}",
         "",
         f"One phase of {SMOKE_PHASE_GENERATED_TOKENS:,} generated tokens per run, arms C and D under their own names "
-        f"({', '.join(smoke_run_name(arm) for arm in SMOKE_ARMS)}); D's round due at its one phase; one kill by PID "
-        f"while {smoke_run_name(SMOKE_KILLED_ARM)} published, then a restart. Gates decide; readings are reported.",
+        f"({', '.join(smoke_run_name(arm) for arm in SMOKE_ARMS)}); each phase trains the value model and a round "
+        "(D: GRPO, the value model and a round in one trainer process, the heaviest pause C and D meet). Gates "
+        "decide; readings are reported.",
+        "",
+        f"The kill: {smoke_run_name(SMOKE_KILLED_ARM)}'s loop was killed by PID (SIGKILL) about 30 s into publishing "
+        'phase 1. With the servers restarted onto new weights (swap = "restart", about 135-250 s) that lands after '
+        "the trainer handed off its merges and while the servers restart onto them, before the version is recorded: "
+        "a restart serves version 0 from disk, then the handed-off version, and records it once. It is not review "
+        "AS's M1 point (during the durable write itself). The driver stopped the servers before the restart; a real "
+        "crash leaves them up, the common and easier case.",
         "",
     ]
     for run, checks in results:
@@ -721,9 +765,25 @@ def smoke_report(results: Sequence[tuple[SmokeRun, Sequence[Check]]]) -> tuple[b
             result = ("PASS" if check.passed else "**FAIL**") if check.gate else "-"
             lines.append(f"| {check.name} | {'gate' if check.gate else 'reading'} | {result} | {check.detail} |")
         lines.append("")
+    missed = any(
+        check.name == "killed while publishing" and not check.passed for _, checks in results for check in checks
+    )
+    if missed:
+        lines += [
+            f"To repeat {smoke_run_name(SMOKE_KILLED_ARM)}: move `runs/{smoke_run_name(SMOKE_KILLED_ARM)}`, "
+            f"`runs/followup_configs/{smoke_run_name(SMOKE_KILLED_ARM)}` and "
+            f"`checkpoints/{smoke_run_name(SMOKE_KILLED_ARM)}*` aside; in the chain's state delete "
+            f"`done_loop_smoke_{SMOKE_KILLED_ARM}`, `attempts_loop_smoke_{SMOKE_KILLED_ARM}_start`, "
+            f"`smoke/kill_{SMOKE_KILLED_ARM}.json`, `smoke/restarted_{SMOKE_KILLED_ARM}` and "
+            f"`smoke/readings_{SMOKE_KILLED_ARM}.tsv`; rename STOPPED and start arms_chain.",
+            "",
+        ]
     lines += [
-        "Not covered by the smoke test: the build and round on a full 4-phase window (watch arm C's phase 4: the "
-        "hand-run round built 2,947 trees in about 80 s) and a value phase beside a round (D's phase 4).",
+        "Not covered by the smoke test, so passing it does not clear reviews AS's and AT's whole lists: the build and "
+        "round on a full 4-phase window (watch arm C's phase 4: the hand-run round built 2,947 trees in about 80 s); a "
+        "kill during the build, and of one trainer rank during the round (AS 5); a stop during a build (AT 6); the "
+        "in-loop round against the hand-run `train` (AS 2; the CPU tests compare them); exactly one policy merge in "
+        "/dev/shm's handoff (AT 1: only implied by the published adapter's path and the /dev/shm peak).",
         "",
     ]
     return passed, "\n".join(lines)

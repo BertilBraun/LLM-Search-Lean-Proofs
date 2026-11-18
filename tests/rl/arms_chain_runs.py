@@ -15,6 +15,7 @@ from lean_search.monitoring.families import (
     HealthSeverity,
     HealthThresholds,
     PhaseHealth,
+    RoundSkip,
 )
 from lean_search.record_fields import record_dict
 from lean_search.rl.health_checks import HealthStop
@@ -33,6 +34,11 @@ class FakeRun:
     name: str
     # "grpo", "expert_iteration" or "grpo_and_expert_iteration".
     update: str
+    # The loop's value_every_phases (the smoke runs': 1).
+    value_every: int = 2
+
+    def trains_value(self, phase: int) -> bool:
+        return phase % self.value_every == 0
 
     @property
     def directory(self) -> Path:
@@ -113,6 +119,7 @@ def round_record(skipped: bool = False) -> ExpertIterationPhase:
         examples=0 if skipped else 300,
         validation_examples=15,
         skipped=skipped,
+        skip=RoundSkip.TOO_FEW_EXAMPLES if skipped else None,
         lean_replay_examples=0 if skipped else 90,
         math_replay_examples=0 if skipped else 30,
         optimizer_steps=0 if skipped else 6,
@@ -135,7 +142,7 @@ def train(run: FakeRun, phase: int, skipped_round: bool = False) -> None:
         summary.parent.mkdir(parents=True, exist_ok=True)
         summary.write_text("{}\n", encoding="utf-8")
         log(run, f"Expert-iteration round of phase {phase}, built in 12 s: phases 1-{phase}")
-    if phase % 2 == 0:
+    if run.trains_value(phase):
         adapter(directory / "value" / "adapter", f"{run.name} value {phase}")
     memory = (StageMemory(TrainingStage.EXPERT_ITERATION, 17.0, 19.5),)
     (directory / "phase.json").write_text(to_json(PhaseOutcome(10, 5, None, None, memory=memory)), encoding="utf-8")
@@ -149,7 +156,7 @@ def publish(run: FakeRun, phase: int) -> ModelVersion:
     previous = versions(run)[-1]
     directory = run.phase_directory(phase)
     policy = directory / ("policy" if run.update == "grpo" else "expert_iteration") / "adapter"
-    value = str(directory / "value" / "adapter") if phase % 2 == 0 else previous.value_adapter
+    value = str(directory / "value" / "adapter") if run.trains_value(phase) else previous.value_adapter
     version = ModelVersion(previous.version + 1, str(policy), value, "now", f"phase {phase}")
     log(run, WAKE_LINE)
     append_line(run.directory / "models" / "versions.jsonl", to_json(version))

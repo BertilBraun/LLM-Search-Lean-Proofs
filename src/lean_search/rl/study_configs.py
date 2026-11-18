@@ -66,8 +66,11 @@ SHARED_SAMPLING_SETTINGS = frozenset(
 )
 
 
-# A smoke run: an arm's overlay with a smaller budget (rl/arms_chain.py, smoke_overlay).
-SMOKE_SETTINGS = ARM_SETTINGS | frozenset({"loop.training.phase_generated_tokens", "loop.training.max_phases"})
+# A smoke run: an arm's overlay with a smaller budget, its value model trained at its phases (rl/arms_chain.py,
+# smoke_overlay).
+SMOKE_SETTINGS = ARM_SETTINGS | frozenset(
+    {"loop.training.phase_generated_tokens", "loop.training.max_phases", "loop.training.value_every_phases"}
+)
 
 
 MODE_SETTINGS = frozenset({"sampling.search_config", "sampling.max_expansions"})

@@ -80,10 +80,15 @@ def changed_keys(arm: str) -> set[str]:
     return {key for key in before.keys() | after.keys() if before.get(key) != after.get(key)}
 
 
-BUDGET_KEYS = {"loop.name", "loop.training.phase_generated_tokens", "loop.training.max_phases"}
+BUDGET_KEYS = {
+    "loop.name",
+    "loop.training.phase_generated_tokens",
+    "loop.training.max_phases",
+    "loop.training.value_every_phases",
+}
 
 
-def test_the_c_smoke_overlay_differs_from_arm_c_only_in_name_budget_and_phase_count() -> None:
+def test_the_c_smoke_overlay_differs_from_arm_c_only_in_name_budget_phase_count_and_value_interval() -> None:
     assert changed_keys("C") == BUDGET_KEYS
 
 
@@ -105,13 +110,19 @@ def smoke_loop(arm: str) -> dict:
 
 
 @pytest.mark.parametrize("arm", ["C", "D"])
-def test_a_smoke_overlay_makes_a_one_phase_loop_with_a_round_at_its_phase(arm: str) -> None:
+def test_a_smoke_overlay_makes_a_one_phase_loop_with_a_round_and_a_value_training_at_its_phase(arm: str) -> None:
     training = parse_loop_config(toml_text(smoke_loop(arm))).training
-    assert (training.max_phases, training.phase_generated_tokens, training.expert_iteration_every_phases) == (
-        1,
-        SMOKE_PHASE_GENERATED_TOKENS,
-        1,
-    )
+    assert (
+        training.max_phases,
+        training.phase_generated_tokens,
+        training.expert_iteration_every_phases,
+        training.value_every_phases,
+    ) == (1, SMOKE_PHASE_GENERATED_TOKENS, 1, 1)
+
+
+def test_the_smoke_phase_is_half_an_arms_phase() -> None:
+    base = toml(CONFIGS / "followup/base.toml")
+    assert base["training"]["phase_generated_tokens"] == SMOKE_PHASE_GENERATED_TOKENS * 2
 
 
 @pytest.mark.parametrize("arm", ["C", "D"])
@@ -283,7 +294,7 @@ def test_the_first_arm_is_compared_with_the_anchors_and_run_7() -> None:
     ]
 
 
-def test_a_later_arm_is_also_compared_with_each_earlier_arms_run() -> None:
+def test_a_later_arm_is_also_compared_with_each_other_arms_run() -> None:
     found = comparisons("D", "arm_D_phase16_run1", [("A", "arm_A_phase16_run1"), ("C", "arm_C_phase16_run1")])
     assert [item.y_label for item in found] == ["v0 anchors", "v35 value final", "arm A", "arm C"]
 
@@ -306,9 +317,12 @@ def test_the_report_lists_every_phase(finished_arm: FakeRun, tmp_path: Path) -> 
 READING = "{time}\t1\ttraining\t{gpu}\t{used}\t24576\t{shared}\t74448896\n"
 
 
-def smoke_run(tmp_path: Path, arm: str, used: int = 20_000, shared: int = 30 * 2**20, killed: bool = False) -> SmokeRun:
-    """A smoke run as the loop and the driver leave it; D killed while publishing and started again."""
-    run = FakeRun(tmp_path / "runs", tmp_path / "checkpoints", f"followup_smoke_{arm}", UPDATES[arm])
+def smoke_run(
+    tmp_path: Path, arm: str, used: int = 20_000, shared: int = 30 * 2**20, killed: bool = False, value_every: int = 1
+) -> SmokeRun:
+    """A smoke run as the loop and the driver leave it (its phase trains the value model too); D killed while
+    publishing and started again."""
+    run = FakeRun(tmp_path / "runs", tmp_path / "checkpoints", f"followup_smoke_{arm}", UPDATES[arm], value_every)
     run.directory.mkdir(parents=True)
     log(run, f"Loop {run.name}: version 0")
     initialize(run)
@@ -352,14 +366,42 @@ def test_a_skipped_round_fails_the_smoke_test(tmp_path: Path) -> None:
     assert failed_gates(run) == ["round trained"]
 
 
+def test_a_round_skipped_for_too_few_examples_says_so_with_its_count(tmp_path: Path) -> None:
+    run = smoke_run(tmp_path, "C")
+    (run.run_directory / "metrics" / "expert_iteration.jsonl").unlink()
+    metric_line(
+        FakeRun(tmp_path / "runs", tmp_path / "checkpoints", run.run_directory.name, "x"), 1, round_record(True)
+    )
+    (check,) = [check for check in smoke_checks(run) if check.name == "round trained"]
+    assert check.detail.startswith("skipped: too few examples") and "0 training examples" in check.detail
+
+
+def test_a_trained_round_reports_its_example_count(tmp_path: Path) -> None:
+    (check,) = [check for check in smoke_checks(smoke_run(tmp_path, "C")) if check.name == "round trained"]
+    assert "300 training examples from 40 solved trees" in check.detail
+
+
+def test_a_phase_without_a_value_training_fails_the_smoke_test(tmp_path: Path) -> None:
+    assert failed_gates(smoke_run(tmp_path, "D", killed=True, value_every=2)) == ["value model trained in the phase"]
+
+
 def test_a_round_recorded_twice_fails_the_smoke_test(tmp_path: Path) -> None:
     run = smoke_run(tmp_path, "C")
     metric_line(FakeRun(tmp_path / "runs", tmp_path / "checkpoints", run.run_directory.name, "x"), 1, round_record())
     assert failed_gates(run) == ["round trained"]
 
 
-def test_gpu_memory_near_the_cards_size_while_training_fails_the_smoke_test(tmp_path: Path) -> None:
-    assert failed_gates(smoke_run(tmp_path, "C", used=23_900)) == ["GPU memory while training"]
+def test_gpu_memory_near_the_cards_size_while_training_is_a_reading_not_a_failure(tmp_path: Path) -> None:
+    assert failed_gates(smoke_run(tmp_path, "C", used=24_500)) == []
+
+
+def test_the_training_peaks_are_reported(tmp_path: Path) -> None:
+    (check,) = [
+        check
+        for check in smoke_checks(smoke_run(tmp_path, "C", used=24_500))
+        if check.name.startswith("GPU memory while")
+    ]
+    assert "GPU 3 24,500 MiB" in check.detail
 
 
 def test_shared_memory_near_full_fails_the_smoke_test(tmp_path: Path) -> None:
@@ -413,9 +455,47 @@ def test_a_second_version_for_the_phase_fails_the_smoke_test(tmp_path: Path) -> 
 
 def test_the_smoke_report_passes_only_when_every_gate_passes(tmp_path: Path) -> None:
     good = smoke_run(tmp_path / "good", "C")
-    bad = smoke_run(tmp_path / "bad", "C", used=24_000)
+    bad = smoke_run(tmp_path / "bad", "C", shared=70_000_000)
     passed, report = smoke_report([(good, smoke_checks(good)), (bad, smoke_checks(bad))])
     assert (passed, "FAILED" in report.splitlines()[0]) == (False, True)
+
+
+def test_the_smoke_report_says_where_the_kill_lands() -> None:
+    _, report = smoke_report([])
+    assert "before the version is recorded" in report and "not review AS's M1 point" in report
+
+
+def test_the_smoke_report_lists_what_it_leaves_to_the_real_arms() -> None:
+    _, report = smoke_report([])
+    assert all(item in report for item in ("AS 5", "AT 6", "AS 2", "AT 1", "4-phase window"))
+
+
+def test_a_missed_kill_brings_the_recipe_to_repeat_the_smoke_run(tmp_path: Path) -> None:
+    run = smoke_run(tmp_path, "D", killed=True)
+    assert run.kill is not None
+    run.kill.unlink()
+    _, report = smoke_report([(run, smoke_checks(run))])
+    assert "To repeat followup_smoke_D" in report
+
+
+def test_a_stop_with_no_healthy_version_says_evaluate_is_not_possible(tmp_path: Path) -> None:
+    run = FakeRun(tmp_path / "runs", tmp_path / "checkpoints", "followup_A", "grpo")
+    initialize(run)
+    train(run, 1)
+    version = publish(run, 1)
+    close_phase(run, 1, version.version, valid=0.3, alert=True)
+    stop_on_health(run, 1, 0)
+    assert "`evaluate` is not possible: no healthy version" in health_report("A", run.directory)
+
+
+def test_a_reports_comparisons_are_called_provisional(finished_arm: FakeRun, tmp_path: Path) -> None:
+    report = arm_report("C", finished_arm.directory, None, ["C_against_anchors.txt"], tmp_path)
+    assert "provisional" in report
+
+
+def test_the_report_names_the_checkouts_the_loop_started_from(finished_arm: FakeRun, tmp_path: Path) -> None:
+    report = arm_report("C", finished_arm.directory, None, [], tmp_path, ["2026-11-19T10:00:00Z 0e04599"])
+    assert "2026-11-19T10:00:00Z 0e04599" in report
 
 
 def test_the_log_lines_the_checks_read_are_still_the_loops() -> None:
