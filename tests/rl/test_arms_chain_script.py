@@ -470,6 +470,131 @@ def test_an_unknown_on_health_stop_stops_the_chain(node: Node) -> None:
     assert "write wait or continue" in node.stopped()
 
 
+SMOKE_STARTS = ["arm_loop.sh smoke C", "arm_loop.sh smoke D", "arm_loop.sh smoke D"]
+
+
+def ordered(node: Node, order: str) -> None:
+    (node.state / "order").write_text(f"{order}\n", encoding="utf-8")
+
+
+def test_the_order_file_sets_the_order(node: Node) -> None:
+    ordered(node, "smoke C A D")
+    assert supervise(node) == [0] and loop_starts(node) == [
+        *SMOKE_STARTS,
+        "arm_loop.sh arm C",
+        "arm_loop.sh arm A",
+        "arm_loop.sh arm D",
+    ]
+
+
+def test_an_order_may_span_lines(node: Node) -> None:
+    ordered(node, "smoke\nC")
+    supervise(node)
+    assert loop_starts(node) == [*SMOKE_STARTS, "arm_loop.sh arm C"] and held(node)
+
+
+@pytest.mark.parametrize(
+    ("order", "refusal"),
+    [
+        ("smoke C B", "names 'B'"),
+        ("smoke C C", "names C twice"),
+        ("C smoke", "puts C before the smoke test"),
+        ("A D", "puts D before the smoke test"),
+        ("", "is empty"),
+    ],
+)
+def test_a_bad_order_stops_the_chain_before_anything_runs(node: Node, order: str, refusal: str) -> None:
+    ordered(node, order)
+    supervise(node)
+    assert (refusal in node.stopped(), node.lines()) == (True, [])
+
+
+def test_an_order_without_the_smoke_test_is_accepted_once_it_is_done(node: Node) -> None:
+    (node.state / "done_smoke").touch()
+    ordered(node, "C")
+    assert supervise(node) == [0] and loop_starts(node) == ["arm_loop.sh arm C"]
+
+
+def old_stopped_arm_a(node: Node) -> Path:
+    """Arm A's old run, stopped by hand: its run directory, a dead loop.pid, pause_A and hold_A."""
+    run = node.runs / "followup_A"
+    run.mkdir(parents=True)
+    (run / "loop_state.json").write_text('{"phase": 7, "stage": "sampling"}\n', encoding="utf-8")
+    (run / "loop.pid").write_text("999999999\n", encoding="utf-8")
+    (node.state / "pause_A").touch()
+    (node.state / "hold_A").touch()
+    (node.state / "started_loop_A").write_text("1\n", encoding="utf-8")
+    return run
+
+
+@pytest.fixture
+def waiting_for_a(node: Node) -> Node:
+    """Order smoke C A D with A held: the chain ran the smoke test and C, then held."""
+    ordered(node, "smoke C A D")
+    old_stopped_arm_a(node)
+    assert supervise(node) == [0]
+    return node
+
+
+def test_with_a_held_the_chain_runs_the_others_then_holds_waiting_for_a(waiting_for_a: Node) -> None:
+    hold = (waiting_for_a.state / "HOLD").read_text(encoding="utf-8")
+    assert ("waiting for: A" in hold, loop_starts(waiting_for_a)) == (True, [*SMOKE_STARTS, "arm_loop.sh arm C"])
+
+
+def test_the_hold_comes_with_the_servers_stopped(waiting_for_a: Node) -> None:
+    assert waiting_for_a.lines()[-1] == "stop_model.sh --all"
+
+
+def test_a_held_arms_old_run_is_not_touched(waiting_for_a: Node) -> None:
+    run = waiting_for_a.runs / "followup_A"
+    assert sorted(path.name for path in run.iterdir()) == ["loop.pid", "loop_state.json"]
+
+
+def test_a_held_arm_is_not_evaluated(waiting_for_a: Node) -> None:
+    assert [line for line in waiting_for_a.lines() if line.endswith((" A", "runs_A.toml"))] == []
+
+
+def test_once_the_hold_is_lifted_the_held_arm_starts_afresh_and_the_rest_follows(waiting_for_a: Node) -> None:
+    node = waiting_for_a
+    (node.runs / "followup_A").rename(node.runs / "followup_A.bug")
+    for name in ("hold_A", "pause_A", "started_loop_A"):
+        (node.state / name).unlink()
+    (node.state / "HOLD").rename(node.state / "HOLD.waiting_for_A")
+    assert supervise(node) == [0] and loop_starts(node)[-2:] == ["arm_loop.sh arm A", "arm_loop.sh arm D"]
+
+
+def test_once_the_hold_is_lifted_each_arm_is_compared_with_every_other_done_arm(waiting_for_a: Node) -> None:
+    node = waiting_for_a
+    (node.runs / "followup_A").rename(node.runs / "followup_A.bug")
+    for name in ("hold_A", "pause_A", "started_loop_A"):
+        (node.state / name).unlink()
+    (node.state / "HOLD").rename(node.state / "HOLD.waiting_for_A")
+    supervise(node)
+    labels = [line.split(" against ", 1)[1] for line in node.lines() if line.startswith("probe_compare.py pair arm_A")]
+    assert labels == ["v0 anchors", "v35 value final", "arm C"]
+
+
+def test_a_held_arm_whose_loop_runs_stops_the_chain(node: Node) -> None:
+    ordered(node, "smoke C A D")
+    run = node.runs / "followup_A"
+    run.mkdir(parents=True)
+    loop = subprocess.Popen(  # noqa: S603
+        ["bash", str(FAKES / "fake_loop.sh"), "grpo_loop.py", str(run), "16", "1", str(node.scenario)],
+        start_new_session=True,
+    )
+    (run / "loop.pid").write_text(f"{loop.pid}\n", encoding="utf-8")
+    (node.state / "hold_A").touch()
+    (node.state / "done_smoke").touch()
+    (node.state / "done_loop_C").touch()
+    for step in ("adapters_C", "probe_list_C", "probe_C", "compare_C", "report_C"):
+        (node.state / f"done_{step}").touch()
+    try:
+        supervise(node)
+    finally:
+        loop.kill()
+    assert ("arm A is held (hold_A) but its loop runs" in node.stopped(), loop_starts(node)) == (True, [])
+
+
 def test_the_driver_records_the_checkout_each_loop_started_from(finished: Node) -> None:
     assert (finished.state / "loops" / "C.revisions").read_text(encoding="utf-8").count("\n") == 1
 

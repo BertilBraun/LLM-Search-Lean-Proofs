@@ -15,6 +15,11 @@
 #   C, D   as A, each also compared with the other arms' probe runs
 #   HOLD   the servers stopped
 #
+# The order is $state/order's words (A, C, D and smoke, each at most once, smoke before C and D unless it is done;
+# read at each start), "A smoke C D" without it. When the order reaches an arm held by $state/hold_<arm>, the chain
+# writes HOLD "waiting for: <arm>" with the servers stopped; the arm is not started, adopted, resumed or evaluated, and
+# the steps after it wait too. Remove the hold file, move HOLD aside and start the chain to go on.
+#
 # Steps done are marked under $state (done_<step>); a rerun (container restart, supervisord's retry) continues at the
 # first step not done, and a loop found neither running nor ended is started again through arm_loop.sh (which resumes
 # it), unless $state/pause_<arm> says it was stopped by hand. An arm's health stop (health_stop.json) is never
@@ -61,7 +66,6 @@ source deployment/environment.sh || stop_chain "environment.sh failed"
 export HF_HUB_OFFLINE=1
 python="${repository}/.venv/bin/python"
 followup=experiments/configs/grpo/followup
-arms=(A C D)
 smoke_killed_arm=D
 gpus=4
 # A GPU reads 1 MiB used after stop_model.sh; a CUDA context alone holds a few hundred.
@@ -70,6 +74,23 @@ gpu_free_mib=100
 [[ -z "${BACKGROUND_CPUS:-}" && -n "${BACKGROUND_CPU_LIST:-}" && -n "${TRAINING_CPU_LIST:-}" ]] \
     || stop_chain "the CPU layout must come from the node environment: BACKGROUND_CPU_LIST and TRAINING_CPU_LIST set, BACKGROUND_CPUS not"
 [[ -f "${mode}" ]] || stop_chain "no sampling mode at ${mode} (step 2's): put the mode arm A was started with there"
+
+# The order of the arms and the smoke test, checked before anything runs.
+order=(A smoke C D)
+if [[ -f "${state}/order" ]]; then
+    read -r -a order <<< "$(tr '\n' ' ' < "${state}/order")"
+fi
+(( ${#order[@]} )) || stop_chain "the order file ${state}/order is empty: write e.g. 'smoke C A D'"
+seen=" "
+for step in "${order[@]}"; do
+    [[ "${step}" =~ ^(A|C|D|smoke)$ ]] || stop_chain "the order (${order[*]}) names '${step}': only A, C, D and smoke"
+    [[ "${seen}" == *" ${step} "* ]] && stop_chain "the order (${order[*]}) names ${step} twice"
+    if [[ "${step}" == C || "${step}" == D ]] && [[ "${seen}" != *" smoke "* ]] && ! done_step smoke; then
+        stop_chain "the order (${order[*]}) puts ${step} before the smoke test, which arms C and D need first"
+    fi
+    seen+="${step} "
+done
+say "order: ${order[*]}$(for step in "${order[@]}"; do [[ -f "${state}/hold_${step}" ]] && printf ' (%s held)' "${step}"; done)"
 
 # The three drivers share the GPUs and the servers, and only this one's runs may have a loop alive.
 other_chain_idle "${STUDY_CHAIN_STATE:-/workspace/runs/study_chain}" study
@@ -356,13 +377,28 @@ smoke_test() {
     esac
 }
 
-run_arm A
-smoke_test
-run_arm C
-run_arm D
+for step in "${order[@]}"; do
+    case "${step}" in
+        smoke) smoke_test ;;
+        *)
+            if [[ -f "${state}/hold_${step}" ]]; then
+                # A held arm's run directory (an old, stopped run before a rerun) is never adopted or resumed.
+                loop_alive "${LEAN_SEARCH_RUNS}/followup_${step}" \
+                    && stop_chain "arm ${step} is held (hold_${step}) but its loop runs or a start of it is in flight: stop it (pause_${step}, then grpo_loop.sh stop) or remove the hold"
+                # The steps after it wait too (D after A: both train on the reward a rerun of A waits for).
+                stop_servers
+                echo "$(date -u +%FT%TZ) waiting for: ${step} (hold_${step}) in the order ${order[*]}; the steps before it are done; the servers are stopped" > "${state}/HOLD"
+                say "HOLD: waiting for: ${step} (hold_${step}); the servers are stopped"
+                exit 0
+            fi
+            run_arm "${step}"
+            ;;
+    esac
+done
 
 # The arms that stopped on their health rule while the chain went on: their evaluation waits for the owner's word.
-for arm in "${arms[@]}"; do
+for arm in "${order[@]}"; do
+    [[ "${arm}" == smoke ]] && continue
     [[ -f "${LEAN_SEARCH_RUNS}/followup_${arm}/health_stop.json" ]] || continue
     read_word "${arm}"
     if [[ -z "${word}" ]]; then
@@ -373,5 +409,5 @@ for arm in "${arms[@]}"; do
 done
 
 stop_servers
-echo "$(date -u +%FT%TZ) arms A, C and D done: report_A.md, report_C.md, report_D.md; the servers are stopped" > "${state}/HOLD"
-say "HOLD: arms A, C and D done; the servers are stopped"
+echo "$(date -u +%FT%TZ) the order ${order[*]} is done: its reports are report_<arm>.md; the servers are stopped" > "${state}/HOLD"
+say "HOLD: the order ${order[*]} is done; the servers are stopped"

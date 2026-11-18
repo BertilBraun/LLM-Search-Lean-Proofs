@@ -168,3 +168,53 @@ healthy version" when `last_good_version` is 0.
    `checkpoints/followup_A_phase_0001`. Were they moved aside with the run directory? Otherwise the 5e-5 run's phase 1
    may have found them (the orchestrator can check on the node: `continued_from` and the dates of
    `followup_A_phase_0001/phase.json`).
+
+## Re-review (2026-11-18)
+
+Fixes reviewed: b5199ee..f61d1d3 (head f61d1d3), four commits. The diff also carries review BC's fixes, which I read
+where they touch this review's points: the run lock, the pause file, the check for other runs' loops.
+
+Checks run:
+- In WSL, against the worktree's `src`: `test_arms_chain`, `test_arms_chain_script`, `test_arm_loop_lock`,
+  `test_followup_arms`, `test_study_chain_script` and `test_offline_chain_script`. 353 passed.
+- `ruff check` and `ruff format --check` over `src`, `experiments` and `tests/rl`: clean.
+- No node access, as asked.
+
+**Verdict: merge.** S1-S5 are fixed. N1 is reasonably left as it is (below). N2-N6 are fixed. The new parts (run lock,
+`on_health_stop`, pause, rerun recipe) are sound. Three small new nits, none blocking.
+
+### Status per finding
+
+| Finding | Status | Notes |
+|---|---|---|
+| S1 smoke round under the 100-example floor | fixed | Smoke budget 6M tokens (`SMOKE_PHASE_GENERATED_TOKENS`, pinned as half an arm's phase). From my earlier estimate that is roughly 150-200 examples, above the floor. "round trained" now names the examples and solved trees, and a skip's reason: too few examples for the floor, or no optimizer step (tested). So a skip would be readable at once rather than look like a broken round. |
+| S2 heaviest pause not tested | fixed | `value_every_phases` is now in `SMOKE_SETTINGS`, and `smoke_overlay` sets it to 1. C's one phase trains value and a round; D's trains GRPO, value and a round in one trainer process. That is AT 2 and 3's worst case, judged by the OOM, wake-memory and /dev/shm gates. A new gate, "value model trained in the phase", checks that version 1's value adapter is not version 0's. Tests pin that the overlays differ from the arms only in name, budget, phase count, value interval and (D) round interval. Not representative, and fine: data size per round (half a phase, not D's 4-phase window), so durations stay readings. |
+| S3 95% nvidia-smi gate | fixed | It is now a reading with the per-GPU peaks. The no-OOM, wake-memory and /dev/shm gates remain. |
+| S4 GPUs idle after a health stop | fixed | `$state/on_health_stop`: `wait` (the default, unchanged behaviour) or `continue` (the next arm runs; at the end the chain stops with the servers stopped and asks for the word, then evaluates the stopped arm against both other arms). An unknown value stops the chain. The health report and the ops note explain both, and the ops note has the "bug: fix and rerun" recipe, which moves the run, its configs, checkpoints, state markers and probe run aside. Tested: continue, the end-of-chain word, the evaluation against both arms, an unknown value. |
+| S5 "not covered" list | fixed | The smoke report lists AS 2, AS 5, AT 1 and AT 6 and says passing does not clear AS's and AT's whole lists. |
+| N1 norm proxy for "GRPO then the round" | left as is, rightly | My suggested direct check does not exist. `round_config` writes the published adapter as the round's `initial_adapter`; in D the persistent trainer continues its in-memory GRPO update, not that file. So `round.toml` cannot show that GRPO came first. The gate also requires one `grpo` line with steps > 0, so with near-orthogonal updates the norm comparison is a reasonable proxy. |
+| N2 provisional wording | fixed | Each report with comparisons says they are provisional under DESIGN's rule until the second pass (tested). |
+| N3 code revisions | fixed | Every loop start records the checkout's commit in `loops/<arm>.revisions`, and the report prints them. Arm A, adopted, shows "none recorded (started by hand, or adopted)". The progress note says it runs master 0e04599. |
+| N4 where the kill lands | fixed | The smoke report says the kill lands during the server restart onto the handed-off merges, before the record. It says this is not AS's M1 point. |
+| N5 servers stopped before the restart | fixed | The smoke report says so. The driver now also waits up to an hour for the GPUs before a restart: a dead loop's trainer may be finishing a command. |
+| N6 no healthy version | fixed | The health report says in bold that `evaluate` is not possible when the last good version is 0. |
+
+### New nits
+
+**R1. The rerun recipe leaves other arms' comparisons against the old run.** `results/followup_node_operations.md:
+588-606`. The recipe moves arm X's own comparison markers and reports. But other arms' files against X
+(`compare/<Y>_against_<X>.txt`) and their `done_compare_<Y>` and `report_<Y>.md` still refer to X's buggy probe run,
+and the driver will not redo them. Add: move the other arms' `done_compare_*` and `done_report_*` aside too, so they
+compare again against the rerun. If the bug is in expert iteration inside the loop, also say whether the smoke test
+is to be repeated: today its markers stay.
+
+**R2. A momentary race on the run lock.** `chain_helpers.sh` `run_lock_held` takes the lock for a moment
+(`flock -n ... true`). An `arm_loop.sh` starting in that instant fails with "another start in flight", and the driver
+counts an attempt and retries on its next poll. Harmless; noted only because it uses up one of three attempts.
+
+**R3. Arm A's checkout is not in its report.** Arm A was started by hand, so its report shows "none recorded".
+Reading the revision the loop recorded itself, or writing 0e04599 by hand into `loops/A.revisions`, would complete
+the record. Optional.
+
+The owner questions stand: on_health_stop is now a setting for the owner to choose, and question 3 (A's 2e-5
+checkpoints) is for the orchestrator to check on the node.
