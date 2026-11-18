@@ -344,12 +344,41 @@ def test_claim_the_block_leaves_open_is_marked() -> None:
     assert outcomes(claim_tree(proved_below=True), BARE_HAVE)[0].leaves_claim_open
 
 
-def test_claim_the_block_proves_is_not_marked_open() -> None:
+def claim_proved_in_its_block() -> tuple[TreeRecord, str]:
     builder = GraphBuilder(ROOT)
     text = f"{BARE_HAVE}\nlinear_combination h₁ - h₀"
     builder.child(builder.root, AFTER_FIRST_HAVE, text=text, tactics=2, tactic_goals=(CLAIM, (AFTER_FIRST_HAVE,)))
+    return builder.record(builder.child(builder.root, text="close")), text
+
+
+def test_claim_the_block_proves_is_not_marked_open() -> None:
+    assert not outcomes(*claim_proved_in_its_block())[0].leaves_claim_open
+
+
+def test_claim_the_block_proves_adds_a_claim() -> None:
+    assert outcomes(*claim_proved_in_its_block())[0].adds_claim
+
+
+def test_claim_the_block_leaves_open_adds_a_claim() -> None:
+    assert outcomes(claim_tree(), BARE_HAVE)[0].adds_claim
+
+
+def test_claim_on_the_proof_graph_adds_a_claim() -> None:
+    assert outcomes(claim_tree(on_proof_graph=True), BARE_HAVE)[0].adds_claim
+
+
+def test_suffices_replacing_the_goal_adds_no_claim() -> None:
+    builder = GraphBuilder(ROOT)
+    builder.child(builder.root, *SUFFICED, text=SUFFICES, tactic_goals=(SUFFICED,))
     record = builder.record(builder.child(builder.root, text="close"))
-    assert not outcomes(record, text)[0].leaves_claim_open
+    assert not outcomes(record, SUFFICES)[0].adds_claim
+
+
+def test_a_goal_split_adds_no_claim() -> None:
+    builder = GraphBuilder(SPLIT_STATE)
+    builder.child(builder.root, *SPLIT_GOALS, text="constructor", tactic_goals=(SPLIT_GOALS,))
+    record = builder.record(builder.child(builder.root, text="close"))
+    assert not outcomes(record, "constructor")[0].adds_claim
 
 
 @pytest.mark.parametrize(

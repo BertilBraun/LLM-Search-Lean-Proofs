@@ -600,23 +600,28 @@ function healthTiles(parent) {
   if (health) {
     const measured = health.measured;
     const limits = health.thresholds;
-    const belowBand = measured.below_band_bare_have_share ?? null;
+    // Like with like: below the band only when the reference phases have a below-band limit too.
+    const belowBandLimit = limits.max_below_band_bare_have_share ?? null;
+    const belowBand = belowBandLimit === null ? null : measured.below_band_bare_have_share ?? null;
     const bareHaves = belowBand ?? measured.bare_have_share;
+    const bareHaveLimit = belowBand === null ? limits.max_bare_have_share : belowBandLimit;
     tile(grid, {
       label: "Bare claims",
-      status: limitStatus(bareHaves, limits.max_bare_have_share, "max"),
+      status: limitStatus(bareHaves, bareHaveLimit, "max"),
       value: formatValue(bareHaves, "share"),
-      sub: `${belowBand === null ? "all statements" : "statements below the band"}, limit ${formatValue(limits.max_bare_have_share, "share")} · all statements ${formatValue(measured.bare_have_share, "share")}`,
+      sub: `${belowBand === null ? "all statements" : "statements below the band"}, limit ${formatValue(bareHaveLimit, "share")} · all statements ${formatValue(measured.bare_have_share, "share")}`,
       spark: healthSeries?.columns[belowBand === null ? "measured.bare_have_share" : "measured.below_band_bare_have_share"],
       why: "Blocks opening with a bare `have h : A` that leaves the claim for later: the reward hack of phases 1-10. Judged on the statements below the band, nearest the first phases' difficulty. Good: falling back toward the first phases' share; the limit is 1.5 times it.",
     });
-    const belowBandProved = measured.below_band_claim_proved_rate ?? null;
+    const belowBandProvedLimit = limits.min_below_band_claim_proved_rate ?? null;
+    const belowBandProved = belowBandProvedLimit === null ? null : measured.below_band_claim_proved_rate ?? null;
     const proved = belowBandProved ?? measured.claim_proved_rate;
+    const provedLimit = belowBandProved === null ? limits.min_claim_proved_rate : belowBandProvedLimit;
     tile(grid, {
       label: "Claims proved",
-      status: limitStatus(proved, limits.min_claim_proved_rate, "min"),
+      status: limitStatus(proved, provedLimit, "min"),
       value: formatValue(proved, "share"),
-      sub: `${belowBandProved === null ? "all statements" : "statements below the band"}, limit ${formatValue(limits.min_claim_proved_rate, "share")} · all statements ${formatValue(measured.claim_proved_rate, "share")}`,
+      sub: `${belowBandProved === null ? "all statements" : "statements below the band"}, limit ${formatValue(provedLimit, "share")} · all statements ${formatValue(measured.claim_proved_rate, "share")}`,
       spark: healthSeries?.columns[belowBandProved === null ? "measured.claim_proved_rate" : "measured.below_band_claim_proved_rate"],
       why: "Of the claims blocks leave open, the share proved later in the tree. A small ratio that moves a lot between phases: read the trend. Good: rising, as claims become real steps; below the limit warns.",
     });

@@ -101,6 +101,34 @@ Owner decision 2026-10-31 (review U, option A): the invented claim carries the p
 failed attempt at it scored −0.15 with the claim's tokens at 0 and the failure's anchor penalty on the proof tactic
 (nlinarith), so an attempt at a provable claim (−0.175) ranked below one at an invented claim, and a valid step or
 no-op after an open claim (−0.25, −0.35) below an error there (−0.15).
+
+**Claims (`claims_earn_progress`, `unproved_claim_cost`; on in arms A and D since 2026-11-18).** Arm A's first run
+(5e-5, stopped by the owner after 7 of 16 phases) drifted into bare `have` openings (20.5% → 32.4% of blocks over
+phases 1-6) with the reward fix above in force. Replayed on its trees with the production path
+(`experiments/analysis/bare_have_credit.py`): an unproved bare claim was already charged (sequence advantage −0.36 to
+−0.46, never positive), but the bare-`have` opening as a whole earned +13.6k to +21.0k summed token advantage per phase,
+all of it on the explanation tokens (the `have` token itself was net negative). The payer was the bare `have` whose
+block proves its own claim (`have h : A`, a proof of it, more steps): +0.22 to +0.30 per sample against +0.01 to +0.09
+for `have … :=` openings, and on the proof graph +0.9 to +1.3 against +0.3 for a direct tactic, because progress
+counts flattened tactics and every claim was one step of δ. Two switches, both off by default (grpo_loop_v1's reward):
+
+- `claims_earn_progress = false`: a tactic adding a claim as a goal (`TacticOutcome.adds_claim`: a bare `have h : A`, a
+  flattened `have h : A := by …`, `obtain … : A`; not `suffices`, which replaces the goal) earns δ less for its own
+  step on the proof graph (`claim_step`: at most one step, relative to the block's last proof-graph state or the node;
+  as the anchor or as a gain, never below 0 there). The next tactic is judged against the state the claim reached, so
+  the δ is dropped, not deferred: `have h : A := by p` counts as p's steps, like a term-mode `have`, and a bare claim
+  the tree proves later scores the on-graph R without progress, one proof step (δ) below proving it inline.
+- `unproved_claim_cost = 0.3` (None: c): leaving an invented claim open costs an error there plus 0.3 instead of
+  c = 0.1: −0.45 as the anchor, −0.4 later. The search keeps the claim as a child state it proves in about one case in
+  nine, so the cost is more than the tokens an error wastes.
+
+Either alone leaves the bare-`have` opening net positive on most of the recorded phases; together, with the cost
+chosen by the replay (0.2 leaves two of ten phases positive), its summed token advantage is negative on all ten (arm
+A's phases 1-7, step 2's v0 phase, the 2e-5 start's two phases), the trainable groups are unchanged, the positive
+advantage of samples reaching the proof graph falls 2-6%, and 6-13% of the groups change the sign of some sample's
+sequence advantage. Bare claims proved in their block keep a positive advantage (+0.16 to +0.23 per sample); claims the
+tree proves elsewhere are not touched beyond their δ.
+
 The baseline b is the multiplicity-weighted mean score of the group's samples with a score, the first-tactic baseline
 b₁ the same mean of their anchors' R (`GroupSample.anchor_parts`, `GroupAdvantages.first_tactic_baseline`). The
 explanation gets score − b and a block's tactic advantages add up to score − b₁: b − b₁ is the group's mean progress
@@ -645,9 +673,13 @@ without a check: the
 closed-form filler share, `have … :=` and linarith/nlinarith openings, tactics per complete block and the continue rate
 after a proof-graph step with goals left) are warnings only, from the first round's samples, logged every phase
 (`Block habits of phase <k> (the reward fix trains from phase <m>): ...`; `reward_fix.json`, written at the first start
-with the fix, holds m: the phase training next then) and charted on the Training page. The warnings compare the
-statements fed from below the curriculum's band (`below_band_*`, nearer the reference phases' difficulty) when the phase
-has any, else all statements, with the reference phases'. Trees summarized before 2026-10-31 have none: the loop
+with the fix, holds m: the phase training next then) and charted on the Training page. The warnings compare like with
+like: the statements fed from below the curriculum's band (`below_band_*`, nearer the reference phases' difficulty)
+against the reference phases' own below-band values (`HealthThresholds.max_below_band_bare_have_share` and its three
+siblings) when the phase and the reference phases have them, else every statement against every statement's. Until
+2026-11-18 a below-band share was judged against the limit from every statement's share: arm A's bare haves below the
+band (16.8% in its reference phase, 26.6% in phase 6) stayed under 1.5 × the reference's all-statement share (30.8%),
+though they passed 1.5 × their own (25.3%) in phase 6, and every statement's share (32.4%) passed 30.8% too. Trees summarized before 2026-10-31 have none: the loop
 measures the reference phases whose health lines lack them from their trees in the background after the servers start
 (`measure_reference_habits`; unreadable trees skipped and counted), appends those lines once and writes them to the
 dashboard; `reference_habits.json` marks it done, so a restart does not again. When no tree could be read it logs an

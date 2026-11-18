@@ -7,6 +7,14 @@ name = "followup_A"
 [phase.policy.data]
 credit = "per_tactic"
 
+[phase.reward]
+# Arm A's first run (stopped by the owner after 7 of 16 phases, 2026-11-18) drifted into bare `have` claims: a claim
+# adding a goal earns no progress for its own step, and leaving an invented claim open costs 0.3 beyond an error there
+# instead of c = 0.1 (src/lean_search/rl/README.md, "Claims";
+# experiments/analysis/bare_have_credit.py replays it on the first run's trees).
+claims_earn_progress = false
+unproved_claim_cost = 0.3
+
 [phase.policy.optimization]
 # Step 2 tied 2e-5 and 5e-5 on the held-out states; the owner chose 5e-5, as C and D use (2026-11-18).
 learning_rate = 5e-5
