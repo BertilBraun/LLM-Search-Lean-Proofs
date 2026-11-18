@@ -510,39 +510,44 @@ State and logs: `/workspace/runs/arms_chain/` (log `chain.log`). Logic: `experim
 
 | Step | What | Markers | Node hours |
 |---|---|---|---|
-| loop A | arm A's loop to `finished.json`. **Adopted**: while `followup_A/loop.pid` names a live process the driver only polls (every 60 s); it touches no server and starts nothing. A loop found neither running nor ended is started again: `stop_model.sh --all`, GPUs checked free, `setsid --wait arm_loop.sh --kind arm --mode <mode> arms/A.toml` (arm_loop resumes it; its own session, so stopping the driver never stops a loop) | `done_loop_A`, `attempts_loop_A_start` (3 tries, then STOPPED) | about 19 (A started about 07:15 UTC 2026-11-18) |
+| loop A | arm A's loop to `finished.json`. **Adopted**: while `followup_A/loop.pid` names a live `grpo_loop.py` process, or `followup_A.lock` is held (an `arm_loop.sh` start in flight: it holds the run's lock from its start and the detached loop keeps it for its whole life), the driver only polls (every 60 s); it touches no server and starts nothing. A lock held 30 min without a live loop is STOPPED (find the holder with `fuser -v`). A loop found neither running nor ended is started again: `stop_model.sh --all`, up to 1 h for the GPUs to read free (a dead loop's trainer first ends its command), `setsid --wait arm_loop.sh --kind arm --mode <mode> arms/A.toml` (arm_loop resumes it; its own session, so stopping the driver never stops a loop; the checkout's commit goes to `loops/A.revisions`) | `done_loop_A`, `attempts_loop_A_start` (3 tries, then STOPPED) | about 19 (A started about 07:15 UTC 2026-11-18) |
 | adapters A | `arms_chain.py adapters`: the policy and value adapters of phase 8 and of the final checkpoint (phase 16; a health-stopped arm: its last good version), copied from `models/versions.jsonl`'s paths to `adapters/A/phase_00kk/{policy,value}/` with `sources.json` and `manifest.sha256` (sha256sum's format), written beside and renamed into place | `done_adapters_A` | minutes |
 | probe A | `probe-list` → `probe/runs_A.toml`: `arm_A_phase16_run1`, the final policy with its own final value adapter (`value_version` = the version that first published it), `step1/probe_evaluation_ordered.toml` (anchors' settings, plain search, longest expected search first: the order check passed); `PROBE_CONCURRENCY=112 probe_runs.sh --foreground`; exit 3 or 4 STOPPED, others retried (it resumes) | `done_probe_list_A`, `done_probe_A` | 2-3.5 |
-| compare A | `probe_compare.py pair` against the anchors (runs 1 and 2 pooled), run 7 (v35, final value; descriptive) and every earlier arm's probe run → `compare/<X>_against_<Y>.txt`; a failure is logged and the chain goes on | `done_compare_A` | minutes |
-| report A | `report_A.md`: the loop's end, hours, a table per phase (trees, solved, tokens, held-out valid and success, alerts), the probe result, the comparison files, the adapters | `done_report_A` | - |
-| smoke | below | `done_smoke_overlays`, `done_loop_smoke_C`, `done_loop_smoke_D`, `done_smoke` | about 1.5-2 |
+| compare A | `probe_compare.py pair` against the anchors (runs 1 and 2 pooled), run 7 (v35, final value; descriptive) and every other arm with a probe run done → `compare/<X>_against_<Y>.txt`; a failure is logged and the chain goes on | `done_compare_A` | minutes |
+| report A | `report_A.md`: the loop's end, hours, the checkouts the driver started it from, a table per phase (trees, solved, tokens, held-out valid and success, alerts), the probe result, the comparison files (provisional: one run per arm), the adapters | `done_report_A` | - |
+| smoke | below | `done_smoke_overlays`, `done_loop_smoke_C`, `done_loop_smoke_D`, `done_smoke` | about 2-2.5 |
 | C, D | as A (D also compared with A and C) | `done_loop_C` ... | about 19 + 2-3.5 each |
 | HOLD | `stop_model.sh --all`, then HOLD | `HOLD` | |
 
-All told from now: A's remaining loop, then about 2-3.5 h (A's probe) + 1.5-2 h (smoke) + 2 × 21-23 h (C, D), so about
-48-50 hours after arm A finishes; the idle gaps between steps are minutes (the copy, the comparisons).
+All told from now: A's remaining loop, then about 2-3.5 h (A's probe) + 2-2.5 h (smoke) + 2 × 21-23 h (C, D), so about
+49-51 hours after arm A finishes; the idle gaps between steps are minutes (the copy, the comparisons).
 
-**The smoke test** (before arm C's real run; reviews AS and AT, "Smoke on the node"). `smoke-overlays` derives
-`smoke/overlays/C.toml` and `D.toml` from `arms/C.toml` and `arms/D.toml` by code (`rl/arms_chain.smoke_overlay`,
-`--kind smoke`: `study_configs.SMOKE_SETTINGS`): the name `followup_smoke_<arm>`, 2M generated tokens per phase, one
-phase, and D's round interval brought from 4 to 1 so that its one phase trains GRPO and a round in one trainer process
-(`tests/rl/test_arms_chain.py` pins that nothing else differs). Each smoke loop starts with the servers stopped, samples
-every 5 s each GPU's `nvidia-smi` used memory (the allocator's reserved memory included) and `/dev/shm`'s use with the
-loop's stage (`smoke/readings_<arm>.tsv`). Once D's loop has been publishing phase 1 for 30 s, the driver kills it by
-PID (SIGKILL, after checking the PID's command line names `grpo_loop.py`; `smoke/kill_D.json`) and starts it again at
-once (no attempt counted; `smoke/restarted_D`). Then `smoke-check` writes `smoke_report.md`; arm C starts only if every
-gate passed, else STOPPED "the smoke test failed (...)".
+**The smoke test** (before arm C's real run; reviews AS and AT, "Smoke on the node"; BC S3, BD S1-S3). `smoke-overlays`
+derives `smoke/overlays/C.toml` and `D.toml` from `arms/C.toml` and `arms/D.toml` by code (`rl/arms_chain.smoke_overlay`,
+`--kind smoke`: `study_configs.SMOKE_SETTINGS`): the name `followup_smoke_<arm>`, 6M generated tokens per phase (half an
+arm's phase: at 2M the round would likely fall under the loop's floor of 100 examples), one phase, the value model
+trained at that phase (`value_every_phases` 1), and D's round interval brought from 4 to 1. D's one phase so trains
+GRPO, the value model and a round in one trainer process, with both merges in /dev/shm: the heaviest pause C (every
+even phase) and D (every fourth) will meet. `tests/rl/test_arms_chain.py` pins that nothing else differs. Each smoke
+loop starts with the servers stopped, samples every 5 s each GPU's `nvidia-smi` used memory (the allocator's reserved
+memory included) and `/dev/shm`'s use with the loop's stage (`smoke/readings_<arm>.tsv`). Once D's loop has been
+publishing phase 1 for 30 s, the driver kills it by PID (SIGKILL, after checking the PID's command line names
+`grpo_loop.py` and `followup_configs/followup_smoke_D/loop.toml`; `smoke/kill_D.json`) and starts it again at once (no
+attempt counted; `smoke/restarted_D`). With swap = "restart" the 30 s lands while the servers restart onto the
+handed-off merges, before the version is recorded (not review AS's M1 point, the durable write itself); the driver
+stops the servers before the restart, while a real crash would leave them up. Then `smoke-check` writes
+`smoke_report.md`; arm C starts only if every gate passed, else STOPPED "the smoke test failed (...)".
 
 | Gate (each smoke run) | Passes when |
 |---|---|
 | finished | `finished.json` with last phase 1, no `health_stop.json` |
 | one version for the phase | exactly one version with trigger "phase 1" |
-| round trained | exactly one `expert_iteration` line for phase 1: not skipped, optimizer steps > 0, LoRA change > 0, Lean and math replay examples > 0 |
+| value model trained in the phase | version 1's value adapter is not version 0's |
+| round trained | exactly one `expert_iteration` line for phase 1: not skipped, optimizer steps > 0, LoRA change > 0, Lean and math replay examples > 0; the detail names the examples and solved trees, and a skip's reason ("skipped: too few examples ...") |
 | round published | version 1's policy adapter is `.../expert_iteration/adapter` |
 | GRPO then the round (D) | exactly one `grpo` line for phase 1 with steps > 0; the phase's LoRA change ≥ the round's |
 | in-loop build | `<run>/expert_iteration/phase_0001/summary.json` exists |
 | no out-of-memory | no "out of memory"/`OutOfMemoryError` in `training/trainer.log` |
-| GPU memory while training | every GPU's nvidia-smi peak in the training stage ≤ 95% of its memory |
 | GPU memory before the wake | the last "GPU memory before the wake" line: free ≥ the servers' shares on every GPU |
 | /dev/shm | peak use ≤ 90% of its size |
 | killed while publishing (D) | the kill record says phase 1, stage publishing |
@@ -550,18 +555,29 @@ gate passed, else STOPPED "the smoke test failed (...)".
 | nothing trained or built again (D) | `phase.json` and the build's `summary.json` older than the kill |
 | one phase record and one version (D) | one `phases.jsonl` line and one version for phase 1 |
 
-Readings only (in the report, never failing): the round's training seconds, peak allocated memory and tokens; the
-build's seconds; the trainer's allocated/reserved memory after each stage (`phase.json`); compiled graphs and the
+Readings only (in the report, never failing): every GPU's nvidia-smi peak in the training stage (the caching allocator
+may reserve nearly a whole card without failing, and nothing calibrates a limit yet; the gates for real trouble are
+"no out-of-memory" and "GPU memory before the wake"); the round's training seconds, peak allocated memory and tokens;
+the build's seconds; the trainer's allocated/reserved memory after each stage (`phase.json`); compiled graphs and the
 count of dynamo "recompile_limit" warnings (arm A's 2e-5 phase 1 hit the limit of 8 on all four ranks, so this is not
-a gate); each phase's durations. Not covered: the 4-phase window's build and round (watch arm C's phase 4) and a value
-phase beside a round (D's phase 4).
+a gate); each phase's durations. Not covered, and listed in the report: the 4-phase window's build and round (watch
+arm C's phase 4); a kill during the build and of one trainer rank during the round (AS 5); a stop during a build (AT 6);
+the in-loop round against the hand-run `train` (AS 2); exactly one policy merge in the handoff (AT 1, only implied).
 
 **After a health stop** (an arm's `health_stop.json`: its first held-out valid-Lean collapse). The arm is never started
-again. The driver waits for the loop to exit, writes `health_report_<arm>.md` (the stop, the last four phases' table,
-their alerts and policy updates), stops the servers and writes STOPPED. The owner's word, given as a file:
+again. The driver waits for the loop to exit and writes `health_report_<arm>.md` (the stop, the last four phases'
+table, their alerts and policy updates; "evaluate is not possible" when the last good version is 0). Then the switch
+file `/workspace/runs/arms_chain/on_health_stop` decides (read at each health stop; anything else STOPs):
+
+- `wait`, or no file (the default): the servers are stopped and the chain writes STOPPED until the owner's word.
+- `continue`: the next arm runs while the owner decides; at the end, before HOLD, the chain stops the servers and
+  writes STOPPED "… waits for the owner's word" if the word is still missing, and after it evaluates the stopped arm
+  (compared with every other arm's probe run).
+
+The owner's word, given as a file:
 
 ```bash
-echo skip > /workspace/runs/arms_chain/word_C        # no probe run of C; its adapters are copied; then arm D
+echo skip > /workspace/runs/arms_chain/word_C        # no probe run of C; its adapters are copied
 echo evaluate > /workspace/runs/arms_chain/word_C    # a probe run of C's last good version with its value model
 mv /workspace/runs/arms_chain/STOPPED /workspace/runs/arms_chain/STOPPED.health_C
 supervisorctl start arms_chain
@@ -569,12 +585,41 @@ supervisorctl start arms_chain
 
 `evaluate` with version 0 as the last good one stops again (nothing trained to evaluate): write `skip`.
 
+**A bug found instead: fix it and rerun the arm** (the rules' third outcome). With the driver at STOPPED (or stopped:
+`supervisorctl stop arms_chain`), and the arm's loop gone:
+
+```bash
+S=/workspace/runs/arms_chain; R=/workspace/runs; C=/workspace/checkpoints; X=C; T=$(date -u +%Y%m%dT%H%M%SZ)
+mv $R/followup_$X $R/followup_$X.bug_$T
+mv $R/followup_configs/followup_$X $R/followup_configs/followup_$X.bug_$T
+for d in $C/followup_${X}_phase_* $C/followup_$X; do mv $d $d.bug_$T; done
+mkdir -p $S/rerun_$T/probe $S/rerun_$T/adapters
+for f in done_loop_$X started_loop_$X attempts_loop_${X}_start word_$X done_health_report_$X health_report_$X.md \
+    health_report_$X.log started_adapters_$X done_adapters_$X adapters_$X.log adapters/$X done_probe_list_$X \
+    started_probe_$X attempts_probe_$X done_probe_$X done_compare_$X done_report_$X report_$X.md report_$X.log \
+    probe/runs_$X.toml; do [[ -e $S/$f ]] && mv $S/$f $S/rerun_$T/$f; done
+[[ -e $R/probe_evaluations/probe_arm_${X}_phase16_run1 ]] && mv $R/probe_evaluations/probe_arm_${X}_phase16_run1{,.bug_$T}
+```
+
+Check `ls $S | grep "_$X\b"` (the smoke runs' markers, `*_smoke_C`, stay). Deploy the fix (section 4) and start the
+driver: it starts arm X afresh and evaluates it. Earlier arms hit by the same bug are rerun the same way; a probe run
+of a stopped arm at another phase has another name (`probe/runs_X.toml` says which).
+
+**Stopping an arm by hand** (BC S2). The driver starts a loop again within a minute when it finds it neither running
+nor ended, so first tell it not to: `touch /workspace/runs/arms_chain/pause_<X>` (X = A, C, D, or `smoke_C`,
+`smoke_D`), then `LOOP_CONFIG=/workspace/runs/followup_configs/followup_<X>/loop.toml deployment/grpo_loop.sh stop`
+(SIGTERM by its PID, then the servers). The driver then writes STOPPED "<X> is paused". To resume: delete
+`pause_<X>`, move STOPPED aside, `supervisorctl start arms_chain` (arm_loop.sh resumes the loop).
+
 **Install** (only on the orchestrator's word; arm A may keep running, the driver adopts it):
 
 0. Deploy a master holding the driver (section 4's stash, fast-forward, pop). The diff from `0e04599` adds files and
-   changes only `study_configs.py` (a new overlay kind, additive), `followup_arm.py` (the kind), the three drivers and
-   `chain_helpers.sh`: nothing the running loop or its held-out jobs import, and arm A's configs are written the same
-   (a restart of A through arm_loop.sh finds them identical). Check with `git diff --stat 0e04599 <new>`.
+   changes only `study_configs.py` (a new overlay kind, additive), `followup_arm.py` (the kind), `arm_loop.sh` (the
+   run lock; read only when a loop starts), the three drivers and `chain_helpers.sh`: nothing the running loop or its
+   held-out jobs import, and arm A's configs are written the same (a restart of A through arm_loop.sh finds them
+   identical). Check with `git diff --stat 0e04599 <new>`. What remains while A runs: jobs A's loop starts during the
+   stash, fast-forward, pop window (a held-out run, a trainer restart) read the checkout then; the diff touches nothing
+   they import, but deploy between pauses (in the sampling stage, `loop_state.json`) all the same.
 1. Install the copies (the step-2 and offline drivers are at HOLD; their new copies also treat the arms chain as the
    other chain):
    ```bash
@@ -588,20 +633,28 @@ supervisorctl start arms_chain
    cp deployment/arms_chain.conf /etc/supervisor/conf.d/arms_chain.conf
    supervisorctl reread && supervisorctl update        # autostart: it starts now
    ```
-2. Check `tail /workspace/runs/arms_chain/chain.log`: "loop_A_start" must NOT appear while A runs; the line
-   "A: its loop runs (pid ...): adopted" must. If A is not running at install time (it died), the driver starts it
+2. Decide the health-stop switch with the owner: `echo continue > /workspace/runs/arms_chain/on_health_stop`, or
+   leave it absent (wait). Check `tail /workspace/runs/arms_chain/chain.log`: "loop_A_start" must NOT appear while A
+   runs; the line "A: its loop runs or a start of it is in flight (loop.pid ...): adopted" must. If A is not running at install time (it died), the driver starts it
    again through arm_loop.sh, which resumes it.
 3. Extend the PC pull (section 7) to `runs/arms_chain` and `runs/followup_*` (without `trees`, `weights`, `merges`),
    and let it call `deployment/pull_arm_adapters.sh` after each pull (below).
 
 A later driver change goes in the same way (`.new`, then `mv`). `supervisorctl stop|restart arms_chain` stops the
-driver and a probe run in flight (resumed at the next start); the arms' loops run in sessions of their own and keep
-running, and the next start adopts them. To stop an arm's loop itself: `LOOP_CONFIG=/workspace/runs/followup_configs/
-followup_<X>/loop.toml deployment/grpo_loop.sh stop` (SIGTERM by its PID, then the servers).
+driver and a probe run in flight (resumed at the next start); the arms' loops (and an `arm_loop.sh` start in flight)
+run in sessions of their own and keep running, and the next start adopts them. To stop an arm's loop itself, see
+"Stopping an arm by hand" above.
+
+**The other drivers** (`study_chain.sh`, `offline_chain.sh`) also check, before their first server or GPU action and
+whatever the arms chain's markers say (its loops outlive it, so a STOPPED arms chain may still have one running), that
+no loop of another run lives (`<run>/loop.pid`) and no start of one is in flight (`<run>.lock`): `no_other_loop` in
+`chain_helpers.sh`. The arms driver checks the same for every run but its own.
 
 **Stops** (STOPPED, its text says why; fix, rename it, delete the step's `attempts_*` if used up, start again): no mode
-file; another chain started and neither at HOLD nor STOPPED; a loop start failing 3 times; a loop not exiting 10 min
-after it ended (3 times); GPUs held after the servers stopped; a health stop (above); a failed smoke test or smoke
+file; another chain started and neither at HOLD nor STOPPED; another run's loop alive or start in flight; a run lock
+held 30 min without a loop; a paused arm found not running; a loop start failing 3 times; a loop not exiting 10 min
+after it ended (3 times); GPUs held after the servers stopped and an hour's wait; a health stop with `wait` (above), or
+at the end with `continue` and no word; an unknown `on_health_stop` or `word_<arm>`; a failed smoke test or smoke
 health stop; a rejected probe run (exit 3: repeat it at a doubled cap under a new name, mark `done_probe_<X>` by hand)
 or dying servers (exit 4); the adapters copy, probe list or compare plan failing.
 
@@ -622,8 +675,8 @@ cycle. LoRA adapters only, never base models or merged weights.
 adapters, phases 8 and 16), `probe/runs_A.toml`, the probe's start order line; the smoke runs' `loop.log` (the round
 line "built in N s", "Expert-iteration update of phase 1"), `smoke/readings_*.tsv` growing, the kill line in
 `chain.log` and D's second "Loop followup_smoke_D: version" line, `smoke_report.md`. Not seen yet anywhere: the kill
-landing inside D's publishing (a 30 s delay into a stage A's phase 1 held for about 250 s; if it is missed the smoke
-test fails with "no kill record"; to repeat D's smoke run, move `runs/followup_smoke_D`, its
+landing inside D's publishing (a 30 s delay into a stage A's phase 1 held for 135-250 s; if it is missed the smoke
+test fails with "no kill record", and `smoke_report.md` repeats this recipe; to repeat D's smoke run, move `runs/followup_smoke_D`, its
 `followup_configs/followup_smoke_D` and `checkpoints/followup_smoke_D*` aside, delete `done_loop_smoke_D`,
 `attempts_loop_smoke_D_start`, `smoke/kill_D.json`, `smoke/restarted_D` and `smoke/readings_D.tsv`, then rename STOPPED
 and start the driver).
