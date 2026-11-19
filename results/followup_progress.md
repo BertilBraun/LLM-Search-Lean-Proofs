@@ -339,6 +339,20 @@ default), safe server stops, results pulled to the PC as they are written.
   - But held-out does not improve: valid 60.4 / 56.5 / 58.4 / 55.7%, success 33.1 / 34.1 / 34.9 / 31.2% after phases
     1-4 (v0 58.7%, 33.2%; held-out states solved 970 at v0, 918 / 956 / 1,004 / 871). The first run at phase 4: 53.1%,
     30.1%; arm C at phase 4: 61.4%, 35.4%. Phase 3 had a `valid_blocks` warning (21.0% < 22.1%).
+- After phase 5: held-out valid 58.4%, success 33.8% (960 states): back at v0's level; bare `have` 20.8%.
+- **Credit on blocks that fail after progress** (owner's question, 2026-11-19 18:05 UTC; replay of A's phases 1-5 on
+  the node, `experiments/analysis/continuation_credit.py`, not yet reviewed; output
+  `runs/arms_chain/claim_watch/continuation_A.md`). Of the trained samples reaching the proof graph, 22% (phase 1) →
+  34% (phase 5) then run a failing tactic. Their mean sequence advantage is +0.35 to +0.41 (72-77% positive) against
+  +0.43 to +0.51 for complete blocks on the graph: a block that fails after progress earns about 85% of a clean one,
+  because the failing tactic costs only c = 0.1 (`wasted_tactic_cost`; continuing pays from P(correct) > 1/3) and the
+  prefix keeps its progress. The continuation tactics net about 0 (+8 to +56 per phase).
+  - Replayed (trained groups unchanged in all): c = 0.3 → +0.21 to +0.29 (63-67% positive); c = 0.5 → +0.07 to
+    +0.18 (55-61%), but never-on-graph samples then turn positive in 15-20% (the baseline falls); "a block failing
+    after progress gets no positive advantage" → −0.04 to −0.06 (0% positive), other classes unchanged.
+  - Caveat: the search keeps the prefix as a child, so such blocks still advance a 16-expansion search; the held-out
+    check (one expansion) penalises them fully. Arm C (positives only) shortened its blocks (2.7 → 2.1 tactics,
+    continue rate 0.86 → 0.80); A kept them (2.5-2.7, 0.86 → 0.89).
 - **Disk**: 90% full at the HOLD (33 GB free; an arm needs about 38 GB). Removed the merged `weights/` folders of
   `followup_A.bug_20261119T124352Z`, `followup_smoke_C`, `followup_smoke_D` and
   `followup_shared_sampling.failed_value_benchmark_20261118` (rebuilt from the adapters kept beside them): 113 GB free.
