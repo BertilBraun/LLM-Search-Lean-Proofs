@@ -332,6 +332,13 @@ default), safe server stops, results pulled to the PC as they are written.
   8.6 → 9.7%. The bare class is now net negative on the proof graph (−0.097 per sample), the decomposition premium
   1.84x → 1.67x. Held-out after phase 2: valid 56.5%, success 34.1% (v0 58.7%, 33.2%). Under every stop line so far;
   the rule reassesses at phase 4.
+- **A's claim watch, phase 4** (`A_phase4.md`, 17:30 UTC): **no stop line crossed**; the habit went back. Bare `have`
+  19.6% (−0.2 points against phase 1; the first run was at 28.4%); proved off the graph 1.01x; open with a failing
+  attempt after 1.07x; open claims proved 9.3% (14.0%); `have … :=` 10.3% (8.6%); decomposition premium 2.66x (1.84x);
+  bare class −0.019 per sample; explanation tokens 112 (97). A goes on under the rule.
+  - But held-out does not improve: valid 60.4 / 56.5 / 58.4 / 55.7%, success 33.1 / 34.1 / 34.9 / 31.2% after phases
+    1-4 (v0 58.7%, 33.2%; held-out states solved 970 at v0, 918 / 956 / 1,004 / 871). The first run at phase 4: 53.1%,
+    30.1%; arm C at phase 4: 61.4%, 35.4%. Phase 3 had a `valid_blocks` warning (21.0% < 22.1%).
 - **Disk**: 90% full at the HOLD (33 GB free; an arm needs about 38 GB). Removed the merged `weights/` folders of
   `followup_A.bug_20261119T124352Z`, `followup_smoke_C`, `followup_smoke_D` and
   `followup_shared_sampling.failed_value_benchmark_20261118` (rebuilt from the adapters kept beside them): 113 GB free.
