@@ -1,7 +1,19 @@
 from collections.abc import Mapping, Sequence
 
 import pytest
-from rl_samples import FAILING, MASKED, NODE_STEPS, PROOF_GRAPH, UNKNOWN, group, sample
+from rl_samples import (
+    FAILING,
+    MASKED,
+    NO_PROGRESS,
+    NODE_STEPS,
+    OFF_GRAPH,
+    PROOF_GRAPH,
+    REDUNDANT,
+    UNKNOWN,
+    UNPROVED_CLAIM,
+    group,
+    sample,
+)
 
 from lean_search.policy.prompts import END_OF_TURN
 from lean_search.rl.advantages import CreditMode
@@ -17,6 +29,7 @@ from lean_search.rl.policy_data import (
     build_policy_data,
 )
 from lean_search.rl.token_credit import CharacterSpan, TokenSegment
+from lean_search.search.tactic_labels import TacticLabel
 from lean_search.search.texts import InsertedSpan, SampledTokens, TokenSpan
 
 
@@ -253,3 +266,140 @@ def proof_success_metrics() -> PolicyDataMetrics:
 )
 def test_proof_success_metrics_of_a_phase(field: str, value: float) -> None:
     assert getattr(proof_success_metrics(), field) == pytest.approx(value)
+
+
+PROGRESS_THEN_FAIL = "step\nbad\nworse"
+
+
+def failing_block_sequences(*, cap: bool, credit: CreditMode = CreditMode.PER_TACTIC) -> list[PolicySequence]:
+    """A group of a block that progresses and then fails, one that fails at once and a clean one: edges 0, 1, 2."""
+    mixed = group(
+        sample("step\nbad\nworse", PROOF_GRAPH, FAILING, MASKED, edge_id=0),
+        sample("error", FAILING, edge_id=1),
+        sample("clean", PROOF_GRAPH, edge_id=2),
+    )
+    texts = [
+        ExpansionTexts(
+            "p", 0, "prompt", (completion(0, "step\nbad\nworse"), completion(1, "error"), completion(2, "clean"))
+        )
+    ]
+    config = PolicyDataConfig(credit, cap_wasted_block_explanation=cap)
+    return list(single_tree_data([mixed], texts, config).sequences)
+
+
+def segment_advantages(sequence: PolicySequence, segment: TokenSegment) -> list[float]:
+    return [
+        advantage for advantage, kind in zip(sequence.advantages, sequence.segments, strict=True) if kind == segment
+    ]
+
+
+def test_a_block_that_progresses_and_then_fails_has_a_positive_explanation_without_the_cap() -> None:
+    assert min(segment_advantages(failing_block_sequences(cap=False)[0], TokenSegment.EXPLANATION)) > 0
+
+
+def test_the_cap_gives_a_block_that_progresses_and_then_fails_a_zero_explanation() -> None:
+    assert set(segment_advantages(failing_block_sequences(cap=True)[0], TokenSegment.EXPLANATION)) == {0.0}
+
+
+def test_the_capped_explanation_stays_trained() -> None:
+    sequence = failing_block_sequences(cap=True)[0]
+    explanation = [
+        trained
+        for trained, kind in zip(sequence.trained, sequence.segments, strict=True)
+        if kind == TokenSegment.EXPLANATION
+    ]
+    assert all(explanation)
+
+
+def test_the_cap_keeps_the_tactic_credit_of_a_failing_block() -> None:
+    capped, uncapped = failing_block_sequences(cap=True)[0], failing_block_sequences(cap=False)[0]
+    assert segment_advantages(capped, TokenSegment.TACTIC) == segment_advantages(uncapped, TokenSegment.TACTIC)
+
+
+@pytest.mark.parametrize("edge_id", [1, 2], ids=["a negative explanation", "a block without a failing tactic"])
+def test_the_cap_leaves_the_sequence_unchanged(edge_id: int) -> None:
+    assert failing_block_sequences(cap=True)[edge_id] == failing_block_sequences(cap=False)[edge_id]
+
+
+@pytest.mark.parametrize("credit", [CreditMode.SEQUENCE, CreditMode.PROOF_SUCCESS])
+def test_the_cap_is_refused_without_per_tactic_credit(credit: CreditMode) -> None:
+    with pytest.raises(ValueError, match="per-tactic"):
+        PolicyDataConfig(credit, cap_wasted_block_explanation=True)
+
+
+def progress_then_fail_group() -> PolicyGroup:
+    return group(
+        sample(PROGRESS_THEN_FAIL, PROOF_GRAPH, FAILING, MASKED, edge_id=0),
+        sample("error", FAILING, edge_id=1),
+        sample("clean", PROOF_GRAPH, edge_id=2),
+    )
+
+
+def test_the_cap_records_the_samples_it_capped() -> None:
+    config = PolicyDataConfig(cap_wasted_block_explanation=True)
+    assert single_tree_data([progress_then_fail_group()], [], config).metrics.capped_explanation_samples == 1
+
+
+def test_the_cap_records_the_credit_it_removed() -> None:
+    removed = segment_advantages(failing_block_sequences(cap=False)[0], TokenSegment.EXPLANATION)[0]
+    config = PolicyDataConfig(cap_wasted_block_explanation=True)
+    metrics = single_tree_data([progress_then_fail_group()], [], config).metrics
+    assert metrics.capped_explanation_credit == pytest.approx(removed)
+
+
+def test_the_cap_reaches_a_failing_block_off_the_proof_graph_above_its_baseline() -> None:
+    weak = group(
+        sample(PROGRESS_THEN_FAIL, UNKNOWN, FAILING, MASKED, edge_id=0), sample("claim", UNPROVED_CLAIM, edge_id=1)
+    )
+    texts = [ExpansionTexts("p", 0, "prompt", (completion(0, PROGRESS_THEN_FAIL), completion(1, "claim")))]
+    capped = single_tree_data([weak], texts, PolicyDataConfig(cap_wasted_block_explanation=True)).sequences[0]
+    assert set(segment_advantages(capped, TokenSegment.EXPLANATION)) == {0.0}
+
+
+def test_the_cap_caps_every_token_of_a_sequence_it_cannot_split_by_tactic() -> None:
+    recorded = completion(0, PROGRESS_THEN_FAIL)
+    broken = SampledCompletion(0, recorded.text, recorded.tactic_spans, tokens=SampledTokens((ord("x"),), (-0.5,)))
+    texts = [ExpansionTexts("p", 0, "prompt", (broken, completion(1, "error"), completion(2, "clean")))]
+    config = PolicyDataConfig(cap_wasted_block_explanation=True)
+    capped = single_tree_data([progress_then_fail_group()], texts, config).sequences[0]
+    assert set(capped.advantages) == {0.0}
+
+
+@pytest.mark.parametrize(
+    "ending", [NO_PROGRESS, REDUNDANT, UNPROVED_CLAIM, UNKNOWN, OFF_GRAPH], ids=lambda label: label.value
+)
+def test_the_cap_reaches_a_block_that_progresses_and_then_wastes_a_tactic(ending: TacticLabel) -> None:
+    wasteful = group(
+        sample("step\nidle", PROOF_GRAPH, ending, edge_id=0),
+        sample("error", FAILING, edge_id=1),
+        sample("clean", PROOF_GRAPH, edge_id=2),
+    )
+    texts = [
+        ExpansionTexts("p", 0, "prompt", (completion(0, "step\nidle"), completion(1, "error"), completion(2, "clean")))
+    ]
+    capped = single_tree_data([wasteful], texts, PolicyDataConfig(cap_wasted_block_explanation=True)).sequences[0]
+    assert set(segment_advantages(capped, TokenSegment.EXPLANATION)) == {0.0}
+
+
+def test_the_cap_reaches_a_block_whose_first_tactic_is_a_no_op() -> None:
+    idle = group(
+        sample("idle", NO_PROGRESS, edge_id=0),
+        sample("claim", UNPROVED_CLAIM, edge_id=1),
+    )
+    texts = [ExpansionTexts("p", 0, "prompt", (completion(0, "idle"), completion(1, "claim")))]
+    capped = single_tree_data([idle], texts, PolicyDataConfig(cap_wasted_block_explanation=True)).sequences[0]
+    assert set(segment_advantages(capped, TokenSegment.EXPLANATION)) == {0.0}
+
+
+DETOUR = "step\nback"
+
+
+def test_the_cap_leaves_a_detour_on_the_proof_graph_alone() -> None:
+    detour = group(
+        sample(DETOUR, PROOF_GRAPH, PROOF_GRAPH, steps=(NODE_STEPS - 1, NODE_STEPS), edge_id=0),
+        sample("error", FAILING, edge_id=1),
+    )
+    texts = [ExpansionTexts("p", 0, "prompt", (completion(0, DETOUR), completion(1, "error")))]
+    capped = single_tree_data([detour], texts, PolicyDataConfig(cap_wasted_block_explanation=True)).sequences[0]
+    uncapped = single_tree_data([detour], texts, PolicyDataConfig()).sequences[0]
+    assert capped == uncapped

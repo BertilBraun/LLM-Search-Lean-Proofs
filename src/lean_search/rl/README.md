@@ -172,6 +172,37 @@ openings under the phase's own reward, mean explanation tokens, held-out against
 stop rule (bare haves more than 5 points over phase 1, or a growing subclass more than 1.5x) for the owner to decide;
 one process, a few minutes per phase on the CPU.
 
+**Wasted blocks' explanation (`[policy.data] cap_wasted_block_explanation`; on in arms A and D since 2026-11-19).**
+With the claim switches, arm A's rerun kept its bare `have` share flat (19.7% → 19.6% at phase 4) but not its
+held-out states (success 33.1-34.9%, v0 33.2%). Of the trained samples reaching the proof graph, 22% (phase 1) → 34%
+(phase 5) then ran a failing tactic, and they earned +0.35 to +0.41 of sequence advantage per sample (72-77% positive)
+against +0.43 to +0.51 for complete blocks on the graph, about 80% (`experiments/analysis/continuation_credit.py`,
+sequence and tactic advantages, phases 1-5). Blocks reaching the graph and then charged without failing (a no-op such
+as a failed `try`, a redundant step, an open claim, an unknown or off-graph ending; 435-745 samples a phase) earned
++0.33 to +0.46, as much as clean ones (review BI). A wasted tactic costs only c (an open claim 0.4) and the block keeps
+its prefix's progress, while per-tactic credit puts the sequence advantage on every explanation token.
+
+The switch (off by default; refused without per-tactic credit) caps the explanation's credit at 0 in a block with a
+wasted tactic (`GroupSample.has_wasted_tactic`: a `TacticLabel.FAILING` tactic, which is an error or timeout, an
+unverified proof's last tactic or a sample without a block; a no-op, a redundant step, an open claim; or a tactic
+not labelled proof graph charged within its block, an unknown or off-graph ending after evidence).
+Its tactics keep their own advantages and a negative explanation stays negative; group selection (`has_signal`), the
+baselines and every other sample are unchanged. Replayed on A's phases 1, 3 and 5, it removes 30-40% of the phases'
+positive explanation credit (failing only: 20-32%) and no tactic credit. The alternatives did less: c = 0.3 or 0.5 left
+the failing class +0.07 to +0.29 (55-67% positive) and turned 7-20% of never-on-graph samples positive; a cost per
+never-run tactic after the failure (0.1 or 0.3) left it +0.17 to +0.38. The owner chose to keep the tactics' credit
+over dropping all positive credit of such blocks. A sequence that cannot be split by tactic (offsets not matching its
+text, a span count not matching its tactics, a sample without a block) gives every token the explanation's credit
+(`token_credits`), so the cap caps it whole. `PolicyDataMetrics.capped_explanation_samples` and
+`capped_explanation_credit` record what it removed; `claim_watch` reads the capped credit.
+
+What it does not change: the tactic-level bet. The token between two tactics belongs to the next one and the closing
+fence gets 0, so continuing after progress still pays at P(correct) > c / (c + δ) = 1/3; only the reasoning stops
+being paid for a block that ends in waste. Expected to move on the rerun, against A's uncapped rerun (phases 1-6): the
+share of on-graph samples failing after the graph (22-34%), held-out valid Lean and success at one expansion, and
+perhaps tactics per block (2.5-2.7) and the continue rate (0.86-0.89). The rule was tuned after seeing A's held-out
+results twice; the probe run decides.
+
 The baseline b is the multiplicity-weighted mean score of the group's samples with a score, the first-tactic baseline
 b₁ the same mean of their anchors' R (`GroupSample.anchor_parts`, `GroupAdvantages.first_tactic_baseline`). The
 explanation gets score − b and a block's tactic advantages add up to score − b₁: b − b₁ is the group's mean progress

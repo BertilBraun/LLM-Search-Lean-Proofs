@@ -44,7 +44,9 @@ CHOSEN_RATES = {
 RECIPE = CONFIGS / "followup/expert_iteration.toml"
 # The reward's claim switches, on in the arms training with GRPO since arm A's bare-have drift (2026-11-18).
 CLAIM_SWITCHES = {"reward": {"claims_earn_progress": False, "unproved_claim_cost": 0.3}}
-CLAIM_SWITCH_ARMS = {"A": CLAIM_SWITCHES, "B1": {}, "B2": {}}
+# The explanation cap of a block with a wasted tactic, on in the same arms since arm A's rerun (2026-11-19).
+EXPLANATION_CAP = {"policy": {"data": {"cap_wasted_block_explanation": True}}}
+CLAIM_SWITCH_ARMS = {"A": CLAIM_SWITCHES | EXPLANATION_CAP, "B1": {}, "B2": {}}
 
 
 def toml(path: Path) -> dict:
@@ -88,6 +90,7 @@ def test_an_arm_may_change_its_credit_learning_rates_seed_offset_name_and_rounds
         "loop.name",
         "loop.seed_offset",
         "phase.policy.data.credit",
+        "phase.policy.data.cap_wasted_block_explanation",
         "phase.policy.optimization.learning_rate",
         "phase.reward.claims_earn_progress",
         "phase.reward.unproved_claim_cost",
@@ -244,6 +247,15 @@ def test_the_claim_switches_are_on_in_the_arms_training_with_grpo(name: str) -> 
     assert toml(CONFIGS / f"followup/arms/{name}.toml")["phase"]["reward"] == CLAIM_SWITCHES["reward"]
 
 
+@pytest.mark.parametrize("name", ["A", "D"])
+def test_the_wasted_block_explanation_cap_is_on_in_the_arms_training_with_grpo(name: str) -> None:
+    assert toml(CONFIGS / f"followup/arms/{name}.toml")["phase"]["policy"]["data"]["cap_wasted_block_explanation"]
+
+
+def test_the_old_runs_phase_config_leaves_wasted_block_explanations_uncapped() -> None:
+    assert not from_json_object(TrainingPhaseConfig, PHASE).policy.data.cap_wasted_block_explanation
+
+
 def test_the_old_runs_phase_config_keeps_claims_earning_progress() -> None:
     assert from_json_object(TrainingPhaseConfig, PHASE).reward.claims_earn_progress
 
@@ -307,6 +319,7 @@ def test_the_recipe_is_the_hand_run_rounds_but_for_its_seeds_and_what_the_loop_f
         ("C", {"phase": {"policy": {"optimization": {"learning_rate": 5e-5}}}}),
         ("C", {"phase": {"policy": {"data": {"credit": "sequence"}}}}),
         ("C", {"phase": {"reward": {"claims_earn_progress": False}}}),
+        ("C", {"phase": {"policy": {"data": {"cap_wasted_block_explanation": True}}}}),
     ],
     ids=[
         "a recipe rate in a GRPO arm",
@@ -315,6 +328,7 @@ def test_the_recipe_is_the_hand_run_rounds_but_for_its_seeds_and_what_the_loop_f
         "a GRPO rate in arm C",
         "a GRPO credit in arm C",
         "a GRPO reward switch in arm C",
+        "a GRPO explanation cap in arm C",
     ],
 )
 def test_an_arm_setting_what_its_policy_update_never_reads_is_refused(name: str, contradiction: dict) -> None:

@@ -359,6 +359,16 @@ default), safe server stops, results pulled to the PC as they are written.
   - Caveat: the search keeps the prefix as a child, so such blocks still advance a 16-expansion search; the held-out
     check (one expansion) penalises them fully. Arm C (positives only) shortened its blocks (2.7 → 2.1 tactics,
     continue rate 0.86 → 0.80); A kept them (2.5-2.7, 0.86 → 0.89).
+- **Owner, 2026-11-19 ~18:50 UTC: cap the reasoning, keep the tactics, rerun A now.** Built as
+  `[policy.data] cap_wasted_block_explanation` (reviews BH, BI; widened after BI from failing blocks to blocks with
+  any wasted tactic: replayed, "charged on graph" blocks, a no-op/redundant/open-claim/off-graph ending after
+  progress, 435-745 samples a phase, earned +0.33 to +0.46 like clean ones). It removes 30-40% of the positive
+  explanation credit, no tactic credit. On in A and D (D's phase config is A's by design). The uncapped rerun
+  (`followup_A`, phases 1-6) is stopped and moved aside; A restarts from v0 with the cap, so A and D both train capped
+  from phase 1. The uncapped rerun's last phase (6): held-out valid 60.2%, success 34.1% (956 states; v0 58.7%,
+  33.2%), bare `have` 24.9% (+5.2 points over phase 1), failing after the graph 33.8%; stopped 19:10 UTC after its
+  phase-6 pause. What should move against the uncapped rerun: on-graph samples failing after the graph (22-34%),
+  held-out valid Lean and success, perhaps tactics per block and the continue rate; the probe run decides.
 - **Disk**: 90% full at the HOLD (33 GB free; an arm needs about 38 GB). Removed the merged `weights/` folders of
   `followup_A.bug_20261119T124352Z`, `followup_smoke_C`, `followup_smoke_D` and
   `followup_shared_sampling.failed_value_benchmark_20261118` (rebuilt from the adapters kept beside them): 113 GB free.

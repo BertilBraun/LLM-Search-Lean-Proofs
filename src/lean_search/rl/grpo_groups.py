@@ -92,6 +92,16 @@ class TacticReward:
     adds_claim: bool = False
 
 
+WASTED_LABELS = frozenset(
+    {
+        TacticLabel.FAILING,
+        TacticLabel.NO_PROGRESS,
+        TacticLabel.REDUNDANT_HYPOTHESIS,
+        TacticLabel.UNPROVED_CLAIM,
+    }
+)
+
+
 @dataclass(frozen=True)
 class GroupSample:
     text: str
@@ -141,6 +151,16 @@ class GroupSample:
     @property
     def has_failing_tactic(self) -> bool:
         return any(tactic.label == TacticLabel.FAILING for tactic in self.tactics)
+
+    @property
+    def has_wasted_tactic(self) -> bool:
+        """A failing, no-op or redundant tactic, an open claim, or a tactic not labelled proof graph charged within its
+        block (an unknown or off-graph ending after evidence)."""
+        return any(
+            tactic.label in WASTED_LABELS
+            or (tactic.gain is not None and tactic.gain.total < 0 and tactic.label != TacticLabel.PROOF_GRAPH)
+            for tactic in self.tactics
+        )
 
     @property
     def complete(self) -> bool:

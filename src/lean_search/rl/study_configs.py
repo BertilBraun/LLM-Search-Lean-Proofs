@@ -47,6 +47,8 @@ ARM_SETTINGS = frozenset(
         # A second seed (WP1's top-level seed offset).
         "loop.seed_offset",
         "phase.policy.data.credit",
+        # GRPO's explanation credit in a block with a wasted tactic (arm A's rerun, 2026-11-19).
+        "phase.policy.data.cap_wasted_block_explanation",
         "phase.policy.optimization.learning_rate",
         # The claim switches of the GRPO reward (arm A's bare-have drift, 2026-11-18).
         "phase.reward.claims_earn_progress",

@@ -45,10 +45,10 @@ from lean_search.rl.claim_watch import BARE_OPENINGS, Opening, proof_band, sampl
 from lean_search.rl.grpo_groups import GroupSample, PolicyGroup, RewardConfig, RewardParts, policy_groups
 from lean_search.rl.policy_data import (
     CompletionTokens,
-    PolicyDataConfig,
     PolicyTokenizer,
     PolicyTree,
     completion_tokens,
+    credited_advantages,
     tree_policy_data,
 )
 from lean_search.rl.reward_replay import added, added_all
@@ -381,7 +381,9 @@ def tree_credit(record: TreeRecord, tokenizer: PolicyTokenizer | None, settings:
         groups = variant_groups(record, labels, tactics, settings_variant, settings.phase_config)
         if settings.check_production and variant == BASE_VARIANT:
             assert tokenizer is not None
-            parts = tree_policy_data(PolicyTree(groups, record.expansions), tokenizer, PolicyDataConfig())
+            parts = tree_policy_data(
+                PolicyTree(groups, record.expansions), tokenizer, settings.phase_config.policy.data
+            )
             mismatches = parts.mismatches
             production = {
                 (
@@ -443,8 +445,14 @@ def tree_credit(record: TreeRecord, tokenizer: PolicyTokenizer | None, settings:
                     offsets = tokens.offsets or tuple((0, 0) for _ in tokens.token_ids)
                     credits = token_credits(offsets, spans, tokens.inserted, sample_advantages, CreditMode.PER_TACTIC)
                     if variant == BASE_VARIANT and production:
+                        trained_advantages = credited_advantages(
+                            sample, sample_advantages, settings.phase_config.policy.data
+                        )
+                        trained = token_credits(
+                            offsets, spans, tokens.inserted, trained_advantages, CreditMode.PER_TACTIC
+                        )
                         produced = production[(completion.edge_id, tuple(tokens.token_ids))]
-                        assert produced == credits.advantages, completion.edge_id
+                        assert produced == trained.advantages, completion.edge_id
                     first_tactic = sample_advantages.tactics[0] if sample_advantages.tactics else None
                     tally = sequence_tally(
                         len(sample_advantages.tactics),

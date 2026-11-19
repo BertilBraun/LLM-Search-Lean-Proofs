@@ -16,6 +16,7 @@ from lean_search.rl.evaluation import EvaluationKind, EvaluationSummary
 from lean_search.rl.fixed_sets import character_stratum
 from lean_search.rl.grpo_groups import policy_groups
 from lean_search.rl.health_checks import HeldOutRates, held_out_rates, read_health_history
+from lean_search.rl.policy_data import PolicyDataConfig, credited_advantages
 from lean_search.rl.training_phase import TrainingPhaseConfig, groups_not_sampled_by
 from lean_search.rl.tree_summary import is_bare_have, is_linarith_opening, is_proof_have, opening
 from lean_search.search.graph_labels import GraphLabels, label_graph
@@ -170,7 +171,8 @@ class TreeWatch:
 
 def tree_watch(record: TreeRecord, config: TrainingPhaseConfig, band: str) -> TreeWatch:
     """The trainer's groups (recorded value estimates, excluded versions dropped, `has_signal` under the phase's
-    credit) with every sample's sequence advantage, and the tree's first-round samples, by opening."""
+    credit) with every sample's sequence advantage as the trainer credits it (`credited_advantages`), and the tree's
+    first-round samples, by opening."""
     labels = label_graph(record)
     tactics = policy_tactics(record, labels, config.reward.off_graph_min_expanded_nodes)
     openings = sample_openings(record, labels, tactics)
@@ -180,12 +182,14 @@ def tree_watch(record: TreeRecord, config: TrainingPhaseConfig, band: str) -> Tr
         record.expansions,
         config.excluded_policy_versions,
     )
+    data = PolicyDataConfig() if config.policy is None else config.policy.data
     advantages: dict[WatchKey, AdvantageSum] = {}
     for group in groups:
         found = group_advantages(group)
         if not found.has_signal(config.credit):
             continue
-        for sample, sample_advantages in zip(group.samples, found.samples, strict=True):
+        for sample, found_advantages in zip(group.samples, found.samples, strict=True):
+            sample_advantages = credited_advantages(sample, found_advantages, data)
             if sample_advantages.sequence is None:
                 continue
             key = WatchKey(openings[sample.edge_ids[0]], sample.reaches_proof_graph, band)

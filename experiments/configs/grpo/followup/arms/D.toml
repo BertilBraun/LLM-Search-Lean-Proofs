@@ -14,6 +14,8 @@ expert_iteration_window_phases = 4
 
 [phase.policy.data]
 credit = "per_tactic"
+# A block with a failing or wasted tactic: at most 0 on its explanation (rl/README.md, "Wasted blocks").
+cap_wasted_block_explanation = true
 
 [phase.reward]
 # Arm A's first run (stopped by the owner after 7 of 16 phases, 2026-11-18) drifted into bare `have` claims: a claim

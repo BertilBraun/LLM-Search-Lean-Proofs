@@ -1,5 +1,6 @@
 """GRPO training sequences: each recorded completion of a group sample, as sampled, with its per-token advantages."""
 
+import dataclasses
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol
@@ -38,8 +39,14 @@ class PolicyTokenizer(ChatTemplate, Protocol):
 @dataclass(frozen=True)
 class PolicyDataConfig:
     credit: CreditMode = CreditMode.PER_TACTIC
+    # Per-tactic credit: a block with a failing or wasted tactic gets at most 0 on its explanation (rl/README.md).
+    cap_wasted_block_explanation: bool = False
     # The sampling temperature of records written before it was kept.
     default_temperature: float = 0.8
+
+    def __post_init__(self) -> None:
+        if self.cap_wasted_block_explanation and self.credit != CreditMode.PER_TACTIC:
+            raise ValueError("policy.data.cap_wasted_block_explanation needs per-tactic credit.")
 
 
 @dataclass(frozen=True)
@@ -103,6 +110,10 @@ class PolicyDataMetrics:
     trained_mean_proof_success: float = 0.0
     proof_success_failing_tail_share: float = 0.0
     proof_success_no_closer_share: float = 0.0
+    # `cap_wasted_block_explanation`: the trained samples it capped and the positive explanation credit it removed,
+    # sample-weighted (per sample, not per token).
+    capped_explanation_samples: int = 0
+    capped_explanation_credit: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -245,6 +256,12 @@ def policy_sequence(
 
 
 @dataclass(frozen=True)
+class ExplanationCap:
+    samples: int = 0
+    removed_credit: float = 0.0
+
+
+@dataclass(frozen=True)
 class PolicyDataParts:
     """One tree's share of the phase's policy data, which `combined_policy_data` joins in tree order."""
 
@@ -253,6 +270,16 @@ class PolicyDataParts:
     trained_groups: tuple[tuple[PolicyGroup, GroupAdvantages], ...]
     without_text: int
     mismatches: int
+    capped: ExplanationCap
+
+
+def credited_advantages(
+    sample: GroupSample, advantages: SampleAdvantages, config: PolicyDataConfig
+) -> SampleAdvantages:
+    """Per-tactic credit gives `sequence` to the explanation tokens, and to every token of a sequence it cannot split
+    by tactic (a sample without a block, offsets or a span count not matching), which the cap then caps whole."""
+    capped = config.cap_wasted_block_explanation and advantages.sequence is not None and sample.has_wasted_tactic
+    return dataclasses.replace(advantages, sequence=min(advantages.sequence, 0.0)) if capped else advantages
 
 
 def tree_policy_data(tree: PolicyTree, tokenizer: PolicyTokenizer, config: PolicyDataConfig) -> PolicyDataParts:
@@ -260,6 +287,7 @@ def tree_policy_data(tree: PolicyTree, tokenizer: PolicyTokenizer, config: Polic
     trained_groups: list[tuple[PolicyGroup, GroupAdvantages]] = []
     without_text = 0
     mismatches = 0
+    capped = ExplanationCap()
     # A node's feedback round has its own prompt: each group trains on the prompt its samples were drawn from.
     texts_by_prompt = {(expansion.node_id, expansion.feedback): expansion for expansion in tree.texts}
     for group in tree.groups:
@@ -267,13 +295,23 @@ def tree_policy_data(tree: PolicyTree, tokenizer: PolicyTokenizer, config: Polic
         if not advantages.has_signal(config.credit):
             continue
         trained_groups.append((group, advantages))
+        credited = [
+            credited_advantages(sample, sample_advantages, config)
+            for sample, sample_advantages in zip(group.samples, advantages.samples, strict=True)
+        ]
+        for sample, sample_advantages, sample_credited in zip(group.samples, advantages.samples, credited, strict=True):
+            if sample_credited.sequence != sample_advantages.sequence:
+                removed = sample_advantages.sequence - sample_credited.sequence
+                capped = ExplanationCap(
+                    capped.samples + sample.multiplicity, capped.removed_credit + removed * sample.multiplicity
+                )
         expansion = texts_by_prompt.get((group.node_id, group.feedback))
         if expansion is None:
             without_text += group.sample_count
             continue
         prompt_ids = tokenizer.encode(expansion.prompt, add_special_tokens=False)
         temperature = config.default_temperature if expansion.temperature is None else expansion.temperature
-        for sample, sample_advantages in zip(group.samples, advantages.samples, strict=True):
+        for sample, sample_credited in zip(group.samples, credited, strict=True):
             completions = [item for item in expansion.completions if item.edge_id in sample.edge_ids]
             if not completions:
                 without_text += sample.multiplicity
@@ -285,12 +323,12 @@ def tree_policy_data(tree: PolicyTree, tokenizer: PolicyTokenizer, config: Polic
                     prompt_ids,
                     completion,
                     temperature,
-                    sample_advantages,
+                    sample_credited,
                     config.credit,
                 )
                 sequences.append(sequence)
                 mismatches += mismatch
-    return PolicyDataParts(tuple(sequences), tree.groups, tuple(trained_groups), without_text, mismatches)
+    return PolicyDataParts(tuple(sequences), tree.groups, tuple(trained_groups), without_text, mismatches, capped)
 
 
 def combined_policy_data(parts: Sequence[PolicyDataParts]) -> PolicyData:
@@ -298,7 +336,12 @@ def combined_policy_data(parts: Sequence[PolicyDataParts]) -> PolicyData:
     groups = [group for part in parts for group in part.groups]
     trained_groups = [trained for part in parts for trained in part.trained_groups]
     without_text = sum(part.without_text for part in parts)
-    metrics = data_metrics(groups, trained_groups, sequences, without_text, sum(part.mismatches for part in parts))
+    capped = ExplanationCap(
+        sum(part.capped.samples for part in parts), sum(part.capped.removed_credit for part in parts)
+    )
+    metrics = data_metrics(
+        groups, trained_groups, sequences, without_text, sum(part.mismatches for part in parts), capped
+    )
     return PolicyData(tuple(sequences), metrics)
 
 
@@ -317,6 +360,7 @@ def data_metrics(
     sequences: Sequence[PolicySequence],
     without_text: int,
     mismatches: int,
+    capped: ExplanationCap,
 ) -> PolicyDataMetrics:
     samples = weighted_samples(groups)
     known = [parts for sample in samples for parts in sample.known]
@@ -354,4 +398,6 @@ def data_metrics(
         proof_success_failing_tail_share=sum(sample.has_failing_tactic for sample in reaching) / max(1, len(reaching)),
         proof_success_no_closer_share=sum(not sample.gets_closer_to_proof for sample in reaching)
         / max(1, len(reaching)),
+        capped_explanation_samples=capped.samples,
+        capped_explanation_credit=capped.removed_credit,
     )
