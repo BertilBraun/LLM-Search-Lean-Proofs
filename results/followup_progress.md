@@ -350,6 +350,12 @@ default), safe server stops, results pulled to the PC as they are written.
   - Replayed (trained groups unchanged in all): c = 0.3 → +0.21 to +0.29 (63-67% positive); c = 0.5 → +0.07 to
     +0.18 (55-61%), but never-on-graph samples then turn positive in 15-20% (the baseline falls); "a block failing
     after progress gets no positive advantage" → −0.04 to −0.06 (0% positive), other classes unchanged.
+  - The owner's alternative, a cost per never-run tactic after the first failure (`continuation_A_masked.md`, phases
+    1-5; failing blocks after progress have 1.15-1.74 never-run tactics, falling): at 0.1 each, fails after the graph
+    +0.29 to +0.38 (70-73% positive), at 0.3 +0.17 to +0.32 (64-70%); it barely closes the gap, and never-on-graph
+    samples turn positive in 7-8% (0.1) or 18-21% (0.3) because the baseline falls. Combined with "never positive":
+    −0.07 to −0.11 (0%), never-on-graph 7-8% positive. "Never positive" alone: −0.04 to −0.06, every other class as
+    under the phase's reward.
   - Caveat: the search keeps the prefix as a child, so such blocks still advance a 16-expansion search; the held-out
     check (one expansion) penalises them fully. Arm C (positives only) shortened its blocks (2.7 → 2.1 tactics,
     continue rate 0.86 → 0.80); A kept them (2.5-2.7, 0.86 → 0.89).
