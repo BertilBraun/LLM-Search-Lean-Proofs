@@ -4,22 +4,24 @@ Written 2026-11-16 by the orchestrating agent for the agent that takes over on a
 repository, same rented node; no conversation history and no running subagents carry over. Everything needed is in this
 file and the files it points to. Keep this file current while you work, or replace it with your own.
 
-**State at a glance (2026-11-19, about 13:00 UTC; updated by the second orchestrator)**
+**State at a glance (2026-11-19, about 19:30 UTC; updated by the second orchestrator)**
 
 - Done: step 1 (incl. the reasoning comparison: no reasoning +4.9 points at equal tokens but Lean-bound, 1.8x the
   time), the offline run O2 (545 of 2,000: FAILED the owner's gate against v35, so the arms sample WITH visible
   reasoning), step 2 (A's learning rate: 2e-5 and 5e-5 tied; the owner chose 5e-5), the C/D smoke test (accepted by
   hand: its wake-memory gate read the line after the deliberate kill), arm C (probe 1,049 of 2,000: +16.7 points over
   v0, −9.3 behind v35 with the final value model). Details: `results/followup_progress.md`.
-- Arm A's first run (stopped by the owner for a bare-`have` drift) is kept as `runs/followup_A.bug_20261119T124352Z`.
-  The reward fix (master `2a1caf4`) is deployed (b5f6425, 2026-11-19 12:44 UTC).
+- Arm A's first run (bare-`have` drift) is kept as `runs/followup_A.bug_20261119T124352Z`, its claim-switch rerun
+  (flat on held-out, blocks failing after progress paid ~80% of clean ones) as `runs/followup_A.uncapped_20261119T192648Z`.
+  The explanation cap `[policy.data] cap_wasted_block_explanation` (reviews BH, BI; next letter `bj`) is deployed
+  (ed0c837, 19:26 UTC) and on for A and D.
 - Running unattended: the arms driver `deployment/arms_chain.sh` (supervisord `arms_chain`, state
-  `/workspace/runs/arms_chain/`, order file `smoke C A D`) runs arm A's rerun from v0 (started 12:45 UTC 2026-11-19,
-  about 15 h plus a 2.5-h probe run), then arm D. The owner's stop rule for A: `experiments/claim_watch.py` after
+  `/workspace/runs/arms_chain/`, order file `smoke C A D`) runs arm A's capped rerun from v0 (started 19:27 UTC
+  2026-11-19, about 15 h plus a 2.5-h probe run), then arm D. The owner wants early signs from its phases 1-2. The owner's stop rule for A: `experiments/claim_watch.py` after
   phases 2 and 4 (`results/followup_progress.md`, "Arm A's rerun"). Disk: 113 GB free after removing regenerable
   merged weights of finished runs (an arm needs about 38 GB).
 - `on_health_stop = continue`. Search-efficiency switches only in the arms' sampling. Arm B dropped; O1 last, on the
-  owner's word. Review letters used up to `bg` (next: `bh`). Spend about $75 of $190 at $0.83/h. The PC sleeps at
+  owner's word. Review letters used up to `bi` (next: `bj`). Spend about $75 of $190 at $0.83/h. The PC sleeps at
   times: the watchdog and the pull pause, the node does not.
 
 ## 1. First hour: what to do
