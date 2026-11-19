@@ -326,6 +326,12 @@ default), safe server stops, results pulled to the PC as they are written.
 - **Arm A's rerun**: master b5f6425 deployed at the HOLD (node-local edits identical, `experiments/configs/grpo/search/`
   and `uv.lock` unchanged); old run moved aside as `*.bug_20261119T124352Z`; `hold_A` removed; the driver started A
   from v0 at 12:45 UTC with `claims_earn_progress = false`, `unproved_claim_cost = 0.3`, 5e-5. Then D.
+- **A's claim watch, phase 2** (`runs/arms_chain/claim_watch/A_phase2.md`, 15:48 UTC): bare `have` 19.7 → 23.6%
+  (+3.9 points; the first run went 20.5 → 23.3%, +2.8); proved in their block off the graph 7.2 → 9.5% of samples
+  (1.32x); left open with a failing attempt after 5.8 → 7.1% (1.23x); open claims proved 14.0 → 11.0%; `have … :=`
+  8.6 → 9.7%. The bare class is now net negative on the proof graph (−0.097 per sample), the decomposition premium
+  1.84x → 1.67x. Held-out after phase 2: valid 56.5%, success 34.1% (v0 58.7%, 33.2%). Under every stop line so far;
+  the rule reassesses at phase 4.
 - **Disk**: 90% full at the HOLD (33 GB free; an arm needs about 38 GB). Removed the merged `weights/` folders of
   `followup_A.bug_20261119T124352Z`, `followup_smoke_C`, `followup_smoke_D` and
   `followup_shared_sampling.failed_value_benchmark_20261118` (rebuilt from the adapters kept beside them): 113 GB free.
