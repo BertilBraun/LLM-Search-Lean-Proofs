@@ -369,6 +369,14 @@ default), safe server stops, results pulled to the PC as they are written.
   33.2%), bare `have` 24.9% (+5.2 points over phase 1), failing after the graph 33.8%; stopped 19:10 UTC after its
   phase-6 pause. What should move against the uncapped rerun: on-graph samples failing after the graph (22-34%),
   held-out valid Lean and success, perhaps tactics per block and the continue rate; the probe run decides.
+- **Capped rerun, early signs** (started 19:27 UTC from v0; v0 held-out 945 states). The cap fired on 1,934 samples
+  (−1,085 positive explanation credit) in phase 1 and 1,595 (−864) in phase 2. Capped against uncapped rerun:
+
+  | After phase | Bare `have` | Failing after graph | Tactics per block | Continue rate | Explanation tokens | Held-out valid | Held-out success |
+  |---|---|---|---|---|---|---|---|
+  | 1 (v0's samples) | 20.5% / 19.7% | 19.4% / 19.0% | 2.60 / 2.57 | 0.87 / 0.86 | 97 / 97 | 60.7% / 60.4% | 33.2% / 33.1% |
+  | 2 | **16.0% / 23.6%** | **18.8% / 22.3%** | 2.65 / 2.69 | 0.87 / 0.89 | **98 / 103** | 57.0% / 56.5% | 33.4% / 34.1% |
+
 - **Disk**: 90% full at the HOLD (33 GB free; an arm needs about 38 GB). Removed the merged `weights/` folders of
   `followup_A.bug_20261119T124352Z`, `followup_smoke_C`, `followup_smoke_D` and
   `followup_shared_sampling.failed_value_benchmark_20261118` (rebuilt from the adapters kept beside them): 113 GB free.
