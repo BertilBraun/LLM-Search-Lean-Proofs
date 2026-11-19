@@ -304,6 +304,32 @@ default), safe server stops, results pulled to the PC as they are written.
 | First node, 2026-11-14 11:20 UTC to its outage at about 23:35 UTC | about $11 at most; partly refunded by the provider (owner) |
 | Second node, from 2026-11-15 about 08:30 UTC | $0.83 per hour |
 
+## Arm C finished; arm A's rerun started 2026-11-19 12:45 UTC
+
+- **Arm C** (expert iteration, 5e-5, window 4): 16 phases, 192.1M generated tokens (0.2% lost), 14.9 loop hours, no
+  health alert, no traceback, no wall-clock stop. Probe run `probe_arm_C_phase16_run1` (C's phase-16 policy with its
+  own phase-16 value model): **1,049 of 2,000 (52.45%)**, accepted.
+  - Against the v0 anchors (714.5): **+16.7 points** [+15.0, +18.5], every band ahead (+9 to +22).
+  - Against v35 with the old run's final value model (run 7, 1,236): **−9.3 points** [−11.5, −7.4]; level under
+    1,000 characters, −7 to −15 points above. Against v35 with value v0 (run 8, 1,083): −1.7 points (not paired-tested).
+  - Compute: 192M training-search tokens against the old run's 495M (39%).
+  - Held-out states: valid Lean 59.6% → about 69% from phase 9 on (71.1% at 16); success 34.3% → 39.6% at phase 10,
+    then flat at 38-39%. Training-search solve rate fell from 0.66-0.73 (phases 1-8) to 0.59-0.62 (13-15).
+  - Expert-iteration loss 0.34 → 0.19, distinct samples per expansion 7.47 → 7.06; verified proofs per phase 4,111
+    (phase 1) → about 900 (from phase 9); bare-`have` share 19.9% → 14% (phases 2-4) → about 20% (9-16), no drift.
+  - Degree-bounded nlinarith: 1-4% of verified proofs per phase fail plain Mathlib (almost all on its wall clock);
+    up to 20 solved trees per phase have no plain-passing proof.
+  - Sampling was 54% of the wall clock (7.5 of 14.0 h over phases 1-15); each pause 21-35 min (policy training ~4,
+    value training 6-9 every second phase, server wake ~6, held-out check ~6.5).
+  - Provisional: one probe run, one seed; the comparisons used different start orders (run 9 showed the order does
+    not change v0's result).
+- **Arm A's rerun**: master b5f6425 deployed at the HOLD (node-local edits identical, `experiments/configs/grpo/search/`
+  and `uv.lock` unchanged); old run moved aside as `*.bug_20261119T124352Z`; `hold_A` removed; the driver started A
+  from v0 at 12:45 UTC with `claims_earn_progress = false`, `unproved_claim_cost = 0.3`, 5e-5. Then D.
+- **Disk**: 90% full at the HOLD (33 GB free; an arm needs about 38 GB). Removed the merged `weights/` folders of
+  `followup_A.bug_20261119T124352Z`, `followup_smoke_C`, `followup_smoke_D` and
+  `followup_shared_sampling.failed_value_benchmark_20261118` (rebuilt from the adapters kept beside them): 113 GB free.
+
 ## Why arm A drifted into bare `have` claims (measured 2026-11-18 on all of A's trees)
 
 - Bare claims left open and never proved are already net negative every phase (−0.36 to −0.46 per sample; the −0.25
@@ -322,10 +348,8 @@ default), safe server stops, results pulled to the PC as they are written.
 
 ## Arm A's rerun: the fix and its stop rule (owner, 2026-11-18)
 
-- The claim reward switches (master `2a1caf4`, reviews BF and BG) are merged, NOT yet deployed: deploy only at the
-  arms driver's HOLD "waiting for: A" after arm C, then the rerun path for A (old run, configs, checkpoints, markers,
-  `pause_A` moved aside), remove `hold_A`, start. Check `git diff` of `experiments/configs/grpo/search/` is empty
-  (A and D are bound to the shared run's search config).
+- The claim reward switches (master `2a1caf4`, reviews BF and BG) are merged and deployed (b5f6425, 2026-11-19 12:44
+  UTC, at the HOLD after arm C); A rerun from v0 since 12:45 UTC.
 - **Stop rule (owner):** after phases 2 and 4 the orchestrator runs `experiments/claim_watch.py --run
   /workspace/runs/followup_A --phase <k>` on the node; reassess at phase 4 (report to the owner, who decides) if the
   bare-`have` share rose more than 5 points over phase 1, or either growing subclass (bare claims proved in their block
