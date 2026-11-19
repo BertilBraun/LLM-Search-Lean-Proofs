@@ -376,6 +376,9 @@ default), safe server stops, results pulled to the PC as they are written.
   |---|---|---|---|---|---|---|---|
   | 1 (v0's samples) | 20.5% / 19.7% | 19.4% / 19.0% | 2.60 / 2.57 | 0.87 / 0.86 | 97 / 97 | 60.7% / 60.4% | 33.2% / 33.1% |
   | 2 | **16.0% / 23.6%** | **18.8% / 22.3%** | 2.65 / 2.69 | 0.87 / 0.89 | **98 / 103** | 57.0% / 56.5% | 33.4% / 34.1% |
+  | 3 | 17.3% / 20.9% | 28.8% / 34.8% | 2.39 / 2.64 | 0.89 / 0.89 | 104 / 106 | 61.4% / 58.4% | 34.8% / 34.9% |
+
+  Phase 3 had the same `valid_blocks` warning in both runs (21.0% of sampled blocks complete).
 
 - **Disk**: 90% full at the HOLD (33 GB free; an arm needs about 38 GB). Removed the merged `weights/` folders of
   `followup_A.bug_20261119T124352Z`, `followup_smoke_C`, `followup_smoke_D` and
