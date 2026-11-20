@@ -430,6 +430,10 @@ STOPPED in `/workspace/runs/screens/` on a failure. About 8.5 h each.
   | 13 (capped only) | 20.2% | 35.0% | **2.99** | 0.89 | 108 | 61.7% | 32.9% (944 states; C at 13: 68.9%, 38.2%, 1,074) |
   | 14 (capped only) | 19.0% | 30.1% | **3.13** | 0.88 | 109 | 62.8% | 31.4% (940 states; C at 14: 69.7%, 38.7%, 1,058) |
   | 15 (capped only) | 20.4% | 26.1% | **4.00** | 0.86 | 102 | 63.2% | 32.0% (913 states; C at 15: 68.4%, 38.3%, 1,063) |
+  | 16 (capped only) | 18.5% | 28.1% | 3.10 | - | - | 62.1% | 33.8% (C at 16: 71.1%, 38.8%) |
+
+  The capped rerun finished 11:48 UTC 2026-11-20 (192.1M tokens, 0.2% lost, no alert in 16 phases); its probe run
+  (phase 16 with its own value model) started 11:50 UTC.
 
   Blocks lengthen from phase 12 on (2.66 → 4.00 tactics per complete block) while failing after progress falls
   (37.7 → 26.1%): the model writes longer blocks that complete; phase 15's sampling took 39 min (others 26-31).
