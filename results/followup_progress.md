@@ -304,6 +304,17 @@ default), safe server stops, results pulled to the PC as they are written.
 | First node, 2026-11-14 11:20 UTC to its outage at about 23:35 UTC | about $11 at most; partly refunded by the provider (owner) |
 | Second node, from 2026-11-15 about 08:30 UTC | $0.83 per hour |
 
+## Arm A (capped) probe and the screens' start, 2026-11-20
+
+- **Arm A's capped rerun, probe `probe_arm_A_phase16_run1`: 822 of 2,000 (41.1%)**, accepted, no wall-clock stop.
+  Against the v0 anchors +5.4 points [+3.7, +7.1] (ahead in every band, significantly in five); against arm C −11.3
+  [−13.3, −9.3] (behind in every band, most at 2,000-4,499 characters, −14.5 and −15.3); against v35 with the final
+  value model −20.7. Solved within 1 expansion 9.7% (v0 10.1%, C 13.1%): A's gain comes only from deeper searches.
+  The phase-8 adapter (A's held-out peak) is staged in `arms_chain/adapters/A` but not probed.
+- HOLD "waiting for: D" at 14:55 UTC. Master eb75e61 deployed (edits identical, search configs and uv.lock unchanged),
+  merged weights of `followup_A` and `followup_C` removed (both probed; regenerable from their adapters; 128 GB free),
+  `run_screens.sh` started 15:13 UTC: the A screen at 2e-5 first, then B2 at 2e-5.
+
 ## Owner, 2026-11-20 ~10:50 UTC: hold D, screen two GRPO fixes
 
 A's capped rerun peaked at phase 8 and slid back to v0's held-out level, its blocks lengthening to 4.0 tactics.
