@@ -384,6 +384,10 @@ default), safe server stops, results pulled to the PC as they are written.
   | 7 (capped only) | 15.4% | 27.6% | 2.28 | 0.84 | 107 | 62.7% | 34.6% (1,034 states; C at 7: 64.6%, 36.4%) |
   | 8 (capped only) | 17.8% | 28.6% | 2.35 | 0.85 | 111 | 65.0% | 36.1% (1,058 states; C at 8: 67.2%, 37.1%, 1,016) |
   | 9 (capped only) | 18.1% | 26.0% | 2.43 | 0.85 | 112 | 62.0% | 35.6% (1,014 states; C at 9: 69.4%, 37.9%, 1,045) |
+  | 10 (capped only) | 21.3% | 30.7% | 2.62 | 0.85 | 112 | 60.0% | 33.9% (987 states; C at 10: 67.9%, 39.6%, 1,127) |
+
+  After its phase-8 peak the capped rerun slides back: held-out success 36.1 → 35.6 → 33.9%, and blocks lengthen
+  again (2.35 → 2.62 tactics, bare `have` 17.8 → 21.3%).
 
   Phase 3 had the same `valid_blocks` warning in both runs (21.0% of sampled blocks complete). At phase 4 all three A
   runs dip to the same held-out level (success 30.1% first run, 31.2% uncapped, 31.1% capped; held-out states 836
