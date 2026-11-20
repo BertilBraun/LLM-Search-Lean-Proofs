@@ -381,6 +381,7 @@ default), safe server stops, results pulled to the PC as they are written.
   | 4 | 21.5% / 19.6% | 24.8% / 33.4% | 2.26 / 2.49 | 0.87 / 0.89 | 106 / 112 | **54.6% / 55.7%** | **31.1% / 31.2%** |
   | 5 | 14.4% / 20.8% | 33.9% / 31.7% | 2.10 / 2.46 | 0.87 / 0.87 | 104 / 115 | 58.6% / 58.4% | 33.1% / 33.8% |
   | 6 | 15.9% / 24.9% | 33.3% / 33.8% | 2.21 / 2.60 | 0.86 / 0.90 | 103 / 121 | 61.5% / 60.2% | 33.0% / 34.1% |
+  | 7 (capped only) | 15.4% | 27.6% | 2.28 | 0.84 | 107 | 62.7% | 34.6% (1,034 states; C at 7: 64.6%, 36.4%) |
 
   Phase 3 had the same `valid_blocks` warning in both runs (21.0% of sampled blocks complete). At phase 4 all three A
   runs dip to the same held-out level (success 30.1% first run, 31.2% uncapped, 31.1% capped; held-out states 836
