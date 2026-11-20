@@ -378,7 +378,12 @@ default), safe server stops, results pulled to the PC as they are written.
   | 2 | **16.0% / 23.6%** | **18.8% / 22.3%** | 2.65 / 2.69 | 0.87 / 0.89 | **98 / 103** | 57.0% / 56.5% | 33.4% / 34.1% |
   | 3 | 17.3% / 20.9% | 28.8% / 34.8% | 2.39 / 2.64 | 0.89 / 0.89 | 104 / 106 | 61.4% / 58.4% | 34.8% / 34.9% |
 
-  Phase 3 had the same `valid_blocks` warning in both runs (21.0% of sampled blocks complete).
+  | 4 | 21.5% / 19.6% | 24.8% / 33.4% | 2.26 / 2.49 | 0.87 / 0.89 | 106 / 112 | **54.6% / 55.7%** | **31.1% / 31.2%** |
+
+  Phase 3 had the same `valid_blocks` warning in both runs (21.0% of sampled blocks complete). At phase 4 all three A
+  runs dip to the same held-out level (success 30.1% first run, 31.2% uncapped, 31.1% capped; held-out states 836
+  capped against 871) although the capped run fails after progress far less and writes shorter blocks: the dip does
+  not follow the credit fixed so far. Arm C at phase 4: 61.4%, 35.4%.
 
 - **Disk**: 90% full at the HOLD (33 GB free; an arm needs about 38 GB). Removed the merged `weights/` folders of
   `followup_A.bug_20261119T124352Z`, `followup_smoke_C`, `followup_smoke_D` and
