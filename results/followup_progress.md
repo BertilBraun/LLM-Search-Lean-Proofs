@@ -315,6 +315,17 @@ default), safe server stops, results pulled to the PC as they are written.
   merged weights of `followup_A` and `followup_C` removed (both probed; regenerable from their adapters; 128 GB free),
   `run_screens.sh` started 15:13 UTC: the A screen at 2e-5 first, then B2 at 2e-5.
 
+**A screen (2e-5), per phase** (held-out valid / success / solved samples; failing after the graph; tactics per complete
+block; bare `have`; parameter change):
+
+| Phase | Valid | Success | Solved | Failing after graph | Tactics | Bare `have` | Change |
+|---|---|---|---|---|---|---|---|
+| 0 (v0) | - | - | 898 | - | - | - | - |
+| 1 | 61.2% | 33.6% | 977 | 19.4% | 2.68 | 20.7% | 4.5% |
+| 2 | 57.2% | 34.9% | 979 | 23.5% | 2.60 | 21.3% | 3.6% |
+| 3 | 60.3% | 35.9% | 1,004 | 31.3% | 2.65 | 19.8% | 3.4% |
+| 4 | 56.8% | 34.2% | 922 | **37.4%** | 2.70 | 21.1% | - |
+
 ## Owner, 2026-11-20 ~10:50 UTC: hold D, screen two GRPO fixes
 
 A's capped rerun peaked at phase 8 and slid back to v0's held-out level, its blocks lengthening to 4.0 tactics.
