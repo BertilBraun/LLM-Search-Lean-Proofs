@@ -1,0 +1,21 @@
+# Screen of arm A at a smaller step (owner, 2026-11-20): arms/A.toml (claim switches and explanation cap included) at
+# 2e-5 instead of 5e-5, 8 phases. A's capped rerun moved the policy 6-10% a phase against C's 2-3% and peaked at
+# phase 8 before sliding back. Run by deployment/run_screens.sh (results/followup_progress.md).
+[loop]
+name = "followup_screen_A_2e-5"
+
+[loop.training]
+phase_generated_tokens = 12_000_000
+max_phases = 8
+value_every_phases = 2
+
+[phase.policy.data]
+credit = "per_tactic"
+cap_wasted_block_explanation = true
+
+[phase.reward]
+claims_earn_progress = false
+unproved_claim_cost = 0.3
+
+[phase.policy.optimization]
+learning_rate = 2e-5

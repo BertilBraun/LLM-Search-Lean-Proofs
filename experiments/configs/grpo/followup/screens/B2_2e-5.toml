@@ -1,0 +1,18 @@
+# Screen of arm B2, proof-success credit (owner, 2026-11-20): arms/B2.toml at the A screen's 2e-5, 8 phases, so the two
+# screens differ only in their credit. Every sampled token gets r minus the group's mean r, r = 1 when the sample
+# reaches the found proof's graph: no per-tactic progress steps, but a block failing after the graph still counts as
+# r = 1 (review BK). The claim switches and the explanation cap do not act on this credit. Run by
+# deployment/run_screens.sh (results/followup_progress.md).
+[loop]
+name = "followup_screen_B2_2e-5"
+
+[loop.training]
+phase_generated_tokens = 12_000_000
+max_phases = 8
+value_every_phases = 2
+
+[phase.policy.data]
+credit = "proof_success"
+
+[phase.policy.optimization]
+learning_rate = 2e-5

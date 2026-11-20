@@ -304,6 +304,46 @@ default), safe server stops, results pulled to the PC as they are written.
 | First node, 2026-11-14 11:20 UTC to its outage at about 23:35 UTC | about $11 at most; partly refunded by the provider (owner) |
 | Second node, from 2026-11-15 about 08:30 UTC | $0.83 per hour |
 
+## Owner, 2026-11-20 ~10:50 UTC: hold D, screen two GRPO fixes
+
+A's capped rerun peaked at phase 8 and slid back to v0's held-out level, its blocks lengthening to 4.0 tactics.
+Diagnosis: (1) GRPO's step is about 3x C's (6-10% parameter change a phase against 2-3%; KL penalty about 0.0006);
+(2) the per-tactic shaped reward is exploited route after route (bare `have`, failing tails, now long blocks);
+(3) about half the samples never reach the graph and push down at about −0.35 each. D shares A's signal, so it is held
+(`hold_D`, 10:59 UTC): after A's probe the driver writes HOLD "waiting for: D".
+
+Two screens of 8 phases each at the same rate, so they differ only in their credit (reviews BJ, BK):
+
+- `followup/screens/A_2e-5.toml`: arm A unchanged (claim switches, explanation cap) at 2e-5. A at 2e-5 moved the
+  LoRA 4.3% in phase 1 against 10.4% at 5e-5; C moves 2.0-3.4% a phase. Tests problem 1.
+- `followup/screens/B2_2e-5.toml`: arm B2, proof-success credit (every token r − mean r, r = 1 on reaching the found
+  proof's graph), at 2e-5. No per-tactic progress steps; a block failing after the graph still counts r = 1, and the
+  claim switches and the cap do not act on this credit (review BK). Tests problem 2 against the A screen.
+
+**Decision rule, fixed before the screens publish phase 4 (review BK).** Held-out success and valid Lean, means over
+phases 4-8 (C: 35.4 / 35.5 / 35.2 / 36.4 / 37.1% success, mean 35.9%; valid mean 64.2%; A capped: 33.6% and 60.5%):
+
+- A screen passes when its means reach at least 34.9% success and 62.2% valid Lean (C's minus 1 and 2 points) and at
+  phases 7-8 it shows no exploit (means of the two): tactics per complete block at most 3.0 (v0 measured 2.55-2.70),
+  failing after the graph at most 30%, bare `have` at most 22%. Both pass: the higher success mean; within 0.5 points, the higher valid mean. Neither passes:
+  that is the result (no GRPO variant matched C through phase 8, one seed), reported to the owner; D stays held.
+- The passing screen then runs from v0 to 16 phases with a probe run, under a new arm-kind overlay and run name
+  (for example `arms/A_2e-5.toml`, `followup_A_2e-5`; written and reviewed when the screens are in); it is stopped and reported
+  if the mean success of phases 10-12 falls 1 point or more below that of phases 6-8 (A capped: 33.1 against
+  34.6, which trips it; 1.5 would not). The probe, paired against C's, decides.
+- Reported alongside: each mean against the run's own v0 baseline (C's sits about a point above A's), solved
+  held-out samples per phase, of 4,096 draws (the rate's denominator moves), parameter change per phase,
+  and phase 1 against A capped's (same seed and curriculum: a sanity check). One seed, the same 512 states every
+  phase: a selection rule, not a significance test.
+
+Run: master deployed at the driver's HOLD "waiting for: D" (after A's probe; never while the script runs), then
+`mkdir -p /workspace/runs/screens && cp deployment/run_screens.sh /workspace/runs/screens/run_screens.sh` and
+`(cd /workspace/LLM-Search-Lean-Proofs && setsid nohup bash /workspace/runs/screens/run_screens.sh >
+/workspace/runs/screens/run.log 2>&1 < /dev/null &)`. Each screen: skipped once ended (finished.json or
+health_stop.json), adopted while its loop runs, else every server stopped, the GPUs waited on (up to 1 h) and the
+screen started through `arm_loop.sh --kind smoke`, resumed at most 3 times; its servers stopped before the next.
+STOPPED in `/workspace/runs/screens/` on a failure. About 8.5 h each.
+
 ## Arm C finished; arm A's rerun started 2026-11-19 12:45 UTC
 
 - **Arm C** (expert iteration, 5e-5, window 4): 16 phases, 192.1M generated tokens (0.2% lost), 14.9 loop hours, no
