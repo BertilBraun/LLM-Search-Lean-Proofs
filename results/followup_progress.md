@@ -386,6 +386,10 @@ default), safe server stops, results pulled to the PC as they are written.
   | 9 (capped only) | 18.1% | 26.0% | 2.43 | 0.85 | 112 | 62.0% | 35.6% (1,014 states; C at 9: 69.4%, 37.9%, 1,045) |
   | 10 (capped only) | 21.3% | 30.7% | 2.62 | 0.85 | 112 | 60.0% | 33.9% (987 states; C at 10: 67.9%, 39.6%, 1,127) |
   | 11 (capped only) | 21.7% | **36.9%** | 2.52 | 0.87 | 109 | 59.2% | **31.3%** (899 states; C at 11: 69.0%, 38.8%, 1,077) |
+  | 12 (capped only) | 19.6% | 37.7% | 2.66 | 0.89 | 109 | 58.2% | 34.2% (1,010 states; C at 12: 69.8%, 38.5%, 1,076) |
+
+  Phase 12's training searches solved 225 of 441 trees (51%, the run's lowest; 793 trainable groups against
+  1,000-2,000 before). The share failing after progress is back above the uncapped rerun's (33-35%) from phase 11 on.
 
   After its phase-8 peak the capped rerun slides back: held-out success 36.1 → 35.6 → 33.9%, and blocks lengthen
   again (2.35 → 2.62 tactics, bare `have` 17.8 → 21.3%).
