@@ -385,6 +385,7 @@ default), safe server stops, results pulled to the PC as they are written.
   | 8 (capped only) | 17.8% | 28.6% | 2.35 | 0.85 | 111 | 65.0% | 36.1% (1,058 states; C at 8: 67.2%, 37.1%, 1,016) |
   | 9 (capped only) | 18.1% | 26.0% | 2.43 | 0.85 | 112 | 62.0% | 35.6% (1,014 states; C at 9: 69.4%, 37.9%, 1,045) |
   | 10 (capped only) | 21.3% | 30.7% | 2.62 | 0.85 | 112 | 60.0% | 33.9% (987 states; C at 10: 67.9%, 39.6%, 1,127) |
+  | 11 (capped only) | 21.7% | **36.9%** | 2.52 | 0.87 | 109 | 59.2% | **31.3%** (899 states; C at 11: 69.0%, 38.8%, 1,077) |
 
   After its phase-8 peak the capped rerun slides back: held-out success 36.1 → 35.6 → 33.9%, and blocks lengthen
   again (2.35 → 2.62 tactics, bare `have` 17.8 → 21.3%).
