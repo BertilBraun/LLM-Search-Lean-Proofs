@@ -17,11 +17,13 @@ file and the files it points to. Keep this file current while you work, or repla
   (ed0c837, 19:26 UTC) and on for A and D.
 - Running unattended: the arms driver `deployment/arms_chain.sh` (supervisord `arms_chain`, state
   `/workspace/runs/arms_chain/`, order file `smoke C A D`) runs arm A's capped rerun from v0 (started 19:27 UTC
-  2026-11-19, about 15 h plus a 2.5-h probe run), then arm D. The owner wants early signs from its phases 1-2. The owner's stop rule for A: `experiments/claim_watch.py` after
+  2026-11-19; peaked at phase 8, then slid back), its probe run, then HOLD: `hold_D` (owner, 2026-11-20). AT THAT
+  HOLD: deploy master (36acaf2 or later) and start `deployment/run_screens.sh` as `results/followup_progress.md`
+  ("hold D, screen two GRPO fixes") says; its decision rule is fixed there. The owner's stop rule for A: `experiments/claim_watch.py` after
   phases 2 and 4 (`results/followup_progress.md`, "Arm A's rerun"). Disk: 113 GB free after removing regenerable
   merged weights of finished runs (an arm needs about 38 GB).
 - `on_health_stop = continue`. Search-efficiency switches only in the arms' sampling. Arm B dropped; O1 last, on the
-  owner's word. Review letters used up to `bi` (next: `bj`). Spend about $75 of $190 at $0.83/h. The PC sleeps at
+  owner's word. Review letters used up to `bk` (next: `bl`). Spend about $75 of $190 at $0.83/h. The PC sleeps at
   times: the watchdog and the pull pause, the node does not.
 
 ## 1. First hour: what to do
