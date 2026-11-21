@@ -4,7 +4,7 @@ Written 2026-11-16 by the orchestrating agent for the agent that takes over on a
 repository, same rented node; no conversation history and no running subagents carry over. Everything needed is in this
 file and the files it points to. Keep this file current while you work, or replace it with your own.
 
-**State at a glance (2026-11-19, about 19:30 UTC; updated by the second orchestrator)**
+**State at a glance (2026-11-21, about 09:15 UTC; updated by the second orchestrator)**
 
 - Done: step 1 (incl. the reasoning comparison: no reasoning +4.9 points at equal tokens but Lean-bound, 1.8x the
   time), the offline run O2 (545 of 2,000: FAILED the owner's gate against v35, so the arms sample WITH visible
@@ -17,9 +17,10 @@ file and the files it points to. Keep this file current while you work, or repla
   (ed0c837, 19:26 UTC) and on for A and D.
 - Running unattended: the arms driver `deployment/arms_chain.sh` (supervisord `arms_chain`, state
   `/workspace/runs/arms_chain/`, order file `smoke C A D`) runs arm A's capped rerun from v0 (started 19:27 UTC
-  2026-11-19; peaked at phase 8, then slid back), its probe run, then HOLD: `hold_D` (owner, 2026-11-20). AT THAT
-  HOLD: deploy master (36acaf2 or later) and start `deployment/run_screens.sh` as `results/followup_progress.md`
-  ("hold D, screen two GRPO fixes") says; its decision rule is fixed there. The owner's stop rule for A: `experiments/claim_watch.py` after
+  2026-11-19; probe 822 of 2,000: +5.4 over v0, −11.3 behind C), then HOLD with `hold_D` (owner). The two screens
+  (A and B2 at 2e-5, 8 phases) ran 15:13-08:50 UTC 2026-11-20/21: neither passes the pre-registered rule (A screen
+  0.4 below the valid-Lean line, level with C on success; B2 clearly worse). Node IDLE since 08:50 UTC 2026-11-21,
+  servers stopped, awaiting the owner's decision (`results/followup_progress.md`). The owner's stop rule for A: `experiments/claim_watch.py` after
   phases 2 and 4 (`results/followup_progress.md`, "Arm A's rerun"). Disk: 113 GB free after removing regenerable
   merged weights of finished runs (an arm needs about 38 GB).
 - `on_health_stop = continue`. Search-efficiency switches only in the arms' sampling. Arm B dropped; O1 last, on the

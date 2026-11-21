@@ -353,6 +353,18 @@ By the pre-registered rule the A screen does not pass (valid Lean). Reported to 
 | 5 | 53.6% | 33.9% | 955 | 36.0% | 2.93 | 23.4% | - |
 | 6 | 53.3% | 33.6% | 925 | **40.7%** | **3.17** | 23.1% | - |
 | 7 | 55.1% | 36.1% | 1,021 | 41.3% | 2.78 | 22.0% | - |
+| 8 | 58.3% | 37.4% | 1,049 | 35.0% | 2.83 | **27.2%** | - |
+
+**B2 screen against the rule** (finished 08:48 UTC 2026-11-21, 96.1M tokens, none lost): success mean of phases 4-8
+**34.7%** (line 34.9%), valid Lean **54.9%** (line 62.2%), guards over phases 7-8: tactics 2.81 (passes), failing
+after the graph 38.2% and bare `have` 24.6% (both fail). Does not pass.
+
+**Screens' outcome: neither passes the pre-registered rule.** The A screen (2e-5) comes closest: level with C on
+held-out success (36.1% against 35.9%, phases 4-8), 2.4 points behind on valid Lean, 0.4 below the line. B2's
+outcome-only credit, at the same rate, is clearly worse: lower valid Lean in every phase from 4 on, and the failing-
+after-graph habit (35-41%) and bare `have` (27% at phase 8) it was expected to avoid grow faster than under A's
+capped per-tactic credit. So the shaping was not the main problem; the step size was. Per the rule D stays held and
+the node is idle since 08:50 UTC (servers stopped), awaiting the owner.
 
 After phase 5 B2 cannot reach the valid-Lean line: phases 6-8 would need 67.8% each (its best so far 59.2%).
 
