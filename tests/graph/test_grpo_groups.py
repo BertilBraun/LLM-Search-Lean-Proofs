@@ -383,8 +383,68 @@ def test_unverified_proof_through_the_proof_graph_is_no_proof_success() -> None:
     assert (labels, sample.reaches_proof_graph) == ([TacticLabel.PROOF_GRAPH, TacticLabel.FAILING], False)
 
 
+def test_redundant_step_on_a_found_proof_is_no_verified_progress() -> None:
+    builder = GraphBuilder(ROOT)
+    redundant = builder.child(builder.root, REDUNDANT, text=COPY, tactic_goals=((REDUNDANT,),))
+    builder.tree.mark_proof_path(builder.child(redundant, text="exact ⟨by linear_combination h₀ - h₁, rfl⟩"))
+    (root, _) = groups(builder.record(builder.child(builder.root, text=PROOF)))
+    (copy,) = [sample for sample in root.samples if sample.text == COPY]
+    assert copy.verified_progress == 0.0
+
+
+def test_block_back_to_an_ancestor_is_no_verified_progress() -> None:
+    builder = GraphBuilder("⊢ p")
+    middle = builder.child(builder.root, "⊢ q", text="intro")
+    builder.duplicate(middle, builder.root, text="revert", tactic_goals=(("⊢ p",),))
+    (_, at_middle) = groups(builder.record(builder.child(middle, text="close")))
+    (back,) = [sample for sample in at_middle.samples if sample.text == "revert"]
+    assert back.verified_progress == 0.0
+
+
+def test_sibling_state_on_the_proof_graph_is_verified_progress() -> None:
+    builder = GraphBuilder("⊢ p")
+    middle = builder.child(builder.root, "⊢ q", text="intro")
+    builder.duplicate(builder.root, middle, text="intro q", tactic_goals=(("⊢ q",),))
+    (root, _) = groups(builder.record(builder.child(middle, text="close")))
+    (sibling,) = [sample for sample in root.samples if sample.text == "intro q"]
+    assert sibling.verified_progress == 1.0
+
+
+def test_transposition_into_the_proof_graph_is_verified_progress() -> None:
+    builder = GraphBuilder("⊢ p")
+    left = builder.child(builder.root, "⊢ x", text="left")
+    right = builder.child(builder.root, "⊢ y", text="right")
+    joined = builder.child(right, "⊢ z", text="step")
+    builder.duplicate(left, joined, text="jump", tactic_goals=(("⊢ z",),))
+    record = builder.record(builder.child(joined, text="close"))
+    (at_left,) = [group for group in groups(record) if group.node_id == left.node_id]
+    assert at_left.samples[0].verified_progress == 1.0
+
+
+def test_a_closing_proof_is_verified_progress() -> None:
+    builder = GraphBuilder("⊢ p")
+    builder.failure(builder.root, text="linarith")
+    proof = builder.child(builder.root, text="close")
+    (root,) = groups(builder.record(proof))
+    (close,) = [sample for sample in root.samples if sample.text == "close"]
+    assert close.verified_progress == 1.0
+
+
+def test_unverified_proof_through_the_proof_graph_is_no_verified_progress() -> None:
+    builder = GraphBuilder(ROOT)
+    proof = builder.child(
+        builder.root, text=PROOF, tactics=3, tactic_goals=((AFTER_FIRST_HAVE,), (AFTER_SECOND_HAVE,), ())
+    )
+    unverified = "have h₂ : x = -4 := by linear_combination h₁ - h₀\nexact bogus"
+    builder.child(builder.root, text=unverified, tactics=2, tactic_goals=((AFTER_FIRST_HAVE,), ()))
+    (root,) = groups(builder.record(proof))
+    (sample,) = [sample for sample in root.samples if sample.text == unverified]
+    assert sample.verified_progress == 0.0
+
+
 def two_proofs_tree() -> TreeRecord:
-    """The root proved in one step and in two: every sample of each group reaches the proof graph."""
+    """The root proved in one step and in two: every sample of each group reaches the proof graph; under verified
+    progress `intro` is no closer than the root (one step left either way), so the root's group trains."""
     builder = GraphBuilder("⊢ p")
     middle = builder.child(builder.root, "⊢ q", text="intro")
     builder.tree.mark_proof_path(builder.child(middle, text="close"))
@@ -392,7 +452,13 @@ def two_proofs_tree() -> TreeRecord:
 
 
 @pytest.mark.parametrize(
-    ("credit", "trainable"), [(CreditMode.PER_TACTIC, 1), (CreditMode.SEQUENCE, 1), (CreditMode.PROOF_SUCCESS, 0)]
+    ("credit", "trainable"),
+    [
+        (CreditMode.PER_TACTIC, 1),
+        (CreditMode.SEQUENCE, 1),
+        (CreditMode.PROOF_SUCCESS, 0),
+        (CreditMode.VERIFIED_PROGRESS, 1),
+    ],
 )
 def test_trainable_groups_are_counted_with_the_phases_credit(credit: CreditMode, trainable: int) -> None:
     assert tree_summary(two_proofs_tree(), CONFIG, credit, 32).trainable_groups == trainable

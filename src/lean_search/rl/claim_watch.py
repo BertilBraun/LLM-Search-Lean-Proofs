@@ -189,11 +189,11 @@ def tree_watch(record: TreeRecord, config: TrainingPhaseConfig, band: str) -> Tr
         if not found.has_signal(config.credit):
             continue
         for sample, found_advantages in zip(group.samples, found.samples, strict=True):
-            sample_advantages = credited_advantages(sample, found_advantages, data)
-            if sample_advantages.sequence is None:
+            credited = credited_advantages(sample, found_advantages, data).whole(config.credit)
+            if credited is None:
                 continue
             key = WatchKey(openings[sample.edge_ids[0]], sample.reaches_proof_graph, band)
-            total = AdvantageSum(sample.multiplicity, sample_advantages.sequence * sample.multiplicity)
+            total = AdvantageSum(sample.multiplicity, credited * sample.multiplicity)
             advantages[key] = advantages.get(key, AdvantageSum()) + total
     samples: dict[WatchKey, int] = {}
     for label in labels.edges:

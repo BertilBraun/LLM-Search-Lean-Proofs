@@ -304,6 +304,26 @@ default), safe server stops, results pulled to the PC as they are written.
 | First node, 2026-11-14 11:20 UTC to its outage at about 23:35 UTC | about $11 at most; partly refunded by the provider (owner) |
 | Second node, from 2026-11-15 about 08:30 UTC | $0.83 per hour |
 
+## Owner, 2026-11-21: a verified-progress screen before D
+
+The owner: GRPO should not underperform on Lean; the likely cause is our credit design. Our per-tactic and
+proof-success credits label a step by whether it lies on the proof the search finished (hindsight), pay a block that
+progresses and then fails, and put the sequence score on the reasoning. The textbook reward (r = 1 only for a block
+closing its goal) was rejected by the owner: it would reward only finishing moves, too hard for long statements.
+Chosen instead: **verified progress** (`src/lean_search/rl/README.md`, "Verified progress"), r = 1 for a complete
+block ending on the proof graph closer to a proof (closing included), 0 for a failing, wasted or dead-end block,
+untrained when the block ends in an unknown state. Screened like the others: `screens/V_2e-5.toml`, 2e-5, 8 phases,
+the same pre-registered rule (means over phases 4-8: success ≥ 34.9%, valid Lean ≥ 62.2%; guards over 7-8). D waits
+for its result; the question of D's round interval (every phase or every 4th) stays open.
+
+## Owner, 2026-11-21: run D with its GRPO at 2e-5
+
+D's GRPO learning rate 5e-5 → 2e-5 (the A screen's setting: credit, cap, claim switches, rate); its rounds keep C's
+rate (5e-5) and window (reviews BL, BM; earlier entries saying D uses 5e-5 are superseded). Review BM: with a round
+every 4th phase, D trains each block in one round where C trains it in four, so D against C measures "GRPO minus 12
+rounds"; only "D clearly ahead of C" would say something about GRPO. Rounds every phase (D = C's schedule plus the
+A screen's GRPO step) would make D against C a two-sided test. The owner decides before D starts.
+
 ## Arm A (capped) probe and the screens' start, 2026-11-20
 
 - **Arm A's capped rerun, probe `probe_arm_A_phase16_run1`: 822 of 2,000 (41.1%)**, accepted, no wall-clock stop.

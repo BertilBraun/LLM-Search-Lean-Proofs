@@ -1165,8 +1165,8 @@ CPU quota (sampling expected Lean-bound), $0.89/h; the owner checks in about twi
 ### Arms
 
 All arms start from v0 (the SFT policy, `data_rewrite_sft_numbered`) and value v0, and train their value model inside
-the arm as in the old run (decided). Each enters step 3 with its own learning rate: A's (and D's GRPO rate) from step
-2, C's (and D's round rate) from the offline run O2, with a 4-phase window for C and D (owner, 2026-11-17; "Step 2").
+the arm as in the old run (decided). Each enters step 3 with its own learning rate: A's from step 2, D's GRPO rate
+2e-5 after the GRPO screens (owner, 2026-11-21), C's (and D's round rate) from the offline run O2, with a 4-phase window for C and D (owner, 2026-11-17; "Step 2").
 Arm B (B1 and B2 below) is dropped (owner, 2026-11-17); its rows stay for the record.
 
 | Arm | Policy update per phase | In the code today |

@@ -52,11 +52,7 @@ def token_credits(
     sequence credit; the other modes give every sampled token the sample's one advantage."""
     by_position = bool(spans) and len(spans) == len(advantages.tactics)
     per_tactic = mode == CreditMode.PER_TACTIC
-    match mode:
-        case CreditMode.PER_TACTIC | CreditMode.SEQUENCE:
-            whole = advantages.sequence
-        case CreditMode.PROOF_SUCCESS:
-            whole = advantages.proof_success
+    whole = advantages.whole(mode)
     segments: list[TokenSegment] = []
     values: list[float | None] = []
     for index, token in enumerate(offsets):

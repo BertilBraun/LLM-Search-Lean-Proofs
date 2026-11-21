@@ -17,6 +17,9 @@ class CreditMode(StrEnum):
     SEQUENCE = "sequence"
     # Every sampled token gets r minus the group's mean r, r = 1 when the sample reaches the proof graph.
     PROOF_SUCCESS = "proof_success"
+    # Every sampled token gets r minus the group's mean r over the samples with an r (`GroupSample.verified_progress`);
+    # a sample without one (a clean block ending in an unknown state) is left out.
+    VERIFIED_PROGRESS = "verified_progress"
 
 
 @dataclass(frozen=True)
@@ -30,6 +33,18 @@ class SampleAdvantages:
     closing: float | None
     # r minus the group's proof-success baseline (`GroupSample.reaches_proof_graph`).
     proof_success: float
+    # r minus the group's verified-progress baseline; None without an r.
+    verified_progress: float | None
+
+    def whole(self, mode: CreditMode) -> float | None:
+        """The advantage a mode gives every sampled token (per-tactic credit: the explanation's)."""
+        match mode:
+            case CreditMode.PER_TACTIC | CreditMode.SEQUENCE:
+                return self.sequence
+            case CreditMode.PROOF_SUCCESS:
+                return self.proof_success
+            case CreditMode.VERIFIED_PROGRESS:
+                return self.verified_progress
 
 
 @dataclass(frozen=True)
@@ -55,6 +70,8 @@ class GroupAdvantages:
                 values = [sample.sequence for sample in self.samples]
             case CreditMode.PROOF_SUCCESS:
                 values = [sample.proof_success for sample in self.samples]
+            case CreditMode.VERIFIED_PROGRESS:
+                values = [sample.verified_progress for sample in self.samples]
         return any(value is not None and abs(value) > ZERO_ADVANTAGE for value in values)
 
 
@@ -79,15 +96,25 @@ def sample_advantages(
     baseline: RewardParts | None,
     first_tactic_baseline: RewardParts | None,
     proof_success_baseline: float,
+    progress_baseline: float | None,
 ) -> SampleAdvantages:
     score = sample.score
     tactics = [tactic_advantage(tactic, first_tactic_baseline) for tactic in sample.tactics]
+    progress = sample.verified_progress
     return SampleAdvantages(
         None if score is None or baseline is None else score - baseline.total,
         tuple(None if parts is None else parts.total for parts in tactics),
         0.0 if sample.complete else None,
         float(sample.reaches_proof_graph) - proof_success_baseline,
+        None if progress is None or progress_baseline is None else progress - progress_baseline,
     )
+
+
+def verified_progress_baseline(samples: Sequence[GroupSample]) -> float | None:
+    rated = [(sample.verified_progress, sample.multiplicity) for sample in samples]
+    known = [(value, weight) for value, weight in rated if value is not None]
+    total = sum(weight for _, weight in known)
+    return sum(value * weight for value, weight in known) / total if total else None
 
 
 def group_advantages(group: PolicyGroup) -> GroupAdvantages:
@@ -100,6 +127,7 @@ def group_advantages(group: PolicyGroup) -> GroupAdvantages:
     proof_success_baseline = (
         sum(float(sample.reaches_proof_graph) * sample.multiplicity for sample in group.samples) / group.sample_count
     )
+    progress_baseline = verified_progress_baseline(group.samples)
     advantages = [
         (parts, sample.multiplicity)
         for sample in group.samples
@@ -111,7 +139,7 @@ def group_advantages(group: PolicyGroup) -> GroupAdvantages:
         first_tactic_baseline=None if first_tactic_baseline is None else first_tactic_baseline.total,
         proof_success_baseline=proof_success_baseline,
         samples=tuple(
-            sample_advantages(sample, baseline, first_tactic_baseline, proof_success_baseline)
+            sample_advantages(sample, baseline, first_tactic_baseline, proof_success_baseline, progress_baseline)
             for sample in group.samples
         ),
         global_magnitude=sum(abs(parts.global_part) * weight for parts, weight in advantages),

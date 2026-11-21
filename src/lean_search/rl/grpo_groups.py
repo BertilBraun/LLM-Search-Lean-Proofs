@@ -145,6 +145,24 @@ class GroupSample:
         return self.kind.is_forward and any(tactic.label == TacticLabel.PROOF_GRAPH for tactic in self.tactics)
 
     @property
+    def verified_progress(self) -> float | None:
+        """Verified-progress credit's r: 1 for a clean block (forward edge, no failing, masked, no-op, redundant or
+        open-claim tactic anywhere, not ending on a claim it adds) whose last state is on the proof graph and closer
+        to a proof than the group's node (a closed goal included); None when a clean block ends in an unknown state
+        (too little evidence either way); else 0: a failing or wasted tactic, a sideways step, an explored dead end."""
+        last = self.tactics[-1]
+        clean = (
+            self.kind.is_forward
+            and self.complete
+            and not any(tactic.label in WASTED_LABELS for tactic in self.tactics)
+            and not last.adds_claim
+        )
+        if clean and last.label == TacticLabel.UNKNOWN:
+            return None
+        closer = last.steps_gained is not None and last.steps_gained > 0
+        return float(clean and last.label == TacticLabel.PROOF_GRAPH and closer)
+
+    @property
     def gets_closer_to_proof(self) -> bool:
         return any(tactic.steps_gained is not None and tactic.steps_gained > 0 for tactic in self.tactics)
 

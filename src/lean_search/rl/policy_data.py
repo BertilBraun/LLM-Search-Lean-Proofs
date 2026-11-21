@@ -114,6 +114,12 @@ class PolicyDataMetrics:
     # sample-weighted (per sample, not per token).
     capped_explanation_samples: int = 0
     capped_explanation_credit: float = 0.0
+    # Verified-progress r (`GroupSample.verified_progress`) over all groups' samples, sample-weighted: its mean over the
+    # samples with an r, and the share without one (a clean block ending in an unknown state).
+    mean_verified_progress: float = 0.0
+    unscored_progress_share: float = 0.0
+    # Sequences left out of the policy data because their sample has no verified-progress r (that credit only).
+    unscored_sequences: int = 0
 
 
 @dataclass(frozen=True)
@@ -271,6 +277,8 @@ class PolicyDataParts:
     without_text: int
     mismatches: int
     capped: ExplanationCap
+    # Completions left out under verified-progress credit: their sample has no r, so no token would train.
+    unscored: int = 0
 
 
 def credited_advantages(
@@ -288,6 +296,7 @@ def tree_policy_data(tree: PolicyTree, tokenizer: PolicyTokenizer, config: Polic
     without_text = 0
     mismatches = 0
     capped = ExplanationCap()
+    unscored = 0
     # A node's feedback round has its own prompt: each group trains on the prompt its samples were drawn from.
     texts_by_prompt = {(expansion.node_id, expansion.feedback): expansion for expansion in tree.texts}
     for group in tree.groups:
@@ -315,6 +324,9 @@ def tree_policy_data(tree: PolicyTree, tokenizer: PolicyTokenizer, config: Polic
             completions = [item for item in expansion.completions if item.edge_id in sample.edge_ids]
             if not completions:
                 without_text += sample.multiplicity
+            if config.credit == CreditMode.VERIFIED_PROGRESS and sample_credited.verified_progress is None:
+                unscored += len(completions)
+                continue
             for completion in completions:
                 sequence, mismatch = policy_sequence(
                     tokenizer,
@@ -328,7 +340,9 @@ def tree_policy_data(tree: PolicyTree, tokenizer: PolicyTokenizer, config: Polic
                 )
                 sequences.append(sequence)
                 mismatches += mismatch
-    return PolicyDataParts(tuple(sequences), tree.groups, tuple(trained_groups), without_text, mismatches, capped)
+    return PolicyDataParts(
+        tuple(sequences), tree.groups, tuple(trained_groups), without_text, mismatches, capped, unscored
+    )
 
 
 def combined_policy_data(parts: Sequence[PolicyDataParts]) -> PolicyData:
@@ -340,7 +354,13 @@ def combined_policy_data(parts: Sequence[PolicyDataParts]) -> PolicyData:
         sum(part.capped.samples for part in parts), sum(part.capped.removed_credit for part in parts)
     )
     metrics = data_metrics(
-        groups, trained_groups, sequences, without_text, sum(part.mismatches for part in parts), capped
+        groups,
+        trained_groups,
+        sequences,
+        without_text,
+        sum(part.mismatches for part in parts),
+        capped,
+        sum(part.unscored for part in parts),
     )
     return PolicyData(tuple(sequences), metrics)
 
@@ -361,11 +381,13 @@ def data_metrics(
     without_text: int,
     mismatches: int,
     capped: ExplanationCap,
+    unscored: int,
 ) -> PolicyDataMetrics:
     samples = weighted_samples(groups)
     known = [parts for sample in samples for parts in sample.known]
     trained_samples = weighted_samples(group for group, _ in trained_groups)
     reaching = [sample for sample in trained_samples if sample.reaches_proof_graph]
+    scored = [progress for sample in samples if (progress := sample.verified_progress) is not None]
     completion_tokens_total = sum(sequence.tokenized.completion_token_count for sequence in sequences)
     untrained = sum(
         not trained
@@ -400,4 +422,7 @@ def data_metrics(
         / max(1, len(reaching)),
         capped_explanation_samples=capped.samples,
         capped_explanation_credit=capped.removed_credit,
+        mean_verified_progress=sum(scored) / max(1, len(scored)),
+        unscored_progress_share=(len(samples) - len(scored)) / max(1, len(samples)),
+        unscored_sequences=unscored,
     )

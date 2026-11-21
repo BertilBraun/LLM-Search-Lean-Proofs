@@ -99,6 +99,11 @@
     "trained_mean_proof_success": 0.0,
     "proof_success_failing_tail_share": 0.0,
     "proof_success_no_closer_share": 0.0,
+    "mean_verified_progress": 0.0,
+    "unscored_progress_share": 0.0,
+    "unscored_sequences": 0,
+    "capped_explanation_samples": 0,
+    "capped_explanation_credit": 0.0,
     "optimizer_steps": 0,
     "update": null
    },
@@ -138,6 +143,11 @@
     "trained_mean_proof_success": 0.0,
     "proof_success_failing_tail_share": 0.0,
     "proof_success_no_closer_share": 0.0,
+    "mean_verified_progress": 0.0,
+    "unscored_progress_share": 0.0,
+    "unscored_sequences": 0,
+    "capped_explanation_samples": 0,
+    "capped_explanation_credit": 0.0,
     "optimizer_steps": 0,
     "update": null
    },
@@ -177,6 +187,11 @@
     "trained_mean_proof_success": 0.0,
     "proof_success_failing_tail_share": 0.0,
     "proof_success_no_closer_share": 0.0,
+    "mean_verified_progress": 0.0,
+    "unscored_progress_share": 0.0,
+    "unscored_sequences": 0,
+    "capped_explanation_samples": 0,
+    "capped_explanation_credit": 0.0,
     "optimizer_steps": 0,
     "update": null
    }

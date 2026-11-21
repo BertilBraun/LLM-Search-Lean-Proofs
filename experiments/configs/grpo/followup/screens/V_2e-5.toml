@@ -1,0 +1,18 @@
+# Screen of verified-progress credit (owner, 2026-11-21): the follow-up base at the screens' 2e-5, 8 phases, every
+# sampled token getting r minus the group's mean r, r = 1 for a complete block whose last state is on the proof graph
+# and closer to a proof than its node (a closed goal included), 0 for a failing, wasted or dead-end block, no r (untrained)
+# for a complete block ending in an unknown state (src/lean_search/rl/README.md, "Verified progress"). Run by
+# deployment/run_screens.sh (results/followup_progress.md).
+[loop]
+name = "followup_screen_V_2e-5"
+
+[loop.training]
+phase_generated_tokens = 12_000_000
+max_phases = 8
+value_every_phases = 2
+
+[phase.policy.data]
+credit = "verified_progress"
+
+[phase.policy.optimization]
+learning_rate = 2e-5

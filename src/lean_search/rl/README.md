@@ -248,6 +248,24 @@ unknown or off-graph state, a detour on the proof graph (no δ). A redundant ste
 proof-graph check, so a lone redundant `have` on a found proof gets 0. Every sampled token but the inserted ones gets
 r minus the group's multiplicity-weighted mean r, and a group trains only when its samples' r differ.
 
+**Verified progress** (`verified_progress` credit; the follow-up's screen `screens/V_2e-5.toml`, owner 2026-11-21).
+The proof-success r pays a block for reaching the proof graph whatever follows, so a block that progresses and then
+fails scores 1; per-tactic credit pays most of its score on the explanation. Here every sample is judged as a whole by
+Lean and by the tree's evidence (`GroupSample.verified_progress`): r = 1 for a clean block (a forward edge; no
+failing, masked, no-op, redundant or open-claim tactic anywhere; not ending on a claim it adds, so a bare `have` the
+tree proves later earns nothing, as with `claims_earn_progress = false`) whose last state is on the proof graph and
+closer to a proof than the group's node, a closed goal included; no r for a clean block ending in an unknown state
+(too little evidence either way: never expanded, or off the graph with live children and fewer than
+`off_graph_min_expanded_nodes` expanded nodes), and such a sample's sequences are left out of the policy data, so
+they add no optimizer step; r = 0 for everything else: a failing or wasted tactic anywhere, an unparsed sample, a
+return to an ancestor, a sideways step, an explored dead end. Every sampled token but the inserted ones gets r minus
+the group's multiplicity-weighted mean r over the samples with an r; a group trains only when those differ. No δ, no
+partial credit; the explanation tokens carry the sequence advantage as in standard GRPO. Recorded per phase
+(`GrpoPhase`): `mean_verified_progress` (over all groups' samples with an r), `unscored_progress_share`,
+`unscored_sequences`. Every 0/1 reward pays a one-step block as much as a whole proof, so a drift toward very short
+blocks is possible: tactics per complete block is charted (no health check), and the orchestrator reads it
+against about 2.0.
+
 Tokens are the recorded ones (`SampledCompletion.tokens.token_ids`, no re-tokenization; the prompt is the recorded
 prompt encoded without special tokens, as vLLM does). Their characters come from decoding them one by one with the
 policy tokenizer (`decoded_offsets`; tokens sharing a multi-byte character share its range), so the executed tactics'

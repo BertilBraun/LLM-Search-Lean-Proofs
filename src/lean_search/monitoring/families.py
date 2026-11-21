@@ -354,6 +354,13 @@ class GrpoPhase:
     trained_mean_proof_success: float = 0.0
     proof_success_failing_tail_share: float = 0.0
     proof_success_no_closer_share: float = 0.0
+    # Verified-progress r (`PolicyDataMetrics`): mean over all groups' samples with an r, the share without one, and the
+    # sequences left out for it; `cap_wasted_block_explanation`: the samples capped and the credit removed.
+    mean_verified_progress: float = 0.0
+    unscored_progress_share: float = 0.0
+    unscored_sequences: int = 0
+    capped_explanation_samples: int = 0
+    capped_explanation_credit: float = 0.0
     # The searches that produced the phase's data; with training_seconds it decides one or two passes.
     sampling_seconds: float | None = None
     # The update's size beside the other arms': its optimizer steps, and the parameter change, gradient norm and loss
