@@ -329,6 +329,7 @@ trained, parameter change per phase against the A and B2 screens.
 | Phase | Valid | Success | Solved | Failing after graph | Tactics | Bare `have` | Change | Mean r | Unscored | Groups trained |
 |---|---|---|---|---|---|---|---|---|---|---|
 | 1 | **64.5%** | 35.2% | **1,046** | 18.6% | 2.62 | 19.2% | 3.6% | 0.376 | 5.8% (755 seq.) | 1,533 |
+| 2 | **63.4%** | 35.2% | 1,039 | **16.6%** | 2.35 | 19.3% | 3.3% | 0.382 | 7.1% | 1,375 |
 
 Phase 1 is the best first phase of any run (A screen 61.2% / 33.6%, B2 59.2% / 34.4%, C 59.6% / 34.3%).
 
