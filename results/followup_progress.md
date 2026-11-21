@@ -328,6 +328,19 @@ block; bare `have`; parameter change):
 | 5 | 61.8% | 36.0% | 1,003 | 36.7% | 2.62 | 19.3% | 3.1% |
 | 6 | 62.6% | 34.8% | 961 | 33.8% | 2.46 | 18.2% | 3.2% |
 | 7 | 63.2% | **37.9%** | **1,101** | 30.8% | 2.79 | 20.6% | 3.0% |
+| 8 | 64.6% | 37.8% | 1,102 | 28.2% | 2.77 | 21.7% | 3.1% |
+
+**A screen against the rule** (finished 00:11 UTC 2026-11-21, 96.1M tokens, none lost, no alert):
+
+- Success, mean of phases 4-8: **36.1%** (line 34.9%; C 35.9%): passes.
+- Valid Lean, mean of phases 4-8: **61.8%** (line 62.2%; C 64.2%): **misses by 0.4 points**.
+- Guards, mean of phases 7-8: tactics 2.78 (≤ 3.0), failing after the graph 29.5% (≤ 30%), bare `have` 21.2% (≤ 22%):
+  all pass, the last two narrowly.
+- Against its own v0 baseline (898 solved samples) and A capped's phases 4-8 (33.6%, 60.5%): far better than any
+  5e-5 A run; level with C on success, about 2.4 points behind on valid Lean.
+
+By the pre-registered rule the A screen does not pass (valid Lean). Reported to the owner; the B2 screen started
+00:13 UTC.
 
 Phase 5 had a `valid_blocks` warning (21.2% of sampled blocks complete), as phase 2.
 
