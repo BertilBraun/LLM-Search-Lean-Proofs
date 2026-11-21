@@ -324,6 +324,14 @@ started the V screen at 10:19 UTC 2026-11-21 (the A and B2 screens skipped as en
 and failing-after-graph shares, tactics per complete block (below about 2.0?), `unscored_progress_share`, groups
 trained, parameter change per phase against the A and B2 screens.
 
+**V screen (verified progress, 2e-5), per phase** (v0 895 solved samples):
+
+| Phase | Valid | Success | Solved | Failing after graph | Tactics | Bare `have` | Change | Mean r | Unscored | Groups trained |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | **64.5%** | 35.2% | **1,046** | 18.6% | 2.62 | 19.2% | 3.6% | 0.376 | 5.8% (755 seq.) | 1,533 |
+
+Phase 1 is the best first phase of any run (A screen 61.2% / 33.6%, B2 59.2% / 34.4%, C 59.6% / 34.3%).
+
 ## Owner, 2026-11-21: run D with its GRPO at 2e-5
 
 D's GRPO learning rate 5e-5 → 2e-5 (the A screen's setting: credit, cap, claim switches, rate); its rounds keep C's
