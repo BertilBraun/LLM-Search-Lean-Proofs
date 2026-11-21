@@ -352,6 +352,7 @@ By the pre-registered rule the A screen does not pass (valid Lean). Reported to 
 | 4 | **54.1%** | **32.4%** | 892 | 30.2% | 2.68 | 22.5% | 2.7% |
 | 5 | 53.6% | 33.9% | 955 | 36.0% | 2.93 | 23.4% | - |
 | 6 | 53.3% | 33.6% | 925 | **40.7%** | **3.17** | 23.1% | - |
+| 7 | 55.1% | 36.1% | 1,021 | 41.3% | 2.78 | 22.0% | - |
 
 After phase 5 B2 cannot reach the valid-Lean line: phases 6-8 would need 67.8% each (its best so far 59.2%).
 
