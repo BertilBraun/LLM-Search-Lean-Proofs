@@ -316,6 +316,14 @@ untrained when the block ends in an unknown state. Screened like the others: `sc
 the same pre-registered rule (means over phases 4-8: success ≥ 34.9%, valid Lean ≥ 62.2%; guards over 7-8). D waits
 for its result; the question of D's round interval (every phase or every 4th) stays open.
 
+After reviews BN and BO the rule is the "clean block" one: r = 1 only with no failing, no-op, redundant or open-claim
+tactic anywhere and not ending on a claim the block adds; samples without an r are left out of the policy data (no
+optimizer steps); `mean_verified_progress`, `unscored_progress_share`, `unscored_sequences` reach `metrics/grpo.jsonl`.
+Master dd2d2cc deployed (edits identical, search configs and uv.lock unchanged); `run_screens.sh` (installed copy)
+started the V screen at 10:19 UTC 2026-11-21 (the A and B2 screens skipped as ended). Watch at phases 1-2: bare `have`
+and failing-after-graph shares, tactics per complete block (below about 2.0?), `unscored_progress_share`, groups
+trained, parameter change per phase against the A and B2 screens.
+
 ## Owner, 2026-11-21: run D with its GRPO at 2e-5
 
 D's GRPO learning rate 5e-5 → 2e-5 (the A screen's setting: credit, cap, claim switches, rate); its rounds keep C's
