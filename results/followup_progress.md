@@ -339,6 +339,7 @@ trained, parameter change per phase against the A and B2 screens.
 
 | 8 | **76.3%** | **39.3%** | **1,200** | 13.9% | 1.92 | 22.7% | 2.5% | 0.369 | 20.3% | 961 |
 | 9 (extended) | **78.1%** | 38.4% | 1,121 | 9.5% | 1.87 | **25.3%** | 2.7% | 0.463 | 22.0% | 1,089 |
+| 10 | 77.3% | **41.5%** | **1,239** | 8.8% | 1.83 | 21.6% | 2.4% | 0.472 | 25.6% | 914 |
 
 **V screen against the rule** (finished 18:24 UTC 2026-11-21, 96.1M tokens, none lost, no alert in 8 phases but the
 phase-5 `claims_proved` warning):
