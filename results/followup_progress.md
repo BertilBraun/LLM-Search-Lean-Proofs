@@ -332,7 +332,11 @@ trained, parameter change per phase against the A and B2 screens.
 | 2 | **63.4%** | 35.2% | 1,039 | **16.6%** | 2.35 | 19.3% | 3.3% | 0.382 | 7.1% | 1,375 |
 | 3 | **66.8%** | **38.4%** | **1,132** | 22.2% | 2.49 | 18.2% | 3.0% | 0.325 | 12.1% | 1,136 |
 
-Phase 3 is the highest held-out result of any run at phase 3 (C: 59.1% / 33.0%; A screen 60.3% / 35.9%).
+| 4 | **67.1%** | **36.8%** | 1,025 | 20.6% | 2.22 | 20.6% | 2.6% | 0.314 | 14.5% | 927 |
+
+Phase 3 is the highest held-out result of any run at phase 3 (C: 59.1% / 33.0%; A screen 60.3% / 35.9%). Phase 4 has
+no dip (every earlier GRPO run fell to 54-57% valid at phase 4; C 61.4% / 35.4%). Watch: the unscored share rises
+(5.8 → 14.5%) and the groups trained fall (1,533 → 927).
 
 Phase 1 is the best first phase of any run (A screen 61.2% / 33.6%, B2 59.2% / 34.4%, C 59.6% / 34.3%).
 
