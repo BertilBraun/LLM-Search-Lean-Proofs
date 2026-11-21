@@ -337,7 +337,21 @@ trained, parameter change per phase against the A and B2 screens.
 | 6 | **71.9%** | 38.5% | 1,102 | 14.5% | 1.90 | 21.6% | 2.5% | 0.373 | 18.1% | 817 |
 | 7 | **73.2%** | 38.6% | **1,161** | 11.3% | 1.92 | **23.4%** | 2.5% | 0.394 | 19.0% | 891 |
 
-Bare `have` at phase 7 (23.4%) is above the 22% guard; the guard is judged on the mean of phases 7-8.
+| 8 | **76.3%** | **39.3%** | **1,200** | 13.9% | 1.92 | 22.7% | 2.5% | 0.369 | 20.3% | 961 |
+
+**V screen against the rule** (finished 18:24 UTC 2026-11-21, 96.1M tokens, none lost, no alert in 8 phases but the
+phase-5 `claims_proved` warning):
+
+- Success, mean of phases 4-8: **38.4%** (line 34.9%; C 35.9%, A screen 36.1%): passes by 3.5 points.
+- Valid Lean, mean of phases 4-8: **71.8%** (line 62.2%; C 64.2%): passes by 9.6 points.
+- Guards, mean of phases 7-8: tactics 1.92 (≤ 3.0) and failing after the graph 12.6% (≤ 30%) pass; bare `have`
+  **23.1% (≤ 22%) fails by 1.1 points** (19.2% at phase 1; v0's runs measured 19.7-20.5% at phase 1).
+- Phase 8 is the best held-out result of any run at any phase (C's best: 71.1% valid at 16, 39.6% success at 10).
+
+By the letter of the pre-registered rule V does not pass (the bare-`have` guard). Under V's credit a bare `have`
+scores 1 only in a clean block that ends on the found proof closer to it (a block ending on the claim it adds scores
+0), so the guard, set against A's exploit, measures something milder here. Reported to the owner, who decides; the
+node idles at HOLD since 18:25 UTC.
 
 Phase 5 had a `claims_proved` warning (6.3% of open claims proved below the band). Tactics per complete block fell
 below 2.0 (the shortening the reviews expected under a 0/1 reward); held-out keeps rising, so it reads as cheaper
