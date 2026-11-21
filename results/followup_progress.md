@@ -353,6 +353,16 @@ scores 1 only in a clean block that ends on the found proof closer to it (a bloc
 0), so the guard, set against A's exploit, measures something milder here. Reported to the owner, who decides; the
 node idles at HOLD since 18:25 UTC.
 
+**Owner, 2026-11-21 ~20:00 UTC: extend V in place to 16 phases** (not fresh from v0). Done by hand with
+`/workspace/runs/screens/extend_V.sh` (node-local, logged to `extend_V.log`): under the run's lock, `max_phases = 8`
+→ 16 in `followup_configs/followup_screen_V_2e-5/loop.toml` (the 8-phase copy kept beside it), `finished.json` moved
+aside (`finished.json.phase8_*`), servers started on version 8, `grpo_loop.sh loop`; the loop (pid 2809547) resumed
+at phase 9, 20:09 UTC. `arm_loop.sh` and `followup_arm.py` are bypassed on purpose (both refuse a finished run or a
+changed config). Difference from a continuous run: the 112 searches paused at phase 8's end were cut off at the
+finish (2.3M tokens lost), so phase 9 starts its searches fresh. No 16-phase rule was pre-registered for V; the
+screens' stop rule (mean success of 10-12 at least 1 point below 6-8) is read, and the probe of phase 16 paired
+against C (1,049) and v0 decides. About 8.5 h, then the probe run (about 2.5 h).
+
 Phase 5 had a `claims_proved` warning (6.3% of open claims proved below the band). Tactics per complete block fell
 below 2.0 (the shortening the reviews expected under a 0/1 reward); held-out keeps rising, so it reads as cheaper
 blocks, not a collapse.
