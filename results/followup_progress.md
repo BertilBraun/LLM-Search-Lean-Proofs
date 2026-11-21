@@ -334,6 +334,7 @@ trained, parameter change per phase against the A and B2 screens.
 
 | 4 | **67.1%** | **36.8%** | 1,025 | 20.6% | 2.22 | 20.6% | 2.6% | 0.314 | 14.5% | 927 |
 | 5 | **70.3%** | **38.7%** | **1,138** | 14.9% | **1.94** | 20.2% | 2.5% | 0.381 | 15.6% | 913 |
+| 6 | **71.9%** | 38.5% | 1,102 | 14.5% | 1.90 | 21.6% | 2.5% | 0.373 | 18.1% | 817 |
 
 Phase 5 had a `claims_proved` warning (6.3% of open claims proved below the band). Tactics per complete block fell
 below 2.0 (the shortening the reviews expected under a 0/1 reward); held-out keeps rising, so it reads as cheaper
