@@ -342,6 +342,18 @@ block; bare `have`; parameter change):
 By the pre-registered rule the A screen does not pass (valid Lean). Reported to the owner; the B2 screen started
 00:13 UTC.
 
+**B2 screen (proof-success credit, 2e-5), per phase** (same columns; v0 938 solved samples):
+
+| Phase | Valid | Success | Solved | Failing after graph | Tactics | Bare `have` | Change |
+|---|---|---|---|---|---|---|---|
+| 1 | 59.2% | 34.4% | 981 | 19.9% | 2.61 | 20.1% | 4.0% |
+| 2 | 57.8% | 35.0% | 1,010 | 19.5% | 2.50 | 20.0% | 3.5% |
+| 3 | 58.1% | 35.9% | 1,030 | 33.0% | 2.70 | 20.3% | 3.4% |
+| 4 | **54.1%** | **32.4%** | 892 | 30.2% | 2.68 | 22.5% | 2.7% |
+
+Phase 3 had a `valid_blocks` warning, phase 4 a `claims_proved` one. The phase-4 dip of every A run shows here too,
+deeper than the A screen's (56.8%, 34.2%).
+
 Phase 5 had a `valid_blocks` warning (21.2% of sampled blocks complete), as phase 2.
 
 ## Owner, 2026-11-20 ~10:50 UTC: hold D, screen two GRPO fixes
