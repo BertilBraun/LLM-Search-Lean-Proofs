@@ -339,6 +339,10 @@ moves the policy less than 0.8 times V; then the chain stops (`F_STOPPED`) for a
 2's same round moved A 4.2% at 2e-5 and 9.8% at 5e-5 with nearly equal gradient norms, so under Adam the step follows
 the rate more than the advantage scale; what smaller advantages can shift is the balance against the replay loss.
 
+**Result (13:14 UTC):** at 2e-5 V's round moves the policy **3.60%**, F's **3.67%** (A's per-tactic round: 4.2%). F's
+smaller per-block credit does not shrink the step, so F runs at 2e-5 as planned; the F screen started at 13:14
+(baselines 5.9 min, held-out states at version 0: 985 of 512 × 2 runs' scale as before, trainer up at 13:31).
+
 ## V's probe, 2026-11-22: 891 of 2,000
 
 `probe_screen_V_phase16_run1` (V's phase 16 with its phase-16 value model; comparisons in
