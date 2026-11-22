@@ -21,7 +21,7 @@ source deployment/environment.sh
 
 state="${LEAN_SEARCH_RUNS}/screens"
 mode="${LEAN_SEARCH_RUNS}/study_chain/mode.toml"
-screens=(A_2e-5 B2_2e-5 V_2e-5)
+screens=(A_2e-5 B2_2e-5 V_2e-5 F_2e-5)
 gpus=4
 # A GPU reads 1 MiB used after stop_model.sh; a CUDA context alone holds a few hundred (as deployment/arms_chain.sh).
 gpu_free_mib=100

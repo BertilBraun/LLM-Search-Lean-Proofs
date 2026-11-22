@@ -304,6 +304,30 @@ default), safe server stops, results pulled to the PC as they are written.
 | First node, 2026-11-14 11:20 UTC to its outage at about 23:35 UTC | about $11 at most; partly refunded by the provider (owner) |
 | Second node, from 2026-11-15 about 08:30 UTC | $0.83 per hour |
 
+## Owner, 2026-11-22: fix the block length, screen it
+
+**Progress-fraction credit** (`verified_fraction`, `src/lean_search/rl/README.md`, "Progress fraction"): as verified
+progress, but a clean block ending on the found proof scores its share of the node's remaining proof (closing 1, one
+step of five 0.2) instead of 1. Screen `screens/F_2e-5.toml`: the follow-up base at 2e-5, 8 phases, run by
+`run_screens.sh` (the earlier screens skipped as ended).
+
+**Judged by the probe, not the held-out states** (V showed they favour short blocks). After phase 8, F's phase-8
+policy with its phase-8 value model is probed on the 2,000 statements, as every arm. Read against C (1,049, phase 16),
+V (891, phase 16) and v0 (714.5), with the per-expansion curve (V's weakness was 5.7% within one expansion) and tactics
+per complete block (V: 1.9). Owner, 2026-11-22: probe C's phase-8 checkpoint first (the like-for-like reference, started
+10:40 UTC), then F for 8 phases with a probe of its phase 8, then F extended in place to 16 phases with a probe of
+phase 16, without idle GPUs in between. Reading (reviews BP, BQ): F at phase 8 against C at phase 8 and against V at
+16 (paired); F at 16 against C at 16 (1,049) settles F against C; gaps under about 3 points would need a second run.
+Caveat fixed beforehand: advantages are not divided by the group's spread, so F's are V's scaled by the positive block's
+share of the node's remaining proof (unchanged one step from a proof, smallest at roots of long proofs) and its update
+at the same 2e-5 is smaller; the per-phase parameter change (V: 2.3-2.7%) is
+read beside the result, and a much smaller one would make a weaker F inconclusive rather than negative. Also watched:
+tactics per complete block, failing after the graph (V: 6.7-14%), solved within one expansion on the probe (v0 10.1%,
+V 5.7%), unscored share (V: 30% at 16). F always reaches 16 phases, so F8 against C8 is a description, not a gate.
+F16 is produced like V16 (extended in place; the searches in flight at phase 8's end are cut), not like C16 (one
+run). F's trees stay on the node until the per-phase metrics the reviews asked for (root-closing share, groups with
+two or more different positive rewards) are computed from them. The chain: `/workspace/runs/screens/f_chain.sh`.
+
 ## V's probe, 2026-11-22: 891 of 2,000
 
 `probe_screen_V_phase16_run1` (V's phase 16 with its phase-16 value model; comparisons in

@@ -442,6 +442,35 @@ def test_unverified_proof_through_the_proof_graph_is_no_verified_progress() -> N
     assert sample.verified_progress == 0.0
 
 
+def test_sibling_state_on_the_proof_graph_scores_its_share_of_the_remaining_proof() -> None:
+    builder = GraphBuilder("⊢ p")
+    middle = builder.child(builder.root, "⊢ q", text="intro")
+    builder.duplicate(builder.root, middle, text="intro q", tactic_goals=(("⊢ q",),))
+    (root, _) = groups(builder.record(builder.child(middle, text="close")))
+    (sibling,) = [sample for sample in root.samples if sample.text == "intro q"]
+    assert sibling.verified_fraction == 0.5
+
+
+def test_transposition_into_the_proof_graph_scores_its_share_of_the_remaining_proof() -> None:
+    builder = GraphBuilder("⊢ p")
+    left = builder.child(builder.root, "⊢ x", text="left")
+    right = builder.child(builder.root, "⊢ y", text="right")
+    joined = builder.child(right, "⊢ z", text="step")
+    builder.duplicate(left, joined, text="jump", tactic_goals=(("⊢ z",),))
+    record = builder.record(builder.child(joined, text="close"))
+    (at_left,) = [group for group in groups(record) if group.node_id == left.node_id]
+    assert at_left.samples[0].verified_fraction == 0.5
+
+
+def test_a_closing_proof_scores_the_whole_remaining_proof() -> None:
+    builder = GraphBuilder("⊢ p")
+    builder.failure(builder.root, text="linarith")
+    proof = builder.child(builder.root, text="close")
+    (root,) = groups(builder.record(proof))
+    (close,) = [sample for sample in root.samples if sample.text == "close"]
+    assert close.verified_fraction == 1.0
+
+
 def two_proofs_tree() -> TreeRecord:
     """The root proved in one step and in two: every sample of each group reaches the proof graph; under verified
     progress `intro` is no closer than the root (one step left either way), so the root's group trains."""

@@ -1,0 +1,18 @@
+# Screen of progress-fraction credit (owner, 2026-11-22): verified progress weighted by the share of the node's remaining
+# proof a clean block covers (a closed goal 1, one step of five 0.2), so a longer correct block earns more than a
+# one-step one; V's 0/1 r shortened blocks to about 1.9 tactics and lost 7.9 probe points to C. The follow-up base at
+# 2e-5, 8 phases (src/lean_search/rl/README.md, "Verified progress" and "Progress fraction"). Run by
+# deployment/run_screens.sh.
+[loop]
+name = "followup_screen_F_2e-5"
+
+[loop.training]
+phase_generated_tokens = 12_000_000
+max_phases = 8
+value_every_phases = 2
+
+[phase.policy.data]
+credit = "verified_fraction"
+
+[phase.policy.optimization]
+learning_rate = 2e-5

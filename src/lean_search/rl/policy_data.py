@@ -36,6 +36,10 @@ class PolicyTokenizer(ChatTemplate, Protocol):
     ) -> Mapping[str, Sequence[object]]: ...
 
 
+# Credits whose samples without an r are left out of the policy data (no token of them would train).
+UNSCORED_LEFT_OUT = frozenset({CreditMode.VERIFIED_PROGRESS, CreditMode.VERIFIED_FRACTION})
+
+
 @dataclass(frozen=True)
 class PolicyDataConfig:
     credit: CreditMode = CreditMode.PER_TACTIC
@@ -118,7 +122,9 @@ class PolicyDataMetrics:
     # samples with an r, and the share without one (a clean block ending in an unknown state).
     mean_verified_progress: float = 0.0
     unscored_progress_share: float = 0.0
-    # Sequences left out of the policy data because their sample has no verified-progress r (that credit only).
+    # The progress-fraction r's mean over all groups' samples with an r (`GroupSample.verified_fraction`).
+    mean_verified_fraction: float = 0.0
+    # Sequences left out of the policy data because their sample has no r (the credits in `UNSCORED_LEFT_OUT`).
     unscored_sequences: int = 0
 
 
@@ -277,7 +283,7 @@ class PolicyDataParts:
     without_text: int
     mismatches: int
     capped: ExplanationCap
-    # Completions left out under verified-progress credit: their sample has no r, so no token would train.
+    # Completions left out under a credit in `UNSCORED_LEFT_OUT`: their sample has no r, so no token would train.
     unscored: int = 0
 
 
@@ -324,7 +330,7 @@ def tree_policy_data(tree: PolicyTree, tokenizer: PolicyTokenizer, config: Polic
             completions = [item for item in expansion.completions if item.edge_id in sample.edge_ids]
             if not completions:
                 without_text += sample.multiplicity
-            if config.credit == CreditMode.VERIFIED_PROGRESS and sample_credited.verified_progress is None:
+            if config.credit in UNSCORED_LEFT_OUT and sample_credited.whole(config.credit) is None:
                 unscored += len(completions)
                 continue
             for completion in completions:
@@ -388,6 +394,7 @@ def data_metrics(
     trained_samples = weighted_samples(group for group, _ in trained_groups)
     reaching = [sample for sample in trained_samples if sample.reaches_proof_graph]
     scored = [progress for sample in samples if (progress := sample.verified_progress) is not None]
+    fractions = [fraction for sample in samples if (fraction := sample.verified_fraction) is not None]
     completion_tokens_total = sum(sequence.tokenized.completion_token_count for sequence in sequences)
     untrained = sum(
         not trained
@@ -423,6 +430,7 @@ def data_metrics(
         capped_explanation_samples=capped.samples,
         capped_explanation_credit=capped.removed_credit,
         mean_verified_progress=sum(scored) / max(1, len(scored)),
+        mean_verified_fraction=sum(fractions) / max(1, len(fractions)),
         unscored_progress_share=(len(samples) - len(scored)) / max(1, len(samples)),
         unscored_sequences=unscored,
     )

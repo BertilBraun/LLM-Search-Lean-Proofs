@@ -266,6 +266,15 @@ partial credit; the explanation tokens carry the sequence advantage as in standa
 blocks is possible: tactics per complete block is charted (no health check), and the orchestrator reads it
 against about 2.0.
 
+**Progress fraction** (`verified_fraction` credit; screen `screens/F_2e-5.toml`, owner 2026-11-22). V's 0/1 r paid a
+one-step block on the found proof as much as a block covering it: its blocks shortened to about 1.9 tactics, and its
+probe solved 5.7% of the statements within one expansion against v0's 10.1% (891 of 2,000 against C's 1,049). Here
+a verified-progress block's r is its share of the node's remaining proof (`GroupSample.verified_fraction`: the steps
+its last state gained over `GroupSample.node_steps`, the node's remaining steps): a closed goal 1, one step of a
+five-step remainder 0.2, two steps 0.4; every other sample as under verified progress (0, or no r and left out). A
+longer correct block now earns more, a failure still nothing, so writing one more tactic pays when it succeeds more
+often than it costs the block: about P(correct) > k / (k + 1) for a block of k steps.
+
 Tokens are the recorded ones (`SampledCompletion.tokens.token_ids`, no re-tokenization; the prompt is the recorded
 prompt encoded without special tokens, as vLLM does). Their characters come from decoding them one by one with the
 policy tokenizer (`decoded_offsets`; tokens sharing a multi-byte character share its range), so the executed tactics'

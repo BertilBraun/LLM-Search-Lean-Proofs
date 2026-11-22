@@ -37,6 +37,7 @@ def sample(
         multiplicity=multiplicity,
         kind=EdgeKind.NEW_STATE,
         tactics=judged_in_block(rewards, REWARDS),
+        node_steps=NODE_STEPS,
     )
 
 

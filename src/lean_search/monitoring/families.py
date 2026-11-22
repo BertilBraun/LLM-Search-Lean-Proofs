@@ -359,6 +359,7 @@ class GrpoPhase:
     mean_verified_progress: float = 0.0
     unscored_progress_share: float = 0.0
     unscored_sequences: int = 0
+    mean_verified_fraction: float = 0.0
     capped_explanation_samples: int = 0
     capped_explanation_credit: float = 0.0
     # The searches that produced the phase's data; with training_seconds it decides one or two passes.

@@ -24,7 +24,7 @@ file and the files it points to. Keep this file current while you work, or repla
   phases 2 and 4 (`results/followup_progress.md`, "Arm A's rerun"). Disk: 113 GB free after removing regenerable
   merged weights of finished runs (an arm needs about 38 GB).
 - `on_health_stop = continue`. Search-efficiency switches only in the arms' sampling. Arm B dropped; O1 last, on the
-  owner's word. Review letters used up to `bo` (next: `bp`). Spend about $75 of $190 at $0.83/h. The PC sleeps at
+  owner's word. Review letters used up to `bq` (next: `br`). Spend about $75 of $190 at $0.83/h. The PC sleeps at
   times: the watchdog and the pull pause, the node does not.
 
 ## 1. First hour: what to do

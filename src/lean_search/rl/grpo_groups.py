@@ -110,6 +110,8 @@ class GroupSample:
     multiplicity: int
     kind: EdgeKind
     tactics: tuple[TacticReward, ...]
+    # The group node's remaining steps to a proof (`GraphLabels.remaining_steps`).
+    node_steps: int
 
     @property
     def known(self) -> list[RewardParts]:
@@ -161,6 +163,17 @@ class GroupSample:
             return None
         closer = last.steps_gained is not None and last.steps_gained > 0
         return float(clean and last.label == TacticLabel.PROOF_GRAPH and closer)
+
+    @property
+    def verified_fraction(self) -> float | None:
+        """Progress-fraction credit's r: a verified-progress block's share of the node's remaining proof (the steps its
+        last state gained over `node_steps`; a closed goal 1), else the verified-progress r (0, or None)."""
+        progress = self.verified_progress
+        if progress is None or progress == 0.0:
+            return progress
+        steps_gained = self.tactics[-1].steps_gained
+        assert steps_gained is not None and 0 < steps_gained <= self.node_steps
+        return steps_gained / self.node_steps
 
     @property
     def gets_closer_to_proof(self) -> bool:
@@ -348,6 +361,7 @@ def group_sample(
         multiplicity=sum(edge.sample_count for edge in edges),
         kind=edges[0].effective_kind,
         tactics=judged_in_block(rewards, config),
+        node_steps=node_steps,
     )
 
 

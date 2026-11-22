@@ -541,6 +541,7 @@ def grpo_phase_record(
         proof_success_failing_tail_share=data.proof_success_failing_tail_share,
         proof_success_no_closer_share=data.proof_success_no_closer_share,
         mean_verified_progress=data.mean_verified_progress,
+        mean_verified_fraction=data.mean_verified_fraction,
         unscored_progress_share=data.unscored_progress_share,
         unscored_sequences=data.unscored_sequences,
         capped_explanation_samples=data.capped_explanation_samples,

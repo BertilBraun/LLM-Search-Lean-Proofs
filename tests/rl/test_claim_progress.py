@@ -33,7 +33,7 @@ NOT_RUN = TacticOutcome(MASKED)
 
 def block(config: RewardConfig, *outcomes: TacticOutcome, text: str = "s") -> GroupSample:
     rewards = [tactic_reward(outcome, config, NODE_STEPS) for outcome in outcomes]
-    return GroupSample(text, (0,), 1, EdgeKind.NEW_STATE, judged_in_block(rewards, config))
+    return GroupSample(text, (0,), 1, EdgeKind.NEW_STATE, judged_in_block(rewards, config), NODE_STEPS)
 
 
 def score(config: RewardConfig, *outcomes: TacticOutcome) -> float | None:

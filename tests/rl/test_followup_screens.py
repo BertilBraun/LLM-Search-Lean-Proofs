@@ -27,10 +27,12 @@ class Screen(NamedTuple):
 
 
 VERIFIED_PROGRESS = {"phase": {"policy": {"data": {"credit": "verified_progress"}}}}
+VERIFIED_FRACTION = {"phase": {"policy": {"data": {"credit": "verified_fraction"}}}}
 SCREENED = {
     "A_2e-5": Screen(toml(CONFIGS / "followup/arms/A.toml"), 2e-5),
     "B2_2e-5": Screen(toml(CONFIGS / "followup/arms/B2.toml"), 2e-5),
     "V_2e-5": Screen(VERIFIED_PROGRESS, 2e-5),
+    "F_2e-5": Screen(VERIFIED_FRACTION, 2e-5),
 }
 
 
@@ -100,3 +102,9 @@ def test_the_v_screens_phase_config_is_the_shipped_phase_with_verified_progress_
 def test_a_screen_is_refused_as_an_arm(stem: str) -> None:
     with pytest.raises(ValueError, match="overlay changes only"):
         screen_configs(toml(SCREENS / f"{stem}.toml"), OverlayKind.ARM)
+
+
+def test_the_f_screens_phase_config_is_the_shipped_phase_with_verified_fraction_credit_at_2e_5() -> None:
+    written = screen_configs(toml(SCREENS / "F_2e-5.toml")).phase
+    expected = merged(PHASE, with_learning_rate(VERIFIED_FRACTION["phase"], 2e-5))
+    assert from_json_object(TrainingPhaseConfig, written) == from_json_object(TrainingPhaseConfig, expected)

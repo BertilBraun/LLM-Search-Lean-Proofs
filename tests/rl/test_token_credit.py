@@ -18,7 +18,12 @@ EXPLANATION = "Introduce x, then normalize.\n\n```lean\n"
 BLOCK = "intro x\nsimp\nring"
 COMPLETION = EXPLANATION + BLOCK + "\n```<|im_end|>"
 ADVANTAGES = SampleAdvantages(
-    sequence=0.5, tactics=(0.8, -0.3, None), closing=None, proof_success=-0.25, verified_progress=0.375
+    sequence=0.5,
+    tactics=(0.8, -0.3, None),
+    closing=None,
+    proof_success=-0.25,
+    verified_progress=0.375,
+    verified_fraction=0.125,
 )
 
 
@@ -78,7 +83,12 @@ def test_token_credit_of_each_part(needle: str, segment: TokenSegment, advantage
 
 def test_closing_tokens_of_a_complete_block_get_the_last_tactic_advantage() -> None:
     complete = SampleAdvantages(
-        sequence=0.5, tactics=(0.8, 0.2, 0.4), closing=0.4, proof_success=0.75, verified_progress=None
+        sequence=0.5,
+        tactics=(0.8, 0.2, 0.4),
+        closing=0.4,
+        proof_success=0.75,
+        verified_progress=None,
+        verified_fraction=None,
     )
     credits, positions = credits_at("<|im_end|>", complete)
     assert {credits.advantages[index] for index in positions} == {0.4}
@@ -111,6 +121,17 @@ def test_proof_success_credit_gives_every_token_the_proof_success_advantage() ->
     assert (set(credits.advantages), set(credits.trained)) == ({-0.25}, {True})
 
 
+def test_verified_fraction_credit_gives_every_token_the_verified_fraction_advantage() -> None:
+    credits = token_credits(
+        character_offsets(COMPLETION),
+        spans(COMPLETION, "intro x", "simp", "ring"),
+        frozenset(),
+        ADVANTAGES,
+        CreditMode.VERIFIED_FRACTION,
+    )
+    assert (set(credits.advantages), set(credits.trained)) == ({0.125}, {True})
+
+
 def test_verified_progress_credit_gives_every_token_the_verified_progress_advantage() -> None:
     credits = token_credits(
         character_offsets(COMPLETION),
@@ -122,7 +143,10 @@ def test_verified_progress_credit_gives_every_token_the_verified_progress_advant
     assert (set(credits.advantages), set(credits.trained)) == ({0.375}, {True})
 
 
-@pytest.mark.parametrize("mode", [CreditMode.SEQUENCE, CreditMode.PROOF_SUCCESS, CreditMode.VERIFIED_PROGRESS])
+@pytest.mark.parametrize(
+    "mode",
+    [CreditMode.SEQUENCE, CreditMode.PROOF_SUCCESS, CreditMode.VERIFIED_PROGRESS, CreditMode.VERIFIED_FRACTION],
+)
 def test_segments_are_by_position_in_every_credit_mode(mode: CreditMode) -> None:
     layout = spans(COMPLETION, "intro x", "simp", "ring")
     per_tactic = token_credits(character_offsets(COMPLETION), layout, frozenset(), ADVANTAGES, CreditMode.PER_TACTIC)
