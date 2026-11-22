@@ -304,6 +304,29 @@ default), safe server stops, results pulled to the PC as they are written.
 | First node, 2026-11-14 11:20 UTC to its outage at about 23:35 UTC | about $11 at most; partly refunded by the provider (owner) |
 | Second node, from 2026-11-15 about 08:30 UTC | $0.83 per hour |
 
+## V's probe, 2026-11-22: 891 of 2,000
+
+`probe_screen_V_phase16_run1` (V's phase 16 with its phase-16 value model; comparisons in
+`/workspace/runs/screens/compare/`): **891 of 2,000 (44.55%)**, accepted, no wall-clock stop.
+
+| Against | Points [95%] |
+|---|---|
+| v0 anchors (714.5) | **+8.8** [+7.1, +10.4], ahead in six of seven bands |
+| arm A capped (822) | +3.5 [+1.4, +5.4] |
+| arm C (1,049) | **−7.9** [−9.8, −5.9], behind in every band (−6 to −10) |
+| v35 with the final value model (1,236) | −17.2 |
+
+- **Held-out and probe disagree.** On the 512 held-out states V led C by 1.7 points of success and 9 of valid Lean
+  (phases 10-16); on the probe it is 7.9 points behind. Solved within 1 / 2 / 4 / 8 / 16 expansions: V 5.7 / 13.0 /
+  24.2 / 34.2 / 44.5%, C 13.1 / 22.2 / 32.9 / 42.8 / 52.4%, v0 10.1 / 16.5 / 22.9 / 29.5 / 35.7%. V proves a whole
+  statement in one expansion half as often as v0: its blocks shortened to about 1.9 tactics, so from a statement's
+  root it needs more expansions, and 16 are often too few. The held-out states are intermediate states, often a few
+  steps from a proof, where a short valid step suffices; they measured the wrong thing for V.
+- Cheaper, too: 14,033 generated tokens per statement (C 16,861) and 3.8 Lean seconds per policy attempt (C 4.7).
+- The block length is the 0/1 reward's doing (reviews BO and BN warned of it): a one-step block on the found proof
+  earns the same 1 as a block covering the proof.
+- Node idle since 06:24 UTC, servers stopped, awaiting the owner.
+
 ## Owner, 2026-11-21: a verified-progress screen before D
 
 The owner: GRPO should not underperform on Lean; the likely cause is our credit design. Our per-tactic and
