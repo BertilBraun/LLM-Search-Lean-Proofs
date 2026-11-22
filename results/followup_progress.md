@@ -328,6 +328,13 @@ F16 is produced like V16 (extended in place; the searches in flight at phase 8's
 run). F's trees stay on the node until the per-phase metrics the reviews asked for (root-closing share, groups with
 two or more different positive rewards) are computed from them. The chain: `/workspace/runs/screens/f_chain.sh`.
 
+**Learning-rate check before F (owner, 2026-11-22).** Right after the deploy the chain trains one GRPO round from v0 on
+step 2's shared trees (step 2's `A_2e-5` round config, its credit changed) with V's and with F's credit at 2e-5 and
+records each relative parameter change (`/workspace/runs/screens/lrtest_result.txt`). F goes on at 2e-5 unless it
+moves the policy less than 0.8 times V; then the chain stops (`F_STOPPED`) for a rate decision. Prior evidence: step
+2's same round moved A 4.2% at 2e-5 and 9.8% at 5e-5 with nearly equal gradient norms, so under Adam the step follows
+the rate more than the advantage scale; what smaller advantages can shift is the balance against the replay loss.
+
 ## V's probe, 2026-11-22: 891 of 2,000
 
 `probe_screen_V_phase16_run1` (V's phase 16 with its phase-16 value model; comparisons in
