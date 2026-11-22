@@ -348,7 +348,7 @@ trained, parameter change per phase against the A and B2 screens.
 | 16 | **81.4%** | 40.1% | 1,206 | 6.7% | 1.84 | 24.0% | 2.4% | 0.489 | 29.7% | 889 |
 
 V finished 03:53 UTC 2026-11-22 (192.1M tokens, 2.3M lost, all at the phase-8 finish; no alert in 16 phases but the
-phase-5 warning). Means of phases 10-16: success 40.4%, valid Lean 78.3% (C: 38.7%, 69.3%). Its probe started 04:00 UTC.
+phase-5 warning). Means of phases 10-16: success 40.4%, valid Lean 78.5% (C: 38.7%, 69.3%). Its probe started 04:00 UTC.
 
 V's probe is queued on the node (`/workspace/runs/screens/probe_V.sh`, waiting for `finished.json`): servers stopped,
 `screen_V_phase16_run1` (phase 16 with its phase-16 value model, `probe_evaluation_ordered.toml`, as the arms' probes),
