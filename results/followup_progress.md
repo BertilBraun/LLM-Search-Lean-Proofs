@@ -341,6 +341,9 @@ trained, parameter change per phase against the A and B2 screens.
 | 9 (extended) | **78.1%** | 38.4% | 1,121 | 9.5% | 1.87 | **25.3%** | 2.7% | 0.463 | 22.0% | 1,089 |
 | 10 | 77.3% | **41.5%** | **1,239** | 8.8% | 1.83 | 21.6% | 2.4% | 0.472 | 25.6% | 914 |
 | 11 | 77.9% | 39.7% | 1,147 | 10.4% | 1.95 | 23.0% | 2.3% | 0.434 | 22.7% | 816 |
+| 12 | **78.8%** | 40.0% | 1,194 | 8.9% | 1.99 | 24.3% | 2.4% | 0.491 | 22.5% | 860 |
+
+Stop rule (the screens'): mean success of phases 10-12 is 40.4% against 38.8% over 6-8, up 1.6 points: no slide.
 
 **V screen against the rule** (finished 18:24 UTC 2026-11-21, 96.1M tokens, none lost, no alert in 8 phases but the
 phase-5 `claims_proved` warning):
