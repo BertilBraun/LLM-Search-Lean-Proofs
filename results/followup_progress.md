@@ -344,6 +344,11 @@ trained, parameter change per phase against the A and B2 screens.
 | 12 | **78.8%** | 40.0% | 1,194 | 8.9% | 1.99 | 24.3% | 2.4% | 0.491 | 22.5% | 860 |
 | 13 | 76.5% | 39.7% | 1,187 | 8.6% | 1.98 | **29.0%** | 2.5% | 0.462 | 25.3% | 970 |
 | 14 | 78.6% | **41.5%** | **1,256** | 8.4% | 2.19 | **30.7%** | 2.5% | 0.474 | 23.3% | 990 |
+| 15 | **79.3%** | 40.3% | 1,196 | 11.3% | 1.99 | 27.1% | 2.3% | 0.419 | 25.1% | 807 |
+
+V's probe is queued on the node (`/workspace/runs/screens/probe_V.sh`, waiting for `finished.json`): servers stopped,
+`screen_V_phase16_run1` (phase 16 with its phase-16 value model, `probe_evaluation_ordered.toml`, as the arms' probes),
+then comparisons with C, the v0 anchors, v35 (run 7) and A in `screens/compare/`.
 
 Stop rule (the screens'): mean success of phases 10-12 is 40.4% against 38.8% over 6-8, up 1.6 points: no slide.
 
