@@ -328,7 +328,7 @@ F16 is produced like V16 (extended in place; the searches in flight at phase 8's
 run). F's trees stay on the node until the per-phase metrics the reviews asked for (root-closing share, groups with
 two or more different positive rewards) are computed from them. The chain: `/workspace/runs/screens/f_chain.sh`.
 
-**C at phase 8** (`arm_C_phase8_run1`, 12:37 UTC 2026-11-22): **938 of 2,000 (46.9%)**, accepted; +11.1 points over
+**C at phase 8** (`arm_C_phase8_run1`, 12:37 UTC 2026-11-22): **937 of 2,000 (46.9%)**, accepted; +11.1 points over
 the v0 anchors [+9.4, +12.8], −5.6 behind C at phase 16 [−7.4, −3.8]. V at 16 (891) is below C at 8. The chain then
 deployed 457190d (12:38) and started the learning-rate rounds.
 
