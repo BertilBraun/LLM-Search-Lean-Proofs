@@ -343,6 +343,29 @@ the rate more than the advantage scale; what smaller advantages can shift is the
 smaller per-block credit does not shrink the step, so F runs at 2e-5 as planned; the F screen started at 13:14
 (baselines 5.9 min, trainer up at 13:31).
 
+**F screen (verified fraction, 2e-5), per phase** (v0 985 solved samples; V's columns, V at the same phase in
+brackets; Mean r is the mean verified fraction, V's mean verified progress beside it):
+
+| Phase | Valid | Success | Solved | Failing after graph | Tactics | Bare `have` | Change | Mean r (progress) | Unscored | Groups trained | Block tactics trained |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 58.7% (64.5) | 34.0% (35.2) | 974 | 17.7% (18.6) | 2.68 (2.62) | 20.6% (19.2) | 3.7% | 0.346 (0.384) | 5.7% (682 seq.) | 1,501 | 2.83 (2.86) |
+| 2 | 58.8% (63.4) | 36.0% (35.1) | 1,004 | 18.6% (16.6) | 2.39 (2.35) | 19.1% (19.3) | 3.6% | 0.350 (0.380) | 5.3% | 1,558 | 2.66 (2.60) |
+| 3 | 60.8% (66.8) | 38.6% (38.4) | 1,105 | 26.7% (22.2) | 2.42 (2.49) | 19.8% (18.2) | 3.0% | 0.255 (0.301) | 9.1% | 1,049 | 3.27 (2.79) |
+| 4 | 54.3% (67.1) | 33.5% (36.8) | 932 | 30.8% (20.6) | 2.47 (2.22) | 24.6% (20.6) | 2.3% | 0.216 (0.267) | 10.4% | 696 | 3.56 (2.67) |
+| 5 | 57.3% (70.3) | 36.9% (38.7) | 1,002 | 30.4% (14.9) | 2.57 (1.94) | 25.0% (20.2) | 2.3% | 0.205 (0.261) | 11.0% | 695 | 3.46 (2.45) |
+| 6 | 58.9% (71.9) | 35.3% (38.5) | 975 | 32.0% (14.5) | 2.68 (1.90) | 28.0% (21.6) | 2.3% | 0.209 (0.259) | 9.8% | 654 | 3.78 (2.46) |
+| 7 | 61.8% (73.2) | 39.0% (38.6) | 1,117 | 31.5% (11.3) | 2.85 (1.92) | 29.3% (23.4) | 2.1% | 0.188 (0.250) | 12.2% | 585 | 4.03 (2.44) |
+| 8 | 62.9% (76.3) | 38.1% (39.3) | 1,073 | 31.5% (13.9) | 2.88 (1.92) | 29.0% (22.7) | 2.3% | 0.188 (0.257) | 11.1% | 688 | 3.71 (2.44) |
+
+F finished 8 phases at 21:11 UTC (96.3M tokens, none lost, no health stop). Block length went where F pushes it
+(valid blocks 2.88 tactics at phase 8 against V's 1.92; trained blocks 3.7-4.0 against 2.4), but at a price on
+held-out states: failing after the proof graph doubled from phase 3 on (31.5% against V's 13.9%), bare `have` rose
+to 29%, valid Lean stays 13 points below V. Success on held-out states is close to V's (38.1% against 39.3% at 8).
+Against the screens' rule: success 4-8 mean 36.6% (line 34.9%) passes; valid Lean 4-8 mean 59.0% (line 62.2%)
+fails; guards 7-8: tactics 2.87 (≤ 3.0) passes, failing after the graph 31.5% (≤ 30%) and bare `have` 29.2% (≤ 22%)
+fail. Held-out states misled for V (short blocks), so the probe decides; by the owner's plan the chain probes phase 8
+and extends F to 16 regardless. The F8 probe started at 21:13.
+
 ## V's probe, 2026-11-22: 891 of 2,000
 
 `probe_screen_V_phase16_run1` (V's phase 16 with its phase-16 value model; comparisons in
