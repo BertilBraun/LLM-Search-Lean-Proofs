@@ -341,7 +341,7 @@ the rate more than the advantage scale; what smaller advantages can shift is the
 
 **Result (13:14 UTC):** at 2e-5 V's round moves the policy **3.60%**, F's **3.67%** (A's per-tactic round: 4.2%). F's
 smaller per-block credit does not shrink the step, so F runs at 2e-5 as planned; the F screen started at 13:14
-(baselines 5.9 min, held-out states at version 0: 985 of 512 × 2 runs' scale as before, trainer up at 13:31).
+(baselines 5.9 min, trainer up at 13:31).
 
 ## V's probe, 2026-11-22: 891 of 2,000
 
