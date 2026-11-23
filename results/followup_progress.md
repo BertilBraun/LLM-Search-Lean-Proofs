@@ -333,7 +333,7 @@ loop.toml equals C's but for `policy_update`, phase.toml is byte-identical to F'
 `d_after.sh` waits for the driver (log `screens/d_after.log`, `D_AFTER_STOPPED` on failure). F's merged serving
 weights (26 GB, rebuilt from its adapters on demand) were removed for disk: 76 GB free at the start.
 
-**D's checks, phases 1-5** (relative parameter change in %; the KL penalty as a share of |policy loss|; held-out
+**D's checks, phases 1-7** (relative parameter change in %; the KL penalty as a share of |policy loss|; held-out
 states after the phase):
 
 | Phase | GRPO step | Round | Whole phase | KL penalty / loss | KL to v0 | Bare `have` | Valid | Success | Mean fraction | Groups trained |
@@ -343,10 +343,13 @@ states after the phase):
 | 3 | 3.10 | 3.20 | 4.41 | 0.027 | 0.011 | 15.1% | 61.5% | 35.7% | 0.277 | 1,199 |
 | 4 | 2.41 | 3.39 | 4.10 | 0.060 | 0.021 | 16.9% | 63.0% | 35.4% | 0.230 | 779 |
 | 5 | 2.34 | 3.31 | 4.00 | 0.049 | 0.027 | 19.7% | 63.2% | 35.5% | 0.204 | 756 |
+| 6 | 2.27 | 3.19 | 3.88 | 0.055 | 0.039 | 17.7% | 64.5% | 37.6% | 0.228 | 743 |
+| 7 | 2.63 | 3.13 | 4.01 | 0.099 | 0.049 | 17.3% | 64.5% | 36.9% | 0.242 | 981 |
 
 The round does not overwrite the GRPO step: both move the adapter by similar amounts and the phase's whole change
-(4.0-4.5%) is below their sum but above either. The KL penalty stays under the 10% line after phase 1 (3-6%), KL to
-v0 grows as in F. Bare `have` 14-20%, below F's (20-25% over the same phases).
+(3.9-4.5%) is below their sum but above either. The KL penalty stayed under the 10% line through phase 6 (3-6%) and
+reached it at phase 7 (9.9%, KL to v0 0.049 against F's 0.023 at phase 16): D moves away from v0 about twice as fast
+as F, so the pull toward v0 is the confound to watch. Bare `have` 14-20%, below F's (20-29% over the same phases).
 
 **Host outage, 2026-11-23 19:51-22:17 UTC** (Vast maintenance, unannounced): the host went offline during phase 7's
 search (about 17 min in, 272 trees written); the container restarted at 22:17 (boot time changed), disk intact. The
