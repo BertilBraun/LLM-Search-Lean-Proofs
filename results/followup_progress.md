@@ -348,6 +348,16 @@ The round does not overwrite the GRPO step: both move the adapter by similar amo
 (4.0-4.5%) is below their sum but above either. The KL penalty stays under the 10% line after phase 1 (3-6%), KL to
 v0 grows as in F. Bare `have` 14-20%, below F's (20-25% over the same phases).
 
+**Host outage, 2026-11-23 19:51-22:17 UTC** (Vast maintenance, unannounced): the host went offline during phase 7's
+search (about 17 min in, 272 trees written); the container restarted at 22:17 (boot time changed), disk intact. The
+driver's resume failed three times and STOPPED at 22:31: `followup_D/curriculum.json` was rewritten at 19:51:39 (band
+13.5 → 14.0 at 19:51:04) and came back empty, because `write_json_atomically` renames without an fsync. One phase-7
+tree (3192, not in the index) was empty too. Repair (owner, 22:35): the 8 leftover servers stopped by pid file, the
+state rebuilt from the log as `{"band_low": 14.0, "generation": 8, "outcomes": []}` (8 band moves; empty outcomes is
+what a restart leaves anyway), the empty tree and file kept aside in `followup_D/`, `attempts_loop_D_start` and
+STOPPED moved aside, the driver started (22:35:43). `d_after.sh` relaunched at 22:21, stopped with the driver at 22:31, relaunched at 22:38. D now ends about 3 h later.
+Follow-up after D: fsync before the rename (code change, two reviews).
+
 
 **Progress-fraction credit** (`verified_fraction`, `src/lean_search/rl/README.md`, "Progress fraction"): as verified
 progress, but a clean block ending on the found proof scores its share of the node's remaining proof (closing 1, one
