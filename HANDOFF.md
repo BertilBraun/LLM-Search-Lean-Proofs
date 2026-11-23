@@ -28,7 +28,7 @@ file and the files it points to. Keep this file current while you work, or repla
   phases 2 and 4 (`results/followup_progress.md`, "Arm A's rerun"). Disk: 113 GB free after removing regenerable
   merged weights of finished runs (an arm needs about 38 GB).
 - `on_health_stop = continue`. Search-efficiency switches only in the arms' sampling. Arm B dropped; O1 last, on the
-  owner's word. Review letters used up to `bs` (next: `bt`). Spend about $75 of $190 at $0.83/h. The PC sleeps at
+  owner's word. Review letters used up to `bu` (next: `bv`). Spend about $75 of $190 at $0.83/h. The PC sleeps at
   times: the watchdog and the pull pause, the node does not.
 
 ## 1. First hour: what to do
@@ -67,7 +67,7 @@ file and the files it points to. Keep this file current while you work, or repla
 
 - **Subagents:** implementation, analysis and review run in subagents on Opus 5.5 at high effort. Two independent
   reviews after every implementation wave, then fixes, then a re-review by the same reviewers, then merge. Reviews are
-  files in `results/reviews/` named `<date>_review_<letters>_<topic>.md`; the last used letters are `bs` (next: `bt`).
+  files in `results/reviews/` named `<date>_review_<letters>_<topic>.md`; the last used letters are `bu` (next: `bv`).
 - **Usage:** running 5-8 Opus subagents at once exhausted the 5-hour usage limit on 2026-11-14 and left the node idle
   for hours. Keep few agents running, have node agents report on events rather than on a timer, and make node work
   self-sustaining so it does not depend on an agent being awake.

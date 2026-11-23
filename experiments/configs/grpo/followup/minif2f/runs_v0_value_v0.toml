@@ -1,0 +1,9 @@
+[[runs]]
+name = "minif2f_v0_value_v0_run1"
+arm = "v0"
+phase = 0
+policy_adapter = "/workspace/checkpoints/data_rewrite_sft_numbered/adapter"
+value = "v0"
+anchor = true
+config = "experiments/configs/grpo/followup/minif2f/minif2f_evaluation.toml"
+purpose = "the anchor on miniF2F-valid; against grpo_loop_v1's v0 run (160 of 244)"

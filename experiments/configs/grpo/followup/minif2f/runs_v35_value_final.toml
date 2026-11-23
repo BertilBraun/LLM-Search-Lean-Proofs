@@ -1,0 +1,9 @@
+[[runs]]
+name = "minif2f_v35_value_final_run1"
+arm = "grpo_loop_v1"
+phase = 35
+policy_adapter = "/workspace/checkpoints/hf_policy_latest_v35/adapter"
+value = "/workspace/checkpoints/hf_value_latest/adapter"
+value_version = 35
+config = "experiments/configs/grpo/followup/minif2f/minif2f_evaluation.toml"
+purpose = "the old run's final policy and value model; against its v35 run (170 of 244)"

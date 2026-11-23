@@ -1,0 +1,9 @@
+[[runs]]
+name = "minif2f_D_phase16_run1"
+arm = "D"
+phase = 16
+policy_adapter = "/workspace/checkpoints/followup_D_phase_0016/expert_iteration/adapter"
+value = "/workspace/checkpoints/followup_D_phase_0016/value/adapter"
+value_version = 16
+config = "experiments/configs/grpo/followup/minif2f/minif2f_evaluation.toml"
+purpose = "arm D (C's rounds plus F's GRPO step) at phase 16 with its own value model"

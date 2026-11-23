@@ -361,6 +361,15 @@ what a restart leaves anyway), the empty tree and file kept aside in `followup_D
 STOPPED moved aside, the driver started (22:35:43). `d_after.sh` relaunched at 22:21, stopped with the driver at 22:31, relaunched at 22:38. D now ends about 3 h later.
 Follow-up after D: fsync before the rename (code change, two reviews).
 
+**Owner, 2026-11-24: wrap up before the node's maintenance (about 20:20 UTC).** Everything off the node while D runs:
+`node_backup/2026-11-15/pull_full.sh` copies every phase checkpoint (adapters, steps, phase records; no merged weights)
+and every run's trees into `node_backup/2026-11-15/full/`, each item checked by file sizes; D's after it finishes.
+After D's two probes, miniF2F-valid (244; the test split never) for C16, F16, D16, v0 and v35, each with its own
+value model, at grpo_loop_v1's miniF2F settings (64 expansions, 3,600 s per search; its v0 160, v35 170 of 244 stand
+as references), runs accepted with up to 5% wall-clock stops (the references had 2.0% and 1.2%). About 70-75 min per
+run, so v0 and v35 may be cut by the maintenance. Configs `experiments/configs/grpo/followup/minif2f/`, reviews BT
+(design) and BU (code); launched by `/workspace/runs/screens/minif2f_after_d.sh`.
+
 
 **Progress-fraction credit** (`verified_fraction`, `src/lean_search/rl/README.md`, "Progress fraction"): as verified
 progress, but a clean block ending on the found proof scores its share of the node's remaining proof (closing 1, one

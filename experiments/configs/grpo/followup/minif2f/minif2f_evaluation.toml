@@ -1,0 +1,13 @@
+# miniF2F-valid (244 statements; the test split is never searched) searched like the probe but as grpo_loop_v1's
+# miniF2F runs were (64 expansions, 3,600 s per search; v0 160, v35 170 of 244), so those two stand as references, in
+# file order: no measured search times exist for these statements. The set: experiments/minif2f_valid_set.py on the node.
+base = "experiments/configs/grpo/followup/probe_evaluation.toml"
+probe_set = "grpo/fixed_sets/minif2f_valid.jsonl"
+output = "minif2f_evaluations"
+# The cap is part of the budget here, as in the reference runs (5 and 3 stops, 2.0% and 1.2%): a stopped search counts
+# as unsolved and the stops are reported; the probe's 1% rule would reject the references themselves.
+max_wall_clock_stop_share = 0.05
+
+[probe]
+max_expansions = 64
+max_wall_seconds = 3600.0

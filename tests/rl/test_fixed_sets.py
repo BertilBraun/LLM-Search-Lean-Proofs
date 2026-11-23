@@ -6,7 +6,8 @@ from pathlib import Path
 import pytest
 
 from lean_search.corpora.records import StatementRecord
-from lean_search.expert_iteration.curriculum import CurriculumConfig
+from lean_search.data import Split, load_minif2f
+from lean_search.expert_iteration.curriculum import CurriculumConfig, file_sha256
 from lean_search.expert_iteration.known_proofs import VerifiedStatement
 from lean_search.rl.fixed_sets import (
     CharacterStrataConfig,
@@ -17,6 +18,7 @@ from lean_search.rl.fixed_sets import (
     character_candidates,
     character_strata,
     character_stratum,
+    minif2f_valid_set,
     read_fixed_set,
     same_statements,
     searched_problem_names,
@@ -230,3 +232,49 @@ def test_a_held_out_states_statement_matches_up_to_whitespace() -> None:
 def test_strata_order_numbered_labels_by_their_low_end_after_the_old_names_by_name() -> None:
     labels = ["hard", "500-999", "easy", "4500+", "0-499", "medium"]
     assert sorted(labels, key=stratum_order) == ["0-499", "500-999", "4500+", "easy", "hard", "medium"]
+
+
+def test_the_minif2f_valid_set_holds_the_244_valid_statements() -> None:
+    assert len(minif2f_valid_set(load_minif2f(Split.VALID))) == 244
+
+
+def test_the_minif2f_valid_set_refuses_a_test_statement() -> None:
+    with pytest.raises(ValueError, match="miniF2F-valid"):
+        minif2f_valid_set(load_minif2f())
+
+
+def test_a_minif2f_valid_statement_searches_its_own_header_and_statement() -> None:
+    problem = load_minif2f(Split.VALID)[0]
+    searched = minif2f_valid_set([problem])[0].problem
+    assert (searched.name, searched.header, searched.formal_statement) == (
+        f"minif2f.{problem.name}",
+        problem.header,
+        problem.formal_statement,
+    )
+
+
+def test_the_minif2f_valid_set_is_stratified_by_competition() -> None:
+    strata = Counter(statement.stratum for statement in minif2f_valid_set(load_minif2f(Split.VALID)))
+    assert strata == {
+        "mathd_algebra": 70,
+        "mathd_numbertheory": 60,
+        "amc12": 45,
+        "imo": 20,
+        "algebra": 18,
+        "aime": 15,
+        "induction": 8,
+        "numbertheory": 8,
+    }
+
+
+def test_the_minif2f_valid_set_reads_back_from_its_file(tmp_path: Path) -> None:
+    statements = minif2f_valid_set(load_minif2f(Split.VALID))
+    write_fixed_set(tmp_path / "minif2f_valid.jsonl", statements)
+    assert read_fixed_set(tmp_path / "minif2f_valid.jsonl") == statements
+
+
+def test_the_written_minif2f_valid_set_has_the_hash_the_node_checks(tmp_path: Path) -> None:
+    # The node's launch script refuses a set with another sha256.
+    path = tmp_path / "minif2f_valid.jsonl"
+    write_fixed_set(path, minif2f_valid_set(load_minif2f(Split.VALID)))
+    assert file_sha256(path) == "bee5a77dc1a7c19f603a8d202f52bcd67f5e3b26010eb8c619902835af2b029c"

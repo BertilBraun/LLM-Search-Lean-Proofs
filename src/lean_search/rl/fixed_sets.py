@@ -22,11 +22,14 @@ from pathlib import Path
 
 from lean_search.corpora.decontamination import canonical_statement
 from lean_search.corpora.records import StatementRecord
-from lean_search.data import Problem
+from lean_search.data import Problem, Split
 from lean_search.expert_iteration.curriculum import Curriculum, CurriculumConfig
 from lean_search.expert_iteration.known_proofs import VerifiedStatement
 from lean_search.expert_iteration.pool import pool_problem, problem_name
 from lean_search.search.records import from_json_object, to_json
+from lean_search.search.summary import category
+
+MINIF2F_SOURCE = "minif2f"
 
 
 class Stratum(StrEnum):
@@ -39,7 +42,7 @@ class Stratum(StrEnum):
 class HeldOutStatement:
     statement: StatementRecord
     difficulty: float
-    # A `Stratum`, or a character band such as "500-999" (`character_stratum`).
+    # A `Stratum`, a character band such as "500-999" (`character_stratum`) or a miniF2F competition.
     stratum: str
 
     @property
@@ -290,10 +293,27 @@ def select_by_characters(
     return CharacterSelection(tuple(chosen), tuple(draws))
 
 
+def minif2f_valid_set(problems: Sequence[Problem]) -> list[HeldOutStatement]:
+    """miniF2F-valid as a fixed set the probe evaluation reads: named `minif2f.<name>`, stratified by competition."""
+    test_problems = [problem.name for problem in problems if problem.split != Split.VALID]
+    if test_problems:
+        raise ValueError(f"Only miniF2F-valid may be searched; given others: {test_problems[:5]}")
+    return [
+        HeldOutStatement(
+            StatementRecord(
+                MINIF2F_SOURCE, problem.name, problem.header, problem.formal_statement, problem.informal_prefix, ""
+            ),
+            0.0,
+            category(problem.name),
+        )
+        for problem in problems
+    ]
+
+
 def write_fixed_set(path: Path, statements: Sequence[HeldOutStatement]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + ".tmp")
-    temporary.write_text("".join(to_json(statement) + "\n" for statement in statements), encoding="utf-8")
+    temporary.write_text("".join(to_json(statement) + "\n" for statement in statements), encoding="utf-8", newline="\n")
     temporary.replace(path)
 
 
