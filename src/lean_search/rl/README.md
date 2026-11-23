@@ -102,7 +102,7 @@ failed attempt at it scored −0.15 with the claim's tokens at 0 and the failure
 (nlinarith), so an attempt at a provable claim (−0.175) ranked below one at an invented claim, and a valid step or
 no-op after an open claim (−0.25, −0.35) below an error there (−0.15).
 
-**Claims (`claims_earn_progress`, `unproved_claim_cost`; on in arms A and D since 2026-11-18).** Arm A's first run
+**Claims (`claims_earn_progress`, `unproved_claim_cost`; on in arm A since 2026-11-18, in D until 2026-11-23).** Arm A's first run
 (5e-5, stopped by the owner after 7 of 16 phases) drifted into bare `have` openings (20.5% → 32.4% of blocks over
 phases 1-6) with the reward fix above in force. Replayed on its trees with the trainer's path
 (`experiments/analysis/bare_have_credit.py`; reviews BF, BG):
@@ -172,7 +172,7 @@ openings under the phase's own reward, mean explanation tokens, held-out against
 stop rule (bare haves more than 5 points over phase 1, or a growing subclass more than 1.5x) for the owner to decide;
 one process, a few minutes per phase on the CPU.
 
-**Wasted blocks' explanation (`[policy.data] cap_wasted_block_explanation`; on in arms A and D since 2026-11-19).**
+**Wasted blocks' explanation (`[policy.data] cap_wasted_block_explanation`; on in arm A since 2026-11-19, in D until 2026-11-23).**
 With the claim switches, arm A's rerun kept its bare `have` share flat (19.7% → 19.6% at phase 4) but not its
 held-out states (success 33.1-34.9%, v0 33.2%). Of the trained samples reaching the proof graph, 22% (phase 1) → 34%
 (phase 5) then ran a failing tactic, and they earned +0.35 to +0.41 of sequence advantage per sample (72-77% positive)
@@ -1255,7 +1255,7 @@ the bare-have warnings should stay quiet. On the node only: the round's adapter 
 The follow-up study's arms C and D (DESIGN.md, "Arms") run rounds at the loop's pauses instead of by hand.
 `[training] policy_update` decides: `"grpo"` (the default; every config before the study), `"expert_iteration"` (C: a
 round, no GRPO update; the phase config sent to the trainer has no policy section) or `"grpo_and_expert_iteration"`
-(D: A's GRPO update every phase, a round after it). A round is due at phases N, 2N, ...
+(D: the F screen's GRPO update every phase, a round after it). A round is due at phases N, 2N, ...
 (`expert_iteration_every_phases`), over the last `expert_iteration_window_phases` phases (fewer at the start: from
 phase 1, every version's samples from version 0 on), by the recipe in `expert_iteration_config`
 (`followup/expert_iteration.toml`: round 1's selection, replay, schedule and rate; an arm overlay sets its rate).

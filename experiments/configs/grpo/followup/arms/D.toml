@@ -1,8 +1,8 @@
-# Arm D, interleaved (DESIGN.md, "Follow-up study: controlled arms", "Arms"): arm A's GRPO update at every pause, and
-# after it at every fourth pause an expert-iteration round over C's window (followup/expert_iteration.toml's recipe),
-# published together as the phase's one version; the KL reference stays v0. D's GRPO half is the A screen's
-# (screens/A_2e-5.toml), its rounds C's. The
-# follow-up base and its phase template changed only in the lines below, the recipe only in its learning rate
+# Arm D, interleaved (DESIGN.md, "Follow-up study: controlled arms", "Arms"): at every pause the F screen's GRPO
+# update, then C's expert-iteration round over C's window (followup/expert_iteration.toml's recipe), published together
+# as the phase's one version; the KL reference stays v0. So D is C's schedule plus F's GRPO step, and D against C
+# measures what the GRPO step adds (owner, 2026-11-23, after F at 16 phases tied C).
+# The follow-up base and its phase template changed only in the lines below, the recipe only in its learning rate
 # (experiments/followup_arm.py writes the loop's configs; src/lean_search/rl/README.md, "Expert iteration inside the
 # loop").
 [loop]
@@ -10,25 +10,14 @@ name = "followup_D"
 
 [loop.training]
 policy_update = "grpo_and_expert_iteration"
-expert_iteration_every_phases = 4
+expert_iteration_every_phases = 1
 expert_iteration_window_phases = 4
 
 [phase.policy.data]
-credit = "per_tactic"
-# A block with a failing or wasted tactic: at most 0 on its explanation (rl/README.md, "Wasted blocks").
-cap_wasted_block_explanation = true
-
-[phase.reward]
-# Arm A's first run (stopped by the owner after 7 of 16 phases, 2026-11-18) drifted into bare `have` claims: a claim
-# adding a goal earns no progress for its own step, and leaving an invented claim open costs 0.3 beyond an error there
-# instead of c = 0.1 (src/lean_search/rl/README.md, "Claims";
-# experiments/analysis/bare_have_credit.py replays it on the first run's trees).
-claims_earn_progress = false
-unproved_claim_cost = 0.3
+# The F screen's credit (screens/F_2e-5.toml).
+credit = "verified_fraction"
 
 [phase.policy.optimization]
-# The A screen at 2e-5 (level with C on held-out success, 2.4 points behind on valid Lean, phases 4-8; it did not pass
-# the screens' rule) against A at 5e-5, which slid after phase 8: the owner chose 2e-5 for D (2026-11-21).
 learning_rate = 2e-5
 
 [expert_iteration.sft.optimization]

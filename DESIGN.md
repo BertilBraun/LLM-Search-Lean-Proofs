@@ -1154,7 +1154,7 @@ CPU quota (sampling expected Lean-bound), $0.89/h; the owner checks in about twi
 | Q2, A vs B2: B2 wins | the shaping misdirects the policy, as in the reward hacking of phases 1–10 |
 | Q2, A vs B1 (step 2 only) | placing the same graph credit per tactic against spreading it over the sequence; not an outcome-only comparison |
 | Q2, A vs C | recipe against recipe (GRPO with KL 0.01 and NLL replay against SFT with 40% replay, no KL); C ahead: GRPO's small steps do not pay at equal tokens |
-| Q2, D vs A and C | D ahead of both: GRPO and expert-iteration rounds are complementary |
+| Q2, D vs C | D is C's schedule plus the F screen's GRPO step (2026-11-23): D ahead of C means the GRPO step adds to the rounds; level means it does not |
 | Q2: no two arms differ | at ~190M tokens per arm the signal does not matter; with the frozen-policy runs, how much comes from the value model and the search |
 | Q3: visible at least as good at equal tokens | reasoning pays per token, not only per expansion; the arms stay visible |
 | Q3: no reasoning wins at equal tokens | the +14 per expansion of 2026-10 was bought with tokens; the owner decides on a no-reasoning arm |
@@ -1175,11 +1175,11 @@ Arm B (B1 and B2 below) is dropped (owner, 2026-11-17); its rows stay for the re
 | B1 graph credit spread over the sequence | every sampled token gets the sample's score − b (the anchor's R plus the block's gains: progress and wasted-tactic costs stay) | `credit = "sequence"` (`grpo/phase_sequence_credit.toml`, `rl/advantages.CreditMode.SEQUENCE`) |
 | B2 pure proof success | r = 1 only if the last tactic of the kept prefix that produces a state is labelled `PROOF_GRAPH` (the sample advances along the found proof from the anchor); a failing first tactic, a no-progress, redundant, back-to-ancestor or off-graph block and an unparsed sample get 0; every sampled token gets r − the group's multiplicity-weighted mean r | missing (WP3) |
 | C expert iteration, window W | SFT continuing the current adapter on the verified proof-graph blocks of the last W phases (`rl/expert_iteration_data.py`: shortest route, no claim left open, ≤ 2 blocks per state, ≤ 6 states per statement, ≤ 20% easy states), replay 30% Lean + 10% math by completion tokens | a hand-run round: `grpo_expert_iteration.py` takes phases from `reward_fix.json`'s phase on, `train` refuses unless the loop is stopped, `publish-adapter` and `compare` by hand; window: WP4a; inside the loop: `policy_update = "expert_iteration"` (WP4b, `arms/C.toml`) |
-| D interleaved | exactly A, plus a C round every N = 4 phases (proposed) over C's window after that phase's GRPO update; the KL reference stays v0 | `policy_update = "grpo_and_expert_iteration"`, `expert_iteration_every_phases = 4` (WP4b, `arms/D.toml`) |
+| D interleaved | the F screen's GRPO update (progress-fraction credit, 2e-5), plus C's round every phase over C's window after it, so D is C's schedule plus one GRPO step (owner, 2026-11-23; before: A's update and a round every 4th phase); the KL reference stays v0 | `policy_update = "grpo_and_expert_iteration"`, `expert_iteration_every_phases = 1`, `credit = "verified_fraction"` (WP4b, `arms/D.toml`) |
 | E unsolved-tree signal | open, owner decides (below) | missing |
 
 - **The claim switches** (2026-11-18, after arm A's first run at 5e-5 drifted into bare `have` openings and was
-  stopped after 7 phases): A and D train with `[reward] claims_earn_progress = false` (a claim adding a goal earns no
+  stopped after 7 phases): A (and D until 2026-11-23, when it took F's credit, which reads neither) trains with `[reward] claims_earn_progress = false` (a claim adding a goal earns no
   δ for its own step; everywhere else a step stays one flattened tactic) and `unproved_claim_cost = 0.3` (an invented
   claim left open: −0.45 instead of −0.25), chosen by a replay on A's trees (`rl/README.md`, "Claims"). A reruns from
   v0. C reads no reward; a GRPO reward key in C's overlay is refused.
@@ -1497,7 +1497,7 @@ land, run 6 with WP2, the ranking and probe runs, while WP1 and WP5 are written.
   the held-out wall cap): WP0's base config must set them all; WP6's diff test checks it.
 - `tree_statistics.py` counts the dashboard's `groups_with_signal` with `PER_TACTIC` whatever the arm's credit.
 - Owner: confirm B2 as the closed-loop control (a change to the pick rule), μ = 0, the 12M × 16 budget, stop at the
-  first collapse, N = 4 for D, and whether E is wanted.
+  first collapse, and whether E is wanted. D's round interval: every phase (owner, 2026-11-23).
 
 ## Known issues (backlog)
 - Resolved: search generation cost is charged per batch (`CandidateBatch`), when the expander yields it. Runs before

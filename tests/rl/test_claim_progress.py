@@ -13,7 +13,7 @@ COST = 0.1
 ON_GRAPH = 0.85
 FAILURE = -0.15
 UNPAID = dataclasses.replace(REWARDS, claims_earn_progress=False)
-# Arms A and D since 2026-11-18.
+# Arm A since 2026-11-18 (D until 2026-11-23).
 ARMS = dataclasses.replace(UNPAID, unproved_claim_cost=0.3)
 
 

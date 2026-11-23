@@ -304,7 +304,29 @@ default), safe server stops, results pulled to the PC as they are written.
 | First node, 2026-11-14 11:20 UTC to its outage at about 23:35 UTC | about $11 at most; partly refunded by the provider (owner) |
 | Second node, from 2026-11-15 about 08:30 UTC | $0.83 per hour |
 
-## Owner, 2026-11-22: fix the block length, screen it
+## Owner, 2026-11-23: run D (C's rounds plus F's GRPO step)
+
+After F tied C at 16 phases, the owner asked whether the GRPO step adds anything on top of expert iteration and chose
+to run D. D's round interval (open since review BM): **every phase**, so D's loop config is C's but for
+`policy_update = "grpo_and_expert_iteration"`, and its phase config is the F screen's exactly (credit
+`verified_fraction`, 2e-5; the claim switches and the explanation cap dropped: F's credit reads neither, and the cap
+is refused with it). Rounds at 5e-5 over C's 4-phase window. Reviews BR (design) and BS (code), 2026-11-23.
+
+**Reading rule, set before D starts** (one closed-loop run per arm; the probe interval does not cover run-to-run
+noise): D − C on the 2,000-statement probe at phase 16 with its lower bound above 0 says the GRPO step adds to the
+rounds; an interval containing 0 says no effect larger than the interval (about ±2 points); an upper bound below 0
+says it costs. Secondary: D at phase 8 against C8 (937) and F8 (1,007), D against F at 16, solved within 1-8
+expansions.
+
+**Checks while D runs** (review BR): the GRPO step, the round and the phase's whole parameter change per phase (the
+round at 5e-5 may largely overwrite GRPO's step at 2e-5; `round.toml` names the published adapter as the round's
+start, but D's round starts from the GRPO adapter); D's KL penalty against its policy loss and its KL to v0 next to
+F's (penalty about 1% of |policy loss| in F, KL to v0 0.023 at phase 16; above about 10% the pull toward v0 is a
+confound); the sampler's agreement per version against F's (D moves more per phase, so the ~2.5M carried-over tokens
+are further off-policy); bare `have` at phases 8 and 16 (F warned at 15 and 16: 27.7%, 28.5% against 26.0%).
+Expected: about 17.5 h of loop (C 15.3 h), then the driver's probe at 16 and comparisons with A and C; then
+`/workspace/runs/screens/d_after.sh` probes D's phase 8 and writes D against C8, F8, F16, C16 and D8.
+
 
 **Progress-fraction credit** (`verified_fraction`, `src/lean_search/rl/README.md`, "Progress fraction"): as verified
 progress, but a clean block ending on the found proof scores its share of the node's remaining proof (closing 1, one
@@ -421,8 +443,9 @@ of C at 8 (+3.5), and ahead at small search budgets at both points, i.e. the pol
 (16.1% in one expansion, the closest any arm comes to v35's 17.1%). Fixing V's block length is what did it (one-
 expansion solves 5.7% → 13.4% → 16.1%). The held-out states disagree with the probe for per-tactic credit in both
 directions (V over-read, F under-read: F's held-out valid Lean and failing-after-graph look worse than V's throughout),
-so they are not a usable gate for these arms. Not closed: F and C were each run once; F used the screens' base budgets,
-C the arm budgets.
+so they are not a usable gate for these arms. Not closed: F and C were each run once. Their budgets match: on the node F's loop.toml
+differs from C's only in C's four expert-iteration keys, F's phase.toml from C's only in `credit` (checked
+2026-11-23).
 
 ## V's probe, 2026-11-22: 891 of 2,000
 

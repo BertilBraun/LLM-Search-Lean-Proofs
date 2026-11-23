@@ -75,8 +75,8 @@ def leaves(table: dict) -> dict[str, object]:
     return found
 
 
-def changed_keys(arm: str) -> set[str]:
-    before, after = leaves(arm_overlay(arm)), leaves(smoke_overlay(arm_overlay(arm), arm))
+def changed_keys(overlay: dict, arm: str) -> set[str]:
+    before, after = leaves(overlay), leaves(smoke_overlay(overlay, arm))
     return {key for key in before.keys() | after.keys() if before.get(key) != after.get(key)}
 
 
@@ -88,12 +88,16 @@ BUDGET_KEYS = {
 }
 
 
-def test_the_c_smoke_overlay_differs_from_arm_c_only_in_name_budget_phase_count_and_value_interval() -> None:
-    assert changed_keys("C") == BUDGET_KEYS
+@pytest.mark.parametrize("arm", ["C", "D"])
+def test_a_smoke_overlay_differs_from_its_arm_only_in_name_budget_phase_count_and_value_interval(arm: str) -> None:
+    assert changed_keys(arm_overlay(arm), arm) == BUDGET_KEYS
 
 
-def test_the_d_smoke_overlay_also_brings_its_round_within_its_one_phase() -> None:
-    assert changed_keys("D") == BUDGET_KEYS | {"loop.training.expert_iteration_every_phases"}
+def test_a_smoke_overlay_brings_a_longer_round_interval_within_its_one_phase() -> None:
+    every_fourth = {
+        "loop": {"training": {"policy_update": "grpo_and_expert_iteration", "expert_iteration_every_phases": 4}}
+    }
+    assert changed_keys(every_fourth, "D") == BUDGET_KEYS | {"loop.training.expert_iteration_every_phases"}
 
 
 def smoke_loop(arm: str) -> dict:

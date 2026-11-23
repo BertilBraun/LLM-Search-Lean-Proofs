@@ -43,9 +43,9 @@ CHOSEN_RATES = {
     ("D", "expert_iteration.sft.optimization.learning_rate"): 5e-5,
 }
 RECIPE = CONFIGS / "followup/expert_iteration.toml"
-# The reward's claim switches, on in the arms training with GRPO since arm A's bare-have drift (2026-11-18).
+# The reward's claim switches, on in arm A since its bare-have drift (2026-11-18).
 CLAIM_SWITCHES = {"reward": {"claims_earn_progress": False, "unproved_claim_cost": 0.3}}
-# The explanation cap of a block with a wasted tactic, on in the same arms since arm A's rerun (2026-11-19).
+# The explanation cap of a block with a wasted tactic, on in arm A since its rerun (2026-11-19).
 EXPLANATION_CAP = {"policy": {"data": {"cap_wasted_block_explanation": True}}}
 CLAIM_SWITCH_ARMS = {"A": CLAIM_SWITCHES | EXPLANATION_CAP, "B1": {}, "B2": {}}
 
@@ -221,16 +221,15 @@ def round_arm(name: str, learning_rate: float = 5e-5, window: int = 4) -> Overla
 
 
 @pytest.mark.parametrize(
-    ("name", "update", "every"),
-    [("C", PolicyUpdate.EXPERT_ITERATION, 1), ("D", PolicyUpdate.GRPO_AND_EXPERT_ITERATION, 4)],
+    ("name", "update"), [("C", PolicyUpdate.EXPERT_ITERATION), ("D", PolicyUpdate.GRPO_AND_EXPERT_ITERATION)]
 )
 def test_a_round_arms_loop_config_is_the_base_but_for_its_name_rounds_and_configs(
-    name: str, update: PolicyUpdate, every: int
+    name: str, update: PolicyUpdate
 ) -> None:
     rounds = {
         "phase_config": "/configs/phase.toml",
         "policy_update": update.value,
-        "expert_iteration_every_phases": every,
+        "expert_iteration_every_phases": 1,
         "expert_iteration_window_phases": 4,
         "expert_iteration_config": "/configs/expert_iteration.toml",
     }
@@ -243,14 +242,12 @@ def test_arm_cs_phase_config_is_the_shipped_phase() -> None:
     assert from_json_object(TrainingPhaseConfig, written) == from_json_object(TrainingPhaseConfig, PHASE)
 
 
-@pytest.mark.parametrize("name", ["A", "D"])
-def test_the_claim_switches_are_on_in_the_arms_training_with_grpo(name: str) -> None:
-    assert toml(CONFIGS / f"followup/arms/{name}.toml")["phase"]["reward"] == CLAIM_SWITCHES["reward"]
+def test_the_claim_switches_are_on_in_arm_a() -> None:
+    assert toml(CONFIGS / "followup/arms/A.toml")["phase"]["reward"] == CLAIM_SWITCHES["reward"]
 
 
-@pytest.mark.parametrize("name", ["A", "D"])
-def test_the_wasted_block_explanation_cap_is_on_in_the_arms_training_with_grpo(name: str) -> None:
-    assert toml(CONFIGS / f"followup/arms/{name}.toml")["phase"]["policy"]["data"]["cap_wasted_block_explanation"]
+def test_the_wasted_block_explanation_cap_is_on_in_arm_a() -> None:
+    assert toml(CONFIGS / "followup/arms/A.toml")["phase"]["policy"]["data"]["cap_wasted_block_explanation"]
 
 
 def test_the_old_runs_phase_config_leaves_wasted_block_explanations_uncapped() -> None:
@@ -261,23 +258,28 @@ def test_the_old_runs_phase_config_keeps_claims_earning_progress() -> None:
     assert from_json_object(TrainingPhaseConfig, PHASE).reward.claims_earn_progress
 
 
-def test_arm_ds_phase_config_is_arm_as_at_the_same_rate() -> None:
-    arm_a = arm_configs(filled(toml(CONFIGS / "followup/arms/A.toml"), 2e-5))
-    arm_d = round_arm("D", 2e-5)
-    assert tomllib.loads(toml_text(arm_d.phase)) == tomllib.loads(toml_text(arm_a.phase))
+def as_written(name: str) -> OverlayConfigs:
+    return arm_configs(toml(CONFIGS / f"followup/arms/{name}.toml"))
 
 
-def test_arm_ds_loop_config_is_arm_as_plus_the_rounds() -> None:
-    rounds = {
-        "policy_update",
-        "expert_iteration_every_phases",
-        "expert_iteration_window_phases",
-        "expert_iteration_config",
-    }
-    arm_a = arm_configs(filled(toml(CONFIGS / "followup/arms/A.toml"))).loop
-    arm_d = round_arm("D").loop
-    without_rounds = {key: value for key, value in arm_d["training"].items() if key not in rounds}
-    assert ({**arm_d, "name": arm_a["name"], "training": without_rounds}) == arm_a
+def test_arm_ds_phase_config_as_written_is_the_f_screens() -> None:
+    screen = overlay_configs(
+        OverlayKind.SMOKE,
+        toml(CONFIGS / "followup/screens/F_2e-5.toml"),
+        BASE,
+        PHASE,
+        "/configs/phase.toml",
+        RECIPE_TABLE,
+        "/configs/expert_iteration.toml",
+    )
+    assert tomllib.loads(toml_text(as_written("D").phase)) == tomllib.loads(toml_text(screen.phase))
+
+
+def test_arm_ds_loop_config_as_written_is_arm_cs_but_for_its_name_and_policy_update() -> None:
+    arm_c = as_written("C").loop
+    arm_d = as_written("D").loop
+    training = {**arm_d["training"], "policy_update": arm_c["training"]["policy_update"]}
+    assert {**arm_d, "name": arm_c["name"], "training": training} == arm_c
 
 
 @pytest.mark.parametrize("name", ROUND_ARMS)

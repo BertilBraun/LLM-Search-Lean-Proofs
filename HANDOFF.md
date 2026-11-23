@@ -14,7 +14,7 @@ file and the files it points to. Keep this file current while you work, or repla
 - Arm A's first run (bare-`have` drift) is kept as `runs/followup_A.bug_20261119T124352Z`, its claim-switch rerun
   (flat on held-out, blocks failing after progress paid ~80% of clean ones) as `runs/followup_A.uncapped_20261119T192648Z`.
   The explanation cap `[policy.data] cap_wasted_block_explanation` (reviews BH, BI; next letter `bj`) is deployed
-  (ed0c837, 19:26 UTC) and on for A and D.
+  (ed0c837, 19:26 UTC) and on for A (and for D until 2026-11-23, when D took F's credit).
 - Running unattended: the arms driver `deployment/arms_chain.sh` (supervisord `arms_chain`, state
   `/workspace/runs/arms_chain/`, order file `smoke C A D`) runs arm A's capped rerun from v0 (started 19:27 UTC
   2026-11-19; probe 822 of 2,000: +5.4 over v0, −11.3 behind C), then HOLD with `hold_D` (owner). Screens A and B2

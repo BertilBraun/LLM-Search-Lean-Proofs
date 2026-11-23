@@ -526,9 +526,9 @@ All told from now: A's remaining loop, then about 2-3.5 h (A's probe) + 2-2.5 h 
 derives `smoke/overlays/C.toml` and `D.toml` from `arms/C.toml` and `arms/D.toml` by code (`rl/arms_chain.smoke_overlay`,
 `--kind smoke`: `study_configs.SMOKE_SETTINGS`): the name `followup_smoke_<arm>`, 6M generated tokens per phase (half an
 arm's phase: at 2M the round would likely fall under the loop's floor of 100 examples), one phase, the value model
-trained at that phase (`value_every_phases` 1), and D's round interval brought from 4 to 1. D's one phase so trains
+trained at that phase (`value_every_phases` 1), and D's round interval brought from 4 to 1 (D's interval then; every phase since 2026-11-23). D's one phase so trains
 GRPO, the value model and a round in one trainer process, with both merges in /dev/shm: the heaviest pause C (every
-even phase) and D (every fourth) will meet. `tests/rl/test_arms_chain.py` pins that nothing else differs. Each smoke
+even phase) and D (then every fourth) will meet. `tests/rl/test_arms_chain.py` pins that nothing else differs. Each smoke
 loop starts with the servers stopped, samples every 5 s each GPU's `nvidia-smi` used memory (the allocator's reserved
 memory included) and `/dev/shm`'s use with the loop's stage (`smoke/readings_<arm>.tsv`). Once D's loop has been
 publishing phase 1 for 30 s, the driver kills it by PID (SIGKILL, after checking the PID's command line names

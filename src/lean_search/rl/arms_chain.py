@@ -63,8 +63,8 @@ def phase_directory_name(run: str, phase: int) -> str:
 
 def smoke_overlay(overlay: Mapping[str, object], arm: str) -> dict[str, object]:
     """The arm's overlay under its smoke name with the smoke's budget, its one phase training the value model too, and a
-    round interval longer than the smoke's phases brought within them: D's one phase then trains GRPO, the value model
-    and a round in one trainer process, the heaviest pause C and D meet (C at every even phase, D at every fourth)."""
+    round interval longer than the smoke's phases brought within them: D's one phase trains GRPO, the value model and a
+    round in one trainer process, the heaviest pause C and D meet (both at every even phase)."""
     loop = overlay.get("loop", {})
     assert isinstance(loop, Mapping)
     training = loop.get("training", {})
