@@ -67,7 +67,7 @@ file and the files it points to. Keep this file current while you work, or repla
 
 - **Subagents:** implementation, analysis and review run in subagents on Opus 5.5 at high effort. Two independent
   reviews after every implementation wave, then fixes, then a re-review by the same reviewers, then merge. Reviews are
-  files in `results/reviews/` named `<date>_review_<letters>_<topic>.md`; the last used letters are `bg` (next: `bh`).
+  files in `results/reviews/` named `<date>_review_<letters>_<topic>.md`; the last used letters are `bs` (next: `bt`).
 - **Usage:** running 5-8 Opus subagents at once exhausted the 5-hour usage limit on 2026-11-14 and left the node idle
   for hours. Keep few agents running, have node agents report on events rather than on a timer, and make node work
   self-sustaining so it does not depend on an agent being awake.
