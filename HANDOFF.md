@@ -4,7 +4,7 @@ Written 2026-11-16 by the orchestrating agent for the agent that takes over on a
 repository, same rented node; no conversation history and no running subagents carry over. Everything needed is in this
 file and the files it points to. Keep this file current while you work, or replace it with your own.
 
-**State at a glance (2026-11-22, about 10:25 UTC; updated by the second orchestrator)**
+**State at a glance (2026-11-23, about 10:50 UTC; updated by the second orchestrator)**
 
 - Done: step 1 (incl. the reasoning comparison: no reasoning +4.9 points at equal tokens but Lean-bound, 1.8x the
   time), the offline run O2 (545 of 2,000: FAILED the owner's gate against v35, so the arms sample WITH visible
@@ -19,11 +19,10 @@ file and the files it points to. Keep this file current while you work, or repla
   `/workspace/runs/arms_chain/`, order file `smoke C A D`) runs arm A's capped rerun from v0 (started 19:27 UTC
   2026-11-19; probe 822 of 2,000: +5.4 over v0, −11.3 behind C), then HOLD with `hold_D` (owner). Screens A and B2
   (2e-5) failed the rule; V (verified progress) ran 16 phases in place: probe 891 of 2,000 (+8.8 over v0, −7.9 behind
-  C; short blocks). NOW (owner, 2026-11-22): `/workspace/runs/screens/probe_C8.sh` probes C's phase 8, then
-  `/workspace/runs/screens/f_chain.sh 457190d` (running, log `f_chain.log`, `F_STOPPED` on failure) deploys 457190d,
-  runs the F screen (progress-fraction credit) for 8 phases, probes it, extends it in place to 16 phases, probes again
-  and writes `screens/compare/F*_against_*.txt`. The owner wants no idle GPUs and a summary at the end
-  (`results/followup_progress.md`). The owner's stop rule for A: `experiments/claim_watch.py` after
+  C; short blocks). F (progress-fraction credit, 2e-5, 457190d) ran 8 phases, was probed (1,007 of
+  2,000: +3.5 over C at phase 8), extended in place to 16 and probed again: **1,059 of 2,000, level with C's 1,049**
+  (+0.5 [−1.4, +2.4]); `/workspace/runs/screens/compare/F*_against_*.txt`. The chain ended 10:22 UTC 2026-11-23;
+  the GPUs idle until the owner decides the next run (summary in `results/followup_progress.md`). The owner's stop rule for A: `experiments/claim_watch.py` after
   phases 2 and 4 (`results/followup_progress.md`, "Arm A's rerun"). Disk: 113 GB free after removing regenerable
   merged weights of finished runs (an arm needs about 38 GB).
 - `on_health_stop = continue`. Search-efficiency switches only in the arms' sampling. Arm B dropped; O1 last, on the

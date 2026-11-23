@@ -400,6 +400,30 @@ lowest since phase 4 (34.5% success, 57.9% valid, 864 solved, on 2,506 samples a
 graph climbed again from phase 14 (33-34%), blocks stay at 2.6-3.0 tactics, groups trained fell to 517. Held-out
 states under-read F at phase 8 by a wide margin, so the F16 probe (started 07:30) is the measure.
 
+**F's probe at phase 16** (`screen_F_phase16_run1`, phase 16 with its phase-16 value model, finished 10:20 UTC
+2026-11-23): **1,059 of 2,000 (52.95%)**, accepted (one wall-clock stop, 0.05%). The chain ended at 10:22 ("F chain
+done"); the GPUs idle from then until the owner's decision.
+
+| F phase 16 against | points [95%] | McNemar (x only / y only, p) |
+|---|---|---|
+| C phase 16 (1,049) | +0.5 [−1.4, +2.4] | 187 / 177, p = 0.64 |
+| F phase 8 (1,007) | **+2.6 [+0.8, +4.5]** | 211 / 159, p = 0.008 |
+| V phase 16 (891) | **+8.4 [+6.5, +10.2]** | 281 / 113, p = 1e-17 |
+| v0 anchors (714.5) | +17.2 [+15.4, +18.9] | 405 / 59 and 412 / 69 |
+| v35 with the final value model (1,236) | −8.8 [−10.8, −6.9] | 114 / 291, p = 6e-19 |
+
+Solved within 1 / 2 / 4 / 8 / 16 expansions: F16 16.1 / 25.5 / 37.0 / 45.0 / 52.9%; C16 13.1 / 22.2 / 32.9 / 42.8 /
+52.4%; v35 final 17.1 / 29.3 / 41.9 / 53.3 / 61.8%. F16 leads C16 by 2-4 points at every budget up to 8 expansions
+and ties at 16; the gain over F8 sits in the 2000-4499 strata (+7.5 and +6.7). Tokens per statement 17,665 (C 16,861).
+
+**Reading.** F is the first per-tactic credit that matches the expert-iteration arm: level with C at 16 phases, ahead
+of C at 8 (+3.5), and ahead at small search budgets at both points, i.e. the policy itself is stronger per expansion
+(16.1% in one expansion, the closest any arm comes to v35's 17.1%). Fixing V's block length is what did it (one-
+expansion solves 5.7% → 13.4% → 16.1%). The held-out states disagree with the probe for per-tactic credit in both
+directions (V over-read, F under-read: F's held-out valid Lean and failing-after-graph look worse than V's throughout),
+so they are not a usable gate for these arms. Not closed: F and C were each run once; F used the screens' base budgets,
+C the arm budgets.
+
 ## V's probe, 2026-11-22: 891 of 2,000
 
 `probe_screen_V_phase16_run1` (V's phase 16 with its phase-16 value model; comparisons in
