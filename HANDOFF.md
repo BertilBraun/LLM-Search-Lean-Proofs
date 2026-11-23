@@ -4,7 +4,7 @@ Written 2026-11-16 by the orchestrating agent for the agent that takes over on a
 repository, same rented node; no conversation history and no running subagents carry over. Everything needed is in this
 file and the files it points to. Keep this file current while you work, or replace it with your own.
 
-**State at a glance (2026-11-23, about 10:50 UTC; updated by the second orchestrator)**
+**State at a glance (2026-11-23, about 12:45 UTC; updated by the second orchestrator)**
 
 - Done: step 1 (incl. the reasoning comparison: no reasoning +4.9 points at equal tokens but Lean-bound, 1.8x the
   time), the offline run O2 (545 of 2,000: FAILED the owner's gate against v35, so the arms sample WITH visible
@@ -22,11 +22,13 @@ file and the files it points to. Keep this file current while you work, or repla
   C; short blocks). F (progress-fraction credit, 2e-5, 457190d) ran 8 phases, was probed (1,007 of
   2,000: +3.5 over C at phase 8), extended in place to 16 and probed again: **1,059 of 2,000, level with C's 1,049**
   (+0.5 [−1.4, +2.4]); `/workspace/runs/screens/compare/F*_against_*.txt`. The chain ended 10:22 UTC 2026-11-23;
-  the GPUs idle until the owner decides the next run (summary in `results/followup_progress.md`). The owner's stop rule for A: `experiments/claim_watch.py` after
+  NOW (owner, 2026-11-23): arm D (C's rounds every phase plus F's GRPO step; 04333f0, reviews BR, BS) runs under
+  the arms driver since 12:40 UTC, then `/workspace/runs/screens/d_after.sh` probes D's phase 8 and writes D against
+  C and F (reading rule and checks in `results/followup_progress.md`). The owner's stop rule for A: `experiments/claim_watch.py` after
   phases 2 and 4 (`results/followup_progress.md`, "Arm A's rerun"). Disk: 113 GB free after removing regenerable
   merged weights of finished runs (an arm needs about 38 GB).
 - `on_health_stop = continue`. Search-efficiency switches only in the arms' sampling. Arm B dropped; O1 last, on the
-  owner's word. Review letters used up to `bq` (next: `br`). Spend about $75 of $190 at $0.83/h. The PC sleeps at
+  owner's word. Review letters used up to `bs` (next: `bt`). Spend about $75 of $190 at $0.83/h. The PC sleeps at
   times: the watchdog and the pull pause, the node does not.
 
 ## 1. First hour: what to do

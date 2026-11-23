@@ -327,6 +327,12 @@ are further off-policy); bare `have` at phases 8 and 16 (F warned at 15 and 16: 
 Expected: about 17.5 h of loop (C 15.3 h), then the driver's probe at 16 and comparisons with A and C; then
 `/workspace/runs/screens/d_after.sh` probes D's phase 8 and writes D against C8, F8, F16, C16 and D8.
 
+**Started 12:40 UTC 2026-11-23:** 04333f0 deployed (12:39), `hold_D` and `HOLD` moved aside, the arms driver started;
+loop pid 3650226. The written `followup_configs/followup_D/` checked before phase 1's pause (review BR, finding 3):
+loop.toml equals C's but for `policy_update`, phase.toml is byte-identical to F's, expert_iteration.toml to C's.
+`d_after.sh` waits for the driver (log `screens/d_after.log`, `D_AFTER_STOPPED` on failure). F's merged serving
+weights (26 GB, rebuilt from its adapters on demand) were removed for disk: 76 GB free at the start.
+
 
 **Progress-fraction credit** (`verified_fraction`, `src/lean_search/rl/README.md`, "Progress fraction"): as verified
 progress, but a clean block ending on the found proof scores its share of the node's remaining proof (closing 1, one
