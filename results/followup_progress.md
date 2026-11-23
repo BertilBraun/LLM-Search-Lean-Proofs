@@ -356,6 +356,14 @@ brackets; Mean r is the mean verified fraction, V's mean verified progress besid
 | 6 | 58.9% (71.9) | 35.3% (38.5) | 975 | 32.0% (14.5) | 2.68 (1.90) | 28.0% (21.6) | 2.3% | 0.209 (0.259) | 9.8% | 654 | 3.78 (2.46) |
 | 7 | 61.8% (73.2) | 39.0% (38.6) | 1,117 | 31.5% (11.3) | 2.85 (1.92) | 29.3% (23.4) | 2.1% | 0.188 (0.250) | 12.2% | 585 | 4.03 (2.44) |
 | 8 | 62.9% (76.3) | 38.1% (39.3) | 1,073 | 31.5% (13.9) | 2.88 (1.92) | 29.0% (22.7) | 2.3% | 0.188 (0.257) | 11.1% | 688 | 3.71 (2.44) |
+| 9 (extended) | 62.6% (78.1) | 37.1% (38.4) | 1,033 | 28.6% (9.5) | 2.67 (1.87) | 29.4% (25.3) | 2.3% | 0.202 (0.279) | 14.5% | 733 | 3.96 |
+| 10 | 61.0% (77.3) | 37.5% (41.5) | 1,027 | 26.0% (8.8) | 2.47 (1.83) | 28.2% (21.6) | 2.1% | 0.226 (0.291) | 14.0% | 614 | 3.64 |
+| 11 | 61.9% (77.9) | 36.2% (39.7) | 996 | 28.8% (10.4) | 2.90 (1.95) | 29.0% (23.0) | 2.1% | 0.205 (0.270) | 14.4% | 634 | 3.94 |
+| 12 | 61.3% (78.8) | 36.8% (40.0) | 1,011 | 26.6% (8.9) | 2.60 (1.99) | 27.0% (24.3) | 2.2% | 0.221 (0.285) | 13.6% | 657 | 3.57 |
+| 13 | 61.3% (76.5) | 38.6% (39.7) | 1,062 | 28.5% (8.6) | 2.63 (1.98) | 30.4% (29.0) | 2.4% | 0.220 (0.284) | 12.6% | 735 | 3.60 |
+| 14 | 62.4% (78.6) | 39.3% (41.5) | 1,088 | 33.2% (8.4) | 2.61 (2.19) | 29.4% (30.7) | 2.3% | 0.187 (0.250) | 13.1% | 685 | 3.83 |
+| 15 | 62.7% (79.3) | 36.2% (40.3) | 952 | 34.3% (11.3) | 2.83 (1.99) | 28.5% (27.1) | 2.1% | 0.166 (0.232) | 15.2% | 601 | 4.03 |
+| 16 | 57.9% (81.4) | 34.5% (40.1) | 864 | 33.2% (6.7) | 3.03 (1.84) | 31.9% (24.0) | 1.9% | 0.180 (0.249) | 13.8% | 517 | 3.86 |
 
 F finished 8 phases at 21:11 UTC (96.3M tokens, none lost, no health stop). Block length went where F pushes it
 (valid blocks 2.88 tactics at phase 8 against V's 1.92; trained blocks 3.7-4.0 against 2.4), but at a price on
@@ -384,6 +392,13 @@ attempt (C8 3.81). The fixed block length did what it was meant to: one-expansio
 Held-out states misled again, this time the other way (F below V there, 116 statements above V here), so the probe
 stays the measure for per-tactic credit. The chain moved the F loop in place to 16 phases (`max_phases` 8 → 16,
 loop pid 3394571 at 00:07 UTC 2026-11-23); F16 probe and comparisons follow.
+
+F finished 16 phases at 07:28 UTC 2026-11-23 (192.2M tokens, 2.8M lost, all at the phase-8 finish; no health stop).
+Phases 9-16 (rows above, from phase 9 the Mean r column's bracket is F's own mean verified progress, V's not
+logged beside it): held-out success flat at 36-39% through phase 15, valid Lean flat at 61-63%, then phase 16 the
+lowest since phase 4 (34.5% success, 57.9% valid, 864 solved, on 2,506 samples against ~2,750). Failing after the
+graph climbed again from phase 14 (33-34%), blocks stay at 2.6-3.0 tactics, groups trained fell to 517. Held-out
+states under-read F at phase 8 by a wide margin, so the F16 probe (started 07:30) is the measure.
 
 ## V's probe, 2026-11-22: 891 of 2,000
 
