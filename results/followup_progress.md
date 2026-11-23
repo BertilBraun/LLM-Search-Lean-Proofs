@@ -366,6 +366,25 @@ fails; guards 7-8: tactics 2.87 (≤ 3.0) passes, failing after the graph 31.5% 
 fail. Held-out states misled for V (short blocks), so the probe decides; by the owner's plan the chain probes phase 8
 and extends F to 16 regardless. The F8 probe started at 21:13.
 
+**F's probe at phase 8** (`screen_F_phase8_run1`, phase 8 with its phase-8 value model, finished 23:58 UTC
+2026-11-22): **1,007 of 2,000 (50.35%)**, accepted, no wall-clock stop; comparisons in `/workspace/runs/screens/compare/`.
+
+| F phase 8 against | points [95%] | McNemar (x only / y only, p) |
+|---|---|---|
+| C phase 8 (937) | **+3.5 [+1.7, +5.3]** | 217 / 147, p = 0.0003 |
+| V phase 16 (891) | **+5.8 [+4.0, +7.6]** | 250 / 134, p = 3e-9 |
+| C phase 16 (1,049) | −2.1 [−4.0, −0.1] | 181 / 223, p = 0.04 |
+| v0 anchors (714.5) | +14.6 [+12.9, +16.4] | 370 / 76 and 376 / 85 |
+
+Solved within 1 / 2 / 4 / 8 expansions: F8 13.4 / 22.4 / 32.8 / 42.6%; C8 11.9 / 20.3 / 29.4 / 38.1%; V16 5.7 / 13.0 /
+24.2 / 34.2%; C16 13.1 / 22.2 / 32.9 / 42.8%. F at 8 matches C at 16 up to 8 expansions and loses its 2.1 points in the
+last eight; it gains over C8 in every stratum but the easiest (largest at 1500-1999: +7.7 [+2.3, +12.3]) and trails
+C16 mostly from 2000 up. Cost: 18,999 generated tokens per statement (C 16,861, V 14,033), Lean 4.13 s per policy
+attempt (C8 3.81). The fixed block length did what it was meant to: one-expansion solves back from V's 5.7% to 13.4%.
+Held-out states misled again, this time the other way (F below V there, 116 statements above V here), so the probe
+stays the measure for per-tactic credit. The chain moved the F loop in place to 16 phases (`max_phases` 8 → 16,
+loop pid 3394571 at 00:07 UTC 2026-11-23); F16 probe and comparisons follow.
+
 ## V's probe, 2026-11-22: 891 of 2,000
 
 `probe_screen_V_phase16_run1` (V's phase 16 with its phase-16 value model; comparisons in
