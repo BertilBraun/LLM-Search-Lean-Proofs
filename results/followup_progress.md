@@ -333,6 +333,21 @@ loop.toml equals C's but for `policy_update`, phase.toml is byte-identical to F'
 `d_after.sh` waits for the driver (log `screens/d_after.log`, `D_AFTER_STOPPED` on failure). F's merged serving
 weights (26 GB, rebuilt from its adapters on demand) were removed for disk: 76 GB free at the start.
 
+**D's checks, phases 1-5** (relative parameter change in %; the KL penalty as a share of |policy loss|; held-out
+states after the phase):
+
+| Phase | GRPO step | Round | Whole phase | KL penalty / loss | KL to v0 | Bare `have` | Valid | Success | Mean fraction | Groups trained |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 3.72 | 1.97 | 4.27 | 0.104 | −0.006 | 19.7% | 59.0% | 34.7% | 0.321 | 1,529 |
+| 2 | 3.45 | 2.81 | 4.46 | 0.047 | 0.004 | 14.3% | 59.3% | 33.0% | 0.328 | 1,447 |
+| 3 | 3.10 | 3.20 | 4.41 | 0.027 | 0.011 | 15.1% | 61.5% | 35.7% | 0.277 | 1,199 |
+| 4 | 2.41 | 3.39 | 4.10 | 0.060 | 0.021 | 16.9% | 63.0% | 35.4% | 0.230 | 779 |
+| 5 | 2.34 | 3.31 | 4.00 | 0.049 | 0.027 | 19.7% | 63.2% | 35.5% | 0.204 | 756 |
+
+The round does not overwrite the GRPO step: both move the adapter by similar amounts and the phase's whole change
+(4.0-4.5%) is below their sum but above either. The KL penalty stays under the 10% line after phase 1 (3-6%), KL to
+v0 grows as in F. Bare `have` 14-20%, below F's (20-25% over the same phases).
+
 
 **Progress-fraction credit** (`verified_fraction`, `src/lean_search/rl/README.md`, "Progress fraction"): as verified
 progress, but a clean block ending on the found proof scores its share of the node's remaining proof (closing 1, one
