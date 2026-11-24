@@ -333,7 +333,7 @@ loop.toml equals C's but for `policy_update`, phase.toml is byte-identical to F'
 `d_after.sh` waits for the driver (log `screens/d_after.log`, `D_AFTER_STOPPED` on failure). F's merged serving
 weights (26 GB, rebuilt from its adapters on demand) were removed for disk: 76 GB free at the start.
 
-**D's checks, phases 1-9** (relative parameter change in %; the KL penalty as a share of |policy loss|; held-out
+**D's checks, phases 1-10** (relative parameter change in %; the KL penalty as a share of |policy loss|; held-out
 states after the phase):
 
 | Phase | GRPO step | Round | Whole phase | KL penalty / loss | KL to v0 | Bare `have` | Valid | Success | Mean fraction | Groups trained |
@@ -347,6 +347,7 @@ states after the phase):
 | 7 | 2.63 | 3.13 | 4.01 | 0.099 | 0.049 | 17.3% | 64.5% | 36.9% | 0.242 | 981 |
 | 8 | 2.37 | 3.17 | 3.86 | **0.154** | 0.054 | 18.3% | 66.1% | 38.9% | 0.236 | 783 |
 | 9 | 2.43 | 3.14 | 3.87 | **0.298** | 0.061 | 17.8% | 68.3% | 38.4% | 0.223 | 818 |
+| 10 | 2.44 | 3.21 | 3.93 | **0.133** | 0.064 | 17.4% | 67.9% | 38.4% | 0.252 | 857 |
 
 The round does not overwrite the GRPO step: both move the adapter by similar amounts and the phase's whole change
 (3.9-4.5%) is below their sum but above either. The KL penalty stayed under the 10% line through phase 6 (3-6%) and
