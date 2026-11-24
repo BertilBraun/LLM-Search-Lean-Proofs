@@ -359,7 +359,7 @@ The round does not overwrite the GRPO step: both move the adapter by similar amo
 (3.9-4.5%) is below their sum but above either. The KL penalty stayed under the 10% line through phase 6 (3-6%) and
 reached it at phase 7 (9.9%) and passed it at phase 8 (15.4%; KL to v0 0.054 against F's 0.023 at phase 16): the
 rounds move D away from v0 about twice as fast as F, so D's GRPO step spends a growing share of its pull on returning
-toward v0. Read beside D's result: a D that ties C may partly be a GRPO step held back by its KL term. Over phases 8-16 the share swung between 10% and 73% (phase 16), KL to v0 rose to 0.090; bare `have` stayed at 17-21% (F 26-32% over the same phases). D's loop ended 08:55 UTC 2026-11-24; the driver's D16 probe started 08:56. Bare `have` 14-20%, below F's (20-29% over the same phases).
+toward v0. Read beside D's result: a D that ties C may partly be a GRPO step held back by its KL term. Over phases 8-16 the share swung between 10% and 73% (phase 16), KL to v0 rose to 0.090; bare `have` stayed at 17-21% (F 27-32% over the same phases). D's loop ended 08:55 UTC 2026-11-24; the driver's D16 probe started 08:56. Bare `have` 14-20%, below F's (20-29% over the same phases).
 
 **Host outage, 2026-11-23 19:51-22:17 UTC** (Vast maintenance, unannounced): the host went offline during phase 7's
 search (about 17 min in, 272 trees written); the container restarted at 22:17 (boot time changed), disk intact. The
