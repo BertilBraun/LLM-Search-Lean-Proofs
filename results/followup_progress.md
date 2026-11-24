@@ -412,6 +412,9 @@ v0 160, v35 170 of 244.
 | Run | Solved of 244 | Wall-clock stops | Finished (UTC) |
 |---|---|---|---|
 | C16 | 172 (70.5%) | 2 (0.8%) | 15:32 |
+| F16 | 174 (71.3%) | 3 (1.2%) | 16:43 |
+
+C16 against F16 (paired): −0.8 points [−3.7, +2.0], 5 against 7 solved by one only, p = 0.77.
 
 
 **Progress-fraction credit** (`verified_fraction`, `src/lean_search/rl/README.md`, "Progress fraction"): as verified
