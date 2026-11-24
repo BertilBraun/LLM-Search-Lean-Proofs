@@ -333,7 +333,7 @@ loop.toml equals C's but for `policy_update`, phase.toml is byte-identical to F'
 `d_after.sh` waits for the driver (log `screens/d_after.log`, `D_AFTER_STOPPED` on failure). F's merged serving
 weights (26 GB, rebuilt from its adapters on demand) were removed for disk: 76 GB free at the start.
 
-**D's checks, phases 1-15** (relative parameter change in %; the KL penalty as a share of |policy loss|; held-out
+**D's checks, phases 1-16** (relative parameter change in %; the KL penalty as a share of |policy loss|; held-out
 states after the phase):
 
 | Phase | GRPO step | Round | Whole phase | KL penalty / loss | KL to v0 | Bare `have` | Valid | Success | Mean fraction | Groups trained |
@@ -353,12 +353,13 @@ states after the phase):
 | 13 | 2.62 | 3.19 | 3.99 | **0.105** | 0.080 | 19.6% | 69.1% | 39.3% | 0.221 | 814 |
 | 14 | 2.19 | 3.15 | 3.73 | **0.110** | 0.082 | 18.9% | 66.2% | 38.3% | 0.230 | 698 |
 | 15 | 2.53 | 3.14 | 3.89 | **0.288** | 0.090 | 19.7% | 67.4% | 35.3% | 0.235 | 835 |
+| 16 | 2.40 | 3.15 | 3.81 | **0.728** | 0.090 | 21.2% | 69.8% | 37.4% | 0.222 | 701 |
 
 The round does not overwrite the GRPO step: both move the adapter by similar amounts and the phase's whole change
 (3.9-4.5%) is below their sum but above either. The KL penalty stayed under the 10% line through phase 6 (3-6%) and
 reached it at phase 7 (9.9%) and passed it at phase 8 (15.4%; KL to v0 0.054 against F's 0.023 at phase 16): the
 rounds move D away from v0 about twice as fast as F, so D's GRPO step spends a growing share of its pull on returning
-toward v0. Read beside D's result: a D that ties C may partly be a GRPO step held back by its KL term. Bare `have` 14-20%, below F's (20-29% over the same phases).
+toward v0. Read beside D's result: a D that ties C may partly be a GRPO step held back by its KL term. Over phases 8-16 the share swung between 10% and 73% (phase 16), KL to v0 rose to 0.090; bare `have` stayed at 17-21% (F 26-32% over the same phases). D's loop ended 08:55 UTC 2026-11-24; the driver's D16 probe started 08:56. Bare `have` 14-20%, below F's (20-29% over the same phases).
 
 **Host outage, 2026-11-23 19:51-22:17 UTC** (Vast maintenance, unannounced): the host went offline during phase 7's
 search (about 17 min in, 272 trees written); the container restarted at 22:17 (boot time changed), disk intact. The
