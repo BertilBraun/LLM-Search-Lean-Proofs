@@ -380,6 +380,31 @@ as references), runs accepted with up to 5% wall-clock stops (the references had
 run, so v0 and v35 may be cut by the maintenance. Configs `experiments/configs/grpo/followup/minif2f/`, reviews BT
 (design) and BU (code); launched by `/workspace/runs/screens/minif2f_after_d.sh`.
 
+**D's result (2026-11-24).** Probe v2, 2,000 statements, 16 expansions, each policy with its own value model; all
+accepted, no wall-clock stops.
+
+| Comparison | Solved | Difference, points [95%] | Only x / only y | McNemar p |
+|---|---|---|---|---|
+| **D16 against C16** | 1,036 / 1,049 | **−0.7 [−2.5, +1.3]** | 185 / 198 | 0.54 |
+| D16 against F16 | 1,036 / 1,059 | −1.1 [−3.0, +0.9] | 178 / 201 | 0.26 |
+| D8 against C8 | 978 / 937 | +2.1 [+0.3, +3.9] | 199 / 158 | 0.034 |
+| D8 against F8 | 978 / 1,007 | −1.5 [−3.2, +0.4] | 168 / 197 | 0.14 |
+| D16 against D8 | 1,036 / 978 | +2.9 [+1.1, +4.8] | 214 / 156 | 0.003 |
+| D16 against A16 | 1,036 / 822 | +10.7 [+8.7, +12.6] | 322 / 108 | 9e-26 |
+| D16 against the v0 anchors | 1,036 / 714.5 | +16.1 [+14.3, +17.9] | | |
+| D16 against v35 (final value) | 1,036 / 1,236 | −10.0 [−11.9, −8.1] | | |
+
+- **By the rule set before D started: the interval contains 0, so the GRPO step on top of C's rounds has no effect
+  larger than about ±2 points.** D was ahead of C at phase 8 and the lead was gone by 16, as F's was.
+- Solved within 1/2/4/8/16 expansions: D16 13.9/22.2/32.0/42.2/51.8%, C16 13.1/22.2/32.9/42.8/52.4%, F16
+  16.1/25.5/37.0/45.0/52.9%.
+- By band, D16 against C16: −6.0 points under 500 characters [−10.0, −2.7] and −4.5 at 2,000-2,999 [−9.5, +0.2];
+  the rest within ±2.
+- Caveat (D's checks above): D's KL penalty passed the 10% line from phase 8 on (up to 73% of |policy loss|), so its
+  GRPO step was partly spent pulling back toward v0; the tie does not rule out a GRPO step without that pull.
+- The PC slept 11:08-14:15 UTC (no watchdog, pull loop stalled; its sleep killed by pid at 14:15, pull at 14:16). The
+  node ran on: D8 probe 11:12-14:17, D's comparisons 14:18, miniF2F C16 started 14:19.
+
 
 **Progress-fraction credit** (`verified_fraction`, `src/lean_search/rl/README.md`, "Progress fraction"): as verified
 progress, but a clean block ending on the found proof scores its share of the node's remaining proof (closing 1, one
