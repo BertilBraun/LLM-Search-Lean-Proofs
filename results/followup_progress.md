@@ -414,10 +414,18 @@ v0 160, v35 170 of 244.
 | C16 | 172 (70.5%) | 2 (0.8%) | 15:32 |
 | F16 | 174 (71.3%) | 3 (1.2%) | 16:43 |
 | D16 | 172 (70.5%) | 2 (0.8%) | 17:53 |
+| v0 (rerun) | 158 (64.8%) | 0 | 19:03 |
 
 C16 against F16 (paired): −0.8 points [−3.7, +2.0], 5 against 7 solved by one only, p = 0.77.
 D16 against C16: +0.0 [−2.0, +2.0] (4 against 4); D16 against F16: −0.8 [−3.3, +1.6] (4 against 6, p = 0.75). The
 launcher (pid 74048) was stopped by hand at 18:11 after v0 started, so v35 never starts; v0 runs on.
+
+Against v0 (paired, same node): C16 +5.7 [+2.5, +9.0] (16 against 2, p = 0.001), F16 +6.6 [+3.7, +9.8] (17 against
+1, p = 0.0001), D16 +5.7 [+2.5, +9.0] (17 against 3, p = 0.003). v0 here 158, the old run's v0 160 at the same
+settings: the node reproduces the reference. All three arms at 16 phases (172-174) beat the old run's v35 (170 of 244)
+on miniF2F-valid by 1-2 problems, a difference inside the noise of 244 statements, while in-pool v35 leads by 9-10
+points; in-pool training gains carry over to miniF2F at about a third of their size (+6 against +16-17 points).
+The ranking matches the probe: C, D and F tie.
 
 
 **Progress-fraction credit** (`verified_fraction`, `src/lean_search/rl/README.md`, "Progress fraction"): as verified
