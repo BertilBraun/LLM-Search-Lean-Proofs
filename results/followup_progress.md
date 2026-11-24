@@ -405,6 +405,14 @@ accepted, no wall-clock stops.
 - The PC slept 11:08-14:15 UTC (no watchdog, pull loop stalled; its sleep killed by pid at 14:15, pull at 14:16). The
   node ran on: D8 probe 11:12-14:17, D's comparisons 14:18, miniF2F C16 started 14:19.
 
+**miniF2F-valid** (244 statements, 64 expansions, 3,600 s per search, each policy with its own value model; owner,
+2026-11-24: C16, F16, D16, v0, v35 skipped for the maintenance). References from grpo_loop_v1 at the same settings:
+v0 160, v35 170 of 244.
+
+| Run | Solved of 244 | Wall-clock stops | Finished (UTC) |
+|---|---|---|---|
+| C16 | 172 (70.5%) | 2 (0.8%) | 15:32 |
+
 
 **Progress-fraction credit** (`verified_fraction`, `src/lean_search/rl/README.md`, "Progress fraction"): as verified
 progress, but a clean block ending on the found proof scores its share of the node's remaining proof (closing 1, one
