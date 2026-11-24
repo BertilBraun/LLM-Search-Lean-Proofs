@@ -427,6 +427,14 @@ on miniF2F-valid by 1-2 problems, a difference inside the noise of 244 statement
 points; in-pool training gains carry over to miniF2F at about a third of their size (+6 against +16-17 points).
 The ranking matches the probe: C, D and F tie.
 
+**Node wrap-up, 2026-11-24 19:25 UTC.** On the PC, each copy checked against the node's file sizes: every phase
+checkpoint of every run (`node_backup/2026-11-15/full/checkpoints/`, 131 items), every run's training trees, every
+evaluation run's trees (probe, held-out, calibration, miniF2F), the launcher logs and miniF2F results
+(`full/runs/`), and all logs and results by the 10-minute pull (`live/`, last 19:13, after the last run ended at
+19:03). Not copied: merged serving weights and the base model (rebuilt from the adapters). The pull loop and the
+watchdog are stopped; the node is ready to be closed by the owner. A partial copy under `full/runs/probe_evaluations`
+outside `trees/` came from a timed-out pull; `live/runs/probe_evaluations` is the complete one.
+
 
 **Progress-fraction credit** (`verified_fraction`, `src/lean_search/rl/README.md`, "Progress fraction"): as verified
 progress, but a clean block ending on the found proof scores its share of the node's remaining proof (closing 1, one
