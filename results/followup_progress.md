@@ -413,8 +413,11 @@ v0 160, v35 170 of 244.
 |---|---|---|---|
 | C16 | 172 (70.5%) | 2 (0.8%) | 15:32 |
 | F16 | 174 (71.3%) | 3 (1.2%) | 16:43 |
+| D16 | 172 (70.5%) | 2 (0.8%) | 17:53 |
 
 C16 against F16 (paired): −0.8 points [−3.7, +2.0], 5 against 7 solved by one only, p = 0.77.
+D16 against C16: +0.0 [−2.0, +2.0] (4 against 4); D16 against F16: −0.8 [−3.3, +1.6] (4 against 6, p = 0.75). The
+launcher (pid 74048) was stopped by hand at 18:11 after v0 started, so v35 never starts; v0 runs on.
 
 
 **Progress-fraction credit** (`verified_fraction`, `src/lean_search/rl/README.md`, "Progress fraction"): as verified
