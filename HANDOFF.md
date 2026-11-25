@@ -4,6 +4,11 @@ Written 2026-11-16 by the orchestrating agent for the agent that takes over on a
 repository, same rented node; no conversation history and no running subagents carry over. Everything needed is in this
 file and the files it points to. Keep this file current while you work, or replace it with your own.
 
+**State (2026-11-25): the follow-up study is finished.** Summary: `results/followup_study_summary.md`. D ran and was
+probed (1,036 of 2,000, level with C and F), miniF2F-valid ran for C16, F16, D16 and v0. Everything was copied to the
+PC (`node_backup/2026-11-15/full/` and `live/`) and the owner closed the node on 2026-11-24; the sections below
+describe the study while it ran. Open: the fsync fix in `write_json_atomically`; anything further is the owner's call.
+
 **State at a glance (2026-11-23, about 12:45 UTC; updated by the second orchestrator)**
 
 - Done: step 1 (incl. the reasoning comparison: no reasoning +4.9 points at equal tokens but Lean-bound, 1.8x the
